@@ -5,6 +5,7 @@
 //! The job prints one line per closed item and one line per key the keeper refused or
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
+use crate::deploy_evidence::SCAN_UNVERIFIED;
 use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -122,6 +123,7 @@ impl ClosePass {
             self.closed_any |= result["closed"]
                 .as_array()
                 .is_some_and(|rows| !rows.is_empty());
+            self.scan_failures(&result);
             if let Some(deployments) = result["deployment_pending"].as_array() {
                 *self.deployment_count.get_or_insert(0) += deployments.len();
                 for row in deployments {
@@ -140,6 +142,19 @@ impl ClosePass {
                 return Err("keeper continuation did not advance".into());
             }
             body["after"] = json!(after);
+        }
+    }
+
+    /// An item the keeper could not scan is not an item without a pending deployment: it becomes a
+    /// row that holds GO. In the inventory pass every refusal counts; elsewhere the scan refusals do.
+    fn scan_failures(&mut self, result: &Value) {
+        for row in result["listed"].as_array().into_iter().flatten() {
+            let reason = row["reason"].as_str().unwrap_or("");
+            if self.inventory || reason.contains("deploy_scan_") || reason.contains("merge_index") {
+                self.deployments.push(json!({
+                    "key": row["key"], "state": row["state"], "merged_at": null, "age_hours": null,
+                    "missing": [format!("{SCAN_UNVERIFIED}: {}", reason.replace(['\n', '\t'], " "))]}));
+            }
         }
     }
 

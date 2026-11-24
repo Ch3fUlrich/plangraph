@@ -728,3 +728,21 @@ def test_an_inventory_request_is_refused_while_done_items_are_not_scanned(env): 
     with pytest.raises(Refused, match="dry run"):
         env.store.include_done_in_scan = True
         env.store.close_merged_auto(env.p("system"), require_seats=False, apply=True, inventory=True)
+
+
+def _deploy_row(env, key, at):
+    item = env.store._item(key)
+    env.store.conn.execute(
+        "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at) VALUES(?,?,?,?,?,?,?)",
+        (key, item["epoch"], "deploy",
+         '{"host":"host-a","is_active":"active","unit":"new.service"}', 1, "fixture", at))
+
+
+def test_only_deploy_proof_recorded_after_the_merge_clears_a_done_item(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    _done(env, "demo:A", note="Deploy-Hosts: host-a")
+    _deploy_row(env, "demo:A", "2020-01-01T00:00:00+00:00")  # verified, but before the merge landed
+    rows = {row["key"]: row for row in _inventory(env, inventory=True)["deployment_pending"]}
+    assert rows["demo:A"]["missing"] == ["host-a:new.service"]
+    _deploy_row(env, "demo:A", "2099-01-01T00:00:00+00:00")
+    assert _inventory(env, inventory=True)["deployment_pending"] == []

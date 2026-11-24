@@ -677,7 +677,10 @@ class ContextMixin:
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
         proofs = self._merged_auto_proofs(pinned)
-        missing = self._deploy_missing(item, proofs, self._deploy_pending(pinned, changes, token))
+        # Only proof recorded after the last merge counts: an older row says nothing of the landed revision.
+        stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
+        since = float("inf") if None in stamps else max(stamps, default=float("inf"))
+        missing = self._deploy_missing(item, proofs, self._deploy_pending(pinned, changes, token, since))
         return {"deployment_pending": self._deployment_row(missing, proofs, now)} if missing else {}
 
     def _deploy_missing(self, item, proofs, pending):

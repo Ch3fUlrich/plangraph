@@ -45,7 +45,7 @@ from . import context_sources, timing
 from .errors import Refused
 from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
-from .evidence_types import valid_commit_ref
+from .evidence_types import as_epoch, valid_commit_ref
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -515,12 +515,18 @@ class CloseMixin:
         except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
 
-    def _deploy_pending(self, item, changes, token):
-        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
+    def _deploy_pending(self, item, changes, token, since=None):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+
+        ``since`` (epoch seconds) counts only proof of the item's current epoch recorded at or after it.
+        """
         targets = deploy_targets(changes)
         if not targets:
             return []
         hosts, evidence = deploy_hosts(item), self._evidence(item["key"])
+        if since is not None:
+            evidence = [row for row in evidence
+                        if row["epoch"] == item["epoch"] and (as_epoch(row["at"]) or 0) >= since]
         per_unit = token[2] if token is not None else {}
         if hosts or not per_unit:
             return deploy_missing(targets, hosts, evidence)

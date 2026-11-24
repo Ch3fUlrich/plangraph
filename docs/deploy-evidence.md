@@ -22,20 +22,25 @@ JSON report `plangraph.deploy-evidence/1`. It runs `PROGRAM HOST TARGET` for eve
 reads the first word printed (`active` for a unit, `installed` for a `bin:NAME` target; a oneshot unit
 answers for its timer). Per target:
 
-| status | meaning | blocks |
-|---|---|---|
-| `unit_inactive`, `binary_missing` | the host does not run it | yes |
-| `host_unverified` | the probe failed; the host is not assumed deployed | yes |
-| `live_proof_missing` | a `Live:` clause with no deploy proof | yes |
-| `hosts_unnamed` | the item names no `Deploy-Hosts:` | yes |
-| `live_unrecorded` | the host runs it, the keeper holds no proof | no |
+| status | meaning |
+|---|---|
+| `unit_inactive`, `binary_missing` | the host does not run it |
+| `unrecorded` | the host runs it, but the keeper holds no deploy evidence tied to the landed revision; a running unit does not say which revision it runs, so the row stays pending until the evidence is recorded |
+| `host_unverified` | the probe failed; the host is not assumed deployed |
+| `live_proof_missing` | a `Live:` clause with no deploy proof |
+| `hosts_unnamed` | the item names no `Deploy-Hosts:` |
+| `scan_unverified` | the keeper could not scan the item (`listed` in the inventory pass); it is never silently dropped |
+
+Every target blocks. Only the keeper's verified `deploy` evidence recorded after the item's merge clears a row
+(an older row, from before the merge, does not).
 
 `--rows FILE` reads keeper rows from a file instead of the keeper (fixtures).
 
 ## Gate
 
 `plangraph deploy-evidence gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]`
-prints a JSON decision and exits 0 (GO), 1 (blocked) or 2 (unreadable input). A pending row older than
+prints a JSON decision and exits 0 (GO), 1 (blocked) or 2 (unreadable or inconsistent input: a wrong schema, no
+`rows` list, a `pending` count that disagrees with the rows, a row without a key, blocking targets or a numeric age). A pending row older than
 24 hours, or of unknown age, blocks. A younger row is listed under `waiting`.
 
 A routing exception is one entry of the exceptions file:
