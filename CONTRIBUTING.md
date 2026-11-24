@@ -139,7 +139,7 @@ non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key appears in both GO-KEYS and the landing merge trailers; part Plan-Items do not
 stand in for the batch's PLAN key. The PR body, GO request, Keeper preparation, and single-PR part count use the parts still active at the pinned train head. `tools/merge_batch.py land` always passes a merge commit `--subject` ending with `(#N)` for the batch PR and refuses a custom `--subject` without `(#N)`. When the keeper schema advances, copy the
 standalone `MIGRATION <version>` field into the GO statement for the exact PR
-head and pass that row with `land --go-row PATH`. See [keeper migrations](docs/keeper-postgres.md#schema-and-migrations).
+head and pass that row with `land --go-row PATH`; the GO-REQ then names `plangraph keeper-restart` with the migration DSN file, never a plain restart, and `land-train go-verify` refuses a train without the field. See [keeper migrations](docs/keeper-postgres.md#schema-and-migrations).
 
 
 After land reports included parts as merged, cleanup

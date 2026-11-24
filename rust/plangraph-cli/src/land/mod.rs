@@ -13,6 +13,9 @@ pub mod git;
 pub mod go_verify;
 #[cfg(test)]
 mod go_verify_tests;
+pub mod keeper_schema;
+#[cfg(test)]
+mod keeper_schema_tests;
 pub mod main_gh;
 #[cfg(test)]
 mod main_gh_tests;

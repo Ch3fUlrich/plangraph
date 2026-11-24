@@ -22,6 +22,9 @@ pub struct PartDeploy {
     pub items: BTreeSet<String>,
     /// Hosts of the `Deploy:` trailers of the part's own commits.
     pub trailer_hosts: BTreeSet<String>,
+    /// The keeper schema version this part raises to (above its own base); `None` when it does not raise it.
+    #[serde(default)]
+    pub keeper_migration: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,20 +50,31 @@ pub struct DeployPlan {
     /// Probed and passed: exactly what the GO-REQ names.
     pub targets: Vec<Target>,
     pub blockers: Vec<Blocker>,
+    /// The keeper schema version the train raises to; the GO needs `MIGRATION <it>`.
+    #[serde(default)]
+    pub keeper_migration: Option<u32>,
 }
 
 impl DeployPlan {
-    /// `deploy: unit@host, ...` for the GO-REQ; `deploy: none` when no part ships a family.
+    /// `deploy: unit@host, ...` for the GO-REQ; `deploy: none` when no part ships a family. A train that
+    /// raises the keeper schema adds the standalone `MIGRATION <version>` field and names `keeper-restart`.
     pub fn go_req(&self) -> String {
-        if self.targets.is_empty() {
-            return "deploy: none".into();
-        }
         let names: Vec<_> = self
             .targets
             .iter()
             .map(|t| format!("{}@{}", t.family, t.host))
             .collect();
-        format!("deploy: {}", names.join(", "))
+        let units = if names.is_empty() {
+            "deploy: none".to_owned()
+        } else {
+            format!("deploy: {}", names.join(", "))
+        };
+        match self.keeper_migration {
+            Some(version) => format!(
+                "{units}; MIGRATION {version}; keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, never a plain restart"
+            ),
+            None => units,
+        }
     }
 
     /// One keeper definition per blocker, in `pg define --file` format.
@@ -188,6 +202,7 @@ pub fn derive_part(repo: &Path, base: &str, part: &Part) -> Result<PartDeploy, S
         families,
         items,
         trailer_hosts: hosts,
+        keeper_migration: super::keeper_schema::rise(repo, from, &part.head)?,
     })
 }
 
@@ -275,6 +290,7 @@ pub fn deploy_plan(
         }
     }
     DeployPlan {
+        keeper_migration: parts.iter().filter_map(|p| p.keeper_migration).max(),
         targets: ok
             .into_iter()
             .map(|((family, host), parts)| Target {
