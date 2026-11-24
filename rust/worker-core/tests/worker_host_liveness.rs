@@ -123,3 +123,28 @@ fn an_outbox_failure_leaves_placement_blocked_and_retries_the_alert() {
     tick(190).unwrap();
     assert_eq!(fs::read_dir(dir).unwrap().count(), 1);
 }
+
+#[test]
+fn a_maintenance_window_over_ten_minutes_ends_in_rejoining_not_ready() {
+    use pg_worker_core::worker_host::Observation;
+
+    let state = tempdir().unwrap();
+    let store = Store::new(state.path(), "worker-a").unwrap();
+    store.set_maintenance(10, 1_000).unwrap();
+    let tick = |now, ssh| {
+        store
+            .observe_liveness(Observation {
+                now,
+                ssh,
+                tailscale: Some(ssh),
+                remote_runs: None,
+                placed_runs: Default::default(),
+            })
+            .unwrap()
+    };
+    assert_eq!(tick(20, false), Phase::Rejoining);
+    assert_eq!(tick(900, false), Phase::Rejoining);
+    // After the window and a successful probe the long outage still needs the gate.
+    assert_eq!(tick(1_100, true), Phase::Rejoining);
+    assert!(store.needs_rejoin().unwrap());
+}

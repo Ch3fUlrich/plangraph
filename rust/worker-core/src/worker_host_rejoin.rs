@@ -39,6 +39,9 @@ pub struct FloorReport {
     pub disk_ok: bool,
     pub ram_ok: bool,
     pub detail: String,
+    /// Floors that could not be measured on this host; each becomes a flag.
+    #[serde(default)]
+    pub unchecked: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -58,8 +61,8 @@ pub trait RejoinHost {
     fn classify_run(&mut self, run: &str) -> io::Result<RunFate>;
     /// Collect and report, re-attach, or release, as the fate says.
     fn settle_run(&mut self, run: &str, fate: RunFate) -> io::Result<()>;
-    /// Reap stale worktrees; returns how many were removed.
-    fn reap_worktrees(&mut self) -> io::Result<u64>;
+    /// Start the host's report-only worktree sweep; it removes nothing itself.
+    fn sweep_worktrees(&mut self) -> io::Result<()>;
     fn check_floors(&mut self) -> io::Result<FloorReport>;
     fn probe_legs(&mut self) -> io::Result<LegReport>;
 }
@@ -191,13 +194,15 @@ impl Store {
             runs.push(json!({"run": run, "fate": fate}));
         }
         log.step("runs", "ok", json!({"settled": unknown.len()}));
-        let reaped = host
-            .reap_worktrees()
-            .map_err(|error| blocked("reap", error.to_string()))?;
-        log.step("reap", "ok", json!({"reaped": reaped}));
+        host.sweep_worktrees()
+            .map_err(|error| blocked("sweep", error.to_string()))?;
+        log.step("sweep", "ok", json!({"report_only": true}));
         let floors = host
             .check_floors()
             .map_err(|error| blocked("floors", error.to_string()))?;
+        for floor in &floors.unchecked {
+            log.flags.push(format!("floor unchecked: {floor}"));
+        }
         if !(floors.disk_ok && floors.ram_ok) {
             let reason = floors.detail.clone();
             log.step("floors", "failed", json!(floors));

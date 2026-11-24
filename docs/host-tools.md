@@ -273,11 +273,15 @@ placed run records with the last available remote inventory. Recovery clears
 the finding and records which runs to check. An outage of more than ten
 minutes leaves the host `rejoining`, which placement refuses, until
 `pg-spawnd rejoin HOST` passes on the coordinator. It runs the host's
-`plangraph-host-sync.service`, flags an installed binary that differs from
+`plangraph-host-sync.service` (or the unit named in the host's
+`PG_REJOIN_SYNC_UNIT`), flags an installed binary that differs from
 `PG_MAIN_SHA` and `PG_MAIN_SHA256` (with the host's `PG_INSTALL_BINARY` and
 `PG_INSTALL_STAMP`), settles each unknown run (finished, live or dead), starts
-`pg-worktree-sweep.service`, checks the work-disk and RAM floors and runs the
-legs in the host's `PG_REJOIN_LEG_PROBES` (JSON of leg to argv). A failed step
+`pg-worktree-sweep.service` (report-only, nothing is removed), checks the
+work-disk floor on the registry's `PLANGRAPH_WORK_MOUNTS` and the RAM floor
+(Windows free memory through the WSL cache guard on a WSL host, guest memory on
+other Linux hosts; a floor that cannot be measured is flagged, not passed
+silently) and runs the legs in the host's `PG_REJOIN_LEG_PROBES` (JSON of leg to argv). A failed step
 keeps the host rejoining. Each attempt writes `rejoin/HOST-TIME-*.json` in the
 state directory; success sets the host ready.
 
@@ -285,7 +289,9 @@ An operator or router with coordinator state access can use
 `pg-spawnd worker-maintenance HOST END_UNIX_SECONDS` to block placement
 immediately. Misses during that window are recorded for host health without
 paging routing. A successful probe at or after the end clears the placement
-hold. A host that still fails remains unavailable. An inventory-only host
+hold, unless the window kept the host unreachable for more than ten minutes:
+then the host stays `rejoining` until `pg-spawnd rejoin HOST` passes. A host
+that still fails remains unavailable. An inventory-only host
 needs an active worker configuration before it can receive placement.
 
 The versioned `pg-worker-liveness` service and timer use a coordinator
