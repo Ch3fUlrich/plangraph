@@ -46,6 +46,15 @@ impl Fx {
         sha
     }
     fn cut(&self, commits: &[String], edits: &[(&str, &str)]) -> Result<Vec<String>, String> {
+        let granted: Vec<String> = edits.iter().map(|(_, d)| d.to_string()).collect();
+        self.cut_granted(commits, edits, &granted)
+    }
+    fn cut_granted(
+        &self,
+        commits: &[String],
+        edits: &[(&str, &str)],
+        grants: &[String],
+    ) -> Result<Vec<String>, String> {
         let gate_edits: BTreeMap<String, String> = edits
             .iter()
             .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -57,6 +66,7 @@ impl Fx {
                 branch: "slice/a",
                 commits,
                 gate_edits: &gate_edits,
+                grants,
                 gate: &gate(),
             },
             &python,
@@ -163,6 +173,7 @@ fn a_gate_path_relative_to_the_caller_still_works_in_the_cut_worktree() {
             branch: "slice/rel",
             commits: &[src],
             gate_edits: &none,
+            grants: &[],
             gate: relative,
         },
         &python,
@@ -184,10 +195,63 @@ fn a_missing_gate_names_the_reason() {
             branch: "slice/missing",
             commits: &[src],
             gate_edits: &none,
+            grants: &[],
             gate: Path::new("no/such/gate.py"),
         },
         &python,
     )
     .unwrap_err();
     assert!(err.contains("no/such/gate.py"), "{err}");
+}
+
+#[test]
+fn a_gate_edit_d_id_the_go_row_does_not_grant_is_refused_before_any_pick() {
+    let fx = Fx::new();
+    let flow = fx.source(".github/workflows/w.yml", TRAILERS);
+    let err = fx
+        .cut_granted(
+            std::slice::from_ref(&flow),
+            &[(&flow, "D-1")],
+            &["D-2".to_string()],
+        )
+        .unwrap_err();
+    assert!(err.contains("D-1") && err.contains("not granted"), "{err}");
+    assert!(g(fx.p(), &["branch", "--list", "slice/a"]).is_empty());
+}
+
+#[test]
+fn a_gate_edit_for_a_commit_that_is_not_cut_is_refused() {
+    let fx = Fx::new();
+    let plain = fx.source("a.txt", TRAILERS);
+    let other = fx.source("b.txt", TRAILERS);
+    let err = fx.cut(&[plain], &[(&other, "D-5")]).unwrap_err();
+    assert!(err.contains("not cut"), "{err}");
+}
+
+#[test]
+fn a_branch_created_while_the_gate_runs_is_not_overwritten() {
+    let fx = Fx::new();
+    let src = fx.source("a.txt", TRAILERS);
+    let rival = fx.source("r.txt", TRAILERS);
+    let creating = || {
+        // The gate of the cut runs this: another job creates the branch in the meantime.
+        g(fx.p(), &["branch", "-f", "slice/a", &rival]);
+        python()
+    };
+    let none = BTreeMap::new();
+    let err = cut(
+        &Cut {
+            repo: fx.p(),
+            base: &fx.base,
+            branch: "slice/a",
+            commits: &[src],
+            gate_edits: &none,
+            grants: &[],
+            gate: &gate(),
+        },
+        &creating,
+    )
+    .unwrap_err();
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(g(fx.p(), &["rev-parse", "slice/a"]), rival);
 }

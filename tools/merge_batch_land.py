@@ -513,6 +513,13 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
         else:
             raise MergeBatchError(f"unknown keeper landing step {step}")
         landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)
+    if train["open_steps"]:  # rebase every open lane onto the merge; a failure never fails the settlement
+        try:
+            r = run(["plangraph", "land-train", "relane-open", "--repo", ".", "--github", repo, "--remote", REMOTE,
+                     "--onto", merge, "--push", "true"], ok=None, timeout=1800)
+            sys.stderr.write(r.stdout + r.stderr)
+        except MergeBatchError as exc:
+            print(f"relane after {merge}: {exc}", file=sys.stderr)
 
 
 def cmd_settle(args):

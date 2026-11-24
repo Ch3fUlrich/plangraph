@@ -91,6 +91,11 @@ elif args[:2] == ['landing', 'verify-hosts']:
     head = args[-1]
     print(json.dumps(dict(verified=[dict(host=str(n), head=head, checkout=head,
         hooks=head, build=head, synced=False) for n in range(3)])))
+elif args[:2] == ['land-train', 'relane-open']:
+    with open(os.environ['JOURNAL_SWEEP_LOG'] + '.relane', 'a') as log:
+        log.write(' '.join(args) + '\\n')
+    print('REBASED lane/x-r1')
+    sys.exit(int(os.environ.get('RELANE_RC', '0')))
 else:
     assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
 """)
@@ -219,6 +224,26 @@ def test_tested_ff_settlement_waits_for_seat_acknowledgement(env, journal):
     resumed = env.run("settle")
     assert resumed.returncode == 0, resumed.stderr
     assert journal()["train"]["open_steps"] == []
+
+
+@pytest.mark.parametrize("relane_rc", ["0", "3"])
+def test_settlement_relanes_the_open_lanes_onto_the_merge_and_never_fails_on_it(env, journal, relane_rc):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.env["INTERRUPT_LANDING"] = "1"
+    assert "interrupted before saving" in land(env, approval).stderr
+    del env.env["INTERRUPT_LANDING"]
+    env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = "off"
+    env.env["RELANE_RC"] = relane_rc
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    (call,) = (env.tmp / "sweep.relane").read_text().splitlines()
+    assert call.startswith("land-train relane-open --repo ")
+    assert f"--onto {main_tip(env)} --push true" in call and "--github" in call
+    assert "REBASED lane/x-r1" in resumed.stderr
+    # A settled train is not relaned a second time.
+    env.run("settle")
+    assert len((env.tmp / "sweep.relane").read_text().splitlines()) == 1
 
 
 def test_legacy_single_pr_settlement_uses_matching_saved_mode(env, journal):

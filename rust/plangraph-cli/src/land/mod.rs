@@ -27,6 +27,8 @@ pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;
 pub mod relane;
+pub mod relane_cli;
+mod relane_git;
 #[cfg(test)]
 mod relane_tests;
 pub mod resolve;

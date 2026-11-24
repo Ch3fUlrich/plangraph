@@ -12,9 +12,10 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
-  plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2] [--gate FILE]\n\
+  plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2 --grants FILE] [--gate FILE]\n\
   plangraph land-train cut-check --repo DIR --base SHA --head SHA [--gate FILE]\n\
-  plangraph land-train relane --repo DIR --remote NAME --onto SHA --lanes A,B [--expect A=SHA,B=SHA] [--writer TEXT] [--push true]\n\
+  plangraph land-train relane --repo DIR --remote NAME --onto SHA --spec FILE [--push true]\n\
+  plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --onto SHA [--push true]\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -197,7 +198,10 @@ pub(super) fn run_inner(
         return super::cut::run_cli(cmd, &flags, python);
     }
     if cmd == "relane" {
-        return super::relane::run_cli(&flags);
+        return super::relane_cli::run_cli(&flags);
+    }
+    if cmd == "relane-open" {
+        return super::relane_cli::run_open_cli(&flags);
     }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);

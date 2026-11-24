@@ -17,6 +17,8 @@ pub struct Cut<'a> {
     pub commits: &'a [String],
     /// Source commit -> the router's D-id for its gate-file edit.
     pub gate_edits: &'a BTreeMap<String, String>,
+    /// The D-ids the router's GO row grants; a gate edit may carry only one of them.
+    pub grants: &'a [String],
     /// `tools/ci_commit_gate.py` of the checkout that runs the cut.
     pub gate: &'a Path,
 }
@@ -92,6 +94,14 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
         repo,
         &["rev-parse", "--verify", &format!("{}^{{commit}}", c.base)],
     )?;
+    for (src, d) in c.gate_edits {
+        if !c.commits.contains(src) {
+            return Err(format!("cut: gate edit names {src}, which is not cut"));
+        }
+        if !c.grants.contains(d) {
+            return Err(format!("cut: {d} for {src} is not granted by the GO row"));
+        }
+    }
     for src in c.commits {
         let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", src])?;
         if parents.split_whitespace().count() != 2 {
@@ -115,10 +125,12 @@ pub fn cut(c: &Cut, python: &dyn Fn() -> Command) -> Result<Vec<String>, String>
     )?;
     let result = pick_all(c, wt).and_then(|head| {
         check(wt, &base, &head, c.gate, python)?;
+        // An empty old value makes the update fail when the branch was created since the check above.
         git::out(
             repo,
-            &["update-ref", &format!("refs/heads/{}", c.branch), &head],
-        )?;
+            &["update-ref", &format!("refs/heads/{}", c.branch), &head, ""],
+        )
+        .map_err(|e| format!("cut: branch {} already exists: {e}", c.branch))?;
         Ok(head)
     });
     let removed = git::out(
@@ -211,8 +223,8 @@ pub fn check(
     }
 }
 
-/// `cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2] [--gate FILE]`
-/// and `cut-check --repo DIR --base SHA --head SHA [--gate FILE]`.
+/// `cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1,B=D-2 --grants FILE] [--gate FILE]`
+/// (FILE lists the D-ids of the GO row) and `cut-check --repo DIR --base SHA --head SHA [--gate FILE]`.
 pub fn run_cli(
     cmd: &str,
     flags: &BTreeMap<String, String>,
@@ -238,6 +250,14 @@ pub fn run_cli(
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect();
+    let grants: Vec<String> = match flags.get("grants") {
+        Some(f) => std::fs::read_to_string(f)
+            .map_err(|e| format!("cut: grants {f}: {e}"))?
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
+        None => Vec::new(),
+    };
     let gate_edits = flags
         .get("gate-edits")
         .map(|s| {
@@ -254,6 +274,7 @@ pub fn run_cli(
             branch: &need("branch")?,
             commits: &commits,
             gate_edits: &gate_edits,
+            grants: &grants,
             gate: &gate,
         },
         python,

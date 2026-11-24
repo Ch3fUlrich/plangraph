@@ -1,1 +1,1 @@
-`land-train cut` accepts a gate path relative to the caller and reports the gate's stderr; `land-train relane` ignores a merge of main inside a lane when it counts own commits and checks the `Writer` trailer.
+`land-train relane` needs a recorded head and writer per lane (`--spec`), keeps fetch and result refs apart, replays a stacked lane after its parent only, refuses a merge with edits of its own, and runs from the settlement as `relane-open`; `land-train cut` creates its branch atomically and takes gate-edit D-ids only from the GO row (`--grants`).

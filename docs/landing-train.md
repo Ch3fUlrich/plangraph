@@ -129,20 +129,24 @@ them into a keeper table needs a keeper schema step that is not part of this cha
 
 ## Relane after a train merge
 
-`plangraph land-train relane --repo DIR --remote NAME --onto SHA --lanes A,B [--expect A=SHA] [--writer TEXT] [--push true]`
-(rust/plangraph-cli/src/land/relane.rs) runs once after a train merge, one lane after the other. Each lane is fetched into
-its own ref `refs/po/<lane>` (never FETCH_HEAD) and rebased onto the new main in a worktree of its own with `--empty=drop`:
-a patch already on main is dropped, not a conflict. The lane's new head is pushed as the next `-rN` branch under a per-clone
-push lock. Result lines: `REBASED` (old head, new head, `patch_ids_equal`, own commit counts, for the seat evidence rule),
-`CURRENT`, `CONFLICT <lane> <files>` (at least one unmerged path; the lane is untouched) and `REFUSED` (fetched head is not
-`--expect`, no own commit left, a commit without the `--writer` trailer). The probe PR move and the seat re-run follow from
-these lines; the verb exits 3 when any lane is not relaned.
+The settlement of a landed train runs `plangraph land-train relane-open --repo DIR --github OWNER/NAME --remote NAME --onto SHA
+--push true` (best effort: a failure never fails the settlement). It lists the open `lane/` pull requests; each lane's recorded
+head is its PR head and its recorded writer is the `Writer` trailer of its newest commit. `relane --repo DIR --remote NAME
+--onto SHA --spec FILE [--push true]` does the same for a JSON array of `{branch, head, writer, parent: {branch, head} | null}`,
+parents first (rust/plangraph-cli/src/land/relane*.rs). One lane after the other, each is fetched into `refs/po/fetch/<lane>`
+(never FETCH_HEAD; results go to `refs/po/result/<next>`, a disjoint namespace) and rebased in a worktree of its own with
+`--empty=drop`: a patch already on main is dropped, not a conflict. The new head is pushed as the next `-rN` branch under a
+per-clone push lock. A stacked child replays only what follows its parent's recorded head, onto the parent's new head. Result
+lines: `REBASED` (old head, new head, `patch_ids_equal`, own commit counts, for the seat evidence rule), `CURRENT`,
+`CONFLICT <lane> <files>` (the lane is untouched) and `REFUSED` (fetched head is not the recorded head, no recorded writer, no
+own commit left, a commit without the lane's `Writer`, a merge with edits of its own that a rebase would flatten, parent not
+relaned). The verb exits 3 when any lane is not relaned.
 
 ## Cutting a slice or landing branch
 
-`plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1] [--gate FILE]`
+`plangraph land-train cut --repo DIR --base SHA --branch NAME --commits A,B [--gate-edits A=D-1 --grants FILE] [--gate FILE]`
 (rust/plangraph-cli/src/land/cut.rs) picks the source commits (full ids, oldest first) onto `--base` without `-x`, drops any
 `(cherry picked from commit ...)` line, adds `Picked-From: <source>` and, for a commit named in `--gate-edits` (the router's
-D-id), `Gate-Edit: <D-id>` inside the existing trailer block, then runs `tools/ci_commit_gate.py check` on the range. The branch
-exists only when the gate accepts; a merge commit as a source is refused. `land-train cut-check --repo DIR --base SHA --head SHA`
+D-id), `Gate-Edit: <D-id>` (the D-id must be listed in the `--grants` file taken from the GO row) inside the existing trailer block, then runs `tools/ci_commit_gate.py check` on the range. The branch
+is created atomically and only when the gate accepts; a merge commit as a source is refused. `land-train cut-check --repo DIR --base SHA --head SHA`
 applies the same check to a branch cut by hand and refuses a `cherry-pick -x` line.
