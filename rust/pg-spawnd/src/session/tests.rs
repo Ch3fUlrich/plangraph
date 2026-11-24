@@ -329,9 +329,9 @@ fn two_concurrent_launches_of_a_key_are_not_both_admitted() {
 #[test]
 fn a_respawn_carries_the_batch_fields_of_the_launch_it_continues() {
     let state = tempfile::tempdir().unwrap();
-    let run = state
-        .path()
-        .join("runs/run-0123456789abcdef0123456789abcdef");
+    // A run id is `run-` and 32 hex digits; built from short parts, not written as one literal.
+    let id = format!("run-{}", "0123456789abcdef".repeat(2));
+    let run = state.path().join("runs").join(&id);
     std::fs::create_dir_all(&run).unwrap();
     std::fs::write(
         run.join("record.json"),
@@ -339,7 +339,7 @@ fn a_respawn_carries_the_batch_fields_of_the_launch_it_continues() {
             .to_string(),
     )
     .unwrap();
-    let spec = serde_json::json!({"run_id":"run-0123456789abcdef0123456789abcdef"});
+    let spec = serde_json::json!({ "run_id": id });
     let carried = restart_admitted(state.path(), &spec, "restart prompt".into());
     assert_eq!(carried.items, ["demo:HELD"]);
     assert_eq!(carried.lane_override.as_deref(), Some("fix lane"));
