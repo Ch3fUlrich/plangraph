@@ -1,7 +1,7 @@
 //! Replay of recorded batches through a selection rule on one timeline, one train at a time.
 //! The objective is parts merged per hour (rule 3.74 (1)); conflicts are parts that overlap an earlier part of
 //! their train (a path-level stand-in for merge conflicts); the red rate is unknown where no CI result is recorded.
-use super::rules::{choose, Pool, Rule};
+use super::rules::{choose, Left, Pool, Rule};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -40,19 +40,19 @@ pub struct Config {
     /// An ordinary train is cut when the oldest ready part has waited this long, or at the size target.
     pub cut_after_secs: i64,
     pub costs: Costs,
+    /// The next candidate is cut as soon as the previous train starts, and tested meanwhile; trains
+    /// still land one after the other, each on the previous one (tested fast-forward).
+    pub speculative: bool,
 }
 
 impl Config {
     /// Rule 3.74 (1): every ready part rides, a train starts at once.
     pub fn every_ready_rides(costs: Costs) -> Config {
         Config {
-            rule: Rule {
-                target: usize::MAX,
-                bound: 0,
-                order: super::Order::Oldest,
-            },
+            rule: Rule::new(usize::MAX, 0, super::Order::Oldest),
             cut_after_secs: 0,
             costs,
+            speculative: false,
         }
     }
 }
@@ -80,11 +80,15 @@ pub struct Report {
 struct Sim<'a> {
     batches: &'a [Batch],
     now: i64,
+    deferrals: Vec<u32>,
 }
 
 impl Pool for Sim<'_> {
     fn waited(&self, p: usize) -> u32 {
         (self.now - self.batches[p].ready).clamp(0, u32::MAX as i64) as u32
+    }
+    fn deferrals(&self, p: usize) -> u32 {
+        self.deferrals[p]
     }
     fn overlaps(&self, a: usize, b: usize) -> bool {
         let (a, b) = (&self.batches[a].paths, &self.batches[b].paths);
@@ -105,6 +109,7 @@ pub fn replay(h: &History, c: &Config) -> Report {
     let mut sim = Sim {
         batches: &h.batches,
         now: 0,
+        deferrals: vec![0; h.batches.len()],
     };
     let mut trains: Vec<Cut> = Vec::new();
     let mut waits: Vec<i64> = Vec::new();
@@ -134,7 +139,12 @@ pub fn replay(h: &History, c: &Config) -> Report {
             continue;
         }
         sim.now = now;
-        let (riding, _left) = choose(&sim, &ready, c.rule);
+        let (riding, left) = choose(&sim, &ready, c.rule);
+        for (p, l) in left {
+            if matches!(l, Left::Overlap { .. } | Left::Target) {
+                sim.deferrals[p] += 1;
+            }
+        }
         // A part that overlaps one riding before it needs one resolution.
         let conflicts = riding
             .iter()
@@ -142,10 +152,13 @@ pub fn replay(h: &History, c: &Config) -> Report {
             .filter(|&(k, &b)| riding[..k].iter().any(|&a| sim.overlaps(a, b)))
             .count();
         let cost = &c.costs;
-        let land = now
+        let tested = now
             + cost.base_secs
             + cost.per_part_secs * (riding.len() as i64 - 1)
             + cost.per_conflict_secs * conflicts as i64;
+        // Main moves to one train at a time: a candidate lands after its predecessor and its own CI.
+        let before = trains.last().map(|t| t.land);
+        let land = tested.max(before.unwrap_or(0));
         for &i in &riding {
             landed[i] = true;
             waits.push(land - h.batches[i].ready);
@@ -156,7 +169,12 @@ pub fn replay(h: &History, c: &Config) -> Report {
             parts: riding.iter().map(|&i| h.batches[i].id.clone()).collect(),
             conflicts,
         });
-        now = land;
+        // A candidate waits only for the train two back to land: one is on main's tip, one under test.
+        now = if c.speculative {
+            now.max(trains.iter().rev().nth(1).map_or(now, |t| t.land))
+        } else {
+            land
+        };
     }
     let first = h.batches.iter().map(|b| b.ready).min().unwrap_or(0);
     let makespan = trains.last().map_or(0, |t| t.land - first);
