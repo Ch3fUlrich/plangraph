@@ -120,7 +120,11 @@ pub fn enforce_pool_cap(
         let Some(_lease) = try_exclusive_lease(slot)? else {
             sizes[idx] = initial;
             if initial > slot_cap_bytes {
-                report.skipped.push(format!("{} (leased)", slot.display()));
+                report.skipped.push(format!(
+                    "{} (leased{})",
+                    slot.display(),
+                    crate::cargo_cache::describe_holders(slot)
+                ));
             }
             continue;
         };
