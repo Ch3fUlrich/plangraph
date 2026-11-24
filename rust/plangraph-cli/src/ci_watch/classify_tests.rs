@@ -158,9 +158,11 @@ fn a_changelog_job_that_prints_the_skip_success_line_is_not_a_trailer_failure() 
 }
 
 #[test]
-fn a_log_that_names_failing_tests_is_code_even_with_a_network_phrase() {
-    let log = "test net::tests::retry ... FAILED\nHTTP 503 from the mock server";
-    assert_eq!(classify_job("Rust", log, false), RedClass::Code);
+fn a_log_with_failing_tests_and_an_infrastructure_phrase_is_mixed() {
+    let log = "test net::tests::retry ... FAILED\nconnection reset by peer";
+    assert_eq!(classify_job("Rust", log, false), RedClass::Mixed);
+    let config = "FAILED tests/a.py::t - boom\nResource not accessible by integration";
+    assert_eq!(classify_job("Python", config, false), RedClass::Mixed);
 }
 
 #[test]

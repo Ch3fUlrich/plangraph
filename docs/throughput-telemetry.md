@@ -59,7 +59,7 @@ and part head). Each row counts the commits only that part brought, oldest part 
 commits belong to no part. The report's `trains` rows give `accepted_parts`, the mean wait, `attempts`
 (1 + `ci_reruns`), `drops` (`left_out`), `fix_tasks` and `minutes_per_merged_batch`; `hours` gives commits, closed
 items, items landed and batches merged per UTC hour. A landing database without one of those lander columns
-reports it null. Red runs, one row per batch and fix rounds by cause are not in the landing row and stay unread.
+reports it null, and `attempts` is null when `ci_reruns` is. Red runs, one row per batch and fix rounds by cause are not in the landing row and stay unread (slice THROUGHPUT-BATCH-ROWS).
 Quota rows (`throughput_quota_window`) hold provider, account, window, the percent and the reset the snapshot
 names; a missing reset or a stale snapshot is null. Rows an earlier collector wrote to `throughput_quota_hourly`
 and `throughput_accept` are no longer read.
