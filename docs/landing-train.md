@@ -67,7 +67,11 @@ the GO-REQ (only passing targets) and one `blocker` line per refused target; `--
 `pg define` file with a blocker item for each. When a part raises the keeper schema version (the
 `MIGRATIONS` of `schema_pg.py`), the line also carries the standalone `MIGRATION <version>` field and names
 `plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE`, never a plain unit restart.
-`plangraph land-train keeper-schema --repo DIR --base SHA --head SHA` prints both versions for the evidence.
+The version is the manifest base against the final train commit, so a part branched from an older main is no
+regression and a migration brought in by a resolution is found. The evidence collector runs
+`plangraph land-train keeper-schema --repo DIR --base SHA --head SHA [--go-statement TEXT]`; it prints
+`{"keeper_schema": {"base": N, "head": M}, "migration": K|null}` for the evidence file (`migration` is the
+`MIGRATION` field of the exact GO row's statement).
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this

@@ -9,19 +9,42 @@ use std::path::Path;
 /// The file whose `MIGRATIONS` registry defines the version.
 pub const SCHEMA_PATH: &str = "src/plangraph/keeper/schema_pg.py";
 
-/// The version of the `MIGRATIONS = (...)` registry: the numbers of its direct `Migration(N, ...)` entries,
-/// consecutive from 1. Strings, comments and the arguments of an entry are skipped, so a `Migration(` mention
-/// elsewhere in the file does not count. A file with no registry is version 0; a gap, a repeat, an entry
-/// that is not a `Migration(N, ...)` call or an unclosed registry is an error, never a guess.
+/// The offset of the `(` of the one top-level `MIGRATIONS = (` assignment. Strings and comments are skipped
+/// from the start of the file, so an example in a docstring or a comment is not the registry; a second
+/// top-level assignment, or none, is an error, as in the AST reader of the batch land gate.
+fn find_registry(text: &str) -> Result<usize, String> {
+    let (mut found, mut depth, mut i) = (None, 0u32, 0);
+    while i < text.len() {
+        let rest = &text[i..];
+        let at_line_start = i == 0 || text[..i].ends_with('\n');
+        if depth == 0 && at_line_start && rest.starts_with("MIGRATIONS = (") {
+            if found.is_some() {
+                return Err("more than one MIGRATIONS registry".into());
+            }
+            found = Some(i + "MIGRATIONS = ".len());
+        }
+        i += match rest.as_bytes()[0] {
+            b'#' | b'"' | b'\'' => literal_len(rest),
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                1
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                1
+            }
+            _ => rest.chars().next().map_or(1, char::len_utf8),
+        };
+    }
+    found.ok_or_else(|| "no MIGRATIONS registry".into())
+}
+
+/// The version of the top-level `MIGRATIONS = (...)` registry: the numbers of its direct `Migration(N, ...)`
+/// entries, consecutive from 1. Strings, comments and the arguments of an entry are skipped, so a
+/// `Migration(` mention elsewhere in the file does not count. A missing or repeated registry, a gap, a
+/// repeat, an entry that is not a `Migration(N, ...)` call or an unclosed registry is an error, never a guess.
 pub fn parse_latest(text: &str) -> Result<u32, String> {
-    let Some(start) = text
-        .match_indices("MIGRATIONS = (")
-        .map(|(at, m)| (at, at + m.len() - 1))
-        .find(|(at, _)| text[..*at].chars().next_back().is_none_or(|c| c == '\n'))
-        .map(|(_, open)| open)
-    else {
-        return Ok(0);
-    };
+    let start = find_registry(text)?;
     let (mut versions, mut depth, mut i) = (Vec::new(), 0u32, start);
     while i < text.len() {
         let rest = &text[i..];
@@ -129,12 +152,43 @@ pub fn rise(repo: &Path, base: &str, head: &str) -> Result<Option<u32>, String> 
     Ok((after > before).then_some(after))
 }
 
-/// `land-train keeper-schema --repo DIR --base SHA --head SHA`: one line the GO evidence copies.
+/// The standalone `MIGRATION <version>` field of a GO statement (`GO ... GO-HEAD SHA; MIGRATION 3; ...`),
+/// as the batch land gate reads it: `;`-separated fields after the first, exactly one starting `MIGRATION `.
+/// `None` when the statement has none; more than one, or a value that is not a number, is an error.
+pub fn migration_field(statement: &str) -> Result<Option<u32>, String> {
+    let fields: Vec<&str> = statement
+        .split(';')
+        .skip(1)
+        .map(str::trim)
+        .filter(|f| f.starts_with("MIGRATION "))
+        .collect();
+    match fields.as_slice() {
+        [] => Ok(None),
+        [one] => one["MIGRATION ".len()..]
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| format!("malformed field {one:?}")),
+        _ => Err("the GO statement has more than one MIGRATION field".into()),
+    }
+}
+
+/// `land-train keeper-schema --repo DIR --base SHA --head SHA [--go-statement TEXT]`: the two evidence fields
+/// of a train as one JSON line, `{"keeper_schema": {"base": N, "head": M}, "migration": K|null}`. The
+/// versions come from the pinned revisions; `migration` is the field of the exact GO row's statement.
 pub(super) fn run_cli(
     flags: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let repo = Path::new(need("repo")?);
     let (base, head) = (at(repo, need("base")?)?, at(repo, need("head")?)?);
-    Ok(vec![format!("keeper-schema base {base} head {head}")])
+    let migration = match flags.get("go-statement") {
+        Some(text) => migration_field(text)?,
+        None => None,
+    };
+    Ok(vec![serde_json::json!({
+        "keeper_schema": {"base": base, "head": head},
+        "migration": migration,
+    })
+    .to_string()])
 }
