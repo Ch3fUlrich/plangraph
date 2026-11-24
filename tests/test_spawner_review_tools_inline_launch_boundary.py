@@ -260,6 +260,10 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         checkout = Path(cwd)
         assert checkout != receiver
         assert (checkout / 'source').read_text() == 'head'
+        # The receiving spawner launches the reviewer in a disposable checkout at the exact head
+        # with no remote, whatever the sending host was.
+        inside = lambda *argv: subprocess.check_output(['git', '-C', str(checkout), *argv], text=True).strip()
+        assert inside('rev-parse', 'HEAD') == head and inside('remote') == ''
         assert options['extra_env']['FIXTURE_HARNESS_ENV'] == 'keep'
         target = Path(options['extra_env']['CARGO_TARGET_DIR'])
         assert target == checkout.parent / 'build' / 'target'

@@ -19,9 +19,10 @@ records without probing, and projection failures preserve the existing
 `fleet: null` fallback.
 
 The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
-`~/.config`), checking valid entries with `src` or `win_src` in parallel with
+`~/.config`), or the registry-resolved entries `ps` queries when the Python
+caller passes them in `PLANGRAPH_PS_HOSTS_JSON`, checking valid entries with `src` or `win_src` in parallel with
 at most 16 workers. SSH uses batch mode, a two-second connection timeout and
-a three-second probe deadline; source checks support POSIX, WSL and Windows
+a three-second probe deadline (nine seconds for a WSL or Windows host); source checks support POSIX, WSL and Windows
 paths. SSH output and diagnostics are discarded. A missing config or no
 eligible entries produces no source check rows; unreadable or malformed
 configuration produces `ps_hosts: fail` with `invalid configuration`.

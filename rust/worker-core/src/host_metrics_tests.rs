@@ -16,6 +16,7 @@ fn registry() -> HostRegistry {
                 transport: Transport::Local,
                 wsl_distro: None,
                 placement_fallback: false,
+                remote_placement: false,
                 ssh_target: None,
                 env: BTreeMap::new(),
                 os: Os::Linux,

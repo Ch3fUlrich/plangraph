@@ -294,7 +294,7 @@ def admit(service, options, *, card=None, preview=False):
             options['cwd'] = selected
 
     def local_readiness_refusal(public):
-        check_general = compare_local and public
+        check_general = compare_local and public and overflow.remote_open(config, local)  # a closed remote needs no comparison
         if not local or not (native or check_general):
             return None
         try:
