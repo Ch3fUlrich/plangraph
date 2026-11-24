@@ -134,10 +134,7 @@ mod tests {
 
     #[test]
     fn wsl_is_told_from_the_kernel_string_or_the_interop_variable() {
-        assert!(is_wsl(
-            "Linux version 6.18.33.2-microsoft-standard-WSL2",
-            None
-        ));
+        assert!(is_wsl("Linux version 6.18-microsoft-standard-WSL2", None));
         assert!(is_wsl(
             "Linux version 6.8 generic",
             Some("/run/WSL/1_interop")
