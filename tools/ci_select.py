@@ -321,6 +321,15 @@ def landing_evidence(statuses, tree: str, creator_id):
     return f"{named.group(1)} attempt {named.group(2)}"
 
 
+def _matrix_problems(jobs) -> list[str]:
+    """Jobs of the run that are missing or not green against the protected matrix of the runner tier it used
+    (``deploy/ci-watch/matrix.toml``: the self-hosted tier has four SQLite shards, the hosted tier three)."""
+    seen = {j.get("name"): j.get("conclusion") for j in jobs if isinstance(j, dict)}
+    tier = "self" if any("of 4)" in str(name) for name in seen) else "hosted"
+    expected = tomllib.loads((TOOLS_DIR.parent / "deploy/ci-watch/matrix.toml").read_text(encoding="utf-8"))[tier]
+    return [name for name in expected if seen.get(name) != "success"]
+
+
 def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, new_tree: str, jobs=()):
     """Evidence text when a commit that differs from ``old_head`` only in its message may reuse its green full run:
     the same non-empty tree, a success ``ci-full`` status of the old head published by github-actions, the run
@@ -332,7 +341,7 @@ def reword_evidence(statuses, run, old_head: str, new_head: str, old_tree: str, 
     seen = _FULL_EVIDENCE.fullmatch((full or {}).get("description") or "")
     if not full or full.get("state") != "success" or not seen or seen.group(3) != new_tree:
         return None
-    if (full.get("creator") or {}).get("login") != "github-actions[bot]" or _load_tool("merge_batch_land").full_job_problems(jobs):
+    if (full.get("creator") or {}).get("login") != "github-actions[bot]" or _matrix_problems(jobs):
         return None
     run = run or {}
     if (str(run.get("id")), str(run.get("run_attempt"))) != seen.group(1, 2) or run.get("head_sha") != old_head:
@@ -387,7 +396,7 @@ def _load_tool(name: str):
     """Import a sibling tool lazily: the CI select job runs without the package installed."""
     import importlib.util
 
-    sys.path.insert(0, str(TOOLS_DIR.parent / "src"))
+    sys.path[:0] = [str(TOOLS_DIR.parent / "src"), str(TOOLS_DIR)]
     spec = importlib.util.spec_from_file_location(f"ci_select_{name}", TOOLS_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -437,76 +446,6 @@ def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", ro
                   *(arg for package in plan["rust_packages"] for arg in ("-p", package))]]
     commands.extend(tests or [])
     return commands
-
-
-# --- entry replay: changed tests run five times on the part's head (LE-CI-FLAKE-ENTRY-REPLAY) -----------------------
-
-_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (\S+)|test (\S+) \.\.\. (ok|FAILED))", re.M)
-
-
-def changed_tests(root, base: str, head: str) -> dict:
-    """Python test files (not browser) and the Rust ``#[test]`` fns whose lines the part touched (body edits
-    included), as [manifest, name]. A test fn spans from its attribute to the closing brace at its indent."""
-    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, check=True, text=True).stdout  # noqa: E731
-    diff = f"{base}...{head}"
-    python = [p for p in git("diff", "--name-only", "--diff-filter=AMR", diff, "--", "tests").splitlines()
-              if re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py", p)]
-    rust = []
-    for path in git("diff", "--name-only", "--diff-filter=AM", diff, "--", "rust").splitlines():
-        hunks = re.findall(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", git("diff", "-U0", diff, "--", path), re.M) if path.endswith(".rs") else []
-        touched = {n for c, d in hunks for n in (range(int(c), int(c) + int(d or 1)) if int(d or 1) else (int(c), int(c) + 1))}
-        text = git("show", f"{head}:{path}") if touched else ""
-        owner = Path(path).parent
-        while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
-            owner = owner.parent
-        for m in re.finditer(r"^([ \t]*)#\[(?:\w+::)?test\b.*\n(?:\1#\[.*\n)*\1(?:async )?fn (\w+)(?:.*\{\}|.*\n(?:.*\n)*?\1\})", text, re.M):
-            if touched & set(range(text.count("\n", 0, m.start()) + 1, text.count("\n", 0, m.end()) + 2)):
-                rust.append([f"{owner}/Cargo.toml", m[2]])
-    return {"python": python, "rust": rust}
-
-
-def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[list[str]]:
-    """Each changed test ``runs`` times on one head; the last run uses every worker or thread."""
-    py = [sys.executable, "-m", "pytest", "-q", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
-    commands = [py + (["-n", "auto"] if workers and i == runs - 1 else []) for i in range(runs)] if changed["python"] else []
-    for manifest, name in changed["rust"]:
-        commands += [["cargo", "test", "--manifest-path", manifest, name, "--", *(["--test-threads=1"] if i < runs - 1 else [])]
-                     for i in range(runs)]
-    return commands
-
-
-def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: str = "") -> dict:
-    """Run the replay, keep every log. FLAKY ids passed and failed among the runs; failed: every run or no outcome."""
-    Path(out).mkdir(parents=True, exist_ok=True)
-    path = os.pathsep.join(filter(None, [str(Path(root) / "src"), os.environ.get("PYTHONPATH")]))
-    seen, failed = {}, []   # test -> {passed: first log}
-    for n, command in enumerate(replay_commands(changed, runs, workers)):
-        done = subprocess.run(command, cwd=root, env=dict(os.environ, PYTHONPATH=path), capture_output=True, text=True)
-        log = Path(out) / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
-        log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
-        outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
-        for test, ok in outcomes:
-            seen.setdefault(test, {}).setdefault(ok, str(log))
-        if done.returncode and not outcomes:
-            failed.append(" ".join(command[:6]))
-    flaky = sorted(t for t, r in seen.items() if len(r) == 2)
-    failed += sorted(t for t, r in seen.items() if True not in r)
-    result = {"flaky": flaky, "failed": failed, "logs": {t: [seen[t][False], seen[t][True]] for t in flaky},
-              "ok": not flaky and not failed, "runs": runs, "head": head, "changed": changed}
-    (Path(out) / "replay.json").write_text(json.dumps(result), encoding="utf-8")
-    return result
-
-
-def replay_dir(head: str) -> Path:
-    """Where the entry replay of a part head is kept: ``<telemetry>/entry-replay/<head>`` (readiness reads it)."""
-    return Path(os.environ.get("PLANGRAPH_TELEMETRY_DIR") or Path.home() / ".local/share/plangraph/telemetry") / "entry-replay" / head
-
-
-def replay_receipt(head: str):
-    try:
-        return json.loads((replay_dir(head) / "replay.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
 
 
 def attempt_key(attempt):
@@ -690,7 +629,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
                 failed = 1
         if args.run:   # the receipt of readiness is written even when no test changed
-            result = replay(root, changed_tests(root, args.base, args.head), args.replay_dir or replay_dir(args.head), head=args.head)
+            plan_tool = _load_tool("merge_batch_plan")
+            sha = subprocess.run(["git", "rev-parse", f"{args.head}^{{commit}}"], cwd=root, capture_output=True, check=True, text=True).stdout.strip()
+            result = plan_tool.replay(root, plan_tool.changed_tests(root, args.base, sha), args.replay_dir or plan_tool.replay_dir(sha), head=sha)
             for test in result["flaky"]:
                 print(f"entry-set: FLAKY: {test} (logs {' and '.join(result['logs'][test])})", file=sys.stderr)
             for test in result["failed"]:
