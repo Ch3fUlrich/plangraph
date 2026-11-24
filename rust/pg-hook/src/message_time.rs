@@ -1,4 +1,4 @@
-//! Reject future or unmarked approximate timestamps in outgoing agent messages.
+//! Reject placeholder times and times that are not the current UTC time in outgoing agent messages.
 use chrono::{DateTime, Duration, NaiveTime, Utc};
 use regex::Regex;
 use serde_json::Value;
@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)\b(?:",
-        r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})",
+        r"[0-9x]{4}-[0-9x]{2}-[0-9x]{2}[T ][0-9x]{2}:[0-9x]{2}(?::[0-9x]{2}(?:\.[0-9x]+)?)?(?:Z|[+-][0-9x]{2}:[0-9x]{2})",
         r"|[0-9x]{2}:[0-9x]{2}(?::[0-9x]{2})?Z",
         r")\b",
     )).expect("timestamp pattern")
@@ -32,6 +32,11 @@ pub fn hook(input: impl BufRead, diagnostic: &mut impl Write) -> i32 {
         _ => None,
     };
     text.as_deref().map_or(0, |text| check(text, diagnostic))
+}
+
+/// The first stamp in `text` that is not a current UTC time (see `invalid_time`).
+pub fn refusal(text: &str, now: DateTime<Utc>) -> Option<(&str, &'static str)> {
+    invalid_time(text, now)
 }
 
 pub fn check(text: &str, diagnostic: &mut impl Write) -> i32 {
@@ -61,8 +66,8 @@ fn shell_message(command: &str) -> Option<String> {
 /// The most a stated time may differ from the UTC clock.
 const TOLERANCE: Duration = Duration::minutes(2);
 
-/// The first stamp that is not a real, current time: a placeholder, a bare clock time more than
-/// two minutes from `now` in either direction, or an instant more than two minutes in the future.
+/// The first stamp that is not the current time: a placeholder, or a clock time or dated instant
+/// more than two minutes from `now` in either direction (bare times wrap at midnight).
 fn invalid_time(text: &str, now: DateTime<Utc>) -> Option<(&str, &'static str)> {
     for found in TIMESTAMP.find_iter(text) {
         let token = found.as_str();
@@ -70,26 +75,23 @@ fn invalid_time(text: &str, now: DateTime<Utc>) -> Option<(&str, &'static str)> 
         if normalized.contains('X') {
             return Some((token, "has placeholder digits; state the real time"));
         }
-        if normalized.contains('-') || normalized.contains('T') {
+        let distance = if normalized.contains('-') || normalized.contains('T') {
             let mut iso = normalized.replace(' ', "T");
             if iso.as_bytes().get(16) != Some(&b':') {
                 iso.insert_str(16, ":00");
             }
-            match DateTime::parse_from_rfc3339(&iso).map(|value| value.to_utc()) {
-                Ok(instant) if instant > now + TOLERANCE => {
-                    return Some((token, "is later than the UTC clock plus two minutes"))
-                }
-                Err(_) => return Some((token, "is not a valid timestamp")),
-                Ok(_) => {}
-            }
+            DateTime::parse_from_rfc3339(&iso)
+                .ok()
+                .map(|instant| (instant.to_utc() - now).abs())
         } else {
-            match clock_distance(&normalized, now) {
-                Some(distance) if distance > TOLERANCE => {
-                    return Some((token, "is not within two minutes of the UTC clock"))
-                }
-                None => return Some((token, "is not a valid timestamp")),
-                Some(_) => {}
+            clock_distance(&normalized, now)
+        };
+        match distance {
+            Some(distance) if distance > TOLERANCE => {
+                return Some((token, "is not within two minutes of the UTC clock"))
             }
+            None => return Some((token, "is not a valid timestamp")),
+            Some(_) => {}
         }
     }
     None
@@ -157,13 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn iso_instants_follow_their_offset_and_may_not_be_in_the_future() {
+    fn dated_instants_follow_their_offset_and_must_be_current() {
         let now = "2026-11-22T04:02:00Z";
         for pass in [
             "2026-11-22T05:03:00+01:00",
             "2026-11-22T04:04Z",
             "2026-11-22T04:04:00Z",
-            "2026-11-20T04:04:00Z",
+            "2026-11-22 04:00:00Z",
+            "2026-11-22T04:00:00.5Z",
         ] {
             assert_eq!(refused(pass, now), None, "{pass}");
         }
@@ -172,8 +175,27 @@ mod tests {
             "2026-11-22T05:04:01+01:00",
             "2026-11-22T03:05:01-01:00",
             "2026-11-22T05:30Z",
+            "2026-11-22T03:59:59Z",
+            "2026-11-20T04:04:00Z",
+            "2020-01-01T04:02:00Z",
+            "2026-11-22T03:03:00+01:00",
         ] {
             assert!(refused(fail, now).is_some(), "{fail}");
+        }
+    }
+
+    #[test]
+    fn dated_placeholders_are_refused() {
+        let now = "2026-11-24T05:27:25Z";
+        for fail in [
+            "2026-11-24T05:4xZ",
+            "2026-11-24 05:4x:00Z",
+            "2026-11-2xT05:27Z",
+            "xxxx-11-24T05:27:25Z",
+            "2026-11-24T05:27:2x+01:00",
+        ] {
+            let reason = refused(fail, now).unwrap_or_else(|| panic!("{fail}"));
+            assert!(reason.contains("placeholder"), "{fail}: {reason}");
         }
     }
 
@@ -181,14 +203,20 @@ mod tests {
     fn the_guessed_stamps_of_2026_11_24_are_refused_and_the_real_clock_passes() {
         // Messages said 05:4xZ and 05:5xZ while the clock read 05:27:25Z.
         let now = "2026-11-24T05:27:25Z";
-        for fail in ["05:4xZ", "05:5xZ", "05:37:26Z", "04:47Z"] {
+        for fail in [
+            "05:4xZ",
+            "05:5xZ",
+            "05:37:26Z",
+            "04:47Z",
+            "2026-11-24T04:47:51+01:00",
+        ] {
             assert!(refused(fail, now).is_some(), "{fail}");
         }
         for pass in [
             "05:27Z",
             "05:28:25Z",
             "05:25:30Z",
-            "2026-11-24T04:47:51+01:00",
+            "2026-11-24T06:27:25+01:00",
         ] {
             assert_eq!(refused(pass, now), None, "{pass}");
         }
