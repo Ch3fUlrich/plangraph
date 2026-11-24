@@ -2,7 +2,7 @@
 //! `review_seat_admission`), the rest queue, and a leg that gets limited while they queue is dropped
 //! at once because every pass routes again and reads the quota state.
 use crate::errors::ToolError;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, path::PathBuf, time::Duration};
 
 /// A reservation covers the gap between admission and the run record; past this it is stale.
@@ -163,55 +163,53 @@ fn lock_leg(state: &Path, leg: &str) -> Result<pg_worker_core::lockfile::LockGua
     ))
 }
 
-/// Takes a slot for the plan's first leg. A full leg queues the seat: it waits, routes again each
-/// poll (a limited leg drops out of the route at once) and, once the wait bound passes, moves on to
-/// the next leg of the route with room or is refused so the caller applies its fallback seats.
+/// Takes a slot for the plan's first leg. A full leg queues the seat: it waits and routes again each
+/// poll (a limited leg drops out of the route at once). The seat never falls through to another leg
+/// of the queued leg's harness: past the wait bound it is refused `seat_queue_timeout`, and a route
+/// that drops the leg for a sibling of the same harness is refused `seat_leg_limited`, so the caller
+/// applies its fallback seats. A route that moves to another harness is that fallback and is taken.
 pub(crate) fn admit(
     state: &Path,
     mut plan: Value,
     ports: &mut impl Ports,
 ) -> Result<(Value, Option<Reservation>), ToolError> {
     let began = ports.now();
+    let mut queued: Option<(String, Value)> = None;
     loop {
+        let leg = plan["first_leg"].clone();
+        let id = leg["id"].as_str().unwrap_or_default().to_owned();
+        if let Some((was, harness)) = &queued {
+            if *was != id && leg["harness"] == *harness {
+                return Err(refused(format!(
+                    "seat_leg_limited: {was} left the route while the seat queued and {id} is the same harness; use the fallback seats"
+                )));
+            }
+        }
         let Some(policy) = Policy::from_plan(&plan) else {
             return Ok((plan, None));
         };
+        let Some(limit) = policy.limits.get(&id).copied() else {
+            return Ok((plan, None));
+        };
         let waited = ports.now() - began;
-        let timed_out = waited >= policy.wait.as_secs_f64();
-        let candidates: Vec<Value> = std::iter::once(plan["first_leg"].clone())
-            .chain(plan["legs"].as_array().into_iter().flatten().cloned())
-            .filter(|leg| leg["id"].is_string())
-            .collect();
-        let mut full = None;
-        for leg in candidates {
-            let id = leg["id"].as_str().unwrap_or_default().to_owned();
-            let Some(limit) = policy.limits.get(&id).copied() else {
-                return Ok((with_first(plan, &leg), None));
-            };
-            let _lock = lock_leg(state, &id)?;
-            let (count, stale) =
-                occupied(state, &crate::records::list_runs(state), &id, ports.now());
-            stale.iter().for_each(|p| {
-                let _ = std::fs::remove_file(p);
-            });
-            if count < limit {
-                let path = slot_dir(state, &id).join(format!("{}-{}", std::process::id(), nonce()));
-                std::fs::write(&path, format!("{}\n", ports.now()))
-                    .map_err(|e| ToolError::Internal(e.to_string()))?;
-                return Ok((with_first(plan, &leg), Some(Reservation(path))));
-            }
-            full = full.or(Some((id.clone(), count, limit)));
-            if !timed_out {
-                break; // The route's first leg is the only one worth waiting for.
-            }
+        let lock = lock_leg(state, &id)?;
+        let (count, stale) = occupied(state, &crate::records::list_runs(state), &id, ports.now());
+        stale.iter().for_each(|p| {
+            let _ = std::fs::remove_file(p);
+        });
+        if count < limit {
+            let path = slot_dir(state, &id).join(format!("{}-{}", std::process::id(), nonce()));
+            std::fs::write(&path, format!("{}\n", ports.now()))
+                .map_err(|e| ToolError::Internal(e.to_string()))?;
+            return Ok((plan, Some(Reservation(path))));
         }
-        let (id, count, limit) = full.unwrap_or_default();
-        if timed_out {
+        drop(lock);
+        if waited >= policy.wait.as_secs_f64() {
             return Err(refused(format!(
-                "seat_queue_timeout: {id} runs {count} of {limit} seats and no other routed leg has room after {:.0}s; use the fallback seats",
-                waited
+                "seat_queue_timeout: {id} runs {count} of {limit} seats after {waited:.0}s; use the fallback seats"
             )));
         }
+        queued = Some((id, leg["harness"].clone()));
         ports.sleep(policy.poll);
         plan = ports.route()?;
     }
@@ -221,14 +219,6 @@ pub(crate) fn admit(
 fn nonce() -> u64 {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-fn with_first(mut plan: Value, leg: &Value) -> Value {
-    if plan["first_leg"]["id"] != leg["id"] {
-        plan["first_leg"] = leg.clone();
-        plan["seat_admission_moved"] = json!(true);
-    }
-    plan
 }
 
 #[cfg(test)]
