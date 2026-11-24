@@ -1,4 +1,4 @@
-# Only ci-gate required; full tier requires every job. Draft/sub-PRs select affected suites.
+# Only ci-gate required; full tier requires every job. Part PRs (draft lane/*) run no job; other draft/sub-PRs select affected suites.
 
 name: tests
 
@@ -17,6 +17,9 @@ on:
 # land-part label, a merge queue event, or a head a router GO row labels ci-full (a push to main and a dispatch
 # also run it). Every other pull request, a part included (label land-part), runs the affected selection
 # (tools/ci_select.py full_run_required).
+# A draft pull request from a lane/* branch (a batch part) runs no job at all: its jobs carry the condition
+# below, jobs that need select are skipped with it, and a skipped required ci-gate reports success, so no
+# check stays pending (part admission is review, fast gates and affected tests on the writer host; D-6773).
 # Marking a draft ready starts no run: the head already has its required ci-gate from the run its last push
 # started, and a second run would leave the required check pending for an hour (landing a draft part).
 # A newer push to the PR cancels the stale run, but never a workflow_dispatch run (timing measurements
@@ -31,6 +34,7 @@ permissions:
 jobs:
   select:
     name: 'Select suites for this change'
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     runs-on: ubuntu-24.04
     outputs:
       pytest: ${{ steps.sel.outputs.pytest }}
@@ -76,6 +80,7 @@ jobs:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
   scrub:
     name: 'Public scrub: no private names or secrets'
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -90,6 +95,7 @@ jobs:
   # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
     name: 'File size limit (400 lines)'
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -102,6 +108,7 @@ jobs:
   # D-4691: added production source must be Rust unless explicitly allowlisted.
   new-code-lang:
     name: 'New code is Rust'
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -115,6 +122,7 @@ jobs:
   # D-653: every change -> CHANGELOG.md + docs (.docs-map)
   changelog-docs:
     name: 'Changelog fragment and docs'
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -718,7 +726,7 @@ jobs:
     name: ci-gate
     runs-on: ubuntu-24.04
     needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
-    if: ${{ always() }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
     permissions:
       contents: read
       statuses: write
