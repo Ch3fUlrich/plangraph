@@ -8,12 +8,13 @@ use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest,
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N --part-ci FILE --previous-train SHA [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N --writer-receipts FILE [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
   plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
   plangraph land-train go-verify --evidence FILE\n\
   plangraph land-train merge-body --repo DIR --manifest FILE [--check BODYFILE]\n\
-part-ci FILE: JSON array of {pr, head, run_id, base, workflow, conclusion}, the full CI run of each part's lane; previous-train: the merge commit of the last train on main\n\
+writer-receipts FILE: JSON array of {pr, head, review_head, review_verdict, checks: [{command, exit_code}]}, the writer host's record per part head (review ACCEPT, affected tests and preflight green); full CI runs once, on the train head
+\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
@@ -214,7 +215,7 @@ pub(super) fn run_inner(
     match cmd.as_str() {
         "build" => {
             let repo_dir = PathBuf::from(need("repo")?);
-            super::part_ci::gate_cli(&flags, &repo_dir, &parts, &need("name")?)?;
+            super::writer_gate::gate_cli(&flags, &parts, &need("name")?)?;
             // Main is read for the repository this checkout belongs to.
             let origin = super::git::out(&repo_dir, &["remote", "get-url", "origin"])?;
             let slug = crate::ci_watch::github::repository(&origin)?;
