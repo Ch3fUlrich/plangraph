@@ -210,34 +210,72 @@ fn dry_run_output_is_parsed_strictly() {
     assert_eq!(missing.unwrap_err()[0].name, "/etc/x");
 }
 
-#[test]
-fn a_part_that_raises_the_keeper_schema_puts_migration_and_keeper_restart_in_the_go_req() {
-    use super::keeper_schema::SCHEMA_PATH;
-    let fx = Fx::new();
-    let two = "MIGRATIONS = (Migration(1, a, X), Migration(2, b, Y))\n";
-    let three = "MIGRATIONS = (Migration(1, a, X), Migration(2, b, Y), Migration(3, c, Z))\n";
-    let base = commit(&fx, &[(SCHEMA_PATH, two)], "schema\n\nPlan-Item: demo:S");
-    g(fx.path(), &["checkout", "-q", "main"]);
-    g(fx.path(), &["reset", "-q", "--hard", &base]);
-    let raise = commit(&fx, &[(SCHEMA_PATH, three)], "raise\n\nPlan-Item: demo:B");
-    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+const SCHEMA: &str = super::keeper_schema::SCHEMA_PATH;
+
+fn registry(n: u32) -> String {
+    let entries: Vec<_> = (1..=n).map(|v| format!("Migration({v}, a, X)")).collect();
+    format!("MIGRATIONS = ({})\n", entries.join(", "))
+}
+
+/// A manifest of one train over `parts` (each a head), built on the current main.
+fn built(fx: &Fx, heads: &[&str]) -> super::train::Manifest {
     let input = BuildInput {
         repo: fx.path(),
         build: "b1".into(),
         base: fx.base(),
-        parts: vec![part(1, &docs, None), part(2, &raise, None)],
+        parts: heads
+            .iter()
+            .enumerate()
+            .map(|(i, h)| part(i as u64 + 1, h, None))
+            .collect(),
         attributes: String::new(),
         cap: None,
         resolutions: vec![],
         protected: vec![],
     };
-    let manifest = build(&input).unwrap().manifest.unwrap();
-    let parts = derive(fx.path(), &manifest).unwrap();
-    assert_eq!(
-        parts.iter().map(|p| p.keeper_migration).collect::<Vec<_>>(),
-        [None, Some(3)]
+    build(&input).unwrap().manifest.unwrap()
+}
+
+fn move_main(fx: &Fx, to: &str) {
+    g(fx.path(), &["checkout", "-q", "main"]);
+    g(fx.path(), &["reset", "-q", "--hard", to]);
+}
+
+#[test]
+fn a_part_branched_before_main_raised_the_schema_is_not_a_regression_of_the_train() {
+    let fx = Fx::new();
+    let one = commit(&fx, &[(SCHEMA, &registry(1))], "s1");
+    move_main(&fx, &one);
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
+    move_main(&fx, &two);
+    let manifest = built(&fx, &[&docs]);
+    assert_eq!(train_migration(fx.path(), &manifest), Ok(None));
+    let plan = deploy_plan(
+        &derive(fx.path(), &manifest).unwrap(),
+        &BTreeMap::new(),
+        &hosts(&[]),
+        &pass(),
     );
-    let plan = deploy_plan(&parts, &BTreeMap::new(), &hosts(&[]), &pass());
+    assert_eq!(plan.go_req(), "deploy: none");
+}
+
+#[test]
+fn a_train_that_raises_the_schema_puts_migration_and_keeper_restart_in_the_go_req() {
+    let fx = Fx::new();
+    let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
+    move_main(&fx, &two);
+    let raise = commit(&fx, &[(SCHEMA, &registry(3))], "raise\n\nPlan-Item: demo:B");
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let manifest = built(&fx, &[&docs, &raise]);
+    let mut plan = deploy_plan(
+        &derive(fx.path(), &manifest).unwrap(),
+        &BTreeMap::new(),
+        &hosts(&[]),
+        &pass(),
+    );
+    assert_eq!(plan.go_req(), "deploy: none");
+    plan.keeper_migration = train_migration(fx.path(), &manifest).unwrap();
     let line = plan.go_req();
     assert!(line.starts_with("deploy: none; MIGRATION 3; "), "{line}");
     assert!(
@@ -245,6 +283,23 @@ fn a_part_that_raises_the_keeper_schema_puts_migration_and_keeper_restart_in_the
         "{line}"
     );
     assert!(line.contains("never a plain restart"), "{line}");
-    let unchanged = deploy_plan(&parts[..1], &BTreeMap::new(), &hosts(&[]), &pass());
-    assert_eq!(unchanged.go_req(), "deploy: none");
+}
+
+#[test]
+fn a_migration_that_only_the_final_train_commit_carries_is_found() {
+    // An adopted resolution adds the migration in the train commit itself, not in any part tip.
+    let fx = Fx::new();
+    let two = commit(&fx, &[(SCHEMA, &registry(2))], "s2");
+    move_main(&fx, &two);
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let mut manifest = built(&fx, &[&docs]);
+    g(
+        fx.path(),
+        &["checkout", "-q", "--detach", &manifest.train_sha],
+    );
+    std::fs::write(fx.path().join(SCHEMA), registry(3)).unwrap();
+    g(fx.path(), &["add", "-A"]);
+    g(fx.path(), &["commit", "-q", "-m", "resolve"]);
+    manifest.train_sha = g(fx.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(train_migration(fx.path(), &manifest), Ok(Some(3)));
 }

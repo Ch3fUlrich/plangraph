@@ -327,3 +327,46 @@ fn evidence_without_the_schema_versions_does_not_parse() {
     value.as_object_mut().unwrap().remove("keeper_schema");
     assert!(serde_json::from_value::<Evidence>(value).is_err());
 }
+
+/// The production path of the two fields: the versions come from the pinned revisions of a git fixture and
+/// the `migration` from the exact GO statement, both through `land-train keeper-schema`.
+#[test]
+fn collected_schema_evidence_accepts_or_refuses_the_exact_go_row_by_its_migration_field() {
+    use super::build_tests::{g, Fx};
+    use super::keeper_schema::SCHEMA_PATH;
+    let fx = Fx::new();
+    let at = |entries: u32, name: &str| {
+        let p = fx.path();
+        g(p, &["checkout", "-q", "--detach", &fx.base()]);
+        let body: Vec<_> = (1..=entries)
+            .map(|v| format!("Migration({v}, a, X)"))
+            .collect();
+        let path = p.join(SCHEMA_PATH);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("MIGRATIONS = ({})\n", body.join(", "))).unwrap();
+        g(p, &["add", "-A"]);
+        g(p, &["commit", "-q", "-m", name]);
+        let sha = g(p, &["rev-parse", "HEAD"]);
+        g(p, &["checkout", "-q", "main"]);
+        sha
+    };
+    let (base, head) = (at(2, "two"), at(3, "three"));
+    let collect = |statement: &str| {
+        let flags = std::collections::BTreeMap::from([
+            ("repo".to_string(), fx.path().display().to_string()),
+            ("base".to_string(), base.clone()),
+            ("head".to_string(), head.clone()),
+            ("go-statement".to_string(), statement.to_string()),
+        ]);
+        let line = super::keeper_schema::run_cli(&flags).unwrap().remove(0);
+        let fields: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let mut e = green();
+        e.keeper_schema = serde_json::from_value(fields["keeper_schema"].clone()).unwrap();
+        e.approvals[0].migration = serde_json::from_value(fields["migration"].clone()).unwrap();
+        codes(&e)
+    };
+    let row = |tail: &str| format!("GO owner/name PR #9 GO-HEAD {HEAD}{tail}");
+    assert_eq!(collect(&row("; MIGRATION 3; PLAN x")), Vec::<&str>::new());
+    assert_eq!(collect(&row("; MIGRATION 2")), ["migration_missing"]);
+    assert_eq!(collect(&row("")), ["migration_missing"]);
+}
