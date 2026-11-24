@@ -269,10 +269,13 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "base"]);
     let base = git(root, &["rev-parse", "HEAD"]);
+    // A host with a data drive configures the one setting; the home cache is never created.
+    let home = tempfile::tempdir().unwrap();
     let run = |fail: &str| {
         Command::new(env!("CARGO_BIN_EXE_plangraph"))
             .current_dir(root)
             .args(["fast-checks", "--owned-worktree", "--base", &base])
+            .env("HOME", home.path())
             .env("PLANGRAPH_CARGO_TARGET_DIR", cache.path().join("cargo"))
             .env("ORIGINAL_CHECKOUT", root)
             .env("FIXTURE_FAIL", fail)
@@ -297,4 +300,6 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         );
         assert!(!root.join("generated").exists());
     }
+    assert!(!home.path().join(".cache/plangraph").exists());
+    assert!(cache.path().join("cargo.plangraph-lock").exists());
 }
