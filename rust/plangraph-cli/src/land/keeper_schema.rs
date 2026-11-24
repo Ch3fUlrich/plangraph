@@ -17,8 +17,7 @@ fn find_registry(text: &str) -> Result<usize, String> {
     let (mut found, mut depth, mut i) = (None, 0u32, 0);
     while i < text.len() {
         let rest = &text[i..];
-        let at_line_start = i == 0 || text[..i].ends_with('\n');
-        if depth == 0 && at_line_start {
+        if depth == 0 && starts_statement(text, i) {
             if let Some(open) = registry_assignment(rest)? {
                 if found.is_some() {
                     return Err("more than one MIGRATIONS registry".into());
@@ -40,6 +39,17 @@ fn find_registry(text: &str) -> Result<usize, String> {
         };
     }
     found.ok_or_else(|| "no MIGRATIONS registry".into())
+}
+
+/// Whether a top-level statement starts at `i`: at column 0 of a line, or after a `;` on a line that itself
+/// starts at column 0 (`A = 1; MIGRATIONS = (...)`). An indented line is part of a block, not top level.
+fn starts_statement(text: &str, i: usize) -> bool {
+    let before = &text[..i];
+    if i == 0 || before.ends_with('\n') {
+        return true;
+    }
+    let line = &before[before.rfind('\n').map_or(0, |n| n + 1)..];
+    !line.starts_with([' ', '\t']) && line.trim_end_matches([' ', '\t']).ends_with(';')
 }
 
 /// For a line start that reads `MIGRATIONS <spaces> = <spaces> VALUE`: the offset of the first byte of

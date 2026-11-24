@@ -449,7 +449,7 @@ def test_keeper_migration_needs_a_head_bound_go_marker(env):
         refused = land(env, approval, "--go-row", str(row), name="g1")
         assert refused.returncode == 1 and f"MIGRATION 2" in refused.stderr
         assert not env.calls("pr", "merge")
-    row.write_text(f"| D-123 | proj | (15:46Z, date -u) GO #100 proj at GO-HEAD {head}; MIGRATION 2 | ROUTER |\n")
+    row.write_text(f"| D-123 | proj | (15:46Z, date -u) GO #100 proj at GO-HEAD {head}; MIGRATION-NOTE staged; MIGRATION 2 | ROUTER |\n")
     accepted = land(env, approval, "--go-row", str(row), name="g1")
     assert accepted.returncode == 0, accepted.stderr
     assert len(env.calls("pr", "merge")) == 1
