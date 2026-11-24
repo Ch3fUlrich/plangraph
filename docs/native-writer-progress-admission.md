@@ -62,12 +62,13 @@ findings. A card that omits `failing_checks` keeps the round's own start count (
 credit), and the last observed count is carried over any number of omissions. A stall without
 a PR refuses `no_progress` or `slow_progress` and queues a return job (one routing line with the
 open findings, nothing planned): the batch goes back. The replan keeps the findings at plan
-level, so a diff with no counted file still hands them to the writer. A routing line is cut to what the fleet bus takes (2000 characters, a 4096-byte ASCII-JSON
-body) with a pointer to the job file that keeps the full text; a saved line the bus can take is
-resent byte for byte under its message id. A return job releases the keeper claim of every item
-in `card.item_keys` (else the item key), each at the epoch seen and saved before the first try
-(`keeper release --epoch`): a retry after a release that was committed finds the epoch gone and
-goes on, and a newer claim is never released. `card.batch_key` names one ledger for several
+level, so a diff with no counted file still hands them to the writer. A routing line is cut to what the fleet bus takes (2000 characters, and the whole signed 4096-byte POST with 600 bytes kept for the envelope) with a pointer to the job file that keeps the full text; a saved line the bus can take is
+resent byte for byte under its message id. A return job releases the keeper claims named by `card.claims` (item -> epoch, the claim
+receipts), each at its saved epoch (`keeper release --epoch`), never one looked up later; a
+retry after a committed release reads the claim with `keeper show --authoritative` (no local
+snapshot), finds the epoch gone and goes on, and a replaced claim is left alone. A return
+without receipts, or a job of the earlier schema, stays pending with `replan_claims_unbound`.
+`card.batch_key` names one ledger for several
 item keys (records, locks, replan jobs and the report use it; verdicts name it too); a running
 initial writer holds its batch (`round_in_flight`);
 `card.round_cause: initial` marks the first implementation, which takes no round number and is

@@ -94,6 +94,8 @@ def _add_reads(sub):
     show.add_argument("key")
     show.add_argument("--brief", action="store_true",
                       help="short task brief instead of the full item")
+    show.add_argument("--authoritative", action="store_true",
+                      help="the keeper's own answer only: fail instead of reading the local snapshot")
 
     blocked = _p(sub, "blocked", help="open items and their unmet deps")
     blocked.add_argument("--project")

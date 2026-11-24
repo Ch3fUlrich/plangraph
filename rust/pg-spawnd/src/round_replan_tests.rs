@@ -16,19 +16,29 @@ fn change(path: &str, lines: u64) -> FileChange {
     }
 }
 
-/// The fleet bus's own text and body caps, written out apart from the production helper:
-/// 2000 characters, and the body `{"text":...}` of at most 4096 bytes in ASCII-only JSON.
+/// The fleet bus's caps, written out apart from the production helper: 2000 characters of
+/// text, and the whole signed POST of at most 4096 bytes in ASCII-only JSON (DEL and every
+/// non-ASCII UTF-16 unit take six bytes), with each identifier at its length limit.
 fn bus_accepts(text: &str) -> bool {
-    let mut body = 10;
+    let fixed = format!(
+        "{{\"body\":{{\"text\":\"\"}},\"envelope\":{{\"host\":\"{}\",\"msg_id\":\"{}\",\"nonce\":\"{}\",\"sig\":\"{}\",\"ts\":9999999999}},\"from\":\"{}\",\"to\":\"{}\"}}",
+        "h".repeat(64),
+        "m".repeat(32),
+        "n".repeat(128),
+        "s".repeat(64),
+        "h".repeat(64),
+        "t".repeat(64)
+    );
+    let mut wire = fixed.len();
     for unit in text.encode_utf16() {
-        body += match unit {
+        wire += match unit {
             0x22 | 0x5c | 0x0a | 0x0d | 0x09 | 0x08 | 0x0c => 2,
-            0x00..=0x1f => 6,
-            0x20..=0x7f => 1,
+            0x00..=0x1f | 0x7f => 6,
+            0x20..=0x7e => 1,
             _ => 6,
         };
     }
-    text.chars().count() <= 2000 && body <= 4096
+    text.chars().count() <= 2000 && wire <= 4096
 }
 
 #[derive(Default)]
@@ -487,7 +497,7 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
         "p:I",
         "no_progress",
         &["HIGH a/one.rs:3 keep\nit".into()],
-        &[]
+        Some(&claims(&[]))
     )
     .ok()
     .unwrap());
@@ -496,7 +506,7 @@ fn a_batch_sent_back_without_a_pr_still_gets_one_delivered_routing_line() {
         "p:I",
         "no_progress",
         &["HIGH a/one.rs:3 keep\nit".into()],
-        &[]
+        Some(&claims(&[]))
     )
     .ok()
     .unwrap());
@@ -551,11 +561,15 @@ fn an_oversized_findings_list_is_cut_to_the_bus_limit_with_a_pointer_to_the_job(
     let findings: Vec<String> = (0..80)
         .map(|n| format!("HIGH file{n}.rs:{n} {}", "x".repeat(60)))
         .collect();
-    assert!(
-        enqueue_return(dir.path(), "p:I", "round_cap", &findings, &[])
-            .ok()
-            .unwrap()
-    );
+    assert!(enqueue_return(
+        dir.path(),
+        "p:I",
+        "round_cap",
+        &findings,
+        Some(&claims(&[]))
+    )
+    .ok()
+    .unwrap());
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let line = ports.calls.borrow().last().unwrap().clone();
@@ -596,16 +610,20 @@ fn a_legacy_job_keeps_one_date_across_retries() {
     assert_eq!(jobs(dir.path())[0]["queued_at"].as_f64(), Some(1_000_000.0));
 }
 
+fn claims(list: &[(&str, u64)]) -> std::collections::BTreeMap<String, u64> {
+    list.iter().map(|(k, e)| (k.to_string(), *e)).collect()
+}
+
 #[test]
-fn a_return_releases_each_claimed_item_at_its_epoch_before_it_reports() {
+fn a_return_releases_each_receipt_item_at_its_saved_epoch_before_it_reports() {
     let dir = tempfile::tempdir().unwrap();
-    // The ledger key names no claim; the items of the card do.
+    // The ledger key names no claim; the receipts of the card do.
     assert!(enqueue_return(
         dir.path(),
         "p:Batch",
         "round_cap",
         &[],
-        &["p:One".into(), "p:Two".into(), "p:Free".into()]
+        Some(&claims(&[("p:One", 3), ("p:Two", 7)]))
     )
     .ok()
     .unwrap());
@@ -623,7 +641,7 @@ fn a_return_releases_each_claimed_item_at_its_epoch_before_it_reports() {
     assert!(calls.contains(&"release p:Two at 7".to_string()));
     assert!(!calls
         .iter()
-        .any(|c| c.starts_with("release") && (c.contains("p:Batch") || c.contains("p:Free"))));
+        .any(|c| c.starts_with("release") && c.contains("p:Batch")));
     let last_release = calls
         .iter()
         .rposition(|c| c.starts_with("release"))
@@ -634,32 +652,67 @@ fn a_return_releases_each_claimed_item_at_its_epoch_before_it_reports() {
 }
 
 #[test]
-fn a_release_committed_before_the_save_is_reconciled_and_a_newer_claim_is_left_alone() {
-    // The release went through and its answer was lost: the retry finds the epoch gone.
+fn a_replaced_claim_is_never_released_and_a_committed_release_is_reconciled() {
+    // The claim of the receipt (epoch 3) was replaced by epoch 5 before the job ran.
     let dir = tempfile::tempdir().unwrap();
-    enqueue_return(dir.path(), "p:I", "round_cap", &[], &["p:I".into()])
-        .ok()
-        .unwrap();
+    enqueue_return(
+        dir.path(),
+        "p:I",
+        "round_cap",
+        &[],
+        Some(&claims(&[("p:I", 3)])),
+    )
+    .ok()
+    .unwrap();
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:I".into(), 5);
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.claimed.borrow().get("p:I"), Some(&5));
+    assert_eq!(ports.count("release p:I at 5"), 0);
+    // A release that went through and lost its answer: the retry finds the epoch gone.
+    let dir = tempfile::tempdir().unwrap();
+    enqueue_return(
+        dir.path(),
+        "p:I",
+        "round_cap",
+        &[],
+        Some(&claims(&[("p:I", 3)])),
+    )
+    .ok()
+    .unwrap();
     let ports = Fixture::default();
     ports.claimed.borrow_mut().insert("p:I".into(), 3);
     *ports.crash_after_release.borrow_mut() = true;
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(ports.count("release p:I at 3"), 1);
     assert_eq!(ports.count("route"), 1);
-    // A later claim (epoch 4) taken between the failed release and the retry is never released.
+}
+
+#[test]
+fn a_return_without_saved_receipts_stays_pending_with_an_explicit_error() {
+    // A job of the previous head (claim_items, no bound receipts) and a card without claims.
     let dir = tempfile::tempdir().unwrap();
-    enqueue_return(dir.path(), "p:I", "round_cap", &[], &["p:I".into()])
+    std::fs::create_dir_all(job_dir(dir.path())).unwrap();
+    std::fs::write(
+        job_dir(dir.path()).join("replan-prev.json"),
+        json!({"item":"p:I", "pr":"", "reason":"round_cap", "kind":"return", "queued_at":5.0,
+        "claim_items":["p:I"], "claims":{}, "plan":{"leg":null, "slices":[], "findings":[]},
+        "defined":[], "closed":false, "report":"pending", "error":null})
+        .to_string(),
+    )
+    .unwrap();
+    enqueue_return(dir.path(), "p:J", "round_cap", &[], None)
         .ok()
         .unwrap();
     let ports = Fixture::default();
     ports.claimed.borrow_mut().insert("p:I".into(), 3);
-    *ports.fail_release.borrow_mut() = true;
-    assert!(run_pending(dir.path(), &ports)[0].1.contains("keeper_down"));
-    ports.claimed.borrow_mut().insert("p:I".into(), 4);
-    *ports.fail_release.borrow_mut() = false;
-    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
-    assert_eq!(ports.claimed.borrow().get("p:I"), Some(&4));
-    assert_eq!(ports.count("release p:I at 4"), 0);
+    for (_, outcome) in run_pending(dir.path(), &ports) {
+        assert!(outcome.contains("replan_claims_unbound"), "{outcome}");
+    }
+    assert_eq!(ports.count("route"), 0);
+    assert_eq!(ports.count("release"), 0);
+    assert_eq!(ports.claimed.borrow().get("p:I"), Some(&3));
+    assert!(jobs(dir.path()).iter().all(|j| j["released"] != true));
 }
 
 #[test]
@@ -703,8 +756,20 @@ fn a_deliverable_saved_line_is_resent_unchanged_and_only_an_oversized_one_is_cut
     );
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let sent = ports.calls.borrow().last().unwrap().clone();
     assert!(bus_accepts(sent.trim_start_matches("route ")));
     assert!(sent.contains("(full text in replans/replan-old.json)"));
+    // The worker ran twice and the bus took exactly one accepted delivery.
+    assert_eq!(ports.count("route"), 1);
+    // A line of DEL characters costs six bytes each and is cut to what the bus takes.
+    let dir = tempfile::tempdir().unwrap();
+    saved(
+        dir.path(),
+        "replan-del.json",
+        &format!("REPLAN p:Old {}", "\u{7f}".repeat(800)),
+    );
+    let ports = Fixture::default();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(ports.count("route"), 1);
 }

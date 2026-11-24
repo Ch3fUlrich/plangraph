@@ -336,7 +336,9 @@ def cmd_show(args, session):
             data = brief_mod.build(data, data.get("depends_on"))
         return _emit(session, data, render)
     params = {"key": args.key, "brief": 1 if args.brief else None}
-    return read(session, "show", params, lambda r: render(r), local)
+    # --authoritative: the keeper's own answer or a failure, never the local snapshot.
+    return read(session, "show", params, lambda r: render(r),
+                None if getattr(args, "authoritative", False) else local)
 
 
 def cmd_blocked(args, session):

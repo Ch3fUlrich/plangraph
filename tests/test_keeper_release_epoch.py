@@ -19,3 +19,16 @@ def test_release_with_an_epoch_sends_that_epoch(monkeypatch):
 def test_release_without_an_epoch_takes_the_current_one(monkeypatch):
     assert _release(monkeypatch, epoch=None) == [("release", {"key": "p:I", "epoch": 9})]
     assert _release(monkeypatch) == [("release", {"key": "p:I", "epoch": 9})]
+
+
+def test_authoritative_show_never_falls_back_to_the_local_snapshot(monkeypatch, capsys):
+    class Down:
+        def call(self, *args, **kwargs):
+            raise cli_verbs.Unreachable("keeper down")
+
+        def local_items(self):
+            raise AssertionError("the local snapshot was read")
+
+    args = SimpleNamespace(key="p:I", brief=False, authoritative=True)
+    assert cli_verbs.cmd_show(args, Down()) == cli_verbs.EXIT_UNREACHABLE
+    assert "keeper unreachable" in capsys.readouterr().err

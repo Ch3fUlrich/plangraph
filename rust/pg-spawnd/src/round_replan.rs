@@ -218,7 +218,7 @@ pub(crate) fn enqueue_return(
     item: &str,
     reason: &str,
     findings: &[String],
-    claim_items: &[String],
+    claims: Option<&std::collections::BTreeMap<String, u64>>,
 ) -> Result<bool, ToolError> {
     std::fs::create_dir_all(job_dir(state))
         .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
@@ -228,7 +228,8 @@ pub(crate) fn enqueue_return(
         return Ok(false);
     }
     let job = json!({"item":item, "pr":"", "reason":reason, "kind":"return", "queued_at":now(),
-        "claim_items":claim_items, "claims":{},
+        "claims_bound":claims.is_some(),
+        "claims":claims.map(|c| c.iter().map(|(k, e)| (k.clone(), json!({"epoch":e, "released":false}))).collect::<serde_json::Map<_, _>>()).unwrap_or_default(),
         "plan":{"leg":null, "slices":[], "findings":findings}, "defined":[], "closed":false,
         "report":"pending", "error":null});
     save(&path, &job)?;
@@ -467,34 +468,39 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
     Ok(())
 }
 
-/// Release the keeper claim of every item the returned batch held, each at the epoch seen
-/// before the first try and saved. A retry after a release that was committed but not saved
-/// finds that epoch gone and goes on; a newer claim on the item is never released.
+/// Release the keeper claim of every item the returned batch held, each at the epoch of the
+/// claim receipt saved with the job (`claims_bound`), never one looked up now: a claim that was
+/// replaced since is not ours to release. A retry after a release that was committed but not
+/// saved finds its epoch gone (read from the keeper itself) and goes on. A job without saved
+/// receipts stays pending with an explicit error.
 fn release_claims(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
-    let items: Vec<String> = job["claim_items"]
-        .as_array()
+    if job["claims_bound"] != true {
+        return Err(parameter(
+            "replan_claims_unbound: this return carries no claim receipts; release its claims by hand or queue it again with card.claims",
+        ));
+    }
+    let items: Vec<String> = job["claims"]
+        .as_object()
         .into_iter()
         .flatten()
-        .filter_map(|v| v.as_str().map(String::from))
+        .map(|(item, _)| item.clone())
         .collect();
     for item in &items {
         if job["claims"][item]["released"] == true {
             continue;
         }
-        if job["claims"][item].is_null() {
-            let epoch = ports.claim_epoch(item)?;
-            job["claims"][item] = json!({"epoch":epoch, "released":epoch.is_none()});
-            save(path, job)?;
-        }
-        if let Some(epoch) = job["claims"][item]["epoch"].as_u64() {
-            if let Err(error) = ports.release_claim(item, epoch) {
-                if ports.claim_epoch(item)? == Some(epoch) {
-                    return Err(error);
-                }
+        let Some(epoch) = job["claims"][item]["epoch"].as_u64() else {
+            return Err(parameter(
+                "replan_claims_unbound: a claim receipt has no epoch",
+            ));
+        };
+        if let Err(error) = ports.release_claim(item, epoch) {
+            if ports.claim_epoch(item)? == Some(epoch) {
+                return Err(error);
             }
-            job["claims"][item]["released"] = json!(true);
-            save(path, job)?;
         }
+        job["claims"][item]["released"] = json!(true);
+        save(path, job)?;
     }
     job["released"] = json!(true);
     save(path, job)
@@ -502,15 +508,18 @@ fn release_claims(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(),
 
 /// The most characters of a routing line the fleet bus takes (its text cap).
 const LINE_MAX: usize = 2000;
-/// The most JSON bytes of the line: the bus body `{"text":...}` is capped at 4096 bytes.
-const LINE_JSON_MAX: usize = 4096 - 10;
+/// The bus caps the whole signed POST at 4096 bytes: this much is kept for everything around
+/// the text (identifiers up to their 64- and 128-character limits, the signature, the keys);
+/// tests/fleet_bus/test_report_budget.py proves it against the client's own serialization.
+const ENVELOPE_RESERVE: usize = 600;
+/// The most JSON bytes the text of a line may take.
+const LINE_JSON_MAX: usize = 4096 - ENVELOPE_RESERVE;
 
 /// The JSON bytes of `c` as the bus client encodes it (ASCII-only JSON).
 fn json_cost(c: char) -> usize {
     match c {
         '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
         c if c.is_ascii() && !c.is_ascii_control() => 1,
-        '\u{7f}' => 1,
         c if c.len_utf16() == 2 => 12,
         _ => 6,
     }
