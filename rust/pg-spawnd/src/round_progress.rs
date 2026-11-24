@@ -228,13 +228,12 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
             }
             saved
         } else if record["round_verdict_file"].is_null()
-            && (after(index).is_some()
-                || record["round_cause"]
-                    .as_str()
-                    .is_some_and(|c| c != crate::round_escalate::CAUSES[0]))
+            && record["round_cause"]
+                .as_str()
+                .is_some_and(|c| c != crate::round_escalate::CAUSES[0])
         {
             // A round judged by its failing checks alone (red CI, fast check, rebase); an unknown
-            // count after it is green.
+            // count after it is green. A review round always needs its verdict.
             json!({"confirmed_blockers":0, "narrow_fix_eligible":false, "verdict":null})
         } else {
             let source = record["round_verdict_file"]
@@ -282,15 +281,19 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let (mut new_level, mut why, mut replan) = (level, Value::Null, Value::Null);
     if let (Some(reason), false) = (reason, narrow) {
         (new_level, why) = (level + 1, json!(reason));
-        replan = match crate::round_replan::enqueue_escalation(
-            state,
-            item,
-            pr.as_str().unwrap_or(""),
-            new_level,
-        ) {
-            Ok(true) => json!("queued"),
-            Ok(false) => json!("exists"),
-            Err(e) => json!(format!("error: {}", e.into_error_data().message)),
+        replan = if args.get("dry_run") == Some(&json!(true)) {
+            json!("dry_run")
+        } else {
+            match crate::round_replan::enqueue_escalation(
+                state,
+                item,
+                pr.as_str().unwrap_or(""),
+                new_level,
+            ) {
+                Ok(true) => json!("queued"),
+                Ok(false) => json!("exists"),
+                Err(e) => json!(format!("error: {}", e.into_error_data().message)),
+            }
         };
     }
     Ok(Admission {

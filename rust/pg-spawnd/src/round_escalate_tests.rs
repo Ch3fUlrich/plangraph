@@ -125,6 +125,63 @@ fn a_check_judged_round_followed_by_a_card_without_failing_checks_is_admitted() 
 }
 
 #[test]
+fn a_review_round_without_a_verdict_is_refused_even_when_the_next_card_reports_zero_checks() {
+    let dir = tempfile::tempdir().unwrap();
+    book(
+        dir.path(),
+        &[Round {
+            cause: "review_finding",
+            ..red(0)
+        }],
+    );
+    assert!(
+        message(run(dir.path(), &card("review_finding", 0))).starts_with("round_verdict_missing")
+    );
+}
+
+#[test]
+fn a_dry_run_admission_queues_no_replan() {
+    let dir = tempfile::tempdir().unwrap();
+    book(dir.path(), &[red(5), red(5), red(5)]);
+    let mut args = card("red_ci", 5);
+    args.insert("dry_run".into(), json!(true));
+    let admitted = run(dir.path(), &args).ok().unwrap();
+    assert_eq!(admitted.fields["round_escalation"], 1);
+    assert_eq!(admitted.fields["round_replan"], "dry_run");
+    assert!(replans(dir.path()).is_empty());
+}
+
+#[test]
+fn the_report_ignores_dry_run_and_voided_attempts() {
+    let dir = tempfile::tempdir().unwrap();
+    for (id, status, extra) in [
+        (
+            "run-d",
+            pg_worker_core::run::record::Status::DryRun,
+            json!({}),
+        ),
+        (
+            "run-v",
+            pg_worker_core::run::record::Status::Failed,
+            json!({"round_void":true}),
+        ),
+    ] {
+        let mut base = json!({"role":"implement", "item_key":"p:Ghost", "writer_round":1,
+            "round_cause":"red_ci", "round_replan":"queued", "round_escalation_reason":"no_progress",
+            "started":5.0});
+        base.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        crate::runs::create(dir.path(), id, "fixture", base, status)
+            .ok()
+            .unwrap();
+    }
+    let report = report(&crate::records::list_runs(dir.path()), 0.0, f64::MAX);
+    assert_eq!(report["items"], json!({}));
+    assert_eq!(report["escalations_per_day"], json!({}));
+}
+
+#[test]
 fn every_cause_counts_and_an_unknown_cause_or_check_count_is_refused() {
     for cause in CAUSES {
         let dir = tempfile::tempdir().unwrap();

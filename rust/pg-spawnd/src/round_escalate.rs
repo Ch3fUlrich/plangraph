@@ -81,16 +81,21 @@ pub(crate) fn report(records: &[Value], since: f64, until: f64) -> Value {
         if at < since || at >= until {
             continue;
         }
-        let entry = items.entry(item.to_string()).or_default();
-        if record["round_replan"] == "queued" || record["replan"] == "queued" {
-            entry.replans += 1;
-        }
         let voided = record["round_void"] == true && record["status"] != "completed";
-        if !record["writer_round"].is_u64()
-            || voided
-            || matches!(record["status"].as_str(), Some("dry_run" | "refused"))
-        {
+        let status = record["status"].as_str();
+        if status == Some("refused") {
+            // A refusal that queued the replan of the batch it sends back.
+            if record["replan"] == "queued" {
+                items.entry(item.to_string()).or_default().replans += 1;
+            }
             continue;
+        }
+        if !record["writer_round"].is_u64() || voided || status == Some("dry_run") {
+            continue;
+        }
+        let entry = items.entry(item.to_string()).or_default();
+        if record["round_replan"] == "queued" {
+            entry.replans += 1;
         }
         entry.rounds += 1;
         *entry
