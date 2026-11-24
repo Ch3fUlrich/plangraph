@@ -101,6 +101,8 @@ GATE_PATHS: tuple[str, ...] = (
     'tools/ci_commit_exempt.txt*',
     '.github/workflows/*',
     'tools/gate_wiring_check.py*',
+    # The verifier of a computed GO and its pins: a change to it changes what a GO means.
+    'rust/plangraph-cli/src/land/go_verify.rs*',
     # A merge attribute changes what a merge produces: the root file and nested ones alike.
     '.gitattributes',
     '*/.gitattributes',

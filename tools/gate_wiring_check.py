@@ -153,6 +153,53 @@ def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Pa
         base, head, workflow, cwd=cwd, include_merges=include_merges) if not has_edit]
 
 
+GO_VERIFY_COMMAND = 'land-train go-verify --evidence'
+#: Step keys that decide what the verifier reads or how its script runs; none may change.
+_GO_VERIFY_FIXED = ('env', 'shell', 'working-directory')
+_SWALLOW = re.compile(r'\|\|\s*(?:true\b|:(?![\w-]))|\bset\s+\+e\b')
+
+
+def _runs_command(step: object) -> bool:
+    '''True when a script line (not a comment, not an echo/printf) runs the go-verify command.'''
+    if not isinstance(step, dict):
+        return False
+    for line in str(step.get('run', '')).splitlines():
+        text = line.strip()
+        if GO_VERIFY_COMMAND in text and not text.startswith(('#', 'echo ', 'printf ')):
+            return True
+    return False
+
+
+def go_verify_step(job: object) -> dict | None:
+    '''Return the step of a ci-gate job that runs the go-verify verifier, or None.'''
+    steps = job.get('steps') if isinstance(job, dict) else None
+    for step in steps if isinstance(steps, list) else []:
+        if _runs_command(step):
+            return step
+    return None
+
+
+def go_verify_problems(base_job: object, head_job: object) -> list[str]:
+    '''Return why the head weakens a go-verify step the base already has (none when base has none).'''
+    base_step = go_verify_step(base_job)
+    if base_step is None:
+        return []
+    head_step = go_verify_step(head_job)
+    if head_step is None:
+        return ['go-verify step removed']
+    problems = []
+    if head_step.get('continue-on-error'):
+        problems.append('go-verify step made non-blocking (continue-on-error)')
+    if _SWALLOW.search(str(head_step.get('run', ''))):
+        problems.append('go-verify step failure is swallowed (|| true, || : or set +e)')
+    if head_step.get('if') != base_step.get('if'):
+        problems.append('go-verify step condition changed')
+    for key in _GO_VERIFY_FIXED:
+        if head_step.get(key) != base_step.get(key):
+            problems.append(f'go-verify step {key} changed')
+    return problems
+
+
 def _wiring_diff(base_wiring: dict[str, object], head_wiring: dict[str, object]) -> str:
     base_text = json.dumps(base_wiring, indent=2, sort_keys=True)
     head_text = json.dumps(head_wiring, indent=2, sort_keys=True)
@@ -193,6 +240,11 @@ def main(argv: list[str] | None = None) -> int:
         print('gate wiring unchanged')
         return 0
     print(_wiring_diff(base_wiring, head_wiring))
+    problems = go_verify_problems(base_wiring['job'], head_wiring['job'])
+    if problems:
+        # A Gate-Edit trailer does not excuse weakening the verifier of a computed GO.
+        print('; '.join(problems), file=sys.stderr)
+        return 1
     try:
         missing = commits_missing_gate_edit(args.base, args.head, args.workflow)
         touching = commits_touching(args.base, args.head, args.workflow)
