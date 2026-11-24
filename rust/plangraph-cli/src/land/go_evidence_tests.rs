@@ -15,7 +15,11 @@ const TREE: &str = "7777777777777777777777777777777777777777";
 const RUN: &str = "run-abababababababababababababababab";
 
 fn encode(bytes: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let alphabet: Vec<u8> = (b'A'..=b'Z')
+        .chain(b'a'..=b'z')
+        .chain(b'0'..=b'9')
+        .chain([b'+', b'/'])
+        .collect();
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
         let n = chunk
@@ -24,7 +28,7 @@ fn encode(bytes: &[u8]) -> String {
             .fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
         for i in 0..4 {
             if i <= chunk.len() {
-                out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+                out.push(alphabet[(n >> (18 - 6 * i) & 63) as usize] as char);
             } else {
                 out.push('=');
             }
