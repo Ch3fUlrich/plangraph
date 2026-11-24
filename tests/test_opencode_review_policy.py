@@ -66,7 +66,7 @@ def test_a_missing_default_deny_or_extra_tool_source_refuses_the_launch(edit, re
     assert 'not JSON' in apply_review_permissions(env, _DENIED_TOOLS, repository_tools=True)
 
 
-def run_review(tmp_path, monkeypatch, stdout, tamper=None):
+def run_review(tmp_path, monkeypatch, stdout, tamper=None, leg=None):
     source = tmp_path / 'source.db'
     source_store(source)
     monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
@@ -90,13 +90,15 @@ def run_review(tmp_path, monkeypatch, stdout, tamper=None):
         seen.append(json.loads(kwargs['env']['OPENCODE_CONFIG_CONTENT']))
 
         async def communicate(input=None):
-            return stdout.encode(), b''
+            out = stdout(seen[-1]) if callable(stdout) else stdout
+            return out.encode(), b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
     async def run():
-        job = await runner.spawn('review', model_or_combo='opencode-go-glm-5.3-flash',
-                                 role='review', client='opencode', wait_seconds=3)
+        job = await runner.spawn('review', model_or_combo=leg.model if leg else 'opencode-go-glm-5.3-flash',
+                                 role='review', client='opencode', wait_seconds=3,
+                                 **({'chosen': leg} if leg else {}))
         if job.job_id in runner._tasks:
             await runner._tasks[job.job_id]
         return job
@@ -120,3 +122,42 @@ def test_launch_with_an_extra_allow_is_refused_before_the_process_starts(tmp_pat
     assert seen == []
     refused = [e for e in job.events if e.get('event') == 'render_refused']
     assert refused and 'review_policy: edit is allowed' in refused[0]['reason']
+
+
+def probe(permission, tool, target):
+    """What OpenCode does with one tool call under `permission`: allowed, or the refusal event."""
+    rule = permission.get(tool, permission['*'])
+    if isinstance(rule, dict):
+        rule = next((effect for pattern, effect in rule.items() if pattern != '*'
+                     and target.startswith(pattern.rstrip('*'))), rule['*'])
+    if rule == 'allow':
+        return json.dumps({'type': 'tool_use', 'part': {'type': 'tool', 'state': {'status': 'completed'}}})
+    return json.dumps({'type': 'tool_use', 'part': {'type': 'tool', 'state': {
+        'status': 'error', 'error': f'Permission denied: {tool}'}}})
+
+
+@pytest.mark.usefixtures('fake_ownership')
+@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'])
+def test_selected_tools_leg_runs_with_the_checkout_commands_and_its_denials_are_recorded(
+        tmp_path, monkeypatch, leg_id):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+
+    def stream(config):
+        """The calls a seat makes, answered from the config the launch actually handed the child."""
+        permission = config['permission']
+        calls = [('read', 'src/a.rs'), ('bash', 'git diff HEAD'), ('bash', 'cargo test -p x'),
+                 ('edit', 'src/a.rs'), ('bash', 'rm -rf target'), ('external_directory', '/etc/passwd'),
+                 ('webfetch', 'https://example.test')]
+        return '\n'.join(probe(permission, tool, target) for tool, target in calls) + '\nVERDICT: ACCEPT\n'
+
+    job, seen = run_review(tmp_path, monkeypatch, stream, leg=leg)
+    assert len(seen) == 1
+    permission = seen[0]['permission']
+    assert [p for p, e in permission['bash'].items() if e == 'allow'] == list(
+        opencode_isolation._CHECKOUT_COMMANDS)
+    assert permission['bash']['*'] == 'deny' and permission['edit'] == 'deny'
+    assert permission['read'] == permission['glob'] == permission['grep'] == permission['list'] == 'allow'
+    assert seen[0]['share'] == 'disabled' and seen[0]['mcp'] == {} and seen[0]['plugin'] == []
+    # edit, `rm -rf`, external_directory and webfetch are refused; read and the checkout commands are not.
+    assert {'event': 'permission_denied', 'count': 4} in job.events
