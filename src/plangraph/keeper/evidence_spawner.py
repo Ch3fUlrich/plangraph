@@ -298,8 +298,8 @@ class SpawnerRecordAdapter:
         checks = (
             (record.get("run_id") == ref.get("run_id"), "record run_id mismatch"),
             (record.get("host") == ref.get("host"), "record host mismatch"),
-            (isinstance(record.get("item_key"), str) and record["item_key"] in
-             [v for v in (item.get("key"), item.get("id")) if isinstance(v, str)],
+            (isinstance(record.get("item_key"), str) and bool(_record_keys(record).intersection(
+                [v for v in (item.get("key"), item.get("id")) if isinstance(v, str)])),
              "record item_key missing or mismatched"),
             (record.get("status") == "completed", "record status is not completed"),
             (type(record.get("exit_code")) is int and record["exit_code"] == 0,

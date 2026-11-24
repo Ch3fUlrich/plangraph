@@ -69,3 +69,14 @@ def test_hydrogen_out_gives_one_argon_seat_not_the_weak_pair():
 
 def test_a_credential_diff_on_a_non_claude_head_gets_one_sonnet_seat():
     assert seats(review(("gpt",), card={"risk_tags": ["secrets"]})) == [REVIEW_SONNET]
+
+
+def test_the_lone_smart_seat_slot_holds_the_next_smart_legs_before_the_weak_pair():
+    """The production seat run restricts re-routing to the slot: hydrogen's slot must reach argon first."""
+    from plangraph.spawner.seat_artifact import reserve_seat_families
+    plan = review(("gpt",))
+    spares, owners = reserve_seat_families(plan, ("gpt",))
+    ids = [leg.id for leg in spares[0]]
+    assert ids[:2] == [REVIEW_ARGON_LOW, REVIEW_ARGON]
+    assert ids.index(REVIEW_ARGON) < ids.index(REVIEW_REQUIRED[0])
+    assert REVIEW_HYDROGEN not in ids
