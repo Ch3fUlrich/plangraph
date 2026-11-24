@@ -109,6 +109,12 @@ fn main() {
             &ops,
         ));
     }
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("round-watch")) {
+        std::process::exit(pg_spawnd::session::round_cli::main(
+            &std::env::args().skip(2).collect::<Vec<_>>(),
+        ));
+    }
     #[cfg(windows)]
     if let Ok(path) = std::env::current_exe() {
         pg_worker_core::run::job_holder_windows::set_holder_path(path);
