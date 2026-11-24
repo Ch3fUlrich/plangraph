@@ -5,7 +5,7 @@ use pg_train_model::*;
 use std::collections::HashSet;
 use support::*;
 
-const DEPTH: usize = 9;
+const DEPTH: usize = 8;
 const PARTS: PartId = 4;
 const TRAINS: TrainId = 3;
 
@@ -28,6 +28,7 @@ fn alphabet(m: &Model, trains: TrainId) -> Vec<Event> {
             out.extend([
                 Event::Join { part, train },
                 Event::Conflict { train, part },
+                Event::Adopt { train, part },
                 Event::CiRed {
                     train,
                     culprit: part,

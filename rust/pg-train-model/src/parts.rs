@@ -115,6 +115,57 @@ impl Model {
         Ok(Outcome::Applied)
     }
 
+    /// The resolution of a conflicting part is adopted while the train is open.
+    pub(crate) fn adopt(&mut self, train: TrainId, part: PartId) -> Result<Outcome, Denied> {
+        let t = self.trains.get(train as usize).ok_or(Denied::Phase)?;
+        if t.closed {
+            return Err(Denied::Phase);
+        }
+        if t.sealed {
+            return Err(Denied::CiStarted);
+        }
+        if !t.conflicted.contains(&part) || self.parts[part as usize].status != Status::Ready {
+            return Err(Denied::Phase);
+        }
+        // What waited on the part rides again with it, at any depth, if every link of its stack is ready.
+        let waiting: Vec<PartId> = t
+            .left_out
+            .iter()
+            .filter(|&&(p, d)| {
+                d == Disposition::Descendant { of: part }
+                    && self.parts[p as usize].status == Status::Ready
+            })
+            .map(|l| l.0)
+            .collect();
+        let mut back = vec![part];
+        while let Some(&p) = waiting.iter().find(|&&p| {
+            !back.contains(&p)
+                && self.parts[p as usize]
+                    .spec
+                    .parent
+                    .is_some_and(|q| back.contains(&q))
+        }) {
+            back.push(p);
+        }
+        let limit = match t.kind {
+            Kind::Ordinary => self.policy.target.min(self.policy.cap),
+            _ => self.policy.cap,
+        };
+        if t.parts.len() + back.len() > limit as usize {
+            return Err(Denied::Phase);
+        }
+        self.parent_ok(part, &t.parts)
+            .map_err(|_| Denied::Dependency)?;
+        let t = &mut self.trains[train as usize];
+        t.parts.extend(back.iter().copied());
+        t.included = Some(t.parts.clone());
+        t.left_out.retain(|l| !back.contains(&l.0));
+        t.conflicted.retain(|&p| p != part);
+        t.bound = false;
+        self.release(&back, Status::InTrain(train));
+        Ok(Outcome::Applied)
+    }
+
     pub(crate) fn drop_part(&mut self, part: PartId) -> Result<Outcome, Denied> {
         let p = self.parts.get(part as usize).ok_or(Denied::Phase)?;
         // The part leaves; what rode or waited on it goes back to ready, to wait for a landed parent.
@@ -131,7 +182,7 @@ impl Model {
             }
             Status::InTrain(t) if !self.trains[t as usize].sealed => {
                 let leaving = self.with_descendants(part, &self.trains[t as usize].parts);
-                self.leave_train(t, &leaving, part, Disposition::Conflict);
+                self.leave_train(t, &leaving, part, Disposition::Dropped);
                 self.release(&leaving, Status::Ready);
             }
             _ => return Err(Denied::Phase),

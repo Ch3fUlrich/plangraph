@@ -88,7 +88,7 @@ impl Model {
             }
             Event::Select => self.select_ordinary(),
             Event::Join { part, train } => {
-                let target = self.policy.target as usize;
+                let (target, cap) = (self.policy.target as usize, self.policy.cap as usize);
                 let riding = self.trains.get(train as usize).map(|t| t.parts.clone());
                 let riding = riding.ok_or(Denied::Phase)?;
                 self.parent_ok(part, &riding)
@@ -101,7 +101,8 @@ impl Model {
                 if t.sealed {
                     return Err(Denied::CiStarted);
                 }
-                if t.kind != Kind::Ordinary || !ready || t.parts.len() >= target {
+                let full = t.parts.len() >= target.min(cap);
+                if t.kind != Kind::Ordinary || !ready || full {
                     return Err(Denied::Phase);
                 }
                 t.parts.push(part);
@@ -211,6 +212,7 @@ impl Model {
             }
             Event::StartRetry => self.start_retry(),
             Event::Conflict { train, part } => self.conflict(train, part),
+            Event::Adopt { train, part } => self.adopt(train, part),
             Event::Drop { part } => self.drop_part(part),
             Event::Revert { part } => self.revert(part),
             Event::Readmit { part } => self.readmit(part),
