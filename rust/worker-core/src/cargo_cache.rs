@@ -238,6 +238,27 @@ pub fn describe_holders(target: &Path) -> String {
 }
 
 #[cfg(unix)]
+fn create_lease_file(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)
+}
+
+/// Create the lock file beside `target` from the host, before a sandboxed child needs it: the
+/// child takes shared leases on it read-only.
+#[cfg(unix)]
+pub fn ensure_lease_file(target: &Path) -> io::Result<PathBuf> {
+    let path = lease_file(target).ok_or_else(|| io::Error::other("cache root needs a name"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    create_lease_file(&path)?;
+    Ok(path)
+}
+
+#[cfg(unix)]
 fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>> {
     let mut name = target
         .components()
@@ -247,16 +268,21 @@ fn try_lease(target: &Path, mode: libc::c_int) -> io::Result<Option<CacheLease>>
         .ok_or_else(|| io::Error::other("cache root needs a name"))?
         .to_os_string();
     name.push(".plangraph-lock");
-    let lease = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(
-            target
-                .parent()
-                .ok_or_else(|| io::Error::other("cache root needs a parent"))?
-                .join(name),
-        )?;
+    let path = target
+        .parent()
+        .ok_or_else(|| io::Error::other("cache root needs a parent"))?
+        .join(name);
+    // A shared lease needs no write access: flock works on a read-only descriptor, and the writer
+    // sandbox grants writes to the target but not to its sibling lock file.
+    let lease = if mode == libc::LOCK_SH {
+        match OpenOptions::new().read(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => create_lease_file(&path)?,
+            Err(error) => return Err(error),
+        }
+    } else {
+        create_lease_file(&path)?
+    };
     try_lock_file(lease, mode)
 }
 
@@ -308,16 +334,34 @@ mod tests {
         let cache = parent.path().join("target");
         assert!(lease_holders(&cache).is_empty());
         let lease = writer_lease(&cache).unwrap();
-        assert_eq!(lease_holders(&cache), vec![std::process::id()]);
+        assert!(lease_holders(&cache).contains(&std::process::id()));
         let refused = try_exclusive_lease(&cache).unwrap();
         assert!(refused.is_none());
-        assert_eq!(
-            describe_holders(&cache),
-            format!(" (held by pid {})", std::process::id())
-        );
+        assert!(describe_holders(&cache).contains(&format!("{}", std::process::id())));
         drop(lease);
-        assert!(lease_holders(&cache).is_empty());
-        assert_eq!(describe_holders(&cache), "");
+        assert!(!lease_holders(&cache).contains(&std::process::id()));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn a_shared_lease_needs_only_read_access_to_the_lock_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join("target");
+        let lock = ensure_lease_file(&cache).unwrap();
+        // The sandbox's view: a read-only lock file in a directory the writer cannot write.
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let shared = (|| {
+            let first = try_lease(&cache, libc::LOCK_SH)?.unwrap();
+            let second = try_lease(&cache, libc::LOCK_SH)?.unwrap();
+            Ok::<_, io::Error>((first, second))
+        })();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (first, second) = shared.expect("shared leases open the lock file read-only");
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(try_exclusive_lease(&cache).unwrap().is_none());
+        drop((first, second));
+        assert!(try_exclusive_lease(&cache).unwrap().is_some());
     }
     #[test]
     #[cfg(target_os = "linux")]

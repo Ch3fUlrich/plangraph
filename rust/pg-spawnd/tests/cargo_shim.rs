@@ -110,3 +110,67 @@ fn a_nested_command_under_an_outer_lease_does_not_wait_for_itself() {
         .unwrap();
     assert_eq!(status.code(), Some(5));
 }
+
+/// Real Codex sandbox: the only writable root is the target, so the lock file beside it can be
+/// opened but not created or written. The shim must still hold the lease for the command.
+#[test]
+#[ignore = "live host check requiring a working Codex sandbox"]
+fn the_shim_holds_its_lease_inside_the_writer_sandbox() {
+    // Outside /tmp and $TMPDIR, which the sandbox mode keeps writable for builds.
+    let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let (target, real, shim, workspace) = (
+        root.join("target"),
+        root.join("real"),
+        root.join("shim"),
+        root.join("workspace"),
+    );
+    for d in [&target, &real, &workspace] {
+        std::fs::create_dir(d).unwrap();
+    }
+    // The host creates the lock file before the sandboxed child starts.
+    let lock = pg_worker_core::cargo_cache::ensure_lease_file(&target).unwrap();
+    let probe = real.join("probe");
+    // The fake Cargo asks the kernel who holds the lock while it runs.
+    script(
+        &real,
+        "cargo",
+        &format!(
+            "grep -c FLOCK /proc/locks > {}; echo cargo-ran",
+            probe.display()
+        ),
+    );
+    let link = install_shim(&shim, Path::new(env!("CARGO_BIN_EXE_pg-spawnd"))).unwrap();
+    let roots = vec![target.clone(), probe.parent().unwrap().to_path_buf()];
+    let script_text = format!(
+        "touch {sibling} && echo sibling-writable; {link} build; echo exit=$?",
+        sibling = root.join("sibling").display(),
+        link = link.display()
+    );
+    let output = Command::new("codex")
+        .arg("sandbox")
+        .args(pg_worker_core::host_readiness::writer_sandbox_args(&roots).unwrap())
+        .args(["--", "env"])
+        .arg(format!("CARGO_TARGET_DIR={}", target.display()))
+        .arg(format!(
+            "PATH={}:{}:/usr/bin:/bin",
+            shim.display(),
+            real.display()
+        ))
+        .args(["sh", "-c", &script_text])
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        text.contains("cargo-ran") && text.contains("exit=0"),
+        "{text}{errors}"
+    );
+    assert!(!text.contains("sibling-writable"), "{text}");
+    assert!(
+        probe.exists() && std::fs::read_to_string(&probe).unwrap().trim() != "0",
+        "no flock was held while the command ran: {}",
+        lock.display()
+    );
+}

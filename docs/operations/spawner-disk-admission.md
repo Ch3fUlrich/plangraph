@@ -82,7 +82,7 @@ lease without invoking Cargo. Native Codex launches pin the same target; briefs 
 targets. The native writer holds the shared lease per Cargo command, not per turn: `cargo` on the
 writer's `PATH` is a link to `pg-spawnd`, which runs the real Cargo under the lease, sets
 `PLANGRAPH_CARGO_LEASE_HELD=<target>` for its children (preflight and fast checks set it too), and
-skips the lease when that variable already names the target. Cap and trim refusals name the pids
+skips the lease when that variable already names the target. A shared lease opens the lock file read-only (the host creates it before the sandboxed writer starts), because the sandbox writes only inside the target, not beside it. Cap and trim refusals name the pids
 that hold the lease, read from `/proc/locks`. Before the protected push the supervisor reclaims an
 over-cap target from the host under the exclusive lease; a real `.git` entry in the target, a
 running build or a held lease leaves a `push_pending` receipt, and a retry pushes the same

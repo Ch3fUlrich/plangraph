@@ -206,3 +206,27 @@ def test_the_refusal_names_the_configured_data_drive_target_not_the_home_cache(r
         assert b"run it in a worktree" not in result.stderr
     monkeypatch.delenv("PLANGRAPH_CARGO_TARGET_DIR")
     assert b"~/.cache/plangraph/cargo-target" in hook("cargo build", main / "rust").stderr
+
+
+@pytest.mark.parametrize("command", [
+    "env -u CARGO_TARGET_DIR cargo build", "env --unset CARGO_TARGET_DIR cargo build",
+    "env --unset=CARGO_TARGET_DIR cargo test", "unset CARGO_TARGET_DIR; cargo build",
+    "unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR && cargo check", "env -i PATH=/usr/bin cargo build",
+    "bash -c 'unset CARGO_TARGET_DIR; cargo build'", "env -u CARGO_TARGET_DIR -u CARGO_BUILD_TARGET_DIR cargo clippy",
+])
+def test_unsetting_the_target_in_the_command_leaves_a_main_checkout_build_refused(repos, monkeypatch, command):
+    """The hook's own CARGO_TARGET_DIR is not what cargo sees after `env -u`, `env -i` or `unset`."""
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
+    result = hook(command, main / "rust")
+    assert result.returncode == 2, (command, result.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "env -u RUSTFLAGS cargo build", "unset RUSTFLAGS; cargo build",
+    "env -i CARGO_TARGET_DIR=/var/cache/shared cargo build", "unset CARGO_TARGET_DIR; CARGO_TARGET_DIR=/var/cache/shared cargo build",
+])
+def test_unrelated_unsets_and_a_target_given_after_the_unset_stay_allowed(repos, monkeypatch, command):
+    main, _ = repos
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/var/cache/shared")
+    assert hook(command, main / "rust").returncode == 0, command

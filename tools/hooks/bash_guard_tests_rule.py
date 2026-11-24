@@ -233,7 +233,7 @@ def _nearest_checkout(path):
     return None
 
 
-def _cargo_target_checkout(rest, envs, where):
+def _cargo_target_checkout(rest, envs, where, host_env=None):
     """The one target resolver: the main checkout or agent worktree a cargo build would fill, else None.
 
     The target is `--target-dir`, then `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR`, relative to the
@@ -242,8 +242,11 @@ def _cargo_target_checkout(rest, envs, where):
     """
     target = next((rest[k + 1] for k, a in enumerate(rest[:-1]) if a == "--target-dir"), None)
     target = target or next((a.split("=", 1)[1] for a in rest if a.startswith("--target-dir=")), None)
+    host_env = os.environ if host_env is None else host_env
     for var in _TARGET_ENVS:
-        target = target or envs.get(var) or os.environ.get(var) or None
+        # A name mapped to None was unset (`env -u`, `unset`): it must not fall back to the hook's own environment.
+        value = envs[var] if var in envs else host_env.get(var)
+        target = target or value or None
     if target is None:
         return main_checkout_root(where)
     try:
@@ -263,6 +266,19 @@ def _cargo_subcommand(rest):
     return None
 
 
+def _env_options(words):
+    """What `env`'s options before the command do to the environment: names unset, and whether it is cleared."""
+    unset, cleared, it = set(), False, iter(words)
+    for word in it:
+        if word in ("-i", "--ignore-environment", "-"):
+            cleared = True
+        elif word in ("-u", "--unset"):
+            unset.add(next(it, ""))
+        elif word.startswith("--unset="):
+            unset.add(word.split("=", 1)[1])
+    return unset, cleared
+
+
 def main_checkout_cargo(command, cwd, depth=0, inherited=None):
     """Deny message for a cargo build whose target dir is a main checkout's or agent worktree's own, wherever cwd, `cd`, `-C` or `--manifest-path` put it."""
     if depth > 3:
@@ -271,15 +287,19 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
     from bash_guard_rules2 import lead, scan
     cwd = Path(cwd or Path.cwd())
     commands, _ = scan(command)
+    state = dict(inherited or {})  # variables later commands see, with `unset` names mapped to None
     for cmd in commands:
         pos = [w for w in cmd if not w.redir]
         words = [w.text for w in pos]
         i = lead(pos)
-        envs = dict(inherited or {})
+        envs = dict(state)
         envs.update(w.split("=", 1) for w in words[i:] if _ENV_ASSIGN_RE.match(w))
         while i < len(words) and _ENV_ASSIGN_RE.match(words[i]):
             i += 1
         if i >= len(words):
+            continue
+        if _basename(words[i]) == "unset":
+            state.update({name: None for name in words[i + 1:] if not name.startswith("-")})
             continue
         # Wrapper options are not modelled: every later word may be the command, as check_command reads it.
         wrapped = _basename(words[i]) in _WRAPPERS | _PLACEMENT_WRAPPERS or any(_basename(w) in _PGTEST for w in words[i:i + 3])
@@ -305,7 +325,13 @@ def main_checkout_cargo(command, cwd, depth=0, inherited=None):
             sub = _cargo_subcommand(rest)
             if sub not in _BUILDING:
                 continue
-            root = _cargo_target_checkout(rest, envs, _cargo_workdir(rest, cwd))
+            unset, cleared = _env_options(words[i:j])
+            if cleared:  # `env -i`: only the assignments given to env itself survive
+                run_env = dict(w.split("=", 1) for w in words[i:j] if _ENV_ASSIGN_RE.match(w))
+            else:
+                run_env = dict(envs)
+            run_env.update({name: None for name in unset})
+            root = _cargo_target_checkout(rest, run_env, _cargo_workdir(rest, cwd), {} if cleared else None)
             if root is not None:
                 return MAIN_TARGET_MESSAGE % (sub, root, shared_target())
     return None

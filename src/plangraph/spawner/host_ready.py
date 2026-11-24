@@ -175,6 +175,16 @@ def cargo_target_size_gb(path):
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
+def _open_lease_file(path, exclusive):
+    """A shared lease needs only read access (a sandboxed writer cannot write beside its target)."""
+    if not exclusive:
+        try:
+            return path.open('rb')
+        except FileNotFoundError:
+            pass
+    return path.open('a+b')
+
+
 def _cargo_lease_for(target, exclusive=False, wait=0.0):
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +194,7 @@ def _cargo_lease_for(target, exclusive=False, wait=0.0):
         try:
             if os.name == 'nt':
                 return _windows_cargo_lease(path, exclusive)
-            lease = path.open('a+b')
+            lease = _open_lease_file(path, exclusive)
             try:
                 import fcntl
                 fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)

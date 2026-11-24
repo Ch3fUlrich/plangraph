@@ -60,6 +60,9 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
     // The `cargo` link on the child's PATH holds the shared lease per command, so the host can
     // reclaim the target between commands and before the push.
     command.env("CARGO_TARGET_DIR", &target);
+    // The sandbox cannot create the lock file beside the target; the shim only opens it.
+    #[cfg(target_os = "linux")]
+    pg_worker_core::cargo_cache::ensure_lease_file(&target).map_err(|e| e.to_string())?;
     command
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log);
