@@ -268,6 +268,9 @@ its effect, or it is not ready.
 relay to the router for those decisions. Watching landings, hosts and close passes belongs to
 the orchestrator session, not to the planner. An accepted plan becomes keeper items as in
 section 5, step 5.
+Then the session stays on as the overseer (`skills/plangraph-oversight/SKILL.md`): it checks
+every beat that the change reaches code, production, the keeper and the agents, and turns every
+gap into an item in the same turn.
 
 ## 6. Readiness
 
@@ -331,3 +334,4 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Readiness and routing left to the keeper; refused cards answered from the planner queue
 - [ ] Reviewers cheap and cross-family; failures become fix-tasks (max 2) then escalate
 - [ ] Done reports, error records and the phase digest filed; plan-graph states updated
+- [ ] Accepted plan: the session switches to oversight (`skills/plangraph-oversight/SKILL.md`)
