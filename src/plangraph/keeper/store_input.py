@@ -284,7 +284,9 @@ class InputMixin:
         if not ({"title", "description"} & fields.keys()):
             return
         answers = check_similar_answers(fields.get("similar") or {}, key)
-        answers = fields["similar"] = {self._qualify(me["project"], k): v for k, v in answers.items()}
+        answers = {self._qualify(me["project"], k): v for k, v in answers.items()}
+        if answers:
+            fields["similar"] = answers      # recorded in the event; an edit without answers stays byte-identical
         self._refuse_unanswered(key, similar_items(me, items), answers)
         index = {item["key"]: item for item in items}
         for field, answer in (("depends_on", "depends_on"), ("supersedes", "supersedes")):
