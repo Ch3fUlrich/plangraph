@@ -321,12 +321,17 @@ def record_reruns(repo, number, reruns):
             gh("api", "--method", "POST", endpoint, "-F", f"body=@{path}")
 
 
+def plangraph_binary():
+    """The plangraph binary the tool calls: PLANGRAPH_BIN, else the one on PATH (None when there is none)."""
+    return os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+
+
 def main_admission(repo, exception=None, binary=None):
     """Ask ``plangraph main-state --admit`` (the one state function of main) and raise its refusal word.
 
     ``exception`` is the GO row's ``EXCEPTION:main-red-fix`` token; the function honours it only while main is
     red at this read. A missing binary or a failed read refuses as ``state_unknown``."""
-    binary = binary or os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+    binary = binary or plangraph_binary()
     if not binary:
         raise MergeBatchError("state_unknown: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
     argv = [binary, "main-state", "--repo", repo, "--admit"] + (["--exception", exception] if exception else [])
@@ -749,6 +754,62 @@ def cmd_review(args):
     return 0
 
 
+def deploy_report(st, active):
+    """The deploy part of the GO-REQ: ``plangraph land-train deploy-plan`` over the train parts, with the host
+    install dry run as the probe. A refused target is listed with its blocker item key and its MISSING lines; the
+    blocker items are filed with ``pg define --file`` when the keeper is configured."""
+    registry = Path.home() / ".config" / "plangraph" / "hosts.json"
+    if not registry.is_file():
+        return "deploy: unchecked (no hosts registry)"
+    binary, wt = plangraph_binary(), st["worktree"]
+    if not binary:
+        raise MergeBatchError("deploy-plan failed: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
+    if any(re.search(r"\s", str(value)) for value in (binary, registry, wt)):
+        raise MergeBatchError("deploy-plan failed: the binary, registry and worktree paths must not hold spaces")
+    spans = [{"pr": rec["pr"], "from": git("rev-parse", f"{rec['merge']}^1", cwd=wt).stdout.strip(),
+              "head": rec["head"]} for rec in active["merged"]]
+    with tempfile.TemporaryDirectory() as tmp:
+        spans_file, blockers = Path(tmp) / "spans.json", Path(tmp) / "blockers.json"
+        spans_file.write_text(json.dumps(spans))
+        probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt}"
+        argv = [binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file), "--registry",
+                str(registry), "--probe-cmd", probe, "--blockers-out", str(blockers)]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise MergeBatchError(f"deploy-plan failed: {exc}") from None
+        if proc.returncode:
+            raise MergeBatchError(f"deploy-plan failed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}")
+        if blockers.is_file() and json.loads(blockers.read_text()).get("items"):
+            file_deploy_blockers(blockers)
+    segments, missing = [], []
+    for line in proc.stdout.splitlines():
+        if line.startswith(("MISSING ", "REFUSED ")) and segments:
+            missing.append(line)
+            continue
+        if missing:
+            segments[-1] += f" ({', '.join(missing)})"
+            missing = []
+        segments.append(line)
+    if missing:
+        segments[-1] += f" ({', '.join(missing)})"
+    return "; ".join(segments)
+
+
+def file_deploy_blockers(path):
+    """File the blocker items of refused deploy targets with ``pg define --file``; a failure is reported, not fatal."""
+    if not keeper_landing_configured():
+        print("deploy blocker items not filed: the keeper is not configured", file=sys.stderr)
+        return
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1] / "src"),
+                                                                      os.environ.get("PYTHONPATH")])))
+    proc = subprocess.run([sys.executable, "-m", "plangraph.keeper.cli", "define", "--file", str(path)],
+                          capture_output=True, text=True, timeout=120, check=False, env=env)
+    if proc.returncode:
+        print(f"deploy blocker items not filed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}",
+              file=sys.stderr)
+
+
 def cmd_go_req(args):
     st = load_state(args.name)
     if st["status"] != "pushed" or not st.get("pr") or not st.get("base_head"):
@@ -784,7 +845,7 @@ def cmd_go_req(args):
     timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"{go_key_block(active)}; {timeline}{migration}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
+            f"{go_key_block(active)}; {timeline}{migration}{deploy_report(st, active)}; PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
             + (f"; {windows_report(st, head)}" if windows_report(st, head) else ""))
     if keeper_landing_configured() and st.get("go_requested_head") != head:
         st.update(go_requested_head=head, go_requested_at_ms=landing_now())
