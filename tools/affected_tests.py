@@ -16,7 +16,7 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import (affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
+from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
                     run_keeper_postgres, test_environment, with_result_line)
 
 
@@ -649,24 +649,12 @@ def pushed_parts_files(root, base, head, union=False, standalone=False):
         return None
 
 
+def build_parser():
+    return affected_parser(__doc__)
+
+
 def _main(root=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True)
-    parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
-    parser.add_argument("--run", action="store_true")
-    parser.add_argument("--fleet-spawnd-prebuilt", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
-    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
-    parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
-    parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
-    parser.add_argument("--keep-local-bound", action="store_true", help="keep the local test bound for spawner/planner core changes (the pre-push hook has a fixed deadline)")
-    parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
-    parser.add_argument("--maxfail", type=int, default=0)
-    parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
-    parser.add_argument("-n", "--workers", default="auto")
-    parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
-    parser.add_argument("--root", default=None, help="repository root")
-    args = parser.parse_args()
+    args = build_parser().parse_args()
     if root is None:
         root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
     else:
@@ -788,9 +776,18 @@ def _main(root=None):
     return 0
 
 
+def _wants_run():
+    """Whether argv asks for `--run`, by the parser's own rules (`--ru` is an accepted abbreviation)."""
+    try:
+        return build_parser().parse_known_args()[0].run
+    except SystemExit:
+        # A parse error: the only run spellings argparse can have accepted are the abbreviations.
+        return any(len(arg) >= 4 and "--run".startswith(arg) for arg in sys.argv[1:])
+
+
 def main(root=None):
     """Every `--run` ends with one AFFECTED line, also when the selection is refused before a batch runs."""
-    return with_result_line(lambda: _main(root), "--run" in sys.argv[1:])
+    return with_result_line(lambda: _main(root), _wants_run)
 
 
 if __name__ == "__main__":
