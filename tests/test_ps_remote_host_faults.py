@@ -129,3 +129,80 @@ def test_wsl_and_windows_hosts_get_a_longer_query_budget(config):
     assert remote_ps.host_timeout(plain) == remote_ps.TIMEOUT
     assert remote_ps.host_timeout(dict(plain, wsl_distro='Ubuntu')) > remote_ps.TIMEOUT
     assert remote_ps.host_timeout(dict(name='w', target='w', win_src='C:/s')) > remote_ps.TIMEOUT
+
+
+CLI_SCRIPT = """
+import sys, threading
+from plangraph.spawner import cli, remote_ps
+remote_ps.TIMEOUT = 0.1
+release = threading.Event()
+def transport(host, timeout):
+    if host['name'] == 'bad':
+        release.wait(600)
+    return '{"runs": [{"run_id": "r1", "host": "x", "status": "running"}]}'
+real = remote_ps.list_runs
+remote_ps.list_runs = lambda rows: real(rows, transport=transport)
+cli.main(['--state', sys.argv[1], 'ps'])
+"""
+
+
+def test_ps_cli_prints_and_exits_while_a_host_is_blocked(config, tmp_path):
+    import os
+    import subprocess
+    import sys
+    write(config, [dict(name='bad', target='bad', src='/s/src'),
+                   dict(name='good', target='good', src='/s/src')])
+    state = tmp_path / 'state'
+    state.mkdir()
+    env = dict(os.environ, XDG_CONFIG_HOME=str(config.parent),
+               PYTHONPATH=os.pathsep.join(sys.path))
+    # A worker still blocked in a transport must not keep the interpreter alive at exit.
+    done = subprocess.run([sys.executable, '-c', CLI_SCRIPT, str(state)], env=env,
+                          capture_output=True, text=True, timeout=30)
+    rows = json.loads(done.stdout)['runs']
+    assert [(r['host'], r['status']) for r in rows] == [('bad', 'unknown'), ('good', 'running')]
+
+
+def shared_target_registry(config):
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'ssh_target': 'ws'}
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': [
+        dict(base, id='ws', os='windows', repos={'plangraph': {'root': 'C:/pg'}}),
+        dict(base, id='ws-wsl', os='linux', wsl_distro='Ubuntu', aliases=['Ws-Guest'],
+             repos={'plangraph': {'root': '/home/g/pg'}})]}))
+
+
+def test_ps_source_alias_match_ignores_case(config):
+    shared_target_registry(config)
+    write(config, [dict(name='WS-GUEST', target='elsewhere', src='/stale/src')])
+    (config / 'hosts.json').write_text((config / 'hosts.json').read_text())
+    assert remote_ps.configured_hosts()[0]['src'] == '/home/g/pg/src'
+
+
+def test_ps_shared_target_never_turns_windows_into_wsl(config):
+    shared_target_registry(config)
+    write(config, [dict(name='native', target='ws', win_src='C:/stale/src')])
+    (config / 'hosts.json').write_text((config / 'hosts.json').read_text())
+    assert remote_ps.configured_hosts() == [dict(name='native', target='ws', win_src='C:/pg/src')]
+
+
+def test_doctor_probe_gets_the_registry_resolved_hosts_and_slow_budget(config, monkeypatch):
+    import asyncio
+    import subprocess
+    from plangraph.spawner import doctor
+    shared_target_registry(config)
+    write(config, [dict(name='ws-wsl', target='ws', src='/stale/src')])
+    (config / 'hosts.json').write_text((config / 'hosts.json').read_text())
+    seen = {}
+
+    def run(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, '[]')
+
+    async def mcp(*args):
+        return 'pass', 'ok'
+    monkeypatch.setattr(doctor.subprocess, 'run', run)
+    monkeypatch.setattr(doctor, 'mcp', mcp)
+    asyncio.run(doctor.diagnose())
+    (host,) = json.loads(seen['env']['PLANGRAPH_PS_HOSTS_JSON'])['hosts']
+    assert (host['src'], host['wsl_distro']) == ('/home/g/pg/src', 'Ubuntu')
+    assert seen['timeout'] == remote_ps.host_timeout(host) + doctor.TIMEOUT

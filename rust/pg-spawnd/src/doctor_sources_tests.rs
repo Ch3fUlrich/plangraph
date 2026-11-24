@@ -1,4 +1,6 @@
-use super::{check, command, plan, row, source_checks, timeout_for, valid, MAX_WORKERS, TIMEOUT};
+use super::{
+    check, command, hosts_text, plan, row, source_checks, timeout_for, valid, MAX_WORKERS, TIMEOUT,
+};
 use serde_json::{json, Value};
 use std::io;
 
@@ -179,5 +181,19 @@ fn wsl_and_windows_probes_get_the_longer_budget() {
     assert_eq!(
         timeout_for("if not exist \"C:\\s\\\" exit /b 44", None),
         TIMEOUT * 3
+    );
+}
+
+#[test]
+fn resolved_hosts_replace_the_raw_file() {
+    let missing = std::path::Path::new("/nonexistent/ps-hosts.json");
+    let resolved = r#"{"hosts":[{"name":"a","target":"a","src":"/src"}]}"#;
+    assert_eq!(
+        hosts_text(Some(resolved.into()), missing).unwrap(),
+        resolved
+    );
+    assert_eq!(
+        hosts_text(None, missing).unwrap_err().kind(),
+        io::ErrorKind::NotFound
     );
 }

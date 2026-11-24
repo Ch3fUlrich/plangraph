@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import selectors
+import threading
 import secrets
 import shlex
 import time
@@ -210,25 +211,41 @@ def host_timeout(host):
 
 
 def registry_sources(directory):
-    """Checkout paths from the host registry, by host id, alias and SSH target.
+    """Checkout paths from the host registry: (by id or alias, by SSH target), keys lower-cased.
 
-    The registry is the one source of a host's checkout path: a stale `ps-hosts.json`
-    must not make a healthy host report `host src missing`. No readable, valid registry
-    gives an empty map and the configured paths stand.
+    The registry is the one source of a host's checkout path: a stale `ps-hosts.json` must not
+    make a healthy host report `host src missing`. An id or alias names one host. An SSH
+    target can be shared (a Windows host and its WSL guest), so it is kept as a list and used
+    only when it names exactly one host of the configured operating system. No readable, valid
+    registry gives empty maps and the configured paths stand.
     """
     from plangraph.fleet_sync import genconfig
+    names, targets = {}, {}
     try:
         registry = json.loads((directory / 'hosts.json').read_text())
-        derived = genconfig.generate(registry)['ps-hosts.json']['hosts']
-        by_id = {entry['name']: entry for entry in derived}
-        names = {}
+        derived = {entry['name']: entry
+                   for entry in genconfig.generate(registry)['ps-hosts.json']['hosts']}
         for entry in registry['hosts']:
-            if entry['id'] in by_id:
-                for key in (entry['id'], entry.get('ssh_target'), *entry.get('aliases', [])):
-                    names.setdefault(key, by_id[entry['id']])
+            found = derived.get(entry['id'])
+            if found is None:
+                continue
+            for key in (entry['id'], *entry.get('aliases', [])):
+                if names.setdefault(key.lower(), found) is not found:
+                    names[key.lower()] = None  # two hosts claim the name: use neither
+            targets.setdefault((entry.get('ssh_target') or entry['id']).lower(), []).append(found)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return {}
-    return names
+        return {}, {}
+    return names, targets
+
+
+def _registry_entry(host, sources):
+    names, targets = sources
+    if (found := names.get(str(host.get('name')).lower())) is not None:
+        return found
+    # A Windows host and a Linux one never stand in for each other on a shared target.
+    same_os = [entry for entry in targets.get(str(host.get('target')).lower(), [])
+               if ('win_src' in entry) == ('win_src' in host)]
+    return same_os[0] if len(same_os) == 1 else None
 
 
 def configured_hosts():
@@ -267,12 +284,38 @@ def configured_hosts():
             validated.append(host)
     sources = registry_sources(path / 'plangraph')
     for index, host in enumerate(validated):
-        entry = sources.get(host.get('name')) or sources.get(host.get('target'))
-        if entry and not host.get('invalid'):
+        entry = None if host.get('invalid') else _registry_entry(host, sources)
+        if entry:
             keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro')}
             validated[index] = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro')
                                           if k in entry}}
     return validated
+
+
+def _bounded(host, transport):
+    """Run one host's transport in a daemon thread and give up after its budget.
+
+    A transport that never returns must not outlive the call: executor workers are joined at
+    interpreter exit, a daemon thread is not, so `ps` prints and exits while it stays blocked.
+    """
+    budget = host_timeout(host)
+    outcome = []
+
+    def run():
+        try:
+            outcome.append((True, transport(host, budget)))
+        except BaseException as exc:  # handed to the caller, which classifies it
+            outcome.append((False, exc))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(budget + 1)  # the transport's own deadline answers first when it holds
+    if not outcome:
+        raise TimeoutError('host query failed')
+    done, value = outcome[0]
+    if not done:
+        raise value
+    return value
 
 
 def _fetch(host, transport):
@@ -280,7 +323,7 @@ def _fetch(host, transport):
         if host.get('invalid'):
             return [dict(host=host['name'], status='unknown', reason='host query failed')]
         try:
-            payload = transport(host, host_timeout(host))
+            payload = _bounded(host, transport)
         except Exception as exc:
             error = type(exc).__name__
             if isinstance(exc, HostQueryError) and type(exc.code) is int and 0 <= exc.code <= 255:
@@ -329,7 +372,7 @@ def list_runs(local, *, transport=query_host):
         futures = [pool.submit(_fetch, host, transport) for host in hosts]
         # One hung host must not hold the others: past the longest budget it is listed as failed.
         waves = -(-len(hosts) // pool._max_workers)
-        wait(futures, timeout=waves * max(host_timeout(host) for host in hosts) + 1)
+        wait(futures, timeout=waves * (max(host_timeout(host) for host in hosts) + 1) + 1)
         rows = [row for host, future in zip(hosts, futures)
                 for row in (future.result() if future.done() else [dict(
                     host=host['name'], status='unknown', reason='host query failed',

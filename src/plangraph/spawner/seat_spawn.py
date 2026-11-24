@@ -294,7 +294,11 @@ def admit(service, options, *, card=None, preview=False):
             options['cwd'] = selected
 
     def local_readiness_refusal(public):
-        check_general = compare_local and public
+        # The local run is compared with remote candidates only while one of them is open.
+        remote_open = not config.get('registry') or any(
+            row.get('remote_placement') is True
+            for name, row in config.get('hosts', {}).items() if name != local)
+        check_general = compare_local and public and remote_open
         if not local or not (native or check_general):
             return None
         try:

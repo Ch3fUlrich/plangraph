@@ -187,6 +187,18 @@ fn source_checks(
     results.into_iter().map(|r| r.1).collect()
 }
 
+/// Environment variable holding the resolved `{"hosts": [...]}` text the Python caller derived
+/// from `ps-hosts.json` and the registry; `ps` uses the same resolved entries.
+const RESOLVED_HOSTS_ENV: &str = "PLANGRAPH_PS_HOSTS_JSON";
+
+/// The host configuration text: the caller's resolved entries when given, else the raw file.
+fn hosts_text(resolved: Option<std::ffi::OsString>, file: &Path) -> io::Result<String> {
+    match resolved.and_then(|text| text.into_string().ok()) {
+        Some(text) => Ok(text),
+        None => std::fs::read_to_string(file),
+    }
+}
+
 pub(crate) fn run() -> Vec<Value> {
     let root = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
@@ -195,7 +207,10 @@ pub(crate) fn run() -> Vec<Value> {
             Path::new(&std::env::var_os("HOME").unwrap_or_default()).join(".config")
         });
     source_checks(
-        std::fs::read_to_string(root.join("plangraph/ps-hosts.json")),
+        hosts_text(
+            std::env::var_os(RESOLVED_HOSTS_ENV),
+            &root.join("plangraph/ps-hosts.json"),
+        ),
         &ssh,
     )
 }

@@ -63,3 +63,35 @@ def test_closed_switch_refuses_every_remote_candidate(fresh, extra, refused):
 def test_hand_written_config_without_registry_flag_is_unaffected(fresh):
     config = {'hosts': {'worker': dict(ssh='worker')}, 'public_repos': []}
     assert 'refusal' not in overflow.ready_records(config)['worker']
+
+
+def local_admission(tmp_path, monkeypatch, registry):
+    """seat_spawn.admit for a review with a diff_ref on a registry host with room and no readiness file."""
+    import json as _json
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready, seat_spawn
+    config = tmp_path / 'config' / 'plangraph'
+    config.mkdir(parents=True)
+    (config / 'hosts.json').write_text(_json.dumps(registry))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config.parent))
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'local')
+    monkeypatch.delenv('PLANGRAPH_PLACED_HOST', raising=False)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda *a: (0, 30000))
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *a, **k: (None, None))
+    service = SimpleNamespace(state=tmp_path / 'state', runner=SimpleNamespace(default_cwd=str(tmp_path)))
+    card = {'diff_ref': {'repo': str(tmp_path), 'base': 'abc', 'head': 'def'}}
+    return seat_spawn.admit(service, {'role': 'review'}, card=card)
+
+
+@pytest.mark.parametrize('public', [None, [], ['plangraph']])
+def test_closed_remote_switches_keep_local_admission(tmp_path, monkeypatch, public):
+    local = dict(host('local'), transport='local', roles=['implement', 'review'],
+                 warmup={'ramp_mb': {'implement': 1024, 'review': 512}},
+                 repos={'plangraph': {'root': str(tmp_path)}})
+    worker = dict(host('worker'), roles=['implement', 'review'],
+                  warmup={'ramp_mb': {'implement': 1024, 'review': 512}})
+    registry = {'version': 1, 'self': 'local', 'hosts': [local, worker],
+                **({} if public is None else {'public_repos': public})}
+    # An omitted allowlist and an explicit empty one admit the same healthy local run.
+    assert local_admission(tmp_path, monkeypatch, registry) is None

@@ -259,10 +259,15 @@ async def _diagnose(probe, checks, memory_probe=False):
     plans = {}
     def source_checks():
         from .remote_ps import configured_hosts, host_timeout, MAX_WORKERS
+        env = dict(os.environ)
         try:
             hosts = configured_hosts()
         except (OSError, ValueError, KeyError, TypeError):
             hosts = []
+        else:
+            # The probe checks the same registry-resolved entries `ps` queries.
+            if hosts:
+                env['PLANGRAPH_PS_HOSTS_JSON'] = json.dumps({'hosts': hosts})
         probe_timeout = max([host_timeout(host) for host in hosts], default=0)
         timeout = max(TIMEOUT, ((len(hosts) + MAX_WORKERS - 1) // MAX_WORKERS) * probe_timeout + TIMEOUT)
         binary = shutil.which('pg-spawnd') or 'pg-spawnd'
@@ -270,7 +275,7 @@ async def _diagnose(probe, checks, memory_probe=False):
         try:
             result = subprocess.run([binary, 'doctor-sources'], check=False,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, timeout=timeout)
+                stderr=subprocess.DEVNULL, timeout=timeout, env=env)
             rows = json.loads(result.stdout)
             if (result.returncode == 0 and isinstance(rows, list)
                     and all(isinstance(row, dict)
