@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
@@ -19,7 +18,7 @@ from .. import views
 from . import events
 from .errors import Refused
 from .evidence_floor import event_bases, ref_head
-from .evidence_types import Context, valid_commit_ref
+from .evidence_types import Context, repo_identity, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
@@ -63,6 +62,10 @@ def _json_dict(value):
     return parsed if isinstance(parsed, dict) else {}
 
 
+#: A decision row that refuses or cancels the work vouches for no merge, even when it names the sha.
+_REFUSAL_ROW = re.compile(r"\bno[- ]go\b|\bcancel(?:l?ed)?\b|\brevert(?:ed)?\b", re.I)
+
+
 class SupportMixin:
     """Row hydration, event append and evidence-verification helpers."""
 
@@ -77,7 +80,7 @@ class SupportMixin:
         for name in names:
             path = git.repo_path(name) if callable(getattr(git, "repo_path", None)) else None
             ref = git.repo_ref(name) if callable(getattr(git, "repo_ref", None)) else "main"
-            ident = (os.path.realpath(path), ref) if path else (name, None)
+            ident = repo_identity(path, ref) if path else (name, None)
             if ident not in seen:
                 seen.add(ident)
                 kept.append(name)
@@ -109,7 +112,7 @@ class SupportMixin:
                     except Exception:  # noqa: BLE001 - an unreadable row never vouches
                         text = None
                     known = text is not None and self._verify_evidence(item, "decision", {"id": did}, now).ok
-                if (text and known and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
+                if (text and known and not _REFUSAL_ROW.search(text) and re.search(rf"(?<![0-9a-fA-F]){re.escape(sha)}(?![0-9a-fA-F])", text, re.I)
                         and names_item(text, item["key"])):
                     return did
         raise Refused("evidence_unverified", f"lane_merge_unproven: {sha[:12]} {', '.join(ids)}")

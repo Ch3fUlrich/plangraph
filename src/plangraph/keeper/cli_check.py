@@ -20,13 +20,13 @@ plan snapshot or keeper is unreachable (nothing is checked).
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
 
 from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, Unreachable
 from .brief import missing_why_how
+from .evidence_types import repo_identity
 from .store_tiers import review_model_findings
 from ..views import cancelled_gate_dependencies
 
@@ -109,8 +109,7 @@ def _repo_path(entry):
 
 
 def _repo_identity(entry):
-    repo, ref = _repo_path(entry)
-    return (os.path.realpath(repo) if repo else repo), ref
+    return repo_identity(*_repo_path(entry))
 
 
 def duplicate_repos(repos):
