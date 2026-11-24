@@ -51,7 +51,7 @@ fn live_state(state: &str) -> bool {
 }
 
 /// The plan item keys a lane card names (the card may be a lane name, a key or both).
-fn item_keys(card: &str) -> Vec<&str> {
+pub(super) fn item_keys(card: &str) -> Vec<&str> {
     card.split(|c: char| c.is_whitespace() || c == ',')
         .filter(|t| t.starts_with("plangraph:"))
         .collect()
@@ -144,7 +144,9 @@ pub(super) fn live_lane_runs(ev: &Evidence) -> Vec<Value> {
         // Any positive evidence keeps the slot: a job state that is not terminal and fresh, the
         // Claude roster listing the session, or the recorded pid. A terminal job state ends it.
         let terminal = state.as_deref().is_some_and(|s| !live_state(s));
-        let fresh = !terminal
+        // A recently written file counts as life only when it decodes to a live state: a
+        // malformed or empty one proves nothing and leaves the decision to the pid and roster.
+        let fresh = state.as_deref().is_some_and(live_state)
             && state_file
                 .as_ref()
                 .and_then(|f| fs::metadata(f).ok())
@@ -307,6 +309,39 @@ mod tests {
             ids(&rows),
             ["lane:writer-1", "lane:writer-2", "lane:writer-3"]
         );
+    }
+
+    #[test]
+    fn a_fresh_but_malformed_or_missing_state_file_is_not_proof_of_life() {
+        let d = tempfile::tempdir().unwrap();
+        let (sessions, jobs) = (d.path().join("s"), d.path().join("j"));
+        fs::create_dir_all(&sessions).unwrap();
+        session(
+            &sessions,
+            "writer-1",
+            json!({"session_id":"s1","job_id":"j1","pid":4343}),
+        );
+        session(
+            &sessions,
+            "writer-2",
+            json!({"session_id":"s2","job_id":"j2","pid":4343}),
+        );
+        session(
+            &sessions,
+            "writer-3",
+            json!({"session_id":"s3","job_id":"j3","pid":4242}),
+        );
+        // j1: just written but not JSON. j2: no state file at all. j3: malformed, live pid.
+        fs::create_dir_all(jobs.join("j1")).unwrap();
+        fs::write(jobs.join("j1/state.json"), "{not json").unwrap();
+        fs::create_dir_all(jobs.join("j3")).unwrap();
+        fs::write(jobs.join("j3/state.json"), "").unwrap();
+        let none = BTreeSet::new();
+        // Dead pid, empty roster: nothing keeps writers 1 and 2; the live pid keeps writer 3.
+        let rows = live_lane_runs(&evidence(&sessions, &jobs, &none, &|| Some(vec![]), &|p| {
+            p == 4242
+        }));
+        assert_eq!(ids(&rows), ["lane:writer-3"]);
     }
 
     #[test]

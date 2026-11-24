@@ -139,12 +139,12 @@ Hand lanes count too. Every writer session record of the fleet launcher on the h
 (`$ROUTING_STATE_DIR/launch/sessions/*.json`, default `~/.local/state/routing/...`, name
 `writer`) is a running writer unless its job under `$CLAUDE_CONFIG_DIR/jobs/<job_id>/state.json`
 (default `~/.claude`) is `done`, `stopped` or `failed`. Any one of these keeps the slot: a
-job state file changed within six hours, `claude agents --json --all` listing the session
+job state file that decodes to a live state and changed within six hours (a malformed or empty one proves nothing), `claude agents --json --all` listing the session
 (read through the bounded host-command capture, so a long roster is read whole), or the
 recorded `pid` being alive; an unreadable roster keeps a stale but unfinished job. A session
 the spawner lists under the same `run_id` is counted once, as the spawner's run, with its
 item keys replaced by the keys parsed from the record's card (the spawner stores the whole
-card as one string). A running lane takes a slot of its host and holds every `plangraph:` key
+card as one string; a `fleet-session` row whose record is not yet published is split by its own card string). A running lane takes a slot of its host and holds every `plangraph:` key
 its card names: each key's files resolve on their own, so the feeder never picks a held item
 nor one sharing its files, and a key that left the ready list never fails the tick. A lane
 whose items are no longer ready still holds its slot.

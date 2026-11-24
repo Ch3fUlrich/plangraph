@@ -13,3 +13,4 @@ Hand-lane detection keeps a slot on any one of fresh job state, Claude roster or
 The quota snapshot is published only with a usable codex observation, a worker names both ages when a fresh snapshot holds only old observations, and the quota_stale refusal keeps the RAM reservation for post-sample writers.
 A live feeder tick claims no further batch once tick_budget_seconds (default 90) is nearly used, so the 110-second service timeout cannot strand a claim.
 The live feeder tick counts its deadline from service entry and begins no claim attempt, first or retry, that cannot finish (60 s reserve) before tick_budget_seconds (100).
+A fleet-session spawner row is split into its card's keys before the launcher record exists, and a malformed state.json no longer counts as proof of life for a hand lane.

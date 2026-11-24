@@ -171,8 +171,17 @@ fn decode_runs(
 /// lane card so each key resolves on its own (a key that left the ready list never fails a tick).
 fn mark_lane_cards(data: &mut Value, cards: &std::collections::BTreeMap<String, Vec<String>>) {
     for row in data["runs"].as_array_mut().into_iter().flatten() {
-        let Some(keys) = row["run_id"].as_str().and_then(|id| cards.get(id)) else {
-            continue;
+        // The launcher registers the spawner row before it publishes its session record, so a
+        // fleet-session row with no record yet is split by its own card string.
+        let fleet =
+            row["run_kind"] == "fleet-session" || row["card"]["run_kind"] == "fleet-session";
+        let keys: Vec<String> = match row["run_id"].as_str().and_then(|id| cards.get(id)) {
+            Some(keys) => keys.clone(),
+            None if fleet => super::lanes::item_keys(row["item_key"].as_str().unwrap_or(""))
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            None => continue,
         };
         row["item_key"] = json!(keys.first().map_or("", String::as_str));
         row["item_keys"] = json!(keys.iter().skip(1).collect::<Vec<_>>());
@@ -516,6 +525,14 @@ mod tests {
             pick(&ready, &runs, &Policy::default()).unwrap().key,
             "plangraph:FREE-B"
         );
+        // The same row before the launcher published its record: split by the row's own card.
+        let mut early = json!({"runs":[{"run_id":"run-9","run_kind":"fleet-session",
+            "host":"workstation","role":"implement","status":"running",
+            "item_key":"plangraph:GONE plangraph:HELD-C","started":900}]});
+        mark_lane_cards(&mut early, &std::collections::BTreeMap::new());
+        let runs = decode_runs(&early, &ready, &json!({"items":[]}), &[]).unwrap();
+        assert!(runs[0].holds("plangraph:GONE") && runs[0].holds("plangraph:HELD-C"));
+        assert_eq!(runs[0].files, ["src/c.rs"]);
         // Without the split the same row stops the tick, as a plain writer run must.
         let plain = json!({"runs":[{"run_id":"run-2","host":"workstation","role":"implement",
             "status":"running","item_key":"plangraph:GONE","started":900}]});
