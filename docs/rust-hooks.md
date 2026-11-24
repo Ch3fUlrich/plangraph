@@ -97,6 +97,26 @@ messages with a leading `BLOCKED`, `FAIL` or `CORRECTION` status. Start
 operator corrections with `Correction:` to record them as signals in either
 transcript format.
 
+### Routine messages to routing and stale session names
+
+Register `pg-hook message-route` for `PreToolUse` on `SendMessage`, next to
+`message-time`. A message to the routing role (`routing` or `routing-NNNN`)
+whose first word is `ACK`, `DONE`, `FILED`, `MERGED` or `STATUS` (upper case) is
+refused with exit 2 and appended as one line `- <UTC time> <sender>: <text>` to
+`$ROUTING_STATE_DIR/inbox/L0.md` (default `~/.local/state/routing/inbox/L0.md`),
+so routing reads it at its heartbeat instead of waking. Each diversion also adds
+a row `{ts, day, sender, to, word}` to `inbox/diversions.jsonl`; count per day and
+sender with `jq -r '[.day,.sender]|@tsv' inbox/diversions.jsonl | sort | uniq -c`.
+`BLOCKED`, `GO-REQ`, `FAIL`, `INCIDENT` and operator relays are delivered. The
+sender is the `session_name` of the launch record whose `session_id` matches.
+
+A message to `<role>-NNNN` for `routing`, `plan-order` or `plan-roadmap`
+(`PG_MESSAGE_SINGLETON_ROLES` replaces the list) is refused when
+`launch/sessions/<role>-MMMM.json` exists with a higher counter; the refusal names
+that live name. Writers are not singletons and are never refused this way.
+The hook reads files only (under 50 ms) and fails open on any error. This host's
+Claude settings must register the hook; a host without the entry gets no refusal.
+
 ### Agent message timestamps
 
 Register `pg-hook message-time` for `PreToolUse` on `SendMessage` and the

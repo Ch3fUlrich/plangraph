@@ -1,4 +1,5 @@
 mod lesson_gate;
+mod message_route;
 mod message_time;
 
 use std::io::{Read, Write};
@@ -62,6 +63,12 @@ fn main() {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).is_some_and(|arg| arg == "lesson-stop") {
         std::process::exit(lesson_gate::run(
+            std::io::stdin().lock(),
+            &mut std::io::stderr(),
+        ));
+    }
+    if args.get(1).is_some_and(|arg| arg == "message-route") {
+        std::process::exit(message_route::hook(
             std::io::stdin().lock(),
             &mut std::io::stderr(),
         ));
