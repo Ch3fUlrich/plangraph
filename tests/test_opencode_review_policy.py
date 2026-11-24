@@ -147,7 +147,7 @@ def test_selected_tools_leg_runs_with_the_checkout_commands_and_its_denials_are_
         """The calls a seat makes, answered from the config the launch actually handed the child."""
         permission = config['permission']
         calls = [('read', 'src/a.rs'), ('bash', 'git diff HEAD'), ('bash', 'cargo test -p x'),
-                 ('edit', 'src/a.rs'), ('bash', 'rm -rf target'), ('external_directory', '/etc/passwd'),
+                 ('edit', 'src/a.rs'), ('bash', 'rm -rf target'), ('external_directory', '/outside/outside.txt'),
                  ('webfetch', 'https://example.test')]
         return '\n'.join(probe(permission, tool, target) for tool, target in calls) + '\nVERDICT: ACCEPT\n'
 
