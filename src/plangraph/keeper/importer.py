@@ -23,7 +23,7 @@ import yaml
 from .errors import Refused
 from .note_fold import DESCRIPTION_CAP, fold_checked as _fold_note
 from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_design_ref, check_host, check_kind,
-                          check_model_fields, check_wait, kind_defaults)
+                          check_model_fields, check_session, check_wait, kind_defaults)
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
@@ -139,7 +139,8 @@ def _normalise_item(raw, where):
     else:
         review_tier = default_review_tier(project, identifier, title, track)
 
-    unknown = {name: raw[name] for name in raw if name not in _FIELDS}
+    session = check_session(raw.get("session"), key)     # metadata of the creation event, not note text
+    unknown = {name: raw[name] for name in raw if name not in _FIELDS and name != "session"}
     note = _fold_note(raw.get("note"), unknown, key)
 
     values = {
@@ -155,7 +156,8 @@ def _normalise_item(raw, where):
         "review_tier": review_tier,
         "source": _string(raw, "source", key), "note": note,
     }
-    return {field: values[field] for field in _FIELD_ORDER}
+    out = {field: values[field] for field in _FIELD_ORDER}
+    return {**out, "session": session} if session is not None else out
 
 
 def load_dir(path):
