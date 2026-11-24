@@ -481,7 +481,7 @@ fn the_fast_check_sweep_reads_cargo_target_dir_from_the_process_environment() {
     fs::write(proc.join("environ"), environ).unwrap();
     let mut report = report();
     sweep_fast_check_targets_at(
-        Some(&tmp.path().join("proc")),
+        &tmp.path().join("proc"),
         &cache,
         &Guards::default(),
         true,

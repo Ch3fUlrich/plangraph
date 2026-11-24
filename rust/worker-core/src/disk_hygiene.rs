@@ -309,7 +309,41 @@ pub fn sweep_stray_worktrees(
     report: &mut Report,
     safe_to_remove: impl Fn(&Path) -> io::Result<bool>,
 ) -> io::Result<()> {
-    stray_worktrees::sweep(repo, roots, guards, now, apply, report, &safe_to_remove)
+    sweep_stray_worktrees_with(
+        repo,
+        roots,
+        guards,
+        now,
+        apply,
+        report,
+        safe_to_remove,
+        &|| {},
+    )
+}
+
+/// As `sweep_stray_worktrees`; `before_lock` runs after the unlocked checks and just before the
+/// sweep asks for the mutation lock (a test seam: it shows the sweep is about to wait).
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_stray_worktrees_with(
+    repo: &Path,
+    roots: &[PathBuf],
+    guards: &Guards,
+    now: SystemTime,
+    apply: bool,
+    report: &mut Report,
+    safe_to_remove: impl Fn(&Path) -> io::Result<bool>,
+    before_lock: &dyn Fn(),
+) -> io::Result<()> {
+    stray_worktrees::sweep(
+        repo,
+        roots,
+        guards,
+        now,
+        apply,
+        report,
+        &safe_to_remove,
+        before_lock,
+    )
 }
 
 /// Reclaim unused caches under disk pressure and old disposable fast-check worktrees.
