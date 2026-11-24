@@ -79,7 +79,11 @@ impl RunValues {
         // separate commands is how a failing early batch was once read past.
         writeln!(brief, "FAST_CHECKS: {FAST_CHECKS_COMMAND}").unwrap();
         if self.push {
-            let argv = pg_worker_core::fast_check_stamp::push_argv("HEAD", &format!("lane/{name}"));
+            // The writer's own head, expanded by its shell: the receipt ref is keyed by the head sha.
+            let argv = pg_worker_core::fast_check_stamp::push_argv(
+                "$(git rev-parse HEAD)",
+                &format!("lane/{name}"),
+            );
             writeln!(brief, "PUSH: git {}", argv.join(" ")).unwrap();
         }
         writeln!(
@@ -248,7 +252,8 @@ mod tests {
         // The head and its receipt ref in one atomic push, the form the lane hook requires.
         assert!(
             rendered.contains(&format!(
-                "\nPUSH: git push --atomic origin HEAD:refs/heads/lane/{name} +refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-{name}\n"
+                "\nPUSH: git push --atomic origin $(git rev-parse HEAD):refs/heads/lane/{name} +refs/plangraph/receipts/$(git rev-parse HEAD):{}\n",
+                pg_worker_core::fast_check_stamp::receipt_ref_for(&format!("lane/{name}"))
             )),
             "{rendered}"
         );

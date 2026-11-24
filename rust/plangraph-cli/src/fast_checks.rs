@@ -259,6 +259,12 @@ fn execute(args: &[String]) -> Result<()> {
     if args.first().map(String::as_str) == Some("--dispatch") {
         return fleet::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--receipt-ref") {
+        // The pre-push hook asks which receipt ref belongs to a lane ref: one mapping, in one place.
+        let target = args.get(1).ok_or("--receipt-ref requires a ref")?;
+        println!("{}", stamp::receipt_ref_for(target));
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("--check-notes") {
         // The pre-push hook asks this of every receipt ref a push would publish.
         let commit = args.get(1).ok_or("--check-notes requires a commit")?;

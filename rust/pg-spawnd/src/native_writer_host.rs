@@ -333,24 +333,38 @@ impl Driver for Host {
         // The turns up to this head are bound to it before the gates run, so a head whose gate
         // fails keeps its own output and the next head starts after it.
         self.session_excerpt(&stamp)?;
-        let (log, mut checks) = self.checks_run()?;
+        let (mut log, _) = self.checks_run()?;
+        // The shared exact-head fast checks (affected tests, lints, formatting): the same command
+        // a human writer runs, and the only producer of the receipt a lane push needs.
+        let shared = self
+            .command("plangraph")
+            .args(["fast-checks", "--owned-worktree"])
+            .current_dir(&self.cwd)
+            .output()
+            .map_err(|e| format!("plangraph fast-checks: {e}"))?;
+        log.push_str(&format!(
+            "== plangraph fast-checks --owned-worktree ({})\n{}{}\n",
+            shared.status,
+            String::from_utf8_lossy(&shared.stdout),
+            String::from_utf8_lossy(&shared.stderr)
+        ));
         // The exact-head gate output, named in the review brief next to the stamp.
-        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
-        // The worktree is verified at `head` above: a receipt always names at least that check.
-        checks.insert(
-            0,
-            pg_worker_core::fast_check_stamp::Check {
-                label: "head-pinned".into(),
-                rc: 0,
-                seconds: 0.0,
-            },
-        );
-        // The shared producer: the state file and the note a lane push carries; the worktree's
-        // own stamp holds the same text for the review gate.
-        let shared = pg_worker_core::fast_check_stamp::publish(&self.cwd, head, &checks)?;
-        fs::copy(shared, &stamp)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        fs::write(stamp.with_extension("log"), &log).map_err(|e| e.to_string())?;
+        if !shared.status.success() {
+            return Err(format!(
+                "plangraph fast-checks failed ({}):\n{}",
+                shared.status,
+                String::from_utf8_lossy(&shared.stderr).trim()
+            ));
+        }
+        // The worktree's own stamp holds the shared receipt's text for the review gate.
+        let receipt = pg_worker_core::worktree::fast_check_stamp(&self.cwd, head)
+            .map_err(|e| e.to_string())?;
+        let text = fs::read_to_string(receipt).map_err(|e| format!("no shared receipt: {e}"))?;
+        if !pg_worker_core::fast_check_stamp::text_is_green(&text, head) {
+            return Err(format!("shared receipt of {head} is not green"));
+        }
+        fs::write(&stamp, text).map_err(|e| e.to_string())
     }
     fn stamped(&mut self, head: &str) -> bool {
         self.stamp(head).is_ok_and(|stamp| {
@@ -380,7 +394,7 @@ impl Driver for Host {
                 "rev-parse",
                 "--verify",
                 "-q",
-                "refs/notes/plangraph-fast-checks",
+                &pg_worker_core::fast_check_stamp::local_receipt_ref(head),
             ])
             .is_err()
         {

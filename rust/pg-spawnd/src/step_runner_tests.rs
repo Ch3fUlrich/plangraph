@@ -499,7 +499,7 @@ fn shell_steps_create_the_worktree_check_the_exact_head_and_push_a_draft_pr() {
     assert_eq!(pushed.pr, 42);
     let log = steps.runner.log.join("\n");
     assert!(log.contains(&format!(
-        "git push --atomic origin {HEAD}:refs/heads/lane/x +refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks-lane-x"
+        "git push --atomic origin {HEAD}:refs/heads/lane/x +refs/plangraph/receipts/{HEAD}:refs/notes/plangraph-fast-checks-lane%2fx"
     )));
     let receipt = std::fs::read_to_string(&checked.stamp).unwrap();
     assert!(

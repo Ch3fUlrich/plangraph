@@ -4,6 +4,30 @@ mod test_python;
 
 use std::{fs, path::Path, process::Command};
 
+fn git_stdin(root: &Path, args: &[&str], input: &str) -> String {
+    use std::io::Write;
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "F")
+        .env("GIT_AUTHOR_EMAIL", "f@example.test")
+        .env("GIT_COMMITTER_NAME", "F")
+        .env("GIT_COMMITTER_EMAIL", "f@example.test")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().into()
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(root)
@@ -323,12 +347,13 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
             receipt.contains(&format!("check affected-tests rc={fail} wall=")),
             "{receipt}"
         );
-        // The receipt also travels as a note on the head.
-        let note = git(
-            root,
-            &["notes", "--ref=plangraph-fast-checks", "show", &commit],
+        // The receipt also travels as one parentless commit holding only that receipt.
+        let local = format!("refs/plangraph/receipts/{commit}");
+        assert_eq!(
+            git(root, &["show", &format!("{local}:{commit}")]),
+            receipt.trim()
         );
-        assert_eq!(note, receipt.trim());
+        assert_eq!(git(root, &["rev-list", "--count", &local]), "1");
         assert_eq!(
             git(root, &["worktree", "list", "--porcelain"]).replace(&commit, &base),
             before
@@ -389,29 +414,41 @@ fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
     );
     git(&writer, &["commit", "--allow-empty", "-qm", "item"]);
     let head = git(&writer, &["rev-parse", "HEAD"]);
-    // The receipt note exactly as `fast-checks --owned-worktree` writes it.
+    // The receipt exactly as `fast-checks --owned-worktree` publishes it: one parentless commit.
     let receipt = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n");
-    git(
+    let blob = git_stdin(&writer, &["hash-object", "-w", "--stdin"], &receipt);
+    let tree = git_stdin(
         &writer,
-        &[
-            "notes",
-            "--ref=plangraph-fast-checks",
-            "add",
-            "-f",
-            "-m",
-            &receipt,
-            &head,
-        ],
+        &["mktree"],
+        &format!("100644 blob {blob}\t{head}\n"),
     );
-    // The one documented push: the lane head and the receipt note together.
+    let commit = git(
+        &writer,
+        &["commit-tree", &tree, "-m", "fast-checks receipt"],
+    );
+    let local = format!("refs/plangraph/receipts/{head}");
+    git(&writer, &["update-ref", &local, &commit]);
+    // The designated receipt ref of the lane comes from the one mapping.
+    let designated = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(&writer)
+        .args(["fast-checks", "--receipt-ref", "refs/heads/lane/x"])
+        .output()
+        .unwrap();
+    let designated = String::from_utf8(designated.stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert_eq!(designated, "refs/notes/plangraph-fast-checks-lane%2fx");
+    // The one documented push: the lane head and its receipt ref, atomically.
     git(
         &writer,
         &[
             "push",
             "-q",
+            "--atomic",
             "origin",
             "HEAD:refs/heads/lane/x",
-            "refs/notes/plangraph-fast-checks",
+            &format!("+{local}:{designated}"),
         ],
     );
     git(
@@ -440,10 +477,13 @@ fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
             "fetch",
             "-q",
             "origin",
-            "refs/notes/plangraph-fast-checks:refs/notes/plangraph-fast-checks",
+            &format!("+{designated}:{designated}"),
         ],
     );
-    assert!(ask(), "the fetched note is a green receipt of that head");
+    assert!(
+        ask(),
+        "the fetched receipt ref is a green receipt of that head"
+    );
 }
 
 #[test]
