@@ -53,8 +53,21 @@ pub(super) fn plan(metadata: &Value, with_optional: bool) -> Result<Vec<Binary>,
             .filter_map(|target| target["name"].as_str())
             .collect();
         let marks = &package["metadata"][TABLE];
+        if !(marks.is_null() || marks.is_object()) {
+            return Err(format!("{package_name}: metadata.{TABLE} must be a table"));
+        }
         for key in [ALWAYS, OPTIONAL] {
-            for name in marks[key].as_array().map_or(&[][..], Vec::as_slice) {
+            // An absent mark is no mark; a mark of the wrong type must not read as absent.
+            let listed = match &marks[key] {
+                Value::Null => &[][..],
+                Value::Array(listed) => listed.as_slice(),
+                _ => {
+                    return Err(format!(
+                        "{package_name}: {key} must be a list of binary names"
+                    ))
+                }
+            };
+            for name in listed {
                 let name = name
                     .as_str()
                     .ok_or_else(|| format!("{package_name}: {key} holds a non-string entry"))?;
@@ -229,6 +242,32 @@ mod tests {
         check_installed(&metadata, &all, false).unwrap();
         let error = check_installed(&metadata, &all[..1], false).unwrap_err();
         assert!(error.contains("plangraph-cli/plangraph"), "{error}");
+    }
+
+    #[test]
+    fn a_mark_of_the_wrong_type_is_refused_not_read_as_absent() {
+        for bad in [json!("pg-x"), json!({"a": 1}), json!(7), json!(true)] {
+            let mut metadata = fixture();
+            metadata["packages"].as_array_mut().unwrap().push(package(
+                "pg-x",
+                &["pg-x"],
+                json!({"plangraph": {"host-binaries": bad}}),
+            ));
+            let error = plan(&metadata, false).unwrap_err();
+            assert!(
+                error.contains("pg-x: host-binaries must be a list"),
+                "{error}"
+            );
+        }
+        let mut metadata = fixture();
+        metadata["packages"].as_array_mut().unwrap().push(package(
+            "pg-y",
+            &["pg-y"],
+            json!({"plangraph": ["host-binaries"]}),
+        ));
+        assert!(plan(&metadata, false)
+            .unwrap_err()
+            .contains("must be a table"));
     }
 
     #[test]

@@ -170,3 +170,65 @@ done
         .unwrap();
     assert!(check.status.success(), "{check:?}");
 }
+
+#[test]
+fn a_host_binaries_mark_of_the_wrong_type_fails_the_install_before_any_build() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let repo = home.join("repo");
+    let tools = home.join("tools");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    fs::create_dir_all(repo.join("rust")).unwrap();
+    git(&["init", "-q"]);
+    fs::write(repo.join("rust/test.rs"), "// x\n").unwrap();
+    git(&["add", "rust"]);
+    git(&["commit", "-qm", "x"]);
+    fs::create_dir_all(&tools).unwrap();
+    // The fake cargo answers metadata only; a build would write this marker.
+    pg_worker_core::executable_test_support::write_executable(
+        tools.join("cargo"),
+        "#!/bin/sh\nif [ \"$1\" = metadata ]; then cat \"$FIXTURE_METADATA\"; exit 0; fi\ntouch \"$HOME/built\"\n",
+    );
+    let metadata = home.join("metadata.json");
+    fs::write(
+        &metadata,
+        serde_json::json!({"packages": [{
+            "name": "pg-telemetry",
+            "targets": [{"name": "pg-telemetry", "kind": ["bin"]}],
+            "metadata": {"plangraph": {"host-binaries": "pg-telemetry"}},
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let path =
+        std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", &path)
+        .env("CARGO_TARGET_DIR", home.join("target"))
+        .env("FIXTURE_METADATA", &metadata)
+        .arg("--install-release")
+        .arg(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("host-binaries must be a list"), "{stderr}");
+    assert!(!home.join("built").exists());
+    assert!(!home.join(".local/bin/pg-telemetry").exists());
+}

@@ -192,4 +192,12 @@ mod tests {
         let error = prepare(&metadata(), false, forgetful).unwrap_err();
         assert!(error.contains("pg-telemetry"), "{error}");
     }
+
+    #[test]
+    fn the_installer_refuses_a_mark_of_the_wrong_type_before_it_builds() {
+        let mut bad = metadata();
+        bad["packages"][1]["metadata"]["plangraph"]["host-binaries"] = json!("pg-telemetry");
+        let error = prepare(&bad, false, plan::plan).unwrap_err();
+        assert!(error.contains("host-binaries must be a list"), "{error}");
+    }
 }
