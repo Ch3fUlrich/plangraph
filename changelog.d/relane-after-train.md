@@ -1,0 +1,1 @@
+Add `plangraph land-train relane`: after a train merge each open lane is fetched into its own ref, rebased onto main in its own worktree (already-upstream patches dropped, conflicts reported with their files) and pushed as the next `-rN` branch, instead of a hand rebase script reading FETCH_HEAD.

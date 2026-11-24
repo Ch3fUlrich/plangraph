@@ -23,6 +23,9 @@ mod push;
 pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;
+pub mod relane;
+#[cfg(test)]
+mod relane_tests;
 pub mod resolve;
 #[cfg(test)]
 mod resolve_tests;
