@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -390,3 +391,171 @@ def test_a_claude_writer_ignores_user_sandbox_exclusions(monkeypatch, tmp_path):
     sandbox = json.loads(argv[argv.index('--settings') + 1])['sandbox']
     assert sandbox['excludedCommands'] == [] and sandbox['enabled'] is True
     assert sandbox['allowUnsandboxedCommands'] is False and sandbox['autoAllowBashIfSandboxed'] is False
+
+
+def _fake_messages_api(commands, log):
+    """A local Messages API: the first request of a run answers with one Bash tool call of
+    ``commands``, the request that carries its result answers with text. No model, no credential."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    def sse(events):
+        return b''.join(f'event: {name}\ndata: {json.dumps(data)}\n\n'.encode() for name, data in events)
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, code, kind, payload):
+            self.send_response(code)
+            self.send_header('content-type', kind)
+            self.send_header('content-length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get('content-length') or 0))
+            request = json.loads(body or b'{}')
+            if not self.path.startswith('/v1/messages') or 'count_tokens' in self.path:
+                return self.reply(200, 'application/json', b'{"input_tokens": 1}')
+            results = [part for message in request.get('messages', []) if isinstance(message.get('content'), list)
+                       for part in message['content'] if part.get('type') == 'tool_result']
+            log.extend(str(part.get('content')) for part in results)
+            message = {'id': 'msg_f', 'type': 'message', 'role': 'assistant', 'model': request.get('model', 'm'),
+                       'content': [], 'stop_reason': None, 'stop_sequence': None,
+                       'usage': {'input_tokens': 1, 'output_tokens': 1}}
+            tools = [tool.get('name') for tool in request.get('tools', [])]
+            if not request.get('stream'):
+                done = dict(message, content=[{'type': 'text', 'text': 'ok'}], stop_reason='end_turn')
+                return self.reply(200, 'application/json', json.dumps(done).encode())
+            if not results and 'Bash' in tools:
+                events = [('message_start', {'type': 'message_start', 'message': message}),
+                          ('content_block_start', {'type': 'content_block_start', 'index': 0, 'content_block': {
+                              'type': 'tool_use', 'id': 'toolu_f1', 'name': 'Bash', 'input': {}}}),
+                          ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {
+                              'type': 'input_json_delta', 'partial_json': json.dumps(
+                                  {'command': commands, 'description': 'fixture reads'})}}),
+                          ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
+                          ('message_delta', {'type': 'message_delta', 'delta': {
+                              'stop_reason': 'tool_use', 'stop_sequence': None}, 'usage': {'output_tokens': 5}}),
+                          ('message_stop', {'type': 'message_stop'})]
+            else:
+                events = [('message_start', {'type': 'message_start', 'message': message}),
+                          ('content_block_start', {'type': 'content_block_start', 'index': 0,
+                                                   'content_block': {'type': 'text', 'text': ''}}),
+                          ('content_block_delta', {'type': 'content_block_delta', 'index': 0,
+                                                   'delta': {'type': 'text_delta', 'text': 'done'}}),
+                          ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
+                          ('message_delta', {'type': 'message_delta', 'delta': {
+                              'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 1}}),
+                          ('message_stop', {'type': 'message_stop'})]
+            self.reply(200, 'text/event-stream', sse(events))
+
+        do_GET = do_POST
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, *, enforce):
+    """Launch the claude writer through SpawnerRunner.spawn, the route's own launch function, with a
+    user settings file that excludes ``cat`` from the sandbox. The factory only adds the fake endpoint
+    the route's environment filter drops. The run reads a denied fixture and a control fixture."""
+    import json
+    import shutil
+    from plangraph.routing_support import claude_seat
+    home = tmp_path / 'home'
+    denied = home / '.config' / 'plangraph' / 'fixture-secret'
+    control = tmp_path / 'control-fixture'
+    denied.parent.mkdir(parents=True)
+    denied.write_text('DENIED-FIXTURE-TEXT')
+    control.write_text('CONTROL-FIXTURE-TEXT')
+    (home / '.claude').mkdir()
+    (home / '.claude' / 'settings.json').write_text(json.dumps({'sandbox': {'excludedCommands': ['cat']}}))
+    results = []
+    server = _fake_messages_api(f'cat {denied}; cat {control}', results)
+    for name in ('XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('PATH', os.pathsep.join([str(Path(shutil.which('claude')).parent), '/usr/bin', '/bin']))
+    if not enforce:       # plumbing check only: the gates are open and the run is unconfined
+        monkeypatch.setattr(claude_seat, 'sandbox_available', lambda env: True)
+        monkeypatch.setattr(claude_seat, 'sandbox_denies_reads', lambda env: True)
+
+    async def factory(exe, *args, **kw):
+        kw['env'] = dict(kw['env'], ANTHROPIC_BASE_URL=f'http://127.0.0.1:{server.server_port}',
+                         ANTHROPIC_API_KEY='sk-' + 'ant-fixture-not-real')
+        return await asyncio.create_subprocess_exec(exe, *args, **kw)
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    try:
+        job = asyncio.run(runner.spawn('read the fixtures', 'claude-haiku-5-5', role='implement', client='claude',
+                                       cwd=str(tmp_path), wait_seconds=90))
+    finally:
+        server.shutdown()
+    return job, results
+
+
+from plangraph.routing_support import claude_seat as _seat
+
+#: The real gates, captured before the autouse fixture replaces them.
+_REAL_SANDBOX_GATES = (_seat.sandbox_available, _seat.sandbox_denies_reads)
+
+
+def _claude_sandbox_runs_here():
+    import shutil
+    return bool(shutil.which('claude')) and all(gate(dict(os.environ)) for gate in _REAL_SANDBOX_GATES)
+
+
+def test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sandbox_exclusion(monkeypatch, tmp_path):
+    """The one real-boundary test: the seat process starts through the route's launch function with the
+    generated settings, a user settings file names a sandbox exclusion for cat, and the run tries to read a
+    fixture under the denied config directory. The read fails and the failure is what the model is shown."""
+    if not _claude_sandbox_runs_here():
+        pytest.skip('needs the claude binary and a sandbox that starts and hides a fixture (bwrap and socat); '
+                    'on other hosts the route is refused, see test_a_claude_writer_is_not_started_where_enforcement_cannot_be_verified')
+    job, results = _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, enforce=True)
+    shown = '\n'.join(results)
+    assert job.status == 'completed', (job.status, job.stderr)
+    assert 'CONTROL-FIXTURE-TEXT' in shown, 'the shell did not run: no control read'
+    assert 'DENIED-FIXTURE-TEXT' not in shown
+    assert 'fixture-secret' in shown and ('Permission denied' in shown or 'No such file' in shown)
+
+
+def test_the_real_claude_binary_fails_closed_under_the_generated_settings_when_its_sandbox_cannot_start(monkeypatch, tmp_path):
+    """The real binary, started through the route's launch function with the gates opened on purpose, must honour
+    sandbox.failIfUnavailable from the generated settings: it never runs the shell, so no fixture is read."""
+    import shutil
+    if not shutil.which('claude') or _claude_sandbox_runs_here():
+        pytest.skip('needs the claude binary on a host whose sandbox cannot start; the enforcing host runs '
+                    'test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sandbox_exclusion')
+    job, results = _launch_claude_writer_against_fake_api(monkeypatch, tmp_path, enforce=False)
+    shown = '\n'.join([*results, job.stdout or '', job.stderr or ''])
+    assert job.status == 'failed' and 'sandbox required but unavailable' in shown
+    assert results == [] and 'DENIED-FIXTURE-TEXT' not in shown and 'CONTROL-FIXTURE-TEXT' not in shown
+
+
+def test_a_claude_writer_is_not_started_where_enforcement_cannot_be_verified(monkeypatch, tmp_path):
+    """Fail closed with the real gates (no mock): a host without socat or bwrap on its PATH never starts the seat."""
+    from plangraph.routing_support import claude_seat
+    monkeypatch.undo()           # the module's autouse patches would hide the real gates
+    lease = Mock()
+    monkeypatch.setattr('plangraph.spawner.host_ready.cargo_lease', lease)
+    bare = tmp_path / 'bare'
+    bare.mkdir()
+    fake_binary(bare, 'claude')
+    monkeypatch.setenv('HOME', '/h')
+    monkeypatch.setenv('PATH', str(bare))       # claude only: no bwrap, no socat
+    monkeypatch.delenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', raising=False)
+    launched = []
+
+    async def factory(exe, *args, **kw):
+        launched.append(exe)
+        raise AssertionError('the seat was started')
+
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
+    job = asyncio.run(runner.spawn('x', 'claude-haiku-5-5', role='implement', client='claude', cwd=str(tmp_path)))
+    assert not launched and job.status == 'failed' and job.stderr.startswith('sandbox_unavailable:')
+    lease.assert_not_called()

@@ -226,8 +226,9 @@ def sandbox_denies_reads(env):
             return False
     elif sys.platform != "darwin":
         return False
-    directory = mkdtemp(prefix="plangraph-deny-smoke-")
+    directory = None
     try:
+        directory = mkdtemp(prefix="plangraph-deny-smoke-")
         fixture = str(Path(directory) / "fixture-secret")
         Path(fixture).write_text("fixture")
         if sys.platform == "linux":
@@ -242,8 +243,12 @@ def sandbox_denies_reads(env):
             masked = [sandbox, "-p", f'(version 1) (allow default) (deny file-read* (subpath "{directory}"))', *refuse]
         # The inversion lives in the shell, so a sandbox that fails to start is not a denial.
         return _smoke_sandbox(visible) and _smoke_sandbox(masked)
+    except OSError:
+        # No writable temporary directory is not a verified denial: the route is refused.
+        return False
     finally:
-        shutil.rmtree(directory, ignore_errors=True)
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 def confine_writer_shell(argv, env, role, job_id):
