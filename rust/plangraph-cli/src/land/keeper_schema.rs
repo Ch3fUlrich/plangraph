@@ -9,25 +9,82 @@ use std::path::Path;
 /// The file whose `MIGRATIONS` registry defines the version.
 pub const SCHEMA_PATH: &str = "src/plangraph/keeper/schema_pg.py";
 
-/// The version of a `MIGRATIONS` registry: the numbers of its `Migration(N, ...)` entries, consecutive
-/// from 1. A file with no entry is version 0; a gap or a repeat is an error, never a guess.
+/// The version of the `MIGRATIONS = (...)` registry: the numbers of its direct `Migration(N, ...)` entries,
+/// consecutive from 1. Strings, comments and the arguments of an entry are skipped, so a `Migration(` mention
+/// elsewhere in the file does not count. A file with no registry is version 0; a gap, a repeat, an entry
+/// that is not a `Migration(N, ...)` call or an unclosed registry is an error, never a guess.
 pub fn parse_latest(text: &str) -> Result<u32, String> {
-    let mut versions = Vec::new();
-    for (at, _) in text.match_indices("Migration(") {
-        let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
-        if text[..at].chars().next_back().is_some_and(word_char) {
-            continue;
-        }
-        let rest = &text[at + "Migration(".len()..];
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        if !digits.is_empty() && rest[digits.len()..].trim_start().starts_with(',') {
-            versions.push(digits.parse::<u32>().map_err(|e| e.to_string())?);
-        }
+    let Some(start) = text
+        .match_indices("MIGRATIONS = (")
+        .map(|(at, m)| (at, at + m.len() - 1))
+        .find(|(at, _)| text[..*at].chars().next_back().is_none_or(|c| c == '\n'))
+        .map(|(_, open)| open)
+    else {
+        return Ok(0);
+    };
+    let (mut versions, mut depth, mut i) = (Vec::new(), 0u32, start);
+    while i < text.len() {
+        let rest = &text[i..];
+        i += match rest.as_bytes()[0] {
+            b'#' | b'"' | b'\'' => literal_len(rest),
+            b'(' if depth == 1 && entry_name(&text[..i]) => {
+                let args = &rest[1..];
+                let digits: String = args.chars().take_while(char::is_ascii_digit).collect();
+                if digits.is_empty() || !args[digits.len()..].trim_start().starts_with(',') {
+                    return Err("a registry entry is not Migration(N, ...)".into());
+                }
+                versions.push(digits.parse::<u32>().map_err(|e| e.to_string())?);
+                depth += 1;
+                1
+            }
+            b'(' if depth == 1 => return Err("a registry entry is not Migration(N, ...)".into()),
+            b'(' => {
+                depth += 1;
+                1
+            }
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    if versions.iter().zip(1u32..).any(|(v, n)| *v != n) {
+                        return Err("keeper migration versions must be consecutive from 1".into());
+                    }
+                    return Ok(versions.len() as u32);
+                }
+                1
+            }
+            _ => 1,
+        };
     }
-    if versions.iter().zip(1u32..).any(|(v, n)| *v != n) {
-        return Err("keeper migration versions must be consecutive from 1".into());
+    Err("the MIGRATIONS registry is not closed".into())
+}
+
+/// Whether `before` ends in the bare name `Migration` (the call about to open).
+fn entry_name(before: &str) -> bool {
+    before.strip_suffix("Migration").is_some_and(|rest| {
+        !rest
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Bytes of the comment or string literal that starts `text`, triple quotes included.
+fn literal_len(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    if bytes[0] == b'#' {
+        return text.find('\n').unwrap_or(text.len());
     }
-    Ok(versions.len() as u32)
+    let q = bytes[0] as char;
+    let mark = if text.starts_with(&q.to_string().repeat(3)) {
+        q.to_string().repeat(3)
+    } else {
+        q.to_string()
+    };
+    let mut i = mark.len();
+    while i < text.len() && !text[i..].starts_with(&mark) {
+        i += if bytes[i] == b'\\' { 2 } else { 1 };
+    }
+    (i + mark.len()).min(text.len())
 }
 
 /// The keeper schema version at `rev`; 0 when the revision has no schema file.
