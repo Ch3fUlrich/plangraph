@@ -160,20 +160,23 @@ pub fn named_targets(plan: &DeployPlan, go_row: &str) -> Result<Vec<Target>, Str
         .collect()
 }
 
-/// A good oneshot run counts only with its timer active (the keeper gate). Returns the timer to write a row
-/// for, or `None` when the family is no oneshot or the timer is itself a target with its own row.
+/// A good oneshot run counts only with its timer active (the keeper gate). Returns the timer and the item
+/// keys that need a timer row: the service's items less those the timer target writes itself. `None` when
+/// the family is no oneshot.
 fn paired_timer_row(
     installer: &dyn Installer,
     t: &Target,
     run: &RunRead,
     targets: &[Target],
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, BTreeSet<String>)>, String> {
     let Some(timer) = run.oneshot.then(|| paired_timer(&t.family)).flatten() else {
         return Ok(None);
     };
-    let own = targets
+    let own: BTreeSet<&String> = targets
         .iter()
-        .any(|o| o.host == t.host && o.family == timer);
+        .filter(|o| o.host == t.host && o.family == timer)
+        .flat_map(|o| o.items.iter())
+        .collect();
     let state = installer
         .read_run(&t.host, &timer)
         .map_err(|e| format!("paired timer {timer}: {e}"))?;
@@ -183,7 +186,13 @@ fn paired_timer_row(
             t.host, state.is_active
         ));
     }
-    Ok((!own).then_some(timer))
+    let keys = t
+        .items
+        .iter()
+        .filter(|k| !own.contains(k))
+        .cloned()
+        .collect();
+    Ok(Some((timer, keys)))
 }
 
 /// Installs `targets` (timers first). `checkpoint` is called after every state change so the caller can save it.
@@ -233,7 +242,11 @@ pub fn apply(
         match outcome {
             Ok((run, timer)) => {
                 for key in &t.items {
-                    if let Some(timer) = &timer {
+                    if let Some(timer) = timer
+                        .as_ref()
+                        .filter(|(_, keys)| keys.contains(key))
+                        .map(|(t, _)| t)
+                    {
                         rows.write(&DeployRow {
                             key: key.clone(),
                             host: t.host.clone(),
