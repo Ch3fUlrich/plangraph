@@ -41,6 +41,9 @@ pub struct Task {
     pub fields: BTreeMap<String, Value>,
 }
 
+/// The policy file the feeder reads without `--policy`, relative to its working directory.
+pub(crate) const DEFAULT_POLICY: &str = "deploy/feeder/policy.toml";
+
 /// Most items one batch run holds: the run record keeps at most this many `item_keys`.
 pub const MAX_BATCH_ITEMS: usize = 50;
 #[derive(Clone, Debug, Deserialize)]

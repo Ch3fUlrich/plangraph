@@ -7,7 +7,10 @@ Type=oneshot
 # Detached supervisors and writers must outlive this timer tick.
 KillMode=process
 WorkingDirectory=%h/code/plangraph
+# The policy file, relative to the working directory or absolute; the quota timer on the
+# coordinator reads the same setting (pg-quota-facts@.service).
+Environment=FEEDER_POLICY=deploy/feeder/policy.toml
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
-ExecStart=%h/.local/bin/plangraph feed --once --live-facts
+ExecStart=%h/.local/bin/plangraph feed --once --live-facts --policy ${FEEDER_POLICY}
 TimeoutStartSec=110
 UMask=0077

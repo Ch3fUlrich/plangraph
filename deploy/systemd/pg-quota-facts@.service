@@ -4,10 +4,11 @@ Description=Push the quota snapshot to worker %i
 [Service]
 Type=oneshot
 WorkingDirectory=%h/code/plangraph
-# The worker's feeder policy, relative to its home: the file its feeder reads. A worker whose
-# feeder runs with `--policy PATH` sets FEEDER_POLICY=PATH in its per-worker file below, which
-# overrides this default.
-Environment=FEEDER_POLICY=code/plangraph/deploy/feeder/policy.toml
+# The worker's feeder policy as its feeder takes it (`--policy PATH`): relative to the worker's
+# checkout (the feeder's working directory) or absolute. The same FEEDER_POLICY is set for the
+# worker's feeder (pg-feeder.service); a worker whose feeder uses another file sets it in its own
+# env file and in the per-worker file below, which override this default.
+Environment=FEEDER_POLICY=deploy/feeder/policy.toml
 # The same per-worker file the SSH link unit reads (HOST_LINK_SSH), and the gateway
 # database setting of the quota alarms (QUOTA_SNAPSHOT_DB).
 EnvironmentFile=%h/.config/plangraph/host-links/%i.env

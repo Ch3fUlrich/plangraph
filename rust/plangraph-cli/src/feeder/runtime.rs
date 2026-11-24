@@ -19,7 +19,7 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
         dry: false,
         live: false,
-        policy: "deploy/feeder/policy.toml".into(),
+        policy: DEFAULT_POLICY.into(),
         facts: home.join(".config/plangraph/feeder-facts.json"),
         rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
