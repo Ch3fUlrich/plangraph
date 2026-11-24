@@ -28,6 +28,8 @@ Use grep for text that is not a symbol.
    fails without the change; a test that cannot fail (asserts nothing, mocks the thing
    under test, takes the fallback path) is a finding. Check the test exercises the path
    production takes.
+   A test command that cannot start (`command not found`, `No module named _pytest`) is
+   a HIGH finding quoting the error, never an acceptance on reading alone.
    For each fails-at-base note, replay the quoted pytest node IDs at the pinned
    base in the same scrubbed environment and compare the fresh output to the claim
    (the claim side is `skills/batch-writer/SKILL.md` step 4).
