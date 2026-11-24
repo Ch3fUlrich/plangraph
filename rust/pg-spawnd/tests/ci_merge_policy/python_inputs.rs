@@ -10,10 +10,11 @@ const MAKE_ADD: &str = r####"
 import os, pathlib
 def make_add(root, inputs):
     def add(path):
-        # is_file() first: a dangling or cyclic symlink is no file and must not reach resolve().
-        if not path.is_file(): return
+        # Containment by name first, so an outside path is never touched. Then is_file() before
+        # resolve(): a dangling or cyclic symlink is no file and must not reach resolve().
         try:
             rel = pathlib.Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
+            if not path.is_file(): return
             pathlib.Path(path).resolve().relative_to(pathlib.Path(root).resolve())
         except (ValueError, RuntimeError, OSError): return
         inputs.add(rel.as_posix())
@@ -39,6 +40,15 @@ with tempfile.TemporaryDirectory() as tmp:
     add(root / 'tools/in.py')
     add(root / 'tools/../tools/in.py')
     add(root / 'tools/missing.py')
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:
+        # An outside path in a directory this user cannot search must be skipped, not raise.
+        (base / 'locked').mkdir()
+        (base / 'locked/x.py').write_text('')
+        os.chmod(base / 'locked', 0)
+        try:
+            add(root / '../locked/x.py')
+        finally:
+            os.chmod(base / 'locked', 0o700)
     try:
         os.symlink(base / 'tools/out.py', root / 'tools/escape.py')
         os.symlink(root / 'tools/in.py', root / 'tools/inside.py')
