@@ -53,6 +53,9 @@
 # there too) and for Bash (or exec_command) with message-time:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-route' _ DEST/pg-hook
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-time' _ DEST/pg-hook
+# Register PreToolUse for Bash, Read and Grep (matcher 'Bash|Read|Grep', onFailure block) with
+# the print guard that refuses cat, head, grep and the like on key, token and env files:
+#   sh -c 'test -x "$1" || exit 1; exec "$1" secret-read' _ DEST/pg-hook
 #
 # Usage:
 #   tools/hooks/install_hooks.sh --session-rust # include the Rust session guards
