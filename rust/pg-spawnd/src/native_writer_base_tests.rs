@@ -1,3 +1,4 @@
+use super::base::Integrated;
 use super::*;
 
 fn git_in(dir: &Path, args: &[&str]) -> String {
@@ -271,3 +272,96 @@ for launch in (False, True):
 
 #[path = "native_writer_moving_main_tests.rs"]
 mod moving_main;
+
+/// A part (lane) of two commits whose first patch main already holds under another commit id, on a
+/// clone whose main moved past the part's base; returns (host, old main, new main).
+fn part_with_upstream_first_patch(dir: &Path) -> (Host, String, String) {
+    let mut host = local_base_fixture(dir);
+    host.cwd = host.repo.clone();
+    let old_main = git_in(&host.cwd, &["rev-parse", "main"]);
+    git_in(&host.cwd, &["checkout", "-q", "-b", "part", &old_main]);
+    fs::write(host.cwd.join("a.txt"), "a\n").unwrap();
+    git_in(&host.cwd, &["add", "a.txt"]);
+    git_in(&host.cwd, &["commit", "-qm", "first"]);
+    let first = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    fs::write(host.cwd.join("b.txt"), "b\n").unwrap();
+    git_in(&host.cwd, &["add", "b.txt"]);
+    git_in(&host.cwd, &["commit", "-qm", "second"]);
+    git_in(&host.cwd, &["checkout", "-q", "main"]);
+    git_in(&host.cwd, &["cherry-pick", &first]);
+    let new_main = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.cwd, &["checkout", "-q", "part"]);
+    (host, old_main, new_main)
+}
+
+#[test]
+fn rebase_drops_a_commit_whose_patch_is_already_on_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, old_main, new_main) = part_with_upstream_first_patch(dir.path());
+    assert_eq!(host.rebase(&new_main, &old_main).unwrap(), Integrated::Done);
+    let own = git_in(
+        &host.cwd,
+        &["log", "--format=%s", &format!("{new_main}..HEAD")],
+    );
+    assert_eq!(
+        own, "second",
+        "the upstream patch is dropped, not kept empty"
+    );
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD^"]), new_main);
+}
+
+#[test]
+fn rebase_names_a_conflict_only_when_a_path_is_unmerged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, old_main, new_main) = part_with_upstream_first_patch(dir.path());
+    // The part's second commit now clashes with a different b.txt on main.
+    git_in(&host.cwd, &["checkout", "-q", "main"]);
+    fs::write(host.cwd.join("b.txt"), "other\n").unwrap();
+    git_in(&host.cwd, &["add", "b.txt"]);
+    git_in(&host.cwd, &["commit", "-qm", "main b"]);
+    let main = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    git_in(&host.cwd, &["checkout", "-q", "part"]);
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        host.rebase(&main, &old_main).unwrap(),
+        Integrated::Conflict(vec!["b.txt".to_owned()])
+    );
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), head);
+    assert!(git_in(&host.cwd, &["status", "--porcelain"]).is_empty());
+    let _ = new_main;
+}
+
+#[test]
+fn rebase_failure_without_an_unmerged_path_is_an_error_not_a_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let (host, old_main, _) = part_with_upstream_first_patch(dir.path());
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    let missing = "0".repeat(40);
+    assert!(host.rebase(&missing, &old_main).is_err());
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn review_base_stays_rebased_when_every_commit_is_already_on_main() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.base_ref = "refs/heads/main".into();
+    host.record_path = dir.path().join("runs/run-local-base/record.json");
+    fs::create_dir_all(host.record_path.parent().unwrap()).unwrap();
+    host.prepare().unwrap();
+    fs::write(host.cwd.join("a.txt"), "a\n").unwrap();
+    git_in(&host.cwd, &["add", "a.txt"]);
+    git_in(&host.cwd, &["commit", "-qm", "part"]);
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    // Main takes the same patch under another commit id.
+    git_in(&host.repo, &["checkout", "-q", "main"]);
+    git_in(&host.repo, &["commit", "-qm", "train", "--allow-empty"]);
+    git_in(&host.repo, &["cherry-pick", &head]);
+    git_in(&host.repo, &["push", "-q", "origin", "main"]);
+    let main = git_in(&host.repo, &["rev-parse", "main"]);
+    let review_base = host.prepare_review_base(&head).unwrap();
+    assert_eq!(review_base.mode, "rebased");
+    assert!(review_base.conflict_files.is_empty());
+    assert_eq!(review_base.base, main);
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), main);
+}
