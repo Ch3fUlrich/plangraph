@@ -122,7 +122,10 @@ The `omniroute-deepseek-flash` subscription leg requests
 The Go review leg already requests `opencode-go/deepseek-v4.1-flash`.
 Registration is not host availability: the launch boundary checks the rendered
 child config via `opencode models --standalone` and skips an absent id with
-`not_served_on_host` before starting a harness run. The recorded local probe
+`not_served_on_host` before starting a harness run; a missing harness binary is refused as
+`harness_not_found <name> <searched paths>` (one resolver, `resolve_harness_binary`). The request bound of an
+opencode leg listed in `configuration/opencode/providers.json` is that registry's context minus its output
+(mimo 1M); only a cost or headroom cap may sit below it. The recorded local probe
 does not yet list the corrected OmniRoute id; gateway and credential readiness remain a host-side operator request. Never replace
 it with the distinct paid `omniroute/deepseek-direct-flash` route.
 
