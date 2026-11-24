@@ -16,6 +16,16 @@ from .private_io import atomic_write_private
 from .remote_ps import configured_hosts
 
 
+def import_root(config):
+    """The directory that holds the `plangraph` package on that host.
+
+    A registry host's `spawner_src` is already `<checkout>/src`; an older config names the
+    checkout. Never a path relative to the working directory: PYTHONSAFEPATH keeps it off sys.path.
+    """
+    source = config['spawner_src']
+    return source if config.get('registry') else source.rstrip('/') + '/src'
+
+
 def check_sources(name, config, command, fail):
     sources = [(config.get('ssh'), config['spawner_src'], False if config.get('registry') else True)]
     ok = True
@@ -353,11 +363,11 @@ def probe_host(name, config, state, runner, timeout, *, persist):
                 prefix += 'set -a && . ' + shlex.quote(config['env_file']) + ' >/dev/null 2>&1 && '
             if config.get('state_dir'):
                 prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
-            prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
+            prefix += 'PYTHONPATH=' + shlex.quote(import_root(config)) + ' python3 -m plangraph.spawner.'
             def spawner(rest):
                 """The step plan of `python3 -m plangraph.spawner.<rest>` run from the source dir."""
                 name, *args = shlex.split(rest)
-                env = {'PYTHONPATH': 'src'}
+                env = {'PYTHONPATH': import_root(config)}
                 if config.get('state_dir'):
                     env['PLANGRAPH_SPAWN_STATE'] = config['state_dir']
                 plan = dict(cwd=config['spawner_src'], steps=[

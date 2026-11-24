@@ -666,6 +666,47 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
     return probe_host(name, config, state, runner, timeout, persist=atomic_write_private)
 
 
+def placement_hosts():
+    """Every host with readiness to publish: the registry's placement hosts, plus this one."""
+    from .overflow import host_config, placement_config, registry_caps
+    from plangraph.fleet_sync.genconfig import work_mounts
+    registry = registry_caps()
+    hosts = placement_config(registry).get('hosts', {})
+    local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
+    if local:
+        if local['id'] in hosts:
+            hosts[local['id']]['local'] = True
+        elif local.get('os') == 'linux' and 'plangraph' in local.get('repos', {}):
+            repo = local['repos']['plangraph']['root']
+            hosts[local['id']] = dict(local=True, registry=True, repo=repo,
+                spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
+                state_dir=local.get('state_dir'),
+                work_mounts=work_mounts(local),
+                session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
+    return hosts
+
+
+def check_records(hosts):
+    """Print each host's published record state; return 1 when any is missing or stale."""
+    from .overflow import read_readiness
+    broken = False
+    for name in hosts:
+        try:
+            record = read_readiness(name)
+        except (OSError, ValueError, KeyError, TypeError):
+            print(f'{name} missing')
+            broken = True
+            continue
+        if not record['fresh']:
+            print(f'{name} stale')
+            broken = True
+        elif record.get('ok') is True:
+            print(f'{name} ready')
+        else:
+            print(f"{name} not-ready {'; '.join(record.get('failures') or [])}")
+    return int(broken)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host')
@@ -674,7 +715,13 @@ def main(argv=None):
     parser.add_argument('--unit')
     parser.add_argument('--cargo-run', nargs=argparse.REMAINDER, metavar='CARGO_ARG')
     parser.add_argument('--cargo-cache-env', type=Path, metavar='GITHUB_ENV')
+    parser.add_argument('--check-records', action='store_true',
+                        help='report each host record (ready, not-ready, stale, missing); exit 1 if one is missing or stale')
+    parser.add_argument('--not-ready-exit', type=int, default=1, metavar='CODE',
+                        help='exit status when every record was published but a host is not ready')
     args = parser.parse_args(argv)
+    if not 0 < args.not_ready_exit < 126:
+        parser.error('--not-ready-exit must be between 1 and 125')
     if args.cargo_cache_env is not None:
         env = _cargo_cache_env(os.environ)
         keys = ('RUSTC_WRAPPER', 'SCCACHE_DIR', 'SCCACHE_CACHE_SIZE', 'CARGO_INCREMENTAL')
@@ -691,21 +738,8 @@ def main(argv=None):
     if args.test_tools:
         print(json.dumps(pre_push_report(args.test_tools, args.unit)))
         return 0
-    from .overflow import host_config, placement_config, readiness_dir, registry_caps
-    from plangraph.fleet_sync.genconfig import work_mounts
-    registry = registry_caps()
-    hosts = placement_config(registry).get('hosts', {})
-    local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
-    if local:
-        if local['id'] in hosts:
-            hosts[local['id']]['local'] = True
-        elif local.get('os') == 'linux' and 'plangraph' in local.get('repos', {}):
-            repo = local['repos']['plangraph']['root']
-            hosts[local['id']] = dict(local=True, registry=True, repo=repo,
-                spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
-                state_dir=local.get('state_dir'),
-                work_mounts=work_mounts(local),
-                session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
+    from .overflow import readiness_dir
+    hosts = placement_hosts()
     if not hosts and not args.host:
         parser.error('hosts.json has no readiness candidates')
     if args.host:
@@ -714,6 +748,8 @@ def main(argv=None):
         hosts = {args.host: hosts[args.host]}
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', name) for name in hosts):
         parser.error('invalid host name')
+    if args.check_records:
+        return check_records(hosts)
     state = readiness_dir()
     try:
         state.mkdir(parents=True, exist_ok=True)
@@ -732,7 +768,9 @@ def main(argv=None):
             check, _, reason = failure.partition(': ')
             print(f"HOST-NOT-READY {record['host']} {check} {reason}",
                   file=sys.stderr if args.json else sys.stdout)
-    return int(any(not r['ok'] for r in records))
+    if any(any(failure.startswith('state: ') for failure in r['failures']) for r in records):
+        return 1  # A record that was not published is never the expected not-ready outcome.
+    return args.not_ready_exit if any(not r['ok'] for r in records) else 0
 
 
 if __name__ == '__main__':

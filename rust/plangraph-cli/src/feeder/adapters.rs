@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 pub type Env = BTreeMap<String, String>;
 pub(super) fn python(env: &Env, repo: &Path) -> Command {
     let mut cmd = Command::new("python3");
@@ -55,6 +56,10 @@ pub struct SlowKeeper<'a> {
     pub max_time_secs: u32,
 }
 pub const MERGE_INDEX_EXPIRED: &str = "merge_index_expired";
+/// A request that ran into its own time limit, as opposed to one the keeper refused.
+pub const REQUEST_TIMED_OUT: &str = "keeper request timed out";
+/// curl's exit status for `--max-time`.
+const CURL_TIMEOUT: i32 = 28;
 const MERGE_INDEX_RUNNING: &str = "merge_index_running";
 
 fn http_response(raw: &[u8]) -> Result<Value, String> {
@@ -94,15 +99,32 @@ fn http_response(raw: &[u8]) -> Result<Value, String> {
 }
 impl Transport for Keeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        post(self.env, verb, body, 20)
+        post(self.env, verb, body, Duration::from_secs(20))
     }
 }
 impl Transport for SlowKeeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        post(self.env, verb, body, self.max_time_secs)
+        post(
+            self.env,
+            verb,
+            body,
+            Duration::from_secs(u64::from(self.max_time_secs)),
+        )
     }
 }
-fn post(env: &Env, verb: &str, body: Option<Value>, max_time_secs: u32) -> Result<Value, String> {
+impl SlowKeeper<'_> {
+    /// One request that also ends within `limit`, which curl takes in fractions of a second.
+    pub fn call_within(
+        &self,
+        verb: &str,
+        body: Option<Value>,
+        limit: Duration,
+    ) -> Result<Value, String> {
+        let own = Duration::from_secs(u64::from(self.max_time_secs));
+        post(self.env, verb, body, own.min(limit))
+    }
+}
+fn post(env: &Env, verb: &str, body: Option<Value>, max_time: Duration) -> Result<Value, String> {
     let url = env.get("PG_URL").ok_or("PG_URL missing")?;
     let path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE missing")?;
     let token = fs::read_to_string(path).map_err(|_| "keeper token file unreadable")?;
@@ -119,7 +141,7 @@ fn post(env: &Env, verb: &str, body: Option<Value>, max_time_secs: u32) -> Resul
     cmd.args([
         "--silent",
         "--max-time",
-        &max_time_secs.to_string(),
+        &format!("{:.3}", max_time.as_secs_f64().max(0.001)),
         "--proto",
         "=http,https",
         "--config",
@@ -150,7 +172,12 @@ fn post(env: &Env, verb: &str, body: Option<Value>, max_time_secs: u32) -> Resul
         .wait_with_output()
         .map_err(|_| "keeper request failed")?;
     if !out.status.success() {
-        return Err("keeper request refused or unreachable".into());
+        return Err(if out.status.code() == Some(CURL_TIMEOUT) {
+            REQUEST_TIMED_OUT
+        } else {
+            "keeper request refused or unreachable"
+        }
+        .into());
     }
     http_response(&out.stdout)
 }

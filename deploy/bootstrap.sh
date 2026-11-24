@@ -6,6 +6,7 @@ set -euo pipefail
 DRY_RUN=0
 SKIP_AUTOOS=0
 SKIP_CTX_WATCHDOG=0
+HOST_READY_TIMER=0
 AUTOOS_ROOT=""
 CATALOG_DB_PATH=""
 PROBE_HOST=""
@@ -18,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     --ci-tools-only) CI_TOOLS_ONLY=1; shift ;;
     --language-servers-only) LANGUAGE_SERVERS_ONLY=1; shift ;;
     --skip-ctx-watchdog) SKIP_CTX_WATCHDOG=1; shift ;;
+    --host-ready-timer) HOST_READY_TIMER=1; shift ;;
     --probe-host|--probe-config)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing probe argument" >&2; exit 1; }
       if [[ "$1" == --probe-host ]]; then PROBE_HOST="$2"; else PROBE_CONFIG="$2"; fi
@@ -316,6 +318,34 @@ install_worktree_sweep() {
     --repo-root "$repo_root"
 }
 install_worktree_sweep
+
+# Placement host only (opt in): publish host-ready/<host>.json every two minutes.
+install_host_ready_timer() {
+  [[ "$HOST_READY_TIMER" -eq 1 ]] || return 0
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local repo_root unit
+  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] host-ready: would install pg-host-ready.service and .timer into $unit_dir, daemon-reload, enable --now the timer, run the service once and check every record"
+    return 0
+  fi
+  [[ "$OSTYPE" == linux* ]] && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1 \
+    || { echo "host-ready: needs a Linux host with systemd --user" >&2; return 1; }
+  mkdir -p "$unit_dir"
+  for unit in pg-host-ready.service pg-host-ready.timer; do
+    install -m 0644 "$SCRIPT_DIR/systemd/$unit" "$unit_dir/$unit"
+  done
+  if ! systemctl --user daemon-reload || ! systemctl --user enable --now pg-host-ready.timer \
+     || ! systemctl --user start pg-host-ready.service \
+     || [[ "$(systemctl --user show pg-host-ready.service -p Result --value)" != success ]]; then
+    echo "host-ready: the service did not run successfully; see journalctl --user -u pg-host-ready.service" >&2
+    return 1
+  fi
+  # Every placement host must have a fresh record; a host that is not ready is reported, not hidden.
+  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$repo_root/src" "$PYTHON_CMD" -m plangraph.spawner.host_ready --check-records \
+    || { echo "host-ready: a placement host has a missing or stale record" >&2; return 1; }
+}
+install_host_ready_timer
 
 # Omnigraph: site config, cache client, session environment, health verification.
 if [[ "$DRY_RUN" -eq 1 ]]; then

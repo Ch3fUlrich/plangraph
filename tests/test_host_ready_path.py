@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -167,7 +168,11 @@ def unit_command():
 def test_host_ready_unit_runs_the_existing_entry_point_often_enough():
     from plangraph.spawner import host_ready
     command = unit_command()
-    assert command[1:] == ['-m', host_ready.__name__]
+    assert command[1:3] == ['-m', host_ready.__name__]
+    expected = int(command[command.index('--not-ready-exit') + 1])
+    service_options = dict(unit_options('pg-host-ready.service', 'Service'))
+    # Only the distinct not-ready status is a success; 1 (crash, unpublished record) and 2 fail.
+    assert expected not in (0, 1, 2) and int(service_options['SuccessExitStatus']) == expected
     assert host_ready.__name__ == 'plangraph.spawner.host_ready'
     service, timer = (dict(unit_options(f'pg-host-ready.{kind}', section))
                       for kind, section in (('service', 'Service'), ('timer', 'Timer')))
@@ -209,10 +214,9 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
     ssh.write_text('''#!/bin/sh
 for arg do script="$arg"; done
 case "$script" in
-  *"echo src_missing"*) exec sh -c "$script";;
+  *"echo src_missing"*|*--test-tools*) exec env -u PYTHONPATH sh -c "umask 022; $script";;
   *"command -v"*|*"codex login"*) echo ok;;
   *pg-host-readiness*) echo '{"errors":[],"sandbox_ok":true}';;
-  *--test-tools*) echo '{"missing":[],"umask":"0022","unit_umask":null}';;
   *meminfo*) echo 'MemAvailable: 8000000 kB';;
   *"df -Pk"*) echo 'fake 9000000 0 5242880 0% /';;
   *rev-list*) echo 0;;
@@ -222,12 +226,17 @@ case "$script" in
 esac
 ''')
     ssh.chmod(0o755)
-    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path),
+    # The probes run the module for real on the "remote" side with the interpreter of this test.
+    (binary / 'python3').symlink_to(sys.executable)
+    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path), PYTHONSAFEPATH='1',
                PATH=str(binary) + os.pathsep + os.environ['PATH'], PYTHONPATH=str(ROOT / 'src'))
     env.pop('PLANGRAPH_HOST_NAME', None)
     command = [sys.executable, *unit_command()[1:]]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
+    check = subprocess.run([sys.executable, '-m', 'plangraph.spawner.host_ready', '--check-records'],
+                           env=env, capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0 and check.stdout.splitlines() == ['alpha ready', 'beta ready'], check
     monkeypatch.setenv('HOME', str(tmp_path))
     records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta')}
     assert all(record['fresh'] and record['ok'] for record in records.values()), records
@@ -235,3 +244,67 @@ esac
         overflow.read_readiness('gamma')
     assert sorted(path.name for path in overflow.readiness_dir().iterdir()) == [
         'alpha.json', 'beta.json']
+
+
+def run_unit(tmp_path, registry, ssh_body=''):
+    """Run the unit's command against a registry written under tmp_path; return the result."""
+    config = tmp_path / 'plangraph'
+    config.mkdir(exist_ok=True)
+    (config / 'hosts.json').write_text(json.dumps(registry))
+    binary = tmp_path / 'bin'
+    binary.mkdir(exist_ok=True)
+    (binary / 'ssh').write_text('#!/bin/sh\nexit 255\n')
+    (binary / 'ssh').chmod(0o755)
+    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path),
+               PATH=str(binary) + os.pathsep + os.environ['PATH'], PYTHONPATH=str(ROOT / 'src'))
+    env.pop('PLANGRAPH_HOST_NAME', None)
+    return subprocess.run([sys.executable, *unit_command()[1:]], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_unit_exit_status_separates_not_ready_from_crashes(tmp_path):
+    from plangraph.fleet_sync import genconfig
+    host = dict(id='alpha', transport='ssh', os='linux', roles=['implement'],
+                state_dir=str(tmp_path / 'state'), caps=dict(mem_floor_mb=3000),
+                repos={'plangraph': {'root': str(tmp_path / 'alpha')}})
+    registry = {'self': 'coord', 'hosts': [
+        dict(id='coord', transport='local', os='linux', caps=dict(mem_floor_mb=3000), repos={}), host]}
+    expected = int(unit_command()[unit_command().index('--not-ready-exit') + 1])
+    (tmp_path / 'plangraph').mkdir()
+    genconfig.sync(registry, write=True, directory=tmp_path / 'plangraph')
+    # The host cannot be reached: its record is published as not ready, the unit's own success.
+    unreachable = run_unit(tmp_path, registry)
+    assert unreachable.returncode == expected, unreachable.stderr
+    assert 'HOST-NOT-READY alpha reachable' in unreachable.stdout + unreachable.stderr
+    # A registry without `self` is a crash: neither 0 nor the not-ready status.
+    crash = run_unit(tmp_path, {'hosts': registry['hosts']})
+    assert crash.returncode not in (0, expected) and 'KeyError' in crash.stderr
+    # A record that cannot be published is never the expected outcome either.
+    shutil.rmtree(tmp_path / '.local', ignore_errors=True)
+    (tmp_path / '.local').write_text('blocked')
+    unpublished = run_unit(tmp_path, registry)
+    assert unpublished.returncode == 1, unpublished.stderr
+    # An empty registry is a usage error, not a ready or not-ready fleet.
+    assert run_unit(tmp_path, {'self': 'coord', 'hosts': []}).returncode == 2
+
+
+def test_check_records_reports_missing_stale_and_failed_hosts(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from plangraph.spawner import host_ready
+    monkeypatch.setenv('HOME', str(tmp_path))
+    directory = tmp_path / '.local/state/plangraph/host-ready'
+    directory.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    stale = (now - timedelta(seconds=host_ready.MAX_AGE + 60)).isoformat()
+    for name, ok, at, failures in [('good', True, now.isoformat(), []),
+                                   ('down', False, now.isoformat(), ['unreachable: other_checks_unknown']),
+                                   ('old', True, stale, [])]:
+        (directory / f'{name}.json').write_text(json.dumps(
+            dict(host=name, ok=ok, checked_at=at, failures=failures)))
+    out = []
+    monkeypatch.setattr('builtins.print', lambda *a, **k: out.append(' '.join(map(str, a))))
+    assert host_ready.check_records(['good', 'down', 'old', 'absent']) == 1
+    assert out == ['good ready', 'down not-ready unreachable: other_checks_unknown',
+                   'old stale', 'absent missing']
+    out.clear()
+    assert host_ready.check_records(['good', 'down']) == 0

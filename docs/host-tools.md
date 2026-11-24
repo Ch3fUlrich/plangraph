@@ -114,30 +114,25 @@ for live protection authority, restore records, and remote-deletion opt-in.
 ## Host-ready timer
 
 `pg-host-ready.timer` runs `pg-host-ready.service` every two minutes on the placement host.
-The service runs `python3 -m plangraph.spawner.host_ready` once: it reads the host registry
-(`registry_caps`, `placement_config`), probes each placement host that has a spawner source in
-parallel, and writes `~/.local/state/plangraph/host-ready/<host>.json` through
-`atomic_write_private`. A host without a spawner source gets no record. The two-minute interval plus the
-probe timeout stays below the freshness limit (`host_ready.MAX_AGE`), so a host that passes always has a
-fresh record. Exit 1 (some host not ready) is a success of the unit; the `HOST-NOT-READY` lines in the
-journal and the record's `failures` say why. Exit 2 (crash, or a registry without candidates) fails it.
+The service runs `python3 -m plangraph.spawner.host_ready --not-ready-exit 3` once: it reads the host
+registry (`registry_caps`, `placement_config`), probes each placement host that has a spawner source in
+parallel, and writes `~/.local/state/plangraph/host-ready/<host>.json` through `atomic_write_private`.
+A host without a spawner source gets no record. The two-minute interval plus the probe timeout stays
+below the freshness limit (`host_ready.MAX_AGE`), so a host that passes always has a fresh record.
+Exit 3 means every record was published and some host is not ready: a success of the unit, with the
+`HOST-NOT-READY` lines in the journal and the reasons in the record's `failures`. A crash or an
+unpublished record exits 1 and a registry without candidates exits 2; both fail the unit.
 
-Install from the checkout on main (host-sync keeps it there), in the placement user's systemd directory:
+Deploy step: `deploy/bootstrap.sh --host-ready-timer` on the placement host, run from the checkout on
+main (host-sync keeps it there). It copies both units into `~/.config/systemd/user`, runs
+`daemon-reload`, `enable --now pg-host-ready.timer`, starts the service once, requires
+`Result=success`, then runs the record check below and fails when a host record is missing or stale.
+`--dry-run` prints the steps. Without the flag nothing is installed, so worker hosts are untouched.
 
-```sh
-cd ~/code/plangraph
-install -Dm644 deploy/systemd/pg-host-ready.service ~/.config/systemd/user/pg-host-ready.service
-install -Dm644 deploy/systemd/pg-host-ready.timer ~/.config/systemd/user/pg-host-ready.timer
-systemctl --user daemon-reload
-systemctl --user enable --now pg-host-ready.timer
-systemctl --user start pg-host-ready.service
-```
-
-Check: `systemctl --user show pg-host-ready.service -p Result` prints `Result=success`, and
-`ls ~/.local/state/plangraph/host-ready/` lists one file per placement host. For each host,
-`PYTHONPATH=src python3 -c "from plangraph.spawner import overflow; print(overflow.read_readiness('HOST')['fresh'])"`
-prints `True` when the host passes (`False` plus the record's `failures` otherwise, never a missing file).
-The timer is a persistent live change: install it only with a routing decision id.
+Check at any time: `python3 -m plangraph.spawner.host_ready --check-records` prints one line per
+placement host (`ready`, `not-ready <failures>`, `stale` or `missing`) and exits 1 when a record is
+missing or stale. A host that is `not-ready` has a fresh record whose probe failed, so a fresh file
+alone is not a pass. The timer is a persistent live change: install it only with a routing decision id.
 
 ## pg-repo-sync
 

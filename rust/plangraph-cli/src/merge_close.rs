@@ -5,7 +5,7 @@
 //! The job prints one line per closed item and one line per key the keeper refused or
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
-use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED};
+use crate::feeder::{Env, SlowKeeper, Transport, MERGE_INDEX_EXPIRED, REQUEST_TIMED_OUT};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -261,11 +261,21 @@ struct DeadlineKeeper<'a> {
 
 impl Transport for DeadlineKeeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        self.call_with(Instant::now(), |keeper| keeper.call(verb, body))
+        self.call_with(Instant::now(), |keeper, limit| {
+            keeper.call_within(verb, body, limit)
+        })
     }
 
     fn call_until(&self, verb: &str, body: Option<Value>, until: Instant) -> Result<Value, String> {
-        self.call_by(Instant::now(), until, |keeper| keeper.call(verb, body))
+        let deadline = self.deadline.min(until);
+        let reply = self.call_by(Instant::now(), until, |keeper, limit| {
+            keeper.call_within(verb, body, limit)
+        })?;
+        // A refresh answer that came after its wait ended does not start a close.
+        if Instant::now() > deadline {
+            return Err(MERGE_INDEX_EXPIRED.into());
+        }
+        Ok(reply)
     }
 }
 
@@ -273,32 +283,34 @@ impl DeadlineKeeper<'_> {
     fn call_with(
         &self,
         now: Instant,
-        request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
+        request: impl FnOnce(&SlowKeeper<'_>, Duration) -> Result<Value, String>,
     ) -> Result<Value, String> {
         self.call_by(now, self.deadline, request)
     }
 
     /// Run one request that must end by the earlier of `until` and the pass deadline.
+    /// The request gets the exact time left, so it cannot outlast the deadline.
     fn call_by(
         &self,
         now: Instant,
         until: Instant,
-        request: impl FnOnce(SlowKeeper<'_>) -> Result<Value, String>,
+        request: impl FnOnce(&SlowKeeper<'_>, Duration) -> Result<Value, String>,
     ) -> Result<Value, String> {
         let deadline = self.deadline.min(until);
         let remaining = deadline.saturating_duration_since(now);
         if remaining.is_zero() {
             return Err(MERGE_INDEX_EXPIRED.into());
         }
-        // curl takes whole seconds here. Round up within the unit's shutdown margin.
-        let remaining_secs = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
-        let request_limit = u64::from(self.keeper.max_time_secs);
-        let result = request(SlowKeeper {
-            env: self.keeper.env,
-            max_time_secs: request_limit.min(remaining_secs) as u32,
-        });
+        let own_limit = Duration::from_secs(u64::from(self.keeper.max_time_secs));
+        let result = request(&self.keeper, own_limit.min(remaining));
         match result {
-            Err(_) if remaining_secs <= request_limit && Instant::now() >= deadline => {
+            // Only the request's own time limit means the index ran out; a refusal that
+            // arrives late is still a refusal.
+            Err(error)
+                if error == REQUEST_TIMED_OUT
+                    && remaining <= own_limit
+                    && Instant::now() >= deadline =>
+            {
                 Err(MERGE_INDEX_EXPIRED.into())
             }
             result => result,
@@ -312,8 +324,19 @@ fn run_scheduled(
     project: Option<&str>,
     deployment_only: bool,
 ) -> Result<Outcome, String> {
-    let seats = require_seats(env)?;
     let timing = ScheduleTiming::new(REFRESH_TIMEOUT, PASS_BUDGET);
+    run_timed(env, apply, project, deployment_only, timing)
+}
+
+/// The scheduled pass over the real keeper transport with the caller's refresh limit and budget.
+pub fn run_timed(
+    env: &Env,
+    apply: bool,
+    project: Option<&str>,
+    deployment_only: bool,
+    timing: ScheduleTiming,
+) -> Result<Outcome, String> {
+    let seats = require_seats(env)?;
     let transport = |max_time_secs| DeadlineKeeper {
         keeper: SlowKeeper { env, max_time_secs },
         deadline: timing.deadline,
@@ -638,25 +661,38 @@ pub fn reconcile(env: &Env, args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
+    fn keeper(env: &Env, request_limit: u32, deadline: Instant) -> DeadlineKeeper<'_> {
+        DeadlineKeeper {
+            keeper: SlowKeeper {
+                env,
+                max_time_secs: request_limit,
+            },
+            deadline,
+        }
+    }
+
     #[test]
     fn deadline_keeper_caps_the_timeout_passed_to_the_request() {
         let env = Env::new();
         let now = Instant::now();
         for (request_limit, remaining, expected) in [
-            (10, Duration::from_secs(5), 5),
-            (10, Duration::from_secs(400), 10),
-            (MAX_TIME_SECS, Duration::from_secs(5), 5),
-            (MAX_TIME_SECS, Duration::from_millis(1), 1),
+            (10, Duration::from_secs(5), Duration::from_secs(5)),
+            (10, Duration::from_secs(400), Duration::from_secs(10)),
+            (
+                MAX_TIME_SECS,
+                Duration::from_secs(5),
+                Duration::from_secs(5),
+            ),
+            (
+                MAX_TIME_SECS,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            ),
+            (10, Duration::from_millis(1500), Duration::from_millis(1500)),
         ] {
-            let transport = DeadlineKeeper {
-                keeper: SlowKeeper {
-                    env: &env,
-                    max_time_secs: request_limit,
-                },
-                deadline: now + remaining,
-            };
-            let reply = transport.call_with(now, |keeper| {
-                assert_eq!(keeper.max_time_secs, expected);
+            let transport = keeper(&env, request_limit, now + remaining);
+            let reply = transport.call_with(now, |_, limit| {
+                assert_eq!(limit, expected);
                 Ok(json!({"merged_not_done": 0}))
             });
             assert_eq!(reply, Ok(json!({"merged_not_done": 0})));
@@ -667,14 +703,8 @@ mod tests {
     fn deadline_keeper_does_not_call_the_request_at_the_deadline() {
         let env = Env::new();
         let deadline = Instant::now();
-        let transport = DeadlineKeeper {
-            keeper: SlowKeeper {
-                env: &env,
-                max_time_secs: MAX_TIME_SECS,
-            },
-            deadline,
-        };
-        let reply = transport.call_with(deadline, |_| panic!("request started at the deadline"));
+        let transport = keeper(&env, MAX_TIME_SECS, deadline);
+        let reply = transport.call_with(deadline, |_, _| panic!("request started at the deadline"));
         assert_eq!(reply, Err(MERGE_INDEX_EXPIRED.into()));
     }
 
@@ -682,19 +712,35 @@ mod tests {
     fn a_request_ends_by_the_earlier_of_the_refresh_and_pass_deadlines() {
         let env = Env::new();
         let now = Instant::now();
-        let transport = DeadlineKeeper {
-            keeper: SlowKeeper {
-                env: &env,
-                max_time_secs: 10,
-            },
-            deadline: now + Duration::from_secs(400),
-        };
-        let reply = transport.call_by(now, now + Duration::from_secs(3), |keeper| {
-            assert_eq!(keeper.max_time_secs, 3);
+        let transport = keeper(&env, 10, now + Duration::from_secs(400));
+        let reply = transport.call_by(now, now + Duration::from_secs(3), |_, limit| {
+            assert_eq!(limit, Duration::from_secs(3));
             Ok(json!({}))
         });
         assert_eq!(reply, Ok(json!({})));
-        let late = transport.call_by(now, now, |_| panic!("request started at the wait deadline"));
+        let late = transport.call_by(now, now, |_, _| {
+            panic!("request started at the wait deadline")
+        });
         assert_eq!(late, Err(MERGE_INDEX_EXPIRED.into()));
+    }
+
+    #[test]
+    fn only_a_timeout_at_the_deadline_is_index_expiry() {
+        let env = Env::new();
+        let now = Instant::now();
+        // The deadline is already behind us when the request fails, as after a slow reply.
+        let transport = keeper(&env, 10, now + Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(5));
+        for (error, expected) in [
+            (REQUEST_TIMED_OUT, MERGE_INDEX_EXPIRED),
+            (
+                "keeper request refused or unreachable",
+                "keeper request refused or unreachable",
+            ),
+            ("item_refused:conflict", "item_refused:conflict"),
+        ] {
+            let reply = transport.call_with(now, |_, _| Err(error.into()));
+            assert_eq!(reply, Err(expected.into()));
+        }
     }
 }

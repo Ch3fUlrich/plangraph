@@ -9,10 +9,11 @@ Environment=PYTHONPATH=%h/code/plangraph/src
 Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
 # One run probes every placement host of hosts.json in parallel and writes
-# ~/.local/state/plangraph/host-ready/<host>.json for each. Exit 1 only means some
-# host is not ready (the HOST-NOT-READY lines go to the journal, the record says why),
-# so it is a success here; a crash or a registry without candidates exits 2 and fails the unit.
-ExecStart=/usr/bin/python3 -m plangraph.spawner.host_ready
-SuccessExitStatus=1
+# ~/.local/state/plangraph/host-ready/<host>.json for each. Exit 3 only means every record was
+# published and some host is not ready (the HOST-NOT-READY lines go to the journal, the record says why),
+# so it is a success here. A crash (exit 1), an unpublished record (exit 1) or a registry without
+# candidates (exit 2) fails the unit.
+ExecStart=/usr/bin/python3 -m plangraph.spawner.host_ready --not-ready-exit 3
+SuccessExitStatus=3
 TimeoutStartSec=3min
 UMask=0077

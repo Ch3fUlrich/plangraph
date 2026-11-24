@@ -558,7 +558,7 @@ def test_local_registry_host_runs_every_probe_as_a_step_plan_without_a_shell(tmp
     assert calls and all(argv == ['pg-spawnd', 'steps'] for argv, _ in calls)
     spawner_plans = [plan for _, plan in calls if plan.get('cwd') == '/invented/source']
     assert spawner_plans and all(plan['env_file'] == '/invented/env' for plan in spawner_plans)
-    assert all(plan['steps'][0]['env'] == {'PYTHONPATH': 'src', 'PLANGRAPH_SPAWN_STATE': '/invented/state'}
+    assert all(plan['steps'][0]['env'] == {'PYTHONPATH': '/invented/source', 'PLANGRAPH_SPAWN_STATE': '/invented/state'}
                for plan in spawner_plans)
     tools = next(plan for _, plan in calls if plan['steps'][0]['argv'][1:] == ['--version'])
     assert [step['argv'][0] for step in tools['steps']] == ['git', 'python3', 'codex']
@@ -573,6 +573,37 @@ def test_source_probe_plan_reports_missing_and_unimportable_sources_by_exit_code
     src = next(plan for _, plan in calls if plan['steps'][0].get('fail_code') == 10)
     assert [step.get('fail_code') for step in src['steps']] == [10, 11, None]
     assert src['steps'][1]['cwd'] == '/' and src['steps'][1]['argv'][-1] == 'import plangraph'
+
+
+def test_module_probes_import_from_the_resolved_source_not_a_relative_path(tmp_path):
+    """The SSH script and the WSL step plan both name the directory that holds `plangraph`."""
+    scripts, plans = [], []
+    def fake(argv, **kwargs):
+        if 'input' in kwargs:
+            plans.append(json.loads(kwargs['input']))
+            return plan_runner([], missing=())(argv, **kwargs)
+        scripts.append(argv[-1])
+        if '--test-tools' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=[], umask='0022', unit_umask=None)))
+        if 'plangraph.spawner.remote_ps' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        return runner(argv, **kwargs)
+    (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name='fiction', target=CONFIG['ssh'], src='/invented/source')]}))
+    first = h.check_host('fiction', dict(CONFIG, registry=True), tmp_path, fake)
+    assert first['ok'], first['failures']
+    module = [text for text in scripts if 'python3 -m plangraph.spawner.' in text]
+    assert module and all("PYTHONPATH=/invented/source python3 -m" in text for text in module)
+    (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
+    assert h.check_host('fiction', dict(CONFIG, registry=True, wsl_distro='Ubuntu'), tmp_path, fake)['ok']
+    modules = [step for plan in plans for step in plan['steps']
+               if step['argv'][:2] == ['python3', '-m']]
+    assert modules and all(step['env']['PYTHONPATH'] == '/invented/source' for step in modules)
+    # A config that still names the checkout imports from its src directory.
+    assert source.import_root(dict(CONFIG, spawner_src='/invented/checkout/')) == '/invented/checkout/src'
+    assert source.import_root(dict(CONFIG, registry=True)) == '/invented/source'
 
 
 def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
