@@ -1,8 +1,8 @@
-use pg_keeper_backup::{docker::Docker, names, restore_test, run_dump, Verify, KEEP, TABLES};
+use pg_keeper_backup::{docker::Docker, names, restore_test, run_dump, Verify, KEEP};
 use std::path::PathBuf;
 
-const USAGE: &str = "usage: pg-keeper-backup dump --dir DIR [--verify] [--schema keeper] [--keep 14] [--image postgres:17] [--docker PATH]\n       \
-pg-keeper-backup restore-test --file DUMP [--schema keeper] [--tables 43] [--image postgres:17]\n\
+const USAGE: &str = "usage: pg-keeper-backup dump --dir DIR [--verify] [--tables N] [--schema keeper] [--keep 14] [--image postgres:17] [--docker PATH]\n       \
+pg-keeper-backup restore-test --file DUMP [--schema keeper] [--tables N] [--image postgres:17]\n\
 The connection comes from the libpq environment variables (see docs/keeper-backup.md).";
 
 struct Opts {
@@ -10,7 +10,7 @@ struct Opts {
     file: Option<PathBuf>,
     schema: String,
     keep: usize,
-    tables: usize,
+    tables: Option<usize>,
     image: String,
     verify: bool,
     docker: String,
@@ -22,7 +22,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         file: None,
         schema: "keeper".into(),
         keep: KEEP,
-        tables: TABLES,
+        tables: None,
         image: "postgres:17".into(),
         verify: false,
         docker: "docker".into(),
@@ -45,7 +45,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--docker" => o.docker = value.clone(),
             "--image" => o.image = value.clone(),
             "--keep" => o.keep = number(value)?.max(1),
-            "--tables" => o.tables = number(value)?,
+            "--tables" => o.tables = Some(number(value)?),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
