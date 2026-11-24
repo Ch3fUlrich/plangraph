@@ -47,7 +47,9 @@ impl Model {
             && retry <= 1
             && spec <= 1
             // Retry precedence: nothing else is open while retry work is pending or running.
-            && (ordinary + spec == 0 || (retry == 0 && self.groups.is_empty()))
+            && (ordinary + spec == 0
+                || (retry == 0 && self.groups.is_empty())
+                || self.retry_beside())
             && self.trains.iter().all(|t| {
                 (!t.sealed || t.parts == t.frozen)
                     && (t.kind != Kind::Ordinary || t.parts.len() <= self.policy.target as usize)
@@ -56,6 +58,16 @@ impl Model {
                     && (t.ci != Ci::Running || t.sealed && t.bound)
                     // Fixing in place ends with the second red round.
                     && (t.closed || t.ci != Ci::Red || t.red_rounds + lineage_round(t) < 2)
+                    // The stale bound (D-6840): tested fast-forward never rebuilds a retry train a third time,
+                    // and only such a train lands stale.
+                    && (self.policy.stale_k == 0
+                        || self.policy.landing != Landing::TestedFf
+                        || !matches!(t.kind, Kind::Retry { .. })
+                        || t.rebuilds <= self.policy.stale_k)
+                    && (!t.stale_landed
+                        || matches!(t.kind, Kind::Retry { .. })
+                            && self.policy.landing == Landing::TestedFf
+                            && t.rebuilds >= self.policy.stale_k)
             })
             && self.trains.iter().filter(|t| t.landed).count() <= self.main as usize
     }

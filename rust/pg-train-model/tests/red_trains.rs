@@ -211,10 +211,12 @@ fn after_a_legacy_settlement_a_held_child_waits_for_the_verified_outcome_of_its_
 }
 
 #[test]
-fn main_moves_restart_a_retry_train_without_a_bound_while_an_ordinary_part_waits() {
+fn with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_while_an_ordinary_part_waits(
+) {
     // The 2n - 2 bound counts retry groups, not CI restarts: every move of main makes the running
     // retry train stale, and a stale train is rebuilt and tested again.
-    let mut m = Model::new(Policy::every_ready_rides(Order::Oldest), disjoint(4));
+    let plain = Policy::every_ready_rides(Order::Oldest).without_stale_bound();
+    let mut m = Model::new(plain, disjoint(4));
     register_all(&mut m, 0..2);
     ok(&mut m, Event::Select);
     start(&mut m, 0);

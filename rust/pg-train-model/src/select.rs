@@ -36,6 +36,16 @@ impl Model {
     pub(crate) fn live_retry(&self) -> bool {
         self.live(|k| matches!(k, Kind::Retry { .. }))
     }
+    /// The live retry train hit its rebuild bound and the landing mode lets an ordinary selection run.
+    pub(crate) fn retry_beside(&self) -> bool {
+        self.policy.landing == Landing::PrMerge
+            && self.policy.stale_k > 0
+            && self.trains.iter().any(|t| {
+                !t.closed
+                    && matches!(t.kind, Kind::Retry { .. })
+                    && t.rebuilds >= self.policy.stale_k
+            })
+    }
     pub(crate) fn live_spec(&self) -> bool {
         self.live(|k| matches!(k, Kind::Speculative { .. }))
     }
@@ -114,7 +124,10 @@ impl Model {
     }
 
     pub(crate) fn select_ordinary(&mut self) -> Result<Outcome, Denied> {
-        if self.live_retry() || !self.groups.is_empty() {
+        // Pull request merge (D-6840): once the live retry train was rebuilt `stale_k` times, an ordinary
+        // selection runs beside it.
+        let beside = self.retry_beside();
+        if (self.live_retry() || !self.groups.is_empty()) && !beside {
             return Err(Denied::RetryFirst);
         }
         if self.live_ordinary() || self.live_spec() {

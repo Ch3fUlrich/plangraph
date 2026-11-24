@@ -28,7 +28,7 @@ impl Model {
     }
 
     fn settle(&mut self, train: TrainId, verified: bool) -> Result<Outcome, Denied> {
-        let main = self.main;
+        let (main, policy) = (self.main, self.policy);
         let t = self.train_mut(train)?;
         if matches!(t.kind, Kind::Speculative { .. }) {
             return Err(Denied::Phase);
@@ -36,7 +36,13 @@ impl Model {
         if t.ci != Ci::Green || !t.bound {
             return Err(Denied::NotGreen);
         }
-        if t.base != main {
+        // A retry train stale `stale_k` times lands on the current main as tested (D-6840).
+        let stale_ok = matches!(t.kind, Kind::Retry { .. })
+            && policy.landing == Landing::TestedFf
+            && policy.stale_k > 0
+            && t.rebuilds >= policy.stale_k;
+        let stale = t.base != main;
+        if stale && !stale_ok {
             return Err(Denied::Stale);
         }
         if t.tested != Some(t.tree) {
@@ -45,6 +51,7 @@ impl Model {
         if !t.checked {
             return Err(Denied::Unverified);
         }
+        t.stale_landed = stale;
         self.land(train, verified);
         Ok(Outcome::Applied)
     }
@@ -232,11 +239,21 @@ impl Model {
                 Ok(Outcome::Applied)
             }
             Event::Rebuild { train } => {
-                let main = self.main;
+                let (main, policy) = (self.main, self.policy);
                 let t = self.train_mut(train)?;
                 // A candidate is never rebuilt: a changed predecessor discards it.
                 if matches!(t.kind, Kind::Speculative { .. }) {
                     return Err(Denied::Phase);
+                }
+                if matches!(t.kind, Kind::Retry { .. }) {
+                    // No third rebuild in tested fast-forward: it lands on the current main instead.
+                    if policy.landing == Landing::TestedFf
+                        && policy.stale_k > 0
+                        && t.rebuilds >= policy.stale_k
+                    {
+                        return Err(Denied::StaleBound);
+                    }
+                    t.rebuilds += 1;
                 }
                 t.base = main;
                 t.bound = false;

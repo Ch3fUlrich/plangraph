@@ -200,7 +200,10 @@ fn explore(policy: Policy) -> (usize, [bool; 5]) {
 
 #[test]
 fn every_interleaving_keeps_the_invariants_under_each_policy() {
+    let mut pr_merge = policy(2, 1, 1, Order::Oldest);
+    pr_merge.landing = Landing::PrMerge;
     let policies = [
+        pr_merge,
         policy(2, 1, 1, Order::Oldest),
         policy(2, 1, 1, Order::Count),
         Policy::every_ready_rides(Order::Oldest),
@@ -208,9 +211,12 @@ fn every_interleaving_keeps_the_invariants_under_each_policy() {
     for p in policies {
         let (states, reached) = explore(p);
         assert!(states > 10_000, "only {states} states");
+        // A candidate is promoted only in tested fast-forward; in pull request merge mode it stays shadow.
+        let promoted = p.landing == Landing::TestedFf;
         assert_eq!(
-            reached, [true; 5],
-            "a state class was never reached under {p:?}"
+            reached,
+            [true, true, true, true, promoted],
+            "a state class was reached or missed under {p:?}"
         );
     }
 }
