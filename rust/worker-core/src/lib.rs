@@ -58,6 +58,7 @@ pub mod host_overflow;
 pub mod host_probe;
 pub mod host_readiness;
 pub mod hosts;
+pub mod idle_targets;
 pub mod janitor;
 pub mod live_probe;
 pub mod lockfile;

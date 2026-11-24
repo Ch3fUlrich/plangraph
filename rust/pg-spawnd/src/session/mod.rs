@@ -1,6 +1,7 @@
 //! Caller-process launch for the fleet's session command.
 
 mod arguments;
+mod cargo_env;
 mod external_run;
 mod identity;
 mod paths;
@@ -324,10 +325,18 @@ fn local(
     }
     let mut lifecycle = external_run::register(args, admission, &name, host)?;
     let launched_ms = storage::epoch_millis();
+    let target_env = cargo_env::target_env(
+        std::env::var_os("CARGO_TARGET_DIR").as_deref(),
+        std::env::var_os("PLANGRAPH_CARGO_TARGET_DIR").as_deref(),
+        &paths.home,
+        &std::env::current_dir().unwrap_or_default(),
+    )
+    .map_err(io::Error::other)?;
     let output = Command::new(argv[0])
         .args(&argv[1..])
         .stdin(Stdio::inherit())
         .current_dir(&args.cwd)
+        .envs(target_env)
         .env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", compact)
         .env("FLEET_SESSION_NAME", &args.role)
         .env("PATH", settings::tool_path(&paths.home))
