@@ -129,7 +129,8 @@ def completion():
 
 
 async def harness(name):
-    binary = shutil.which(name)
+    from plangraph.routing_support.clients import resolve_harness_binary
+    binary = resolve_harness_binary(name).path
     if binary is None:
         return 'skip', 'not on PATH'
     child = await asyncio.create_subprocess_exec(binary, '--version',
@@ -302,7 +303,8 @@ async def _diagnose(probe, checks, memory_probe=False):
         await check('omnigraph_access', lambda: asyncio.to_thread(_memory_access))
     for name in HARNESSES:
         await check('harness_' + name, lambda: harness(name))
-    if not any(shutil.which(name) for name in HARNESSES):
+    from plangraph.routing_support.clients import resolve_harness_binary
+    if not any(resolve_harness_binary(name).path for name in HARNESSES):
         await check('harness_any', lambda: ('fail', 'no harness on PATH'))
 
     service = None

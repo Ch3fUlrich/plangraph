@@ -183,7 +183,7 @@ def test_doctor_rust_sources(monkeypatch, mode, detail):
     monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: [])
     monkeypatch.setattr(doctor, 'mcp', mcp)
     monkeypatch.setattr(doctor.shutil, 'which',
-                        lambda name: str(built_rust_binary('pg-spawnd'))
+                        lambda name, path=None: str(built_rust_binary('pg-spawnd'))
                         if name == 'pg-spawnd' else None)
     result = asyncio.run(doctor.diagnose())['checks'][0]
     assert result == ({key: rows[0][key] for key in ('name', 'status', 'detail')}
@@ -203,7 +203,7 @@ def test_doctor_deadline_many_hosts(monkeypatch):
     monkeypatch.setattr(doctor.subprocess, 'run', run)
     monkeypatch.setattr(doctor, 'mcp', mcp)
     monkeypatch.setattr(doctor.shutil, 'which',
-                        lambda name: str(built_rust_binary('pg-spawnd'))
+                        lambda name, path=None: str(built_rust_binary('pg-spawnd'))
                         if name == 'pg-spawnd' else None)
     asyncio.run(doctor.diagnose())
 

@@ -552,7 +552,8 @@ def client_installed(name: str) -> bool:
     if name == "codex":
         from plangraph.routing_support.clients import resolve_codex_client
         return resolve_codex_client()[0] is not None
-    return shutil.which(name) is not None
+    from plangraph.routing_support.clients import resolve_harness_binary
+    return resolve_harness_binary(name).path is not None
 
 
 def service_probe(service) -> Callable[[str], bool] | None:
@@ -572,8 +573,15 @@ def opencode_counterpart(leg: Leg) -> Leg | None:
     if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
         return None
     tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
+    # The OpenCode leg is bound by the OmniRoute registry window, not by the native client's.
+    key = model.removeprefix("omniroute/")
+    base = next((key[:-len(e) - 1] for e in CX_EFFORTS if key.endswith("-" + e)), key)
+    limit = _registry_limit("omniroute", key) or _registry_limit("omniroute", base)   # effort variants share the base window
+    cap = limit["context"] - limit.get("output", 0) if isinstance(limit.get("context"), int) else leg.max_request_tokens
+    if leg.max_request_tokens is not None:
+        cap = min(cap, leg.max_request_tokens)
     return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
-                               harness_fallback=None, web_access=False)
+                               harness_fallback=None, web_access=False, max_request_tokens=cap)
 
 
 def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:

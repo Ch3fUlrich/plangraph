@@ -727,6 +727,10 @@ def main(argv=None):
     else:
         for record in records:
             print(record['host'] + (' ok' if record['ok'] else ' FAIL ' + '; '.join(record['failures'])))
+    served = {record['host']: record['served_legs'] for record in records if record.get('served_legs')}
+    if served:
+        from plangraph.routing_support.leg_state import served_digest
+        print(served_digest(served), file=sys.stderr if args.json else sys.stdout)
     for record in records:
         for failure in record['failures']:
             check, _, reason = failure.partition(': ')
