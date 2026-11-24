@@ -149,11 +149,14 @@ pub fn note(dir: &Path, run_id: &str, reason: &str, now: i64) -> Option<Value> {
         return None;
     }
     crate::atomic::write(&alerts, text.as_bytes()).ok()?;
-    // Announce an incident the first time it appears (keyed by its first seat).
+    // Announce an incident the first time it appears. It keeps its identity while seats join it:
+    // a later seat moves its stamp (same first seat), an earlier seat moves its first seat (same
+    // stamp), so neither makes it new.
     let fresh = incidents.into_iter().find(|incident| {
-        !before
-            .iter()
-            .any(|row| row["reason"] == cause.as_str() && row["first"] == incident["first"])
+        !before.iter().any(|row| {
+            row["reason"] == cause.as_str()
+                && (row["first"] == incident["first"] || row["ts"] == incident["ts"])
+        })
     })?;
     eprintln!(
         "no_verdict_alert {} review seats ended without a verdict: {cause}",
@@ -231,6 +234,52 @@ mod tests {
             .collect();
         rows.sort();
         rows
+    }
+
+    fn announcements(order: &[usize], seats: &[(&str, i64)]) -> usize {
+        let dir = tempfile::tempdir().unwrap();
+        order
+            .iter()
+            .filter(|index| note(dir.path(), seats[**index].0, CAUSE, seats[**index].1).is_some())
+            .count()
+    }
+
+    #[test]
+    fn an_incident_is_announced_once_whichever_seat_joins_it_late() {
+        // Seats ended at 1000, 1100 and 1200: one incident however they arrive, so one announcement
+        // (booking 1100, 1200, 1000 used to announce it twice: its first seat moved).
+        let seats = [("run-a", 1000), ("run-b", 1100), ("run-c", 1200)];
+        for order in permutations(&[0, 1, 2]) {
+            assert_eq!(announcements(&order, &seats), 1, "order {order:?}");
+        }
+        // Extending the incident at its end keeps one announcement as well.
+        let more = [
+            ("run-a", 1000),
+            ("run-b", 1100),
+            ("run-c", 1200),
+            ("run-d", 1300),
+        ];
+        for order in permutations(&[0, 1, 2, 3]) {
+            assert_eq!(announcements(&order, &more), 1, "order {order:?}");
+        }
+    }
+
+    #[test]
+    fn every_final_incident_is_announced_and_only_a_true_interim_pair_is_extra() {
+        // 1000, 1001, 2801, 2802: two final incidents. When 1001 and 2801 are booked first they are
+        // a true incident of their own at that moment (1800 s apart) and are announced as such, so
+        // an order may announce three times, never fewer than the two final incidents.
+        let four = [
+            ("run-a", 1000),
+            ("run-b", 1001),
+            ("run-c", 2801),
+            ("run-d", 2802),
+        ];
+        let mut counts = std::collections::BTreeMap::new();
+        for order in permutations(&[0, 1, 2, 3]) {
+            *counts.entry(announcements(&order, &four)).or_insert(0) += 1;
+        }
+        assert_eq!(counts, [(2, 20), (3, 4)].into_iter().collect());
     }
 
     #[test]
