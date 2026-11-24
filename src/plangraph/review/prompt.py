@@ -10,6 +10,11 @@ from string import Template
 
 __all__ = [
     "NO_TOOLS_PREAMBLE",
+    "ItemContextError",
+    "ITEM_CONTEXT_FIELDS",
+    "UNAVAILABLE",
+    "verified_empty",
+    "item_context_defects",
     "render_brief",
     "load_tail",
     "vector_block",
@@ -27,6 +32,13 @@ NO_TOOLS_PREAMBLE = (
     "Answer in plain text; never emit tool calls."
 )
 REVIEW_OUTPUT_SECTION = "\n\n=== REVIEW OUTPUT\n"
+UNAVAILABLE = "unavailable (request before acceptance)"
+# Brief field -> its label in the "=== ITEM CONTEXT" block of review_brief.md.
+ITEM_CONTEXT_FIELDS = {
+    "public_symbols": "Changed public symbols",
+    "callers": "Callers of changed public symbols",
+    "test_output_paths": "Affected test output (paths)",
+}
 _WRITER_ARTIFACT_MAX_BYTES = 1024 * 1024
 _WRITER_ARTIFACT_EXCERPT_BYTES = 32 * 1024
 
@@ -101,14 +113,59 @@ def _writer_artifacts(record: dict) -> str:
     return "\n".join(sections) + "\n\n"
 
 
+class ItemContextError(ValueError):
+    """A lane-head review brief lacks evidence for one or more item-context fields."""
+
+    def __init__(self, fields: list[str]):
+        self.fields = fields
+        super().__init__("review brief item context refused: missing or empty field(s) "
+                         + ", ".join(fields))
+
+
+def verified_empty(what: str) -> str:
+    """Explicit value for a search that ran and found nothing (docs-only diff, no callers)."""
+    return f"none (verified empty: {what})"
+
+
+def _unrendered(value: object) -> bool:
+    text = value.strip() if isinstance(value, str) else ""
+    return not text or text == UNAVAILABLE or text.startswith("$")
+
+
+def item_context_defects(prompt: str) -> list[str]:
+    """Fields of the emitted prompt's item-context block that are empty or unrendered.
+
+    The block of a prompt without one counts as wholly unrendered.
+    """
+    _, marker, block = prompt.rpartition("=== ITEM CONTEXT")
+    found: dict[str, str] = {}
+    for line in block.splitlines() if marker else ():
+        label, sep, value = line.partition(":")
+        if sep and label in ITEM_CONTEXT_FIELDS.values():
+            found[label] = value
+    return [field for field, label in ITEM_CONTEXT_FIELDS.items()
+            if _unrendered(found.get(label))]
+
+
 def render_brief(role: str, context: dict | None = None, *, rules: str = "",
-                 launch_record: dict | None = None) -> str:
-    """Render a versioned brief, optionally bound to a Claude fleet writer record."""
+                 launch_record: dict | None = None,
+                 require_item_context: bool = False) -> str:
+    """Render a versioned brief, optionally bound to a Claude fleet writer record.
+
+    A lane-head review brief sets `require_item_context`: a public_symbols, callers or
+    test_output_paths field that is missing, blank or the unavailable placeholder raises
+    ItemContextError. A search that found nothing is passed as `verified_empty(...)`.
+    """
     if role not in ("review", "writer"):
         raise ValueError("role must be review or writer")
+    if require_item_context and role == "review":
+        missing = [field for field in ITEM_CONTEXT_FIELDS
+                   if _unrendered((context or {}).get(field))]
+        if missing:
+            raise ItemContextError(missing)
     fields = ("item_key", "done_criteria", "invariants", "base_sha", "head_sha",
               "public_symbols", "callers", "test_output_paths")
-    values = {field: "unavailable (request before acceptance)" for field in fields}
+    values = {field: UNAVAILABLE for field in fields}
     context = context or {}
     values.update({key: str(value) for key, value in context.items()
                    if key in fields})

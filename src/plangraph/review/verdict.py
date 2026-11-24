@@ -9,6 +9,7 @@ gating here are stricter.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass
 from html import unescape
 from typing import Any
@@ -21,6 +22,9 @@ __all__ = [
     "finish_reason",
     "Verdict",
     "judge",
+    "Findings",
+    "classify_findings",
+    "diff_paths",
 ]
 
 VERDICTS = ("pass", "fix", "halt")
@@ -270,3 +274,92 @@ def judge(text: str, finish_reason: str | None,
     return Verdict(verdict=verdict, finish_reason=finish_reason,
                    test_gaming=gaming, test_gaming_quote=quote, empty=False,
                    low_only=low_only)
+
+
+# Files that make up the supplied review prompt. A finding about one of them, when the
+# reviewed diff does not change it and the emitted prompt shows the defect, is a process
+# diagnostic for the orchestrator, not a defect of the head.
+PROCESS_PATHS = ("review_brief.md", "skills/review/SKILL.md")
+_SEVERITY = {"HIGH": "high", "P1": "high", "MED": "med", "P2": "med",
+             "LOW": "low", "P3": "low", "PROCESS": "process"}
+_FINDING_LINE = re.compile(
+    r"^[\s#*\-\[(]*(?:\d+[.)][\s#*\-\[(]*)?(?:FINDING:[\s#*\-\[(]*)?"
+    r"(HIGH|MED|LOW|P1|P2|P3|PROCESS)\b[\s:*\])]*(.*)$")
+_DIFF_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)$", re.M)
+_DIFF_COMMAND = re.compile(r"^git diff ([0-9a-f]{7,40}) ([0-9a-f]{7,40})$", re.M)
+
+
+@dataclass(frozen=True)
+class Findings:
+    """Finding lines of one review, split into the head's blockers and process diagnostics."""
+
+    high: int = 0
+    med: int = 0
+    low: int = 0
+    process: tuple[str, ...] = ()
+
+    @property
+    def blocking(self) -> int:
+        """HIGH+MED count of the head; PROCESS lines are not in it."""
+        return self.high + self.med
+
+
+def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
+    """Paths the dispatched diff changes, or None when the prompt does not identify it.
+
+    Inline seats carry `diff --git` headers; tool seats carry the `git diff A B` command,
+    which is run in `cwd` (the seat's checkout) read-only.
+    """
+    paths: set[str] = set()
+    for old, new in _DIFF_HEADER.findall(prompt):
+        paths.update((old, new))
+    for base, head in _DIFF_COMMAND.findall(prompt):
+        if cwd is None:
+            return None
+        try:
+            out = subprocess.run(["git", "-C", cwd, "diff", "--name-only", base, head],
+                                 capture_output=True, text=True, timeout=60, check=True)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        paths.update(out.stdout.split())
+    return paths or None
+
+
+def _names_process_file(line: str) -> str | None:
+    for token in re.split(r"[\s`'\"(),]+", line):
+        path = token.partition(":")[0]
+        if any(path == name or path.endswith("/" + name) for name in PROCESS_PATHS):
+            return path
+    return None
+
+
+def classify_findings(text: str, *, prompt: str = "",
+                      changed_paths: set[str] | None = None) -> Findings:
+    """Count finding lines; a HIGH/MED/PROCESS line about the supplied brief or skill is
+    PROCESS only when the emitted `prompt` has an empty item-context field and the
+    dispatched diff (`changed_paths`) does not change that file. Otherwise it keeps its
+    severity (fail closed); a typed PROCESS line that fails the check counts as MED.
+    """
+    from .prompt import item_context_defects
+
+    counts = {"high": 0, "med": 0, "low": 0}
+    process: list[str] = []
+    verified = bool(prompt) and bool(item_context_defects(prompt)) and changed_paths is not None
+    for raw in _unquoted_lines(text):
+        found = _FINDING_LINE.match(raw)
+        if not found:
+            continue
+        kind = _SEVERITY[found.group(1)]
+        path = _names_process_file(found.group(2))
+        about_prompt = (path is not None and verified
+                        and not any(c == name or c.endswith("/" + name) or name.endswith("/" + c)
+                                    for c in changed_paths for name in (path,)))
+        if kind == "process":
+            kind = "process" if about_prompt else "med"
+        elif kind != "low" and about_prompt:
+            kind = "process"
+        if kind == "process":
+            process.append(raw.strip())
+        else:
+            counts[kind] += 1
+    return Findings(counts["high"], counts["med"], counts["low"], tuple(process))

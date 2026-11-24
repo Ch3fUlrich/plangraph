@@ -415,3 +415,43 @@ def test_served_model_witness_precedes_admissible_request_side(tmp_path, capsys)
     reason = payload["body"]["reason"]
     assert "witness=" not in reason
     assert "glm-5.3-flash-free" not in reason
+
+
+def _process_seat(tmp_path, review, prompt):
+    argv = seat(tmp_path, review)
+    seat_dir = Path(argv[argv.index("--seat-dir") + 1])
+    (seat_dir / "prompt.txt").write_text(prompt)
+    return argv, seat_dir
+
+
+PROCESS_PROMPT = "=== ITEM CONTEXT\nItem key: demo:A\nChanged public symbols: unavailable (request before acceptance)\n"
+PROCESS_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
+BRIEF_MED = "MED src/plangraph/review/review_brief.md:26 - brief omits public symbols"
+
+
+def test_process_only_response_is_not_posted_as_fix(tmp_path, capsys):
+    argv, seat_dir = _process_seat(tmp_path, f"{BRIEF_MED}\nVERDICT: REQUEST_CHANGES\n",
+                                   PROCESS_PROMPT + PROCESS_DIFF)
+    assert sv.main(argv + ["--dry-run"]) == sv.EXIT_PROCESS
+    assert json.loads(capsys.readouterr().out)["process"]["lines"] == [BRIEF_MED]
+    saved = json.loads((seat_dir / "process.json").read_text())
+    assert (saved["key"], saved["run_id"], saved["head_sha"]) == ("demo:A", "run-example", "a" * 40)
+    assert not (seat_dir / "verdict.payload.json").exists()
+
+
+def test_mixed_response_keeps_the_real_blocker_as_fix(tmp_path, capsys):
+    argv, seat_dir = _process_seat(
+        tmp_path, f"{BRIEF_MED}\nHIGH src/a.py:3 - real bug\nVERDICT: REQUEST_CHANGES\n",
+        PROCESS_PROMPT + PROCESS_DIFF)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert json.loads((seat_dir / "process.json").read_text())["blocking"] == 1
+
+
+def test_brief_finding_stays_a_fix_when_the_head_changes_the_brief(tmp_path, capsys):
+    changed = "diff --git a/src/plangraph/review/review_brief.md b/src/plangraph/review/review_brief.md\n+x\n"
+    argv, seat_dir = _process_seat(tmp_path, f"{BRIEF_MED}\nVERDICT: REQUEST_CHANGES\n",
+                                   PROCESS_PROMPT + changed)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()

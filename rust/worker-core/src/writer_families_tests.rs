@@ -169,3 +169,18 @@ fn keeper_families_fold_spellings_into_the_keeper_table() {
     assert_ne!(table["claude"], table["gpt"]);
     assert_eq!(table["deepseek"], "deepseek");
 }
+
+#[test]
+fn a_lane_head_review_brief_refuses_empty_item_context_by_field_name() {
+    let full = serde_json::json!({
+        "item_key": "demo:CTX", "public_symbols": "run", "callers": "none (verified empty: no caller)",
+        "test_output_paths": "logs/fast.log"});
+    let brief = render_review_brief(&full, "", &python).unwrap();
+    assert!(brief.contains("Callers of changed public symbols: none (verified empty: no caller)"));
+    for field in ["public_symbols", "callers", "test_output_paths"] {
+        let mut context = full.clone();
+        context.as_object_mut().unwrap().remove(field);
+        let refusal = render_review_brief(&context, "", &python).unwrap_err();
+        assert!(refusal.contains(field), "{field}: {refusal}");
+    }
+}

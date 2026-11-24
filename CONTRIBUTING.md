@@ -686,10 +686,10 @@ part table. `merge_batch push` uses the batch's saved part heads for the first
 push, before the batch PR exists. See [the commit gate](docs/ci-gate.md).
 
 Review prompt builders use `src/plangraph/review/review_brief.md` through
-`plangraph.review.prompt.render_brief`. Supply item context explicitly (the judge
-CLI accepts `--context` JSON); missing fields remain visible as unavailable.
-Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
-content follows it so different items reuse the same prompt cache prefix.
+`plangraph.review.prompt.render_brief`. Item context is supplied explicitly (judge CLI:
+`--context` JSON) and fixed rules precede `=== ITEM CONTEXT`, so items share one cache prefix.
+A lane-head brief sets `require_item_context=True`: an empty symbols, callers or test-output
+field is refused by name; a search that found nothing is `verified_empty(...)`.
 
 Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).
 
