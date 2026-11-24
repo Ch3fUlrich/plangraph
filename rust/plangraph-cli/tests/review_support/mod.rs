@@ -122,13 +122,17 @@ card = json.loads(Path(opts["card"][1:]).read_text()) if opts.get("card", "").st
 ORDER = ("google", "openai", "deepseek", "xiaomi") if MODE in ("family_order", "fenced_pass") else ("xiaomi",)
 SEAT_FAMILY = next(f for f in ORDER if f not in opts["writer_family"])
 with LOG.open("a", encoding="utf-8") as fh:
-    fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref")}}) + "\n")
+    fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref"), "cwd": opts.get("cwd"), "review_workspace": card.get("review_workspace"), "repository_review_required": card.get("repository_review_required")}}) + "\n")
 
 if verb == "route":
     # Budget for the review contract and one small patch while still forcing multiple patches to split.
     max_tok = 450 if MODE in ("split_pass", "split_fail_beta", "single_too_big") else 200000
     if MODE == "null_leg":
         print(json.dumps({{"first_leg": None, "legs": []}}))
+        sys.exit(0)
+    if MODE == "agy_build":
+        leg = {{"id": "agy-gemini-4-hydrogen-high", "family": SEAT_FAMILY, "harness": "agy", "tool_mode": "tools", "max_request_tokens": max_tok}}
+        print(json.dumps({{"first_leg": leg, "legs": [leg]}}))
         sys.exit(0)
     print(json.dumps({{
         "first_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}},

@@ -519,6 +519,22 @@ def test_build_review_requires_worker_with_disk_and_ram(orchestration):
     remote.assert_not_called()
 
 
+def test_dry_run_build_review_names_the_worker_host_without_spawning(orchestration):
+    service, rows, remote, path, registry = orchestration
+    rows['host-b']['disk_free_gb'] = 30
+    config = json.loads(path.read_text())
+    card = {'review_workspace': True, 'repository_review_required': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    options = {'role': 'review', 'dry_run': True, 'prompt': 'review the exact head'}
+    assert service.admit_spawn(options, card=card) is None
+    assert options['_placement']['host'] == 'host-b'
+    assert options['_placement']['reason']
+    remote.assert_not_called()
+    plain = {'role': 'review', 'dry_run': True}
+    assert service.admit_spawn(plain, card={'diff_ref': card['diff_ref']}) is None
+    assert '_placement' not in plain
+
+
 @pytest.mark.parametrize('local,projected_only,admitted', [
     ('host-b', False, True), ('host-a', False, False), ('host-b', True, False),
 ])

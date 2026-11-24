@@ -128,7 +128,7 @@ Each candidate must meet its memory floor and role reservation. The most free RA
 the floor wins, with `placement_fallback` hosts considered after the ready workers.
 Spawn records carry `placement` with `host`, `reason`, and `free_mb`. Route planning accepts
 a placement snapshot. Other eligible spawns try SSH overflow when local admission refuses.
-Dry runs, private or unknown repositories, and local benchmark databases stay local.
+Dry runs launch nothing; a workspace review's dry run still records the `placement` host. Private or unknown repositories and local benchmark databases stay local.
 Repository-required reviews that use the existing checkout apply orchestration fallback
 health thresholds. In-worker native reviews with a disposable checkout can run locally
 without host registration if worker placement is allowed and the host meets disk and RAM limits.
