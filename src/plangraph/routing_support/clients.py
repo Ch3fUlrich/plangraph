@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 from collections.abc import Mapping, Sequence
@@ -99,6 +100,67 @@ def resolve_codex_client(env=None):
         if local.is_absolute() and (executable := shutil.which(str(local))):
             return executable, str(local)
     return shutil.which("codex", path=env.get("PATH", os.defpath)), "PATH"
+
+
+@dataclass(frozen=True)
+class HarnessBinary:
+    """Result of :func:`resolve_harness_binary`: ``path`` is None when nothing was found."""
+
+    name: str
+    path: str | None
+    searched: tuple[str, ...]
+    source: str  # 'env', 'host_table', 'search' or 'missing'
+
+    @property
+    def refusal(self) -> str | None:
+        """The one refusal text for a missing binary, named before any run starts."""
+        if self.path is not None:
+            return None
+        return f"harness_not_found {self.name} {os.pathsep.join(self.searched) or '(no search path)'}"
+
+
+def _host_harness_table(name):
+    """``harness_bins`` of this host in the hosts registry (absolute path per harness)."""
+    try:
+        from plangraph.spawner.overflow import host_config, registry_caps
+        registry = registry_caps()
+        host = host_config(registry, os.environ.get("PLANGRAPH_HOST_NAME") or registry.get("self"))
+        table = host.get("harness_bins")
+        value = table.get(name) if isinstance(table, dict) else None
+    except Exception:  # a broken registry never hides the PATH fallback
+        return None
+    return value if isinstance(value, str) and Path(value).is_absolute() else None
+
+
+_warned_path_fallback: set[str] = set()
+
+
+def resolve_harness_binary(name, env=None, *, search=None):
+    """The one lookup of a harness executable (opencode, agy, qodercli, claude, codex).
+
+    Order: ``PLANGRAPH_<NAME>_BIN``, the host's ``harness_bins`` table, then the search path
+    (the child's PATH plus the user install dirs systemd units lack, host_ready.harness_path;
+    a caller that already computed that path passes it as ``search``).
+    The search path answers with a logged warning: a host that relies on it should list the
+    binary in its table.  A miss returns ``HarnessBinary.refusal``.
+    """
+    import logging
+    from plangraph.spawner.host_ready import harness_path
+    env = os.environ if env is None else env
+    var = "PLANGRAPH_" + re.sub(r"\W", "_", str(name)).upper() + "_BIN"
+    for source, candidate in (("env", env.get(var)), ("host_table", _host_harness_table(name))):
+        if candidate and Path(candidate).is_absolute() and (found := shutil.which(candidate)):
+            return HarnessBinary(name, found, (candidate,), source)
+    search = harness_path(dict(env)) if search is None else search
+    found = shutil.which(name, path=search)
+    entries = tuple(entry for entry in search.split(os.pathsep) if entry)
+    if found is None:
+        return HarnessBinary(name, None, entries, "missing")
+    if name not in _warned_path_fallback:
+        _warned_path_fallback.add(name)
+        logging.getLogger(__name__).warning(
+            "harness_path_fallback %s resolved by PATH search, not the host table: %s", name, found)
+    return HarnessBinary(name, found, entries, "search")
 
 
 def codex_review_client(harness, role, tag, *, env=None):

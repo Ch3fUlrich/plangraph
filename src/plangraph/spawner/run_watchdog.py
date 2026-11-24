@@ -469,3 +469,51 @@ def watchdog_reason(job):
         return job.status
     return next((e['rule'] for e in reversed(job.events)
                  if e.get('rule') in ('tool_loop', 'stuck') and e.get('event') == 'watchdog_stalled'), job.status)
+
+
+#: Two review seats ending without a verdict for one cause inside this window raise one alert.
+NO_VERDICT_WINDOW_S = 1800
+NO_VERDICT_REPEAT = 2
+
+
+def no_verdict_reason(record):
+    """The normalised cause of a finished review seat that has no verdict, else None."""
+    if record.get('role') != 'review' or record.get('status') not in ('failed', 'refused'):
+        return None
+    if (record.get('completion') or {}).get('verdict') or record.get('verdict'):
+        return None
+    text = record.get('reason') or record.get('error') or '; '.join(
+        a['skip_reason'] for a in record.get('attempts') or () if a.get('skip_reason')) or 'no reason recorded'
+    # Run ids, paths and numbers differ per seat; the cause does not.
+    return re.sub(r'\d+', '#', re.sub(r'run-[0-9a-f]+|\S*/\S*', '<x>', str(text)))[:160]
+
+
+def note_no_verdict(state, record, now=None):
+    """Book a no-verdict seat; return the alert when this seat is the second with the same cause in the window.
+
+    ``no_verdict.jsonl`` holds the seats, ``alerts.jsonl`` the alerts (one per cause per window).
+    """
+    import json
+    reason = no_verdict_reason(record)
+    if reason is None:
+        return None
+    now = time.time() if now is None else now
+    state = Path(state)
+    seats, alerts = state / 'no_verdict.jsonl', state / 'alerts.jsonl'
+
+    def rows(path):
+        try:
+            return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+        except (OSError, ValueError):
+            return []
+    with open(seats, 'a', encoding='utf-8') as out:
+        out.write(json.dumps(dict(ts=now, run_id=record.get('run_id'), reason=reason)) + '\n')
+    recent = [row for row in rows(seats) if now - row['ts'] <= NO_VERDICT_WINDOW_S and row['reason'] == reason]
+    if len(recent) < NO_VERDICT_REPEAT or any(
+            row['reason'] == reason and now - row['ts'] <= NO_VERDICT_WINDOW_S for row in rows(alerts)):
+        return None
+    alert = dict(ts=now, kind='no_verdict_repeat', reason=reason, seats=[row['run_id'] for row in recent])
+    with open(alerts, 'a', encoding='utf-8') as out:
+        out.write(json.dumps(alert) + '\n')
+    logging.getLogger(__name__).error('no_verdict_alert %d review seats ended without a verdict: %s', len(recent), reason)
+    return alert

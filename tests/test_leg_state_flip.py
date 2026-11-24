@@ -103,9 +103,13 @@ def test_adapter_default_off(boundary, tmp_path):
     assert reader._at is None
 
 
-def test_standalone_exact(monkeypatch):
+def test_standalone_exact(monkeypatch, tmp_path):
+    binary = tmp_path / 'opencode'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('PLANGRAPH_OPENCODE_BIN', str(binary))
     def run(argv, **kw):
-        assert argv == ['opencode', 'models', '--standalone']
+        assert argv == [str(binary), 'models', '--standalone']
         assert isinstance(kw.pop('env'), dict)  # filtered child environment
         assert kw == dict(capture_output=True, text=True, timeout=8, shell=False, check=True)
         return SimpleNamespace(stdout='sample\n')

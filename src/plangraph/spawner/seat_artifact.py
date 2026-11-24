@@ -137,6 +137,8 @@ def sync_seat(record, held_families=()):
         else:
             reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
             reason += ': ' + (detail or record.get('error') or 'no leg launched')
+            if 'harness_not_found' in detail:
+                reason = detail   # the host fault names itself; it is not a family problem
             reason = own[0].get('reason') or reason
             if status not in ('failed', 'refused'):
                 record['error'] = reason

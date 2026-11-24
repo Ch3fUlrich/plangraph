@@ -447,7 +447,8 @@ def _probe_served_models(config, *, env=None):
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
-        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        from .clients import resolve_harness_binary
+        executable = resolve_harness_binary('opencode', env).path or 'opencode'
         result = subprocess.run([executable, 'models', '--standalone'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                 text=True, encoding='utf-8', errors='replace', timeout=10, **background_process_options())
         if result.returncode == 0:
@@ -522,7 +523,10 @@ def admitted_by_render(model):
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli', 'claude'):   # D-3649 r2: the child's exec PATH (env overlay; None -> os.defpath, '' finds nothing)
-        return None if shutil.which(harness, path=os.pathsep.join(os.get_exec_path({**os.environ, **(env or {})}))) else 'harness_missing: ' + harness
+        from .clients import resolve_harness_binary
+        # The child's exec PATH decides, with no extra install dirs: the runner already built it.
+        exec_path = os.pathsep.join(os.get_exec_path({**os.environ, **(env or {})}))
+        return resolve_harness_binary(harness, {**os.environ, **(env or {})}, search=exec_path).refusal
     if harness != 'opencode':
         return None
     model = row.get('model') or row.get('id') or row.get('model_id')
@@ -554,6 +558,10 @@ def host_skip_reason(row, *, probe=None, env=None):
                            probe=probe)
     if present:
         return None
+    from .clients import resolve_harness_binary
+    missing = resolve_harness_binary('opencode', child).refusal
+    if missing:   # an absent binary is not "model not served": name it before any run
+        return missing
     reason = 'not_served_on_host: ' + model
     if child.get(OVERLAY_ROOT_MISSING):
         reason += f' (root_provider_config_missing: {child[OVERLAY_ROOT_MISSING]})'
