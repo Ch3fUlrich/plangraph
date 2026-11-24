@@ -1,0 +1,1 @@
+Add a workstation data-drive configuration that lists the D:, G: and F: work drives with a free-space floor each. The host session applies it with `PLANGRAPH_SETTINGS` once the mount write speeds are measured; it changes no mount.
