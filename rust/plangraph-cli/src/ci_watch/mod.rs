@@ -4,6 +4,7 @@ mod batch_delivery_tests;
 pub mod batch_failure;
 #[cfg(test)]
 mod batch_failure_tests;
+pub mod classify;
 pub(crate) mod github;
 mod keeper;
 pub(crate) mod logs;
@@ -26,7 +27,7 @@ use std::fs;
 use std::path::Path;
 
 type Result<T> = std::result::Result<T, String>;
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Task {
     pub key: String,
     pub head: String,
@@ -40,6 +41,13 @@ pub struct Task {
     pub keeper_defined: bool,
     #[serde(default)]
     pub keeper_key: Option<String>,
+    /// Class of the failing job (`classify::RedClass::name`) and of the whole run; empty on older rows.
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub run_class: String,
+    #[serde(default)]
+    pub job_id: u64,
 }
 #[derive(Deserialize)]
 struct Flakes {
@@ -263,8 +271,17 @@ fn scan(
             let log = gh
                 .log(number(&job, "id")?)
                 .unwrap_or_else(|_| "Job log unavailable; inspect the failed job on GitHub".into());
-            for (test, excerpt) in logs::failures(&log) {
-                failures.push((name.clone(), logs::scrub(&test), excerpt));
+            let found = logs::failures(&log);
+            let flaky = found.keys().any(|test| flakes.contains_key(test));
+            let class = classify::classify_job(&name, &logs::scrub(&log), flaky);
+            for (test, excerpt) in found {
+                failures.push((
+                    name.clone(),
+                    logs::scrub(&test),
+                    excerpt,
+                    class,
+                    number(&job, "id")?,
+                ));
             }
         }
         if failures.is_empty() {
@@ -272,11 +289,13 @@ fn scan(
                 "<workflow>".into(),
                 "<job-failure>".into(),
                 "No failing job logs available".into(),
+                classify::RedClass::Unknown,
+                0,
             ));
         }
         let known: BTreeSet<_> = failures
             .iter()
-            .filter_map(|(_, test, _)| flakes.get(test).cloned())
+            .filter_map(|(_, test, ..)| flakes.get(test).cloned())
             .collect();
         let attempted =
             run["run_attempt"].as_u64().unwrap_or(1) > 1 || reruns.runs.contains(&run_id);
@@ -326,7 +345,8 @@ fn scan(
                 }
             }
         }
-        for (job, test, excerpt) in failures {
+        let run_class = classify::classify_run(&failures.iter().map(|f| f.3).collect::<Vec<_>>());
+        for (job, test, excerpt, class, job_id) in failures {
             if !attempted && !rerun_failed && flakes.contains_key(&test) {
                 continue;
             }
@@ -347,6 +367,9 @@ fn scan(
                 priority: 10,
                 keeper_defined: old_defined,
                 keeper_key,
+                class: class.name().into(),
+                run_class: run_class.name().into(),
+                job_id,
             };
             output.push(format!(
                 "{}task: {}",
