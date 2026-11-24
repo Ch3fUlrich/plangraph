@@ -95,5 +95,5 @@ task is made.
 class; all else goes to a narrow fix writer. `plangraph ci-watch --autofix` runs the automatic fix after the scan
 (`ci_watch/autofix.rs`): a scratch clone of the pull request head (a fork or a moved head is refused), the command
 in `rust/`, one commit `Hand-Edit: ci-watch <class> fix of failed job <id>` and one plain push. A fix of more than 50
-lines, one that touches a gate file or one that changes nothing is dropped and left to the writer, whose task
+lines, one that touches a path the commit gate protects for Hand-Edit commits (its `AUTH_DOOR_PATHS` and `GATE_PATHS`, held equal by a test) or one that changes nothing is dropped and left to the writer, whose task
 stays. The (pull request, class) is reserved in `autofix.json` before the fix runs, with the job id and result. A closed or merged pull request is read once, recorded in the same file and never touched again.

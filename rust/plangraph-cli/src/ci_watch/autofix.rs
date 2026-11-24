@@ -12,13 +12,44 @@ use std::time::Duration;
 
 /// A Hand-Edit commit may change at most this many lines (tools/ci_commit_gate.py HAND_EDIT_MAX_LINES).
 pub const MAX_LINES: u64 = 50;
-/// Paths a Hand-Edit commit never touches (the gate files of tools/ci_commit_gate.py).
-const GATE_PATHS: &[&str] = &[
-    ".github/workflows/",
-    "tools/ci_commit_gate.py",
-    "tools/ci_commit_exempt.txt",
-    "tools/gate_wiring_check.py",
+/// Paths a Hand-Edit commit never touches: tools/ci_commit_gate.py `AUTH_DOOR_PATHS` and `GATE_PATHS`, as
+/// fnmatch patterns (`*` matches any characters, `/` included). A test holds this list equal to that file.
+pub(super) const PROTECTED: &[&str] = &[
+    "src/plangraph/keeper/*",
+    "src/plangraph/*/auth*",
+    "src/plangraph/*auth*",
+    "*/roles*",
+    "*/scopes*",
+    "roles*",
+    "scopes*",
+    "tools/seat_verdict.py*",
+    "tools/seat_record.py*",
+    "ops/pg.sh*",
+    "tools/ci_commit_gate.py*",
+    "tools/ci_commit_exempt.txt*",
+    "tools/gate_wiring_check.py*",
+    ".github/*",
+    ".github/workflows/*",
+    "rust/plangraph-cli/src/land/go_verify.rs*",
+    ".gitattributes",
+    "*/.gitattributes",
 ];
+
+/// `fnmatch` for patterns that use only `*`.
+fn glob(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((head, rest)) => text.strip_prefix(head).is_some_and(|tail| {
+            (0..=tail.len())
+                .filter(|at| tail.is_char_boundary(*at))
+                .any(|at| glob(rest, &tail[at..]))
+        }),
+    }
+}
+
+fn protected(path: &str) -> bool {
+    PROTECTED.iter().any(|pattern| glob(pattern, path))
+}
 
 /// The pull request head a fix applies to.
 #[derive(Clone)]
@@ -87,10 +118,7 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
     // Stage first: a file the command created is untracked and invisible to a plain diff.
     run(scratch, "git", &["add", "-A"])?;
     let paths = run(scratch, "git", &["diff", "--cached", "--name-only"])?;
-    if let Some(path) = paths
-        .lines()
-        .find(|p| GATE_PATHS.iter().any(|gate| p.starts_with(gate)))
-    {
+    if let Some(path) = paths.lines().find(|p| protected(p)) {
         return Ok(Outcome::GatePath(path.to_owned()));
     }
     let lines: u64 = run(scratch, "git", &["diff", "--cached", "--numstat"])?
