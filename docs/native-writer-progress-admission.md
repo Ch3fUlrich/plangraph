@@ -57,12 +57,15 @@ half of the round-1 count stalls too (`8,7,6`). A stall queues a replan job (`ro
 `round_replan_pending` (no round used, a repeat queues nothing); once the job planned its
 slices and reported (`round_replan.rs`, the PR stays open, nothing is defined or closed) the
 round is admitted on the same writer (`round_escalation` +1, `round_replan: done`) and 3 more
-misses queue the next job. A stall without a PR refuses `no_progress` or `slow_progress`: the
-batch goes back. A check-triggered round must carry `card.failing_checks`
+misses queue the next job. The admitted writer's prompt carries the job's slices and open
+findings. A card that omits `failing_checks` keeps the round's own start count (no progress
+credit). A stall without a PR refuses `no_progress` or `slow_progress` and queues a return job
+(one routing line, nothing planned): the batch goes back. A check-triggered round must carry `card.failing_checks`
 (`round_failing_checks_missing`), an accepted review still allows a counted red-check or
 moved-main fix, and a dry run queues no job. Writer 9 always
-refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause, escalations
-and replans per item, escalations per day, items over the ceiling. At a stall only,
+refuses with `round_cap`. `health report` carries `fix_rounds`: rounds by cause per item, escalations and replans
+counted from the replan jobs by their queue time (a waiting batch shows), escalations per
+day, items over the ceiling. At a stall only,
 `card.narrow_fix: true` permits one additional narrow round if the latest
 verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.
