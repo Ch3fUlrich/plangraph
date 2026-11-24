@@ -167,7 +167,8 @@ def test_deploy_blocker_items_are_filed_one_at_a_time_and_a_retry_is_idempotent(
 def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(monkeypatch):
     import types
 
-    shown = {"p:A": {"description": "Why: x\nDeploy-Hosts: alpha, beta"}, "p:B": {"description": "no hosts"}}
+    shown = {"p:A": {"key": "p:A", "description": "Why: x\nDeploy-Hosts: alpha, beta"},
+             "p:B": {"key": "p:B", "description": "no hosts"}}
 
     def fake_cli(verb, key, flag):
         assert (verb, flag) == ("show", "--json")
@@ -182,6 +183,13 @@ def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(mon
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
     # An item without a declaration declares nothing; the commit trailers decide for it.
     assert merge_batch_plan.declared_hosts(active) == {"p:A": ["alpha", "beta"]}
+    # A reply that is not the requested item is no answer either: `{}`, a list, null, another item.
+    for reply in ({}, [], None, {"key": 7}, {"description": "Deploy-Hosts: alpha"}):
+        monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a, reply=reply: types.SimpleNamespace(
+            returncode=0, stdout=json.dumps(reply), stderr=""))
+        with pytest.raises(MergeBatchError, match="Deploy-Hosts of p:A"):
+            merge_batch_plan.declared_hosts({"merged": [{"items": ["p:A"]}]})
+    monkeypatch.setattr(merge_batch_plan, "keeper_cli", fake_cli)
     # A lookup that fails is not an absent declaration: a trailer must not name the host in its place.
     for key in ("p:GONE", "p:JUNK"):
         with pytest.raises(MergeBatchError, match=f"Deploy-Hosts of {key}"):
