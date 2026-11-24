@@ -133,6 +133,8 @@ def shard_items(items, shard):
         return str(group.kwargs.get('name', group.args[0] if group.args else 'default')) if group else item.nodeid
 
     if duration_file := os.environ.get('PYTEST_SHARD_DURATIONS_FILE'):
+        # Imported here so a conftest that copies only this function still resolves it.
+        from _split_ci_environment import _weighted_shard
         return _weighted_shard(items, key, index, count, duration_file)
     return [item for item in items
             if int.from_bytes(hashlib.sha256(key(item).encode()).digest()[:8], 'big') % count == index]

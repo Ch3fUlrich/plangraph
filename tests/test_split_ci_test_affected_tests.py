@@ -152,7 +152,8 @@ def test_local_unreadable_graph_refuses_instead_of_full_collection(tmp_path, mon
     assert 'local-selection' in capsys.readouterr().err
 
 
-def test_three_shards_cover_only_affected_selection(tmp_path, request):
+@pytest.mark.parametrize('durations', [False, True])
+def test_three_shards_cover_only_affected_selection(tmp_path, request, durations):
     import inspect
     import os
     import sys
@@ -181,6 +182,11 @@ def test_three_shards_cover_only_affected_selection(tmp_path, request):
         trace = tmp_path / f'trace-{index}'
         env = dict(os.environ, PYTEST_SHARD=f'{index}/3', PYTEST_DISABLE_PLUGIN_AUTOLOAD='1',
                    PYTHONPATH=os.pathsep.join((str(tmp_path / 'src'), str(Path(__file__).resolve().parent))), SHARD_TRACE=str(trace))
+        env.pop('PYTEST_SHARD_DURATIONS_FILE', None)
+        if durations:
+            weights = tmp_path / 'durations.json'
+            weights.write_text('{"tests/test_selected.py::test_selected": 2.5}\n')
+            env['PYTEST_SHARD_DURATIONS_FILE'] = str(weights)
         result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-c', str(tmp_path / 'pytest.ini'),
             '--confcutdir', str(tmp_path), *plan['tests']], cwd=tmp_path, env=env,
             capture_output=True, text=True, timeout=20)
