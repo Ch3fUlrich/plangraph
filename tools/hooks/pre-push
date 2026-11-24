@@ -4,8 +4,8 @@
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
-A push to refs/heads/lane/* runs the public scrub, the commit gate and the fast-checks stamp
-gate only (seconds, no worktree is created, no test, no network call): a lane head needs a green
+A push to refs/heads/lane/* runs the public scrub, the commit
+gate (with its open-PR query) and the stamp gate only (seconds, no worktree, no test): a lane head needs a green
 `plangraph fast-checks` receipt, or PG_LANE_PUSH_UNSTAMPED=1 for an intermediate item commit.
 Train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
@@ -523,8 +523,7 @@ def push_main():
             print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
         # The first train push is backed by the manifest alone. Updates also
         # check the existing PR plan and distinguish its parts from foreign PRs.
-        # A lane has no pull request yet: the open-PR parent check needs the network and is for trains.
-        open_prs = (not train or not is_zero(remote_sha)) and not is_lane_ref(remote_ref)
+        open_prs = not train or not is_zero(remote_sha)
         if commit_gate(local_sha, remote_ref, remote_sha, open_prs=open_prs) or file_size_gate(local_sha):
             return 1
         if is_lane_ref(remote_ref) and stamp_gate(local_sha):
