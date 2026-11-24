@@ -645,5 +645,17 @@ def test_pytest_deadline_arming_failure_fails_only_that_test(tmp_path):
     assert 'could not arm the test deadline' in output and 'INTERNALERROR' not in output, output
 
 
+def test_modules_importing_a_cargo_building_session_fixture_declare_a_deadline():
+    import re
+
+    tests = Path(__file__).resolve().parent
+    # These session fixtures run `cargo build` in the setup of the first test that requests them.
+    importer = re.compile(r'^from\s+\w+\s+import\b[^\n]*\b(native_client_binary|rules_binary)\b', re.M)
+    unmarked = [path.name for path in sorted(tests.glob('test_*.py'))
+                if importer.search(path.read_text(encoding='utf-8'))
+                and 'long_test_deadline' not in path.read_text(encoding='utf-8')]
+    assert not unmarked, f'add a reasoned long_test_deadline override to: {unmarked}'
+
+
 def _nested_pytest_env():
     return {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}
