@@ -485,7 +485,7 @@ def test_round_watch_tick_runs_the_rust_watchdog_at_the_given_clock(tmp_path):
     def run(argv, **kwargs):
         seen.append(argv)
         out = '{"rule": "round-wait-stopped", "task": "a"}\nnot json\n'
-        return subprocess.CompletedProcess(argv, 0, stdout=out)
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr='')
 
     findings = w.round_watch_tick(tmp_path, now=1700000000.5, run=run)
     assert seen == [['pg-spawnd', 'round-watch', '--state', str(tmp_path), '--now-ms', '1700000000500']]
@@ -498,3 +498,11 @@ def test_round_watch_tick_without_the_binary_is_a_finding_not_a_failure(tmp_path
 
     assert w.round_watch_tick(tmp_path, run=run) == [
         {'rule': 'round-watch-unavailable', 'reason': 'FileNotFoundError'}]
+
+
+def test_round_watch_tick_reports_a_failing_binary_instead_of_a_healthy_pass(tmp_path):
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 2, stdout='', stderr='usage: unknown\x1b[31m command round-watch')
+
+    assert w.round_watch_tick(tmp_path, run=run) == [
+        {'rule': 'round-watch-failed', 'code': 2, 'detail': 'usage: unknown[31m command round-watch'}]

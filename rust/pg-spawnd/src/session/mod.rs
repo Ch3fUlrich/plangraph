@@ -14,6 +14,7 @@ pub mod round_cli;
 #[cfg(test)]
 mod round_cli_tests;
 mod round_host;
+pub mod round_reader;
 pub mod round_store;
 pub mod round_time;
 #[cfg(test)]
@@ -77,6 +78,27 @@ impl Caps {
     }
 }
 
+/// A session whose round the wait watchdog closed as BLOCKED is not restarted on its own.
+fn round_blocked(request: &Request) -> Option<String> {
+    let args = &request.args;
+    let source = args.option("session").unwrap_or(&args.name);
+    blocked_reason(args.respawn, source, &round_watch::spawn_state_dir())
+}
+
+fn blocked_reason(respawn: bool, source: &str, spawn_state: &Path) -> Option<String> {
+    if !respawn || !paths::basename(source) {
+        return None;
+    }
+    let path = round_watch::state_file(spawn_state, source);
+    let blocked = round_watch::blocked_outcome(&path)?;
+    Some(format!(
+        "{source}: {} (command `{}`); clear {} after the operator has looked",
+        blocked["reason"].as_str().unwrap_or("blocked"),
+        blocked["command"].as_str().unwrap_or("?"),
+        path.display()
+    ))
+}
+
 fn role_of(name: &str) -> &str {
     static SEQ: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-\d{4,}$").unwrap());
     SEQ.find(name.strip_suffix('\n').unwrap_or(name))
@@ -129,6 +151,14 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     let Some(mut request) = Request::new(args, paths) else {
         return Ok(2);
     };
+    if let Some(reason) = round_blocked(&request) {
+        if !request.args.dry {
+            let admission = Admission::check(&request, policy.as_ref(), None, &paths.state);
+            storage::record_outcome(&admission, "refused", None);
+        }
+        eprintln!("fleet-launch: round BLOCKED, no automatic restart: {reason}");
+        return Ok(2);
+    }
     match restart::prepare(&request, paths, policy.as_ref()) {
         Ok(Some(restart)) => {
             request.restart = Some(restart);

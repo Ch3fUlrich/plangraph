@@ -402,8 +402,17 @@ fn review_round(
         format!("weak_verdict: no review run returned a verdict on {head}: {last}"),
     ))
 }
-fn final_gates(driver: &mut impl Driver, head: &str) -> Result<(), (i32, String)> {
-    driver.gates().map_err(|e| (7, e))?;
+fn final_gates(
+    driver: &mut impl Driver,
+    record: &mut Value,
+    head: &str,
+) -> Result<(), (i32, String)> {
+    let started = stage::now();
+    let gates = driver.gates();
+    // The stage is booked on failure too; the turn's own `writing` interval encloses
+    // it only when a gate runs inside a writer turn.
+    stage::record(record, "final_gates", head, started);
+    gates.map_err(|e| (7, e))?;
     if driver.head().map_err(|e| (7, e))? != head {
         return Err((7, "HEAD changed during final gates".into()));
     }
@@ -525,7 +534,7 @@ fn writer_attempt(
         }
         base_retries = 0;
         if review["status"] == REVIEW_DEFERRED {
-            final_gates(driver, &head)?;
+            final_gates(driver, record, &head)?;
             record["review_status"] = json!(REVIEW_DEFERRED);
             record["review_causes"] = review["causes"].clone();
             record["status_line"] = json!("DEFERRED");
@@ -550,7 +559,7 @@ fn writer_attempt(
                     continue;
                 }
             }
-            final_gates(driver, &head)?;
+            final_gates(driver, record, &head)?;
             let started = stage::now();
             let pushed = driver.push(&head);
             if !matches!(pushed, Ok(None)) {

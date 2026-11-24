@@ -333,12 +333,25 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         with self._name_lock(self._lock_key(name)), self._counter_flock():
             return self._action("relaunch", name, lambda: self._relaunch_inner(name, handoff))
 
+    def _refuse_blocked_round(self, name):
+        """The wait watchdog closed this session's round as BLOCKED (second stop of a
+        background wait over the cap): no automatic relaunch until an operator clears it."""
+        path = self._state / "round-watch" / f"{name}.json"
+        try:
+            blocked = json.loads(path.read_text(encoding="utf-8")).get("blocked")
+        except (OSError, ValueError, AttributeError):
+            return
+        if isinstance(blocked, dict):
+            raise _refuse(f"round BLOCKED for {name}: {blocked.get('reason')} "
+                          f"(command: {blocked.get('command')}); clear {path} to relaunch")
+
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
         name = self._check_name(name)
         rec = self._find_record(name, None)
         if rec is None:
             raise _refuse(f"unknown session: {name}")
+        self._refuse_blocked_round(name)
         old_sid = rec.get("session_id")
         handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
         # The stored spec is re-validated BEFORE the stop: never lose the session.

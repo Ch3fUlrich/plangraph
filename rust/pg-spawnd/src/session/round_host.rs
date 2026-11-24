@@ -1,6 +1,6 @@
 //! Real effects of the round watchdog on the executing host (Linux /proc, signals, outbox).
 
-use super::round_watch::{Host, Owner};
+use super::round_watch::{Host, Owner, Stop};
 use pg_worker_core::run::{
     group::{stop_group, Identity, StopOutcome},
     group_unix::{proc_start_time, Roots, UnixGroup},
@@ -85,7 +85,17 @@ impl Host for LocalHost {
         (found.len() == 1).then(|| found.remove(0))
     }
 
-    fn stop(&self, owner: &Owner) -> bool {
+    fn stop(&self, owner: &Owner, command: &str) -> Stop {
+        // The record names one process by pid and start time. A process that is gone,
+        // reused by another start, or no longer running the command is not ours to end.
+        let alive = proc_start_time(&self.roots.proc, owner.pid);
+        let cmdline = fs::read(self.roots.proc.join(owner.pid.to_string()).join("cmdline"));
+        let same = alive.is_some()
+            && alive == owner.start_time
+            && cmdline.is_ok_and(|bytes| cmdline_runs(&bytes, command));
+        if !same {
+            return Stop::Gone;
+        }
         let group = UnixGroup {
             identity: Identity {
                 pid: owner.pid,
@@ -97,7 +107,10 @@ impl Host for LocalHost {
                 cgroup: self.roots.cgroup.clone(),
             },
         };
-        stop_group(&group, Duration::from_secs(5), Duration::from_secs(5)) == StopOutcome::Empty
+        match stop_group(&group, Duration::from_secs(5), Duration::from_secs(5)) {
+            StopOutcome::Empty => Stop::Ended,
+            StopOutcome::Survivors(_) => Stop::Survivors,
+        }
     }
 
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {
