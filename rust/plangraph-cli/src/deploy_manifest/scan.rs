@@ -90,62 +90,83 @@ const EXEC_KEYS: [&str; 7] = [
 ];
 
 /// The program of an `Exec*` value, read as systemd reads the first word: whitespace ends it unless
-/// quoted, `"` and `'` quote (also inside a word), C escapes decode (`\x2f`, `\057`, `\s`, `\"`), and only
-/// then do the prefix characters (`@ - : + !`) come off the decoded word.
+/// quoted, `"` and `'` quote (also inside a word), C escapes decode into bytes (`\x2f`, `\057`, `\s`, `\"`,
+/// `\u002f`, `\U0000002f`; `\xc3\xa9` is the two bytes of one character), and only then do the prefix
+/// characters (`@ - : + !`) come off the decoded word.
 fn first_word(value: &str) -> String {
-    let mut word = String::new();
+    let mut word: Vec<u8> = Vec::new();
     let mut quote: Option<char> = None;
     let mut chars = value.trim_start().chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' => word.push_str(&unescape(&mut chars)),
+            '\\' => word.extend(unescape(&mut chars)),
             c if quote == Some(c) => quote = None,
             '"' | '\'' if quote.is_none() => quote = Some(c),
             c if c.is_whitespace() && quote.is_none() => break,
-            c => word.push(c),
+            c => word.extend(c.to_string().into_bytes()),
         }
     }
+    let word = String::from_utf8_lossy(&word);
     word.trim_start_matches(['@', '-', ':', '+', '!'])
         .to_owned()
 }
 
-/// One escape sequence after a backslash: `\a \b \f \n \r \t \v \s`, `\xHH`, three octal digits, and a
-/// quoted or backslash character as itself. An unknown escape stays as written.
-fn unescape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
-    let digits = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>, radix: u32, max: usize| {
-        let mut out = String::new();
-        while out.len() < max && chars.peek().is_some_and(|c| c.is_digit(radix)) {
-            out.extend(chars.next());
-        }
-        out
+type Chars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
+
+/// Up to `max` digits of `radix` from the front of `chars`.
+fn digits(chars: &mut Chars<'_>, radix: u32, max: usize) -> String {
+    let mut out = String::new();
+    while out.len() < max && chars.peek().is_some_and(|c| c.is_digit(radix)) {
+        out.extend(chars.next());
+    }
+    out
+}
+
+/// One escape sequence after a backslash, as bytes: `\a \b \f \n \r \t \v \s`, `\xHH` and three octal
+/// digits (one byte each), `\uXXXX` and `\UXXXXXXXX` (one character, UTF-8), a quote or backslash as
+/// itself. An unknown or incomplete escape stays as written.
+fn unescape(chars: &mut Chars<'_>) -> Vec<u8> {
+    let kept = |text: String| text.into_bytes();
+    let unicode = |hex: &str, want: usize| {
+        let ch = (hex.len() == want)
+            .then(|| u32::from_str_radix(hex, 16).ok().and_then(char::from_u32))
+            .flatten();
+        ch.map(|c| c.to_string().into_bytes())
     };
     match chars.next() {
-        None => "\\".to_owned(),
-        Some('a') => "\x07".to_owned(),
-        Some('b') => "\x08".to_owned(),
-        Some('f') => "\x0c".to_owned(),
-        Some('n') => "\n".to_owned(),
-        Some('r') => "\r".to_owned(),
-        Some('t') => "\t".to_owned(),
-        Some('v') => "\x0b".to_owned(),
-        Some('s') => " ".to_owned(),
-        Some(c @ ('\\' | '"' | '\'')) => c.to_string(),
+        None => b"\\".to_vec(),
+        Some('a') => vec![0x07],
+        Some('b') => vec![0x08],
+        Some('f') => vec![0x0c],
+        Some('n') => vec![b'\n'],
+        Some('r') => vec![b'\r'],
+        Some('t') => vec![b'\t'],
+        Some('v') => vec![0x0b],
+        Some('s') => vec![b' '],
+        Some(c @ ('\\' | '"' | '\'')) => kept(c.to_string()),
         Some('x') => {
             let hex = digits(chars, 16, 2);
             match u8::from_str_radix(&hex, 16) {
-                Ok(byte) if hex.len() == 2 => char::from(byte).to_string(),
-                _ => format!("\\x{hex}"),
+                Ok(byte) if hex.len() == 2 => vec![byte],
+                _ => kept(format!("\\x{hex}")),
             }
         }
         Some(c @ '0'..='3') => {
-            let mut oct = c.to_string();
-            oct.push_str(&digits(chars, 8, 2));
+            let oct = format!("{c}{}", digits(chars, 8, 2));
             match u8::from_str_radix(&oct, 8) {
-                Ok(byte) if oct.len() == 3 => char::from(byte).to_string(),
-                _ => format!("\\{oct}"),
+                Ok(byte) if oct.len() == 3 => vec![byte],
+                _ => kept(format!("\\{oct}")),
             }
         }
-        Some(c) => format!("\\{c}"),
+        Some('u') => {
+            let hex = digits(chars, 16, 4);
+            unicode(&hex, 4).unwrap_or_else(|| kept(format!("\\u{hex}")))
+        }
+        Some('U') => {
+            let hex = digits(chars, 16, 8);
+            unicode(&hex, 8).unwrap_or_else(|| kept(format!("\\U{hex}")))
+        }
+        Some(c) => kept(format!("\\{c}")),
     }
 }
 

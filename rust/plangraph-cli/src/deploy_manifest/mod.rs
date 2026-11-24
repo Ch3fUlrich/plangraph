@@ -341,6 +341,8 @@ impl Manifest {
 #[cfg(test)]
 mod consumer_tests;
 #[cfg(test)]
+mod exec_tests;
+#[cfg(test)]
 mod scan_tests;
 #[cfg(test)]
 mod tests;

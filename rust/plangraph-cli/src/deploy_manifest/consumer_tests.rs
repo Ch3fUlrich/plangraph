@@ -28,7 +28,7 @@ fn a_binary_run_from_a_path_its_entry_does_not_declare_is_named() {
         ("systemd/keep.service", "tool", "~/.local/bin/tool"),
         ("systemd/wsl.service", "tool", "/usr/local/bin/tool"),
         ("systemd/keep.service", "plain", "~/.local/bin/plain"),
-        ("systemd/keep.service", "python3", "/usr/bin/python3"),
+        ("systemd/keep.service", "other-tool", "/usr/bin/other-tool"),
     ]);
     assert_eq!(m.consumer_problems(&ok), Vec::<String>::new());
     // A path outside the two usual directories is judged like any other.
@@ -66,7 +66,7 @@ fn consumers_and_env_files_are_read_from_the_unit_files() {
                 "deploy/systemd/a.service",
                 "[Service]\nEnvironmentFile=-%h/.config/plangraph/a.env\nEnvironmentFile=/etc/plangraph/b.env\n\
                  ExecStartPre=-%h/.local/bin/pre --x\nExecStart=/usr/local/bin/tool run\n\
-                 ExecStart=/usr/bin/python3 -m x\nExecStopPost=-/opt/x/bin/post\nExecReload=%h/.local/bin/reload\n\
+                 ExecStart=/usr/bin/other-tool -m x\nExecStopPost=-/opt/x/bin/post\nExecReload=%h/.local/bin/reload\n\
                  ExecStart=relative/not-a-path\nEnvironmentFile=-/srv/other/c.env\nEnvironmentFile=\n",
             ),
             ("deploy/systemd/t@.service", "[Service]\nEnvironmentFile=%h/.config/plangraph/sub/%i.env\n"),
@@ -81,7 +81,7 @@ fn consumers_and_env_files_are_read_from_the_unit_files() {
         consumers(&[
             (a, "post", "/opt/x/bin/post"),
             (a, "pre", "~/.local/bin/pre"),
-            (a, "python3", "/usr/bin/python3"),
+            (a, "other-tool", "/usr/bin/other-tool"),
             (a, "reload", "~/.local/bin/reload"),
             (a, "tool", "/usr/local/bin/tool"),
         ])
