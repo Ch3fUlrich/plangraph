@@ -70,8 +70,18 @@ fn tracked(repo: &Path, sub: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Where the tracked unit files run a binary from: `(bin, path)` of the program of every `ExecStart` and
-/// `ExecStartPre` line under `/usr/local/bin` or `%h/.local/bin` (`%h` is written `~`). Reads the
+/// The unit settings that run a program.
+const EXEC_KEYS: [&str; 7] = [
+    "ExecStart",
+    "ExecStartPre",
+    "ExecStartPost",
+    "ExecCondition",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+];
+
+/// Where the tracked unit files run a binary from: `(bin, path)` of the program of every `Exec*` line under `/usr/local/bin` or `%h/.local/bin` (`%h` is written `~`). Reads the
 /// files only; nothing here asks systemd.
 pub fn consumer_paths(
     repo: &Path,
@@ -85,11 +95,11 @@ pub fn consumer_paths(
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
-            if key.trim() != "ExecStart" && key.trim() != "ExecStartPre" {
+            if !EXEC_KEYS.contains(&key.trim()) {
                 continue;
             }
             let program = value
-                .trim_start_matches(|c| matches!(c, '-' | '+' | '!' | '@' | ' '))
+                .trim_start_matches(['-', '+', '!', '@', ' '])
                 .split_whitespace()
                 .next()
                 .unwrap_or("");
