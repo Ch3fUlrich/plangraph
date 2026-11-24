@@ -25,7 +25,10 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 
 #: Probe/harness evidence is leg-level; provider responses keep exact-tuple scope
 #: (omitted account/combo dimensions are not wildcards for provider responses).
-_SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
+#: A quota-recovery row of any scope is read by every scope: the harness-limit filter in
+#: ``_without_recovered_quota`` decides what it ends (see ``record_quota_recovery``).
+_SCOPE = ("((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response')"
+          " OR source = 'quota-recovery')")
 
 
 def leg_key(leg):

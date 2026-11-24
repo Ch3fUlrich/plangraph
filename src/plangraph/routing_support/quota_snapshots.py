@@ -2,9 +2,11 @@
 
 Rows are omniroute ``quota_snapshots`` (provider, connection_id, window_key,
 remaining_percentage, is_exhausted, next_reset_at, created_at; camelCase keys
-also read). A leg whose provider pool has every account at/below the threshold
-reads ``limited`` until the earliest account reset and routes again after it.
-A missing, unreadable or malformed source never blocks routing.
+also read). A leg whose provider pool has every account at/below the threshold reads
+``limited`` until its pool recovers: a fresher snapshot row of the window, or a
+successful probe newer than the snapshot. The stored reset alone does not clear it;
+a source with no fresher row for ``SOURCE_STALE_S`` after the observation and
+reset is blind and never blocks. A missing, unreadable or malformed source never blocks routing.
 """
 from __future__ import annotations
 
@@ -32,7 +34,8 @@ MIN_PCT_ENV = 'PLANGRAPH_QUOTA_MIN_REMAINING_PCT'
 ALIASES = {'cx': 'codex', 'cc': 'claude', 'gc': 'grok-cli', 'gh': 'github'}
 #: The management route may omit resets; prefer QUOTA_SNAPSHOT_DB when available.
 URL_PATH = '/api/usage/utilization?range=7d&aggregateBy=connection'
-HOLD_S = 1800.0
+#: Hourly snapshots: two missed ones plus jitter (keeper.quota_alarms STALE_HOURS) make the source blind.
+SOURCE_STALE_S = 3 * 3600.0
 CACHE_S = 60.0
 
 
@@ -82,10 +85,13 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
         except (TypeError, ValueError):
             pct = None
         if _get(row, 'is_exhausted', 'isExhausted') in (1, True, '1', 'true') or (pct is not None and pct <= min_pct):
-            reset = _ts(_get(row, 'next_reset_at', 'nextResetAt', 'resetAt'))
-            reset = seen + HOLD_S if reset is None else reset
-            if reset > now:
-                accounts[account] = max(accounts[account], reset)
+            # The stored reset is a prediction. The exhausted observation stays the latest word until
+            # recovery is recorded (a fresher snapshot row of the window, or a passed probe: QuotaGate.apply),
+            # and is dropped when the source itself went blind (no fresher row for SOURCE_STALE_S).
+            reset = _ts(_get(row, 'next_reset_at', 'nextResetAt', 'resetAt')) or 0.0
+            until = max(reset, seen + SOURCE_STALE_S if seen else 0.0)
+            if until > now:
+                accounts[account] = max(accounts[account], until)
     return None if not accounts or 0.0 in accounts.values() else min(accounts.values())
 
 

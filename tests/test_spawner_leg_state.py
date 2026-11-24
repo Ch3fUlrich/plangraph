@@ -576,3 +576,21 @@ def test_quota_recovery_clears_provider_limits_only_in_the_verified_scope_and_or
     store.record_quota_recovery("sib", "review-probe", now=now + 20)
     store.record_provider_response("sib", 429, body, {"retry-after": "259200"}, "spawner", now=now + 20)
     assert store.leg_status("sib", now=now + 21)["state"] == "limited"
+
+
+def test_a_recovery_recorded_for_another_scope_ends_harness_limits_but_not_provider_responses(tmp_path):
+    """The a1/c1 reader sees the a2/c2 recovery; provider 429s keep exact account/combo matching."""
+    store = ls.LegStateStore(tmp_path / "legs.sqlite")
+    now = 1_000_000.0
+    scope = dict(account="a1", combo="c1")
+    store.record_harness_limit("harness-leg", "HTTP 429: usage limit, resets in 72h", "spawner:harness",
+                               now=now, harness="codex", **scope)
+    store.record_provider_response("provider-leg", 429, "usage limit", {"retry-after": "259200"}, "spawner",
+                                   now=now, **scope)
+    for leg in ("harness-leg", "provider-leg"):
+        assert store.leg_status(leg, now=now + 1, **scope)["state"] == "limited"
+        store.record_quota_recovery(leg, "review-probe", now=now + 5, account="a2", combo="c2")
+    assert store.leg_status("harness-leg", now=now + 6, **scope)["state"] == "ok"       # leg-level evidence, any scope
+    assert store.leg_status("provider-leg", now=now + 6, **scope)["state"] == "limited"  # another account's 429 stands
+    store.record_quota_recovery("provider-leg", "review-probe", now=now + 7, **scope)
+    assert store.leg_status("provider-leg", now=now + 8, **scope)["state"] == "ok"
