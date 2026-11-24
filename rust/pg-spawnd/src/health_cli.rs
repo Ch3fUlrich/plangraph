@@ -53,6 +53,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     let mut result = crate::health_report::build_report(&records, &evidence, since, until)
         .map_err(|e| e.to_string())?;
     result["review_legs"] = crate::review_health::report(&state, &records, since, until);
+    result["fix_rounds"] = crate::round_escalate::report(&records, since as f64, until as f64);
     if flags.contains_key("--baseline") {
         baseline(&state, since, until, &result)?;
     }
