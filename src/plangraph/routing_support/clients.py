@@ -130,7 +130,13 @@ def codex_isolation_args(env=None, role="review"):
     entries = ['":root"="read"']
     if writes:
         entries += ['":project_roots"={"."="write"}', '":tmpdir"="write"', '"/tmp"="write"']
-    entries += [f"{quoted}=\"none\"" for path in secret_paths(env) if (quoted := toml_string(path))]
+    for path in secret_paths(env):
+        if (quoted := toml_string(path)) is None:
+            # A required deny entry that cannot be written must stop the launch, never vanish.
+            from plangraph.routing_errors import SpawnRefused
+            raise SpawnRefused("sandbox_refused: a secret path of the deny list is not valid UTF-8 and cannot "
+                               "be written into the Codex permission profile; launch refused")
+        entries.append(f"{quoted}=\"none\"")
     exclude = ",".join(toml_string(pattern) for pattern in secret_data()["tool_env_exclude"])
     values = [f'default_permissions="{name}"',
               f"permissions.{name}.filesystem={{{','.join(entries)}}}",

@@ -24,6 +24,11 @@ CLAUDE_ENV_ALLOW = frozenset({
     'LANG', 'LANGUAGE', 'TZ',
     # scratch space
     'TMPDIR', 'TEMP', 'TMP',
+    # locale categories and XDG base directories, by exact name
+    'LC_ALL', 'LC_COLLATE', 'LC_CTYPE', 'LC_MESSAGES', 'LC_MONETARY', 'LC_NUMERIC', 'LC_TIME', 'LC_ADDRESS',
+    'LC_IDENTIFICATION', 'LC_MEASUREMENT', 'LC_NAME', 'LC_PAPER', 'LC_TELEPHONE',
+    'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR',
+    'XDG_CONFIG_DIRS', 'XDG_DATA_DIRS',
     # where the subscription login lives, and the pinned shell of the Bash tool
     'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_SHELL',
     # network egress and the CA bundle paths it may need
@@ -33,8 +38,9 @@ CLAUDE_ENV_ALLOW = frozenset({
     'LOCALAPPDATA', 'PROGRAMDATA', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME',
 })
 
-#: Name prefixes (upper-case) that are allowed whole: locale categories and XDG base directories.
-CLAUDE_ENV_ALLOW_PREFIXES = ('LC_', 'XDG_')
+#: No name prefix is allowed whole: a look-alike such as LC_APP_PASSWORD or XDG_KEEPER_DSN is not a locale or
+#: base-directory variable. The locale categories and XDG base directories are listed by exact name above.
+CLAUDE_ENV_ALLOW_PREFIXES: tuple = ()
 
 
 def claude_env_allowed(name: str) -> bool:

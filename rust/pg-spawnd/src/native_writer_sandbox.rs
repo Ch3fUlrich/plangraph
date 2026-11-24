@@ -23,6 +23,19 @@ pub(crate) const ENV_ALLOW: &[&str] = &[
     "TERM",
     "LANG",
     "LANGUAGE",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_ADDRESS",
+    "LC_IDENTIFICATION",
+    "LC_MEASUREMENT",
+    "LC_NAME",
+    "LC_PAPER",
+    "LC_TELEPHONE",
     "TZ",
     "TMPDIR",
     "XDG_CONFIG_HOME",
@@ -56,8 +69,7 @@ pub(crate) const ENV_ALLOW: &[&str] = &[
 ];
 
 fn allowed(name: &OsStr) -> bool {
-    name.to_str()
-        .is_some_and(|n| ENV_ALLOW.contains(&n) || n.starts_with("LC_"))
+    name.to_str().is_some_and(|n| ENV_ALLOW.contains(&n))
 }
 
 /// The inherited variables the writer child may keep.
