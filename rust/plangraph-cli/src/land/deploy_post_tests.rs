@@ -322,10 +322,12 @@ fn a_shipped_timer_goes_first_and_is_not_written_twice() {
     assert_eq!(units, ["a.timer", "a.service"]);
 }
 
+#[cfg(unix)]
 fn sh(script: &str) -> Vec<String> {
     vec!["sh".into(), "-c".into(), script.into()]
 }
 
+#[cfg(unix)]
 #[test]
 fn the_command_installer_runs_install_read_and_disable_with_host_and_name() {
     let log = tempfile::tempdir().unwrap();
@@ -360,6 +362,7 @@ fn the_command_installer_runs_install_read_and_disable_with_host_and_name() {
     assert!(CommandInstaller { argv: vec![] }.install("h", "f").is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn the_command_rows_pass_the_row_as_json_on_stdin_with_the_key_as_argument() {
     let dir = tempfile::tempdir().unwrap();
@@ -393,14 +396,18 @@ fn the_command_rows_pass_the_row_as_json_on_stdin_with_the_key_as_argument() {
         .is_err());
 }
 
+#[cfg(unix)]
 fn script(dir: &std::path::Path, name: &str, body: &str) -> String {
-    use std::os::unix::fs::PermissionsExt;
-    let p = dir.join(name);
-    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    p.display().to_string()
+    pg_worker_core::executable_test_support::write_script(
+        dir,
+        name,
+        &format!("#!/bin/sh\n{body}\n"),
+    )
+    .display()
+    .to_string()
 }
 
+#[cfg(unix)]
 #[test]
 fn deploy_apply_end_to_end_writes_rows_then_resumes_and_a_failure_blocks_the_rerun() {
     let dir = tempfile::tempdir().unwrap();
