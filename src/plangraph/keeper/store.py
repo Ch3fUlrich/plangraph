@@ -116,6 +116,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         self.alert_window_s = ALERT_WINDOW_S
         # Seat gate of the merged closes; the keeper setting ``require_seats`` (off by default).
         self.require_seats = False
+        # D-6790: an item closes only with a live evidence row or a 'no deploy needed: <reason>' line.
+        # Tests of unrelated behaviour switch it off on their own store; no keeper setting does.
+        self.require_live_evidence = True
         # Forge records of landings, kept for good: a merge-index scan works on a shallow copy of the
         # store, so the dict has to exist before the copy for the scan's answers to reach the server.
         self._landings = {}

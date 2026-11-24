@@ -27,7 +27,7 @@ import re
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
-from .evidence_types import Result, as_epoch, has_live_clause, live_evidence_missing, valid_commit_ref
+from .evidence_types import Result, as_epoch, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
@@ -542,8 +542,8 @@ class WaiverMixin:
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes, token)
-            if live_evidence_missing(item, self._evidence(key)):
-                pending = [*pending, "live_evidence_missing"]
+            if code := self._live_status(item):
+                pending = [*pending, code]
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
             if pending:
@@ -642,8 +642,8 @@ class WaiverMixin:
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
         missing = list(pending)
-        if self._live_evidence_missing(item, proofs):
-            missing.append("live_evidence_missing")
+        if code := self._live_evidence_missing(item, proofs):
+            missing.append(code)
         result = {}
         if missing:
             landed = [(stamp, proof["merged_at"]) for proof in proofs
@@ -690,12 +690,12 @@ class WaiverMixin:
                     **self._flags_of(flags), **gaps}
 
     def _live_evidence_missing(self, item, proofs):
-        if not has_live_clause(item):
-            return False
+        """The code that holds the item, or ``None``: see ``live_evidence_status``; the row must follow the last merge."""
         stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
         if any(stamp is None for stamp in stamps):
-            return True
-        return live_evidence_missing(item, self._evidence(item["key"]), max(stamps))
+            # A merge date nobody can read proves nothing: no evidence row can count (epoch -1 matches none).
+            return self._live_status(dict(item, epoch=-1))
+        return self._live_status(item, max(stamps, default=None))
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""

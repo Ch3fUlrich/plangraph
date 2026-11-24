@@ -70,6 +70,8 @@ class World:
             "semaphore-task": FakeVerifier(),
         }
         self.store = Store(self.conn, clock=self.clock, verifiers=self.verifiers)
+        # The rule 'close needs live evidence or a no-deploy reason' (D-6790) has its own tests.
+        self.store.require_live_evidence = False
         self.tokens = {}
         self.principals = {}
         for name, role, projects, family in PRINCIPALS:

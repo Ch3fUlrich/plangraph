@@ -56,6 +56,7 @@ class E2E:
         self.clock = Clock()
         self.verifiers = {kind: FakeVerifier() for kind in EVIDENCE}
         self.store = Store(self.conn, clock=self.clock, verifiers=self.verifiers)
+        self.store.require_live_evidence = False
         self.tokens, self.principals = {}, {}
         for name, role, projects, family in PRINCIPALS:
             token = auth.add_principal(self.conn, name, role, projects,
