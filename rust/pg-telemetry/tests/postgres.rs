@@ -3,15 +3,17 @@
 use postgres::{Client, NoTls};
 use serde_json::json;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+#[path = "../../test_support/python.rs"]
+mod test_python;
 
 fn keeper_ready(fixture: &mut Client) -> serde_json::Value {
     let input: String = fixture.query_one(
         "SELECT json_agg(row_to_json(i))::text FROM
            (SELECT items.*, ARRAY(SELECT dst FROM baseline_fixture.edges WHERE src=items.key) AS depends_on
             FROM baseline_fixture.items) i", &[]).unwrap().get(0);
-    let mut python = Command::new("python3")
-        .env("PYTHONPATH", concat!(env!("CARGO_MANIFEST_DIR"), "/../../src"))
+    let mut python = test_python::command()
         .args(["-c", "import json,sys; from plangraph.views import ready; items=json.load(sys.stdin); print(json.dumps([[i['key'] for i in ready(items,agent=agent)] for agent in (False,True)]))"])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
     python
