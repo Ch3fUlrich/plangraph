@@ -270,3 +270,21 @@ def test_the_real_host_sandbox_hides_a_masked_fixture_file(monkeypatch):
     if not starts:
         pytest.skip("this host cannot start bwrap")
     assert claude_seat.sandbox_denies_reads({"PATH": os.defpath}) is True
+
+
+def test_an_unwritable_temporary_directory_refuses_writer_admission_with_sandbox_unavailable(tmp_path, monkeypatch):
+    """The probe fixture cannot be created: admission answers sandbox_unavailable instead of raising OSError."""
+    import tempfile
+
+    unwritable = tmp_path / "ro"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)
+    monkeypatch.setattr(tempfile, "tempdir", str(unwritable))
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    if os.access(unwritable, os.W_OK):
+        pytest.skip("this user can write to a mode 0500 directory")
+    argv = ["claude", "-p", "--tools", "Read,Bash"]
+    event = claude_seat.confine_writer_shell(argv, {"PATH": os.defpath}, "implement", "job")
+    assert event["refusal"].startswith("sandbox_unavailable:")
+    assert "--settings" not in argv      # nothing was configured for a route that is refused
+    assert claude_seat.sandbox_denies_reads({"PATH": os.defpath}) is False
