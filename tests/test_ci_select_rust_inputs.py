@@ -115,18 +115,22 @@ def test_deployment_inputs_read_by_rust_are_explicitly_selected(name):
     assert ci_select.select([path])["rust"]
 
 
+def test_deploy_manifest_is_a_registered_rust_input():
+    # rust/plangraph-cli/tests/deploy_manifest.rs reads it through the MANIFEST_PATH constant, a join the
+    # literal scan above does not see, so the entry is checked here.
+    assert (ROOT / "deploy/manifest.toml").is_file()
+    assert "deploy/manifest.toml" in ci_select.RUST_INPUTS
+    assert "deploy/manifest.toml" in (ROOT / "rust/plangraph-cli/src/deploy_manifest/mod.rs").read_text()
+
+
 @pytest.mark.parametrize("path", [
-    "deploy/manifest.toml",
-    "deploy/systemd/pg-feeder.timer",
-    "deploy/pganchor/pganchor.socket",
-    "deploy/liveness/liveness-watchdog@.service",
-    "deploy/systemd/new.target",
-    "deploy/systemd/new.mount",
-    "deploy/watchdog/nested/new.path",
+    "deploy/manifest.toml", "deploy/systemd/pg-feeder.timer", "deploy/pganchor/pganchor.socket",
+    "deploy/systemd/new.target", "deploy/systemd/new.mount", "deploy/watchdog/nested/new.path",
 ])
-def test_deploy_manifest_and_unit_files_select_rust(path):
-    # The plangraph-cli deploy_manifest test checks every unit file under deploy/ against the manifest.
-    assert ci_select.select([path])["rust"], path
+def test_deploy_manifest_and_unit_files_select_the_full_suite_with_rust(path):
+    # deploy/ is not in KNOWN_PREFIXES: any change there runs every suite, Rust included.
+    selected = ci_select.select([path])
+    assert selected["rust"] and selected["full"], path
 
 
 def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):

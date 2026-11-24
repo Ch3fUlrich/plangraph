@@ -71,9 +71,9 @@ pub struct BinaryEntry {
     /// The Cargo package that builds it.
     pub package: String,
     pub bin: String,
-    /// Every path a consumer runs the binary from when that is not the default user bin directory,
-    /// each with the host roles it applies to (a system unit that runs `/usr/local/bin/<bin>`, a user
-    /// unit that runs `~/.local/bin/<bin>`). A binary used from two places lists both; none is guessed.
+    /// Every path a consumer runs the binary from, each with the host roles it applies to (a system
+    /// unit that runs `/usr/local/bin/<bin>`, a user unit that runs `~/.local/bin/<bin>`). No list means
+    /// only `~/.local/bin/<bin>`; a binary used from two places lists both, none is guessed.
     #[serde(default)]
     pub install_paths: Vec<InstallPath>,
     #[serde(default)]
@@ -112,12 +112,10 @@ impl UnitEntry {
         format!("deploy/{}", self.dir.as_deref().unwrap_or("systemd"))
     }
 
-    /// How coverage names one of its files: the plain name under `deploy/systemd`, else `<dir>/<name>`.
+    /// How coverage names one of its files: the path under `deploy/`, always with its directory, so
+    /// `deploy/foo.service` and `deploy/systemd/foo.service` are two different files.
     pub fn coverage_key(&self, file: &str) -> String {
-        match self.dir.as_deref() {
-            None | Some("systemd") => file.to_owned(),
-            Some(dir) => format!("{dir}/{file}"),
-        }
+        format!("{}/{file}", self.dir.as_deref().unwrap_or("systemd"))
     }
 
     /// The unit that must be active: `enable`, else the only timer, else the only file.
@@ -217,7 +215,7 @@ impl Manifest {
 
     fn validate(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
-        let mut files = BTreeSet::new();
+        let mut files: BTreeSet<String> = BTreeSet::new();
         for unit in &self.unit {
             let what = format!("unit {}", unit.name);
             if !names.insert(unit.name.as_str()) {
@@ -226,8 +224,21 @@ impl Manifest {
             if unit.files.is_empty() {
                 return Err(format!("{what}: no files"));
             }
+            if unit.dir.as_deref().is_some_and(|d| {
+                d.is_empty()
+                    || d.starts_with('/')
+                    || d.ends_with('/')
+                    || d.split('/').any(|c| c.is_empty() || c == "." || c == "..")
+            }) {
+                return Err(format!("{what}: dir must be a relative path under deploy/"));
+            }
             for file in &unit.files {
-                if !files.insert(file.as_str()) {
+                if file.is_empty() || file.contains(['/', '\\']) || file == ".." {
+                    return Err(format!(
+                        "{what}: file {file:?} must be a bare file name; name its directory in dir"
+                    ));
+                }
+                if !files.insert(unit.coverage_key(file)) {
                     return Err(format!("{what}: {file} belongs to two entries"));
                 }
             }
@@ -305,20 +316,14 @@ impl Manifest {
         for file in unit_files {
             if !named.contains(file) {
                 problems.push(format!(
-                    "unit file deploy/{} is not in {MANIFEST_PATH}: add it to a [[unit]] entry (dir = \"<subdir>\" outside deploy/systemd), or an entry with not_deployed = \"<reason>\"",
-                    if file.contains('/') { file.clone() } else { format!("systemd/{file}") }
+                    "unit file deploy/{file} is not in {MANIFEST_PATH}: add it to a [[unit]] entry (dir = \"<subdir>\" outside deploy/systemd), or an entry with not_deployed = \"<reason>\""
                 ));
             }
         }
         for file in &named {
             if !unit_files.contains(file) {
                 problems.push(format!(
-                    "{MANIFEST_PATH} names deploy/{}, which does not exist",
-                    if file.contains('/') {
-                        file.clone()
-                    } else {
-                        format!("systemd/{file}")
-                    }
+                    "{MANIFEST_PATH} names deploy/{file}, which is not a tracked file"
                 ));
             }
         }
@@ -338,6 +343,56 @@ impl Manifest {
             if !bins.contains(&(package.clone(), bin.clone())) {
                 problems.push(format!(
                     "{MANIFEST_PATH} names binary {package}/{bin}, which no crate builds"
+                ));
+            }
+        }
+        problems
+    }
+
+    /// Every problem between the binaries and the places units run them from (`consumers`: bin name and
+    /// the path of its `ExecStart`, `%h` written `~`): a path the entry does not declare. Names no
+    /// binary of this manifest (python, logger, claude) are not its business.
+    pub fn consumer_problems(&self, consumers: &BTreeSet<(String, String)>) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (bin, path) in consumers {
+            for entry in self.binary.iter().filter(|b| &b.bin == bin) {
+                let declared = if entry.install_paths.is_empty() {
+                    path == &format!("~/.local/bin/{bin}")
+                } else {
+                    entry.install_paths.iter().any(|p| &p.path == path)
+                };
+                if !declared {
+                    problems.push(format!(
+                        "a unit runs {path}, which binary {}/{bin} does not declare: add it to its install_paths (with ~/.local/bin/{bin} when that is used too)",
+                        entry.package
+                    ));
+                }
+            }
+        }
+        problems
+    }
+
+    /// Every problem between the unit files and the env files the manifest names for them (`env`: unit
+    /// key and the file name its `EnvironmentFile=` reads): a file the unit reads that its entry omits.
+    pub fn env_problems(&self, env: &BTreeSet<(String, String)>) -> Vec<String> {
+        let mut problems = Vec::new();
+        for (key, name) in env {
+            let Some(entry) = self
+                .unit
+                .iter()
+                .find(|u| u.files.iter().any(|f| &u.coverage_key(f) == key))
+            else {
+                continue; // an unlisted unit file is reported by `coverage`
+            };
+            if !entry
+                .env_files
+                .iter()
+                .flat_map(|e| e.split('|'))
+                .any(|e| e == name)
+            {
+                problems.push(format!(
+                    "deploy/{key} reads env file {name}, which unit {} does not list in env_files",
+                    entry.name
                 ));
             }
         }

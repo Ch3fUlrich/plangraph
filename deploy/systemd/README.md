@@ -5,16 +5,21 @@ a root system service and timer.
 
 ## 0. The deploy manifest
 
-`deploy/manifest.toml` is the one table of what runs where: every unit file under `deploy/` (any depth; service,
-timer, socket, target, mount, path and the other systemd unit types) and every binary target of the workspace
-crates is named there. A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the
-env file names it reads (never values) and its first-run check. A binary lists its package, bin, host roles and,
-in `install_paths`, every path a consumer runs it from besides the user bin directory, each with its roles. A host
-lists its roles in `PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names. A unit
-or binary that should not run anywhere gets an entry with `not_deployed = "<reason>"`, the only way to leave one
-out. The `cargo test -p plangraph-cli deploy_manifest` tests fail for a unit file or binary target the manifest
-does not name and for an entry whose file is gone, so adding a unit means adding its entry in the same change.
-Nothing in them reads systemd. The tables below describe the units; the manifest decides where they are installed.
+`deploy/manifest.toml` is the one table of what runs where: every Git-tracked unit file under `deploy/` (any depth;
+service, timer, socket, target, mount, path and the other systemd unit types) and every binary target of the
+workspace crates is named there. Coverage names a unit file by its path under `deploy/` (`systemd/foo.service`,
+`pganchor/pganchor.socket`), so the same file name in two directories needs two entries (`dir = "<subdir>"`
+outside `deploy/systemd`). A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the
+env file names it reads (never values; `%i` for the instance of a template) and its first-run check. A binary lists
+its package, bin, host roles and, in `install_paths`, every path a consumer runs it from, each with its roles; no
+list means only `~/.local/bin/<bin>`, and a binary run from two places lists both. A host lists its roles in
+`PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names. A unit or binary that
+should not run anywhere gets an entry with `not_deployed = "<reason>"`, the only way to leave one out.
+`cargo test -p plangraph-cli deploy_manifest` (unit tests and the integration tests of the same name) fails for a
+unit file or binary target the manifest does not name, for an entry whose file is not tracked, for an
+`ExecStart` path or `EnvironmentFile` of a tracked unit that its entry does not declare, and for a workspace
+member the scan cannot resolve. Nothing in them reads systemd. The tables below describe the units; the manifest
+decides where they are installed.
 
 ## 1. Files
 
