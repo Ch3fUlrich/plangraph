@@ -374,7 +374,8 @@ class SpawnerRunner:
                 from plangraph.routing_support.claude_seat import configure_review_tests
                 tools_event = configure_review_tests(
                     cmd, child_env, leg, role, self._ocdata_dirs, job_id,
-                    worktree=work_dir, review_target=review_target)
+                    worktree=work_dir, review_target=review_target,
+                    leases=self.__dict__.setdefault('_cargo_leases', {}))
             if render_reason is None:
                 self._child_envs[job_id] = child_env
 
@@ -488,7 +489,9 @@ class SpawnerRunner:
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             from .host_ready import cargo_lease
             self._cargo_leases = getattr(self, '_cargo_leases', {})
-            self._cargo_leases[job_id] = None if review_target else await asyncio.to_thread(cargo_lease)
+            # A review slot already holds the lease hygiene checks for it; no other review builds in the shared target.
+            held = self._cargo_leases.get(job_id)
+            self._cargo_leases[job_id] = held or (None if review_target else await asyncio.to_thread(cargo_lease))
             try:
                 from .service import claim_first_dispatch
                 claim_first_dispatch(prompt_record)
