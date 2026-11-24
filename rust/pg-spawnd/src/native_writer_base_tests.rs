@@ -269,5 +269,7 @@ for launch in (False, True):
     );
 }
 
+// Drives the real host through its fast checks, which run `plangraph` (a shell stand-in): unix only.
+#[cfg(unix)]
 #[path = "native_writer_moving_main_tests.rs"]
 mod moving_main;
