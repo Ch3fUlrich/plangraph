@@ -221,6 +221,11 @@ fn quote_schema(schema: &str) -> Result<String, String> {
 
 /// Connect using the reader's local PostgreSQL DSN.
 pub fn report(dsn: &str, schema: &str, since: Option<&str>) -> Result<Value, String> {
+    // Refuse a bad schema or window before touching the database.
+    quote_schema(schema)?;
+    since
+        .map(|value| timestamp(value).ok_or("invalid --since timestamp"))
+        .transpose()?;
     let mut client =
         Client::connect(dsn, NoTls).map_err(|_| "cannot connect to keeper PostgreSQL")?;
     report_client(&mut client, schema, since)
