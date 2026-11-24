@@ -161,14 +161,45 @@ fn newest_codex_age(rows: &Value, now: i64) -> Option<i64> {
         .map(|at| now.saturating_sub(at))
 }
 
-/// Longest age of a codex observation the center publishes: the policy default
-/// `quota_max_age_seconds`, the store's hourly cadence with margin.
-const PUBLISH_OBSERVATION_MAX_AGE: i64 = 10_800;
+/// The observation-age limit the feeder reads with (`quota_max_age_seconds`), taken from the
+/// same policy text, so what the center publishes is exactly what a worker would accept.
+fn observation_limit(policy_text: &str) -> Result<i64, String> {
+    toml::from_str::<super::Policy>(policy_text)
+        .map(|p| p.quota_max_age_seconds)
+        .map_err(|_| "invalid policy".to_string())
+}
+
+/// Pull `--policy PATH` out of the arguments; the rest are the verb's own.
+fn split_policy_arg(args: &[String]) -> Result<(Vec<String>, Option<String>), String> {
+    let mut rest = Vec::new();
+    let mut policy = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--policy" {
+            policy = Some(
+                it.next()
+                    .filter(|p| !p.is_empty())
+                    .ok_or("--policy requires a path")?
+                    .clone(),
+            );
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    Ok((rest, policy))
+}
+
+/// The limit for publishing, from `--policy` or the feeder's default `deploy/feeder/policy.toml`.
+fn publish_limit(policy: Option<&str>) -> Result<i64, String> {
+    let path = policy.unwrap_or("deploy/feeder/policy.toml");
+    let text = std::fs::read_to_string(path).map_err(|_| "policy unreadable".to_string())?;
+    observation_limit(&text)
+}
 
 /// Publishing needs a usable codex observation; otherwise the previous file stays and ages, so
 /// workers report `quota_stale` with its age instead of a fresh envelope around nothing.
-fn publishable(rows: &Value, now: i64) -> Result<(), String> {
-    if remaining(rows, now, PUBLISH_OBSERVATION_MAX_AGE).is_some() {
+fn publishable(rows: &Value, now: i64, max_age: i64) -> Result<(), String> {
+    if remaining(rows, now, max_age).is_some() {
         return Ok(());
     }
     let newest = newest_codex_age(rows, now).map_or_else(
@@ -250,7 +281,26 @@ fn push(doc: &str, destination: &str, ssh: &str) -> Result<(), String> {
 /// Print the most recent available observation for each provider, account and window.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
     let mut effective = env.clone();
-    match args {
+    let (args, policy) = match split_policy_arg(args) {
+        Ok(split) => split,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let publishing = args.iter().any(|a| a == "--export" || a == "--push");
+    let limit = if publishing {
+        match publish_limit(policy.as_deref()) {
+            Ok(limit) => limit,
+            Err(e) => {
+                eprintln!("quota publish: {e}");
+                return 2;
+            }
+        }
+    } else {
+        0
+    };
+    match args.as_slice() {
         [] => {}
         [flag, path] if flag == "--db" && !path.is_empty() => {
             effective.insert("QUOTA_SNAPSHOT_DB".into(), path.clone());
@@ -265,7 +315,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
                 return 2;
             };
             let now = chrono::Utc::now().timestamp();
-            if let Err(why) = publishable(&rows, now) {
+            if let Err(why) = publishable(&rows, now, limit) {
                 eprintln!("quota export: {why}");
                 return 2;
             }
@@ -285,7 +335,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
                 return 2;
             };
             let now = chrono::Utc::now().timestamp();
-            if let Err(why) = publishable(&rows, now) {
+            if let Err(why) = publishable(&rows, now, limit) {
                 eprintln!("quota push: {why}");
                 return 2;
             }
@@ -300,7 +350,7 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
         }
         _ => {
             eprintln!(
-                "usage: plangraph quota [--db PATH | --export PATH | --push SSH_DESTINATION]"
+                "usage: plangraph quota [--db PATH | --export PATH | --push SSH_DESTINATION] [--policy PATH]"
             );
             return 2;
         }
@@ -396,13 +446,38 @@ mod tests {
         let err = center_rows(Some(&wrap(json!([]))), now, 900, 10_800).unwrap_err();
         assert!(err.contains("no codex observation"), "{err}");
         // The center refuses to publish either, so the worker's file keeps aging instead.
-        assert!(publishable(&old, now)
+        assert!(publishable(&old, now, 10_800)
             .unwrap_err()
             .contains("newest 20000s old"));
-        assert!(publishable(&json!([]), now).is_err());
+        assert!(publishable(&json!([]), now, 10_800).is_err());
         let fresh =
             json!([{"provider":"codex:a","windowKey":"5h","timestamp":now - 60,"remainingPct":70}]);
-        assert!(publishable(&fresh, now).is_ok());
+        assert!(publishable(&fresh, now, 10_800).is_ok());
+    }
+    #[test]
+    fn publishing_uses_the_policys_observation_age_limit_like_the_reader() {
+        let now = 1_800_000_000;
+        let four_hours = json!([{"provider":"codex:a","windowKey":"5h","timestamp":now - 14_400,"remainingPct":70}]);
+        let default = observation_limit("").unwrap();
+        assert_eq!(default, 10_800);
+        assert!(publishable(&four_hours, now, default).is_err());
+        // A six-hour policy publishes it, and the worker's read with the same limit accepts it.
+        let six = observation_limit("quota_max_age_seconds = 21600\n").unwrap();
+        assert_eq!(six, 21_600);
+        assert!(publishable(&four_hours, now, six).is_ok());
+        let text = json!({"observed_at":now,"rows":four_hours}).to_string();
+        assert!(center_rows(Some(&text), now, 900, six).is_ok());
+        assert!(center_rows(Some(&text), now, 900, default).is_err());
+        assert!(observation_limit("quota_max_age_seconds = \"x\"").is_err());
+    }
+    #[test]
+    fn the_policy_argument_is_split_from_the_verb_arguments() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (rest, policy) = split_policy_arg(&a(&["--push", "w", "--policy", "p.toml"])).unwrap();
+        assert_eq!((rest, policy), (a(&["--push", "w"]), Some("p.toml".into())));
+        assert_eq!(split_policy_arg(&a(&["--db", "x"])).unwrap().1, None);
+        assert!(split_policy_arg(&a(&["--policy"])).is_err());
+        assert!(publish_limit(Some("/nonexistent/policy.toml")).is_err());
     }
     #[test]
     fn a_host_without_codex_rows_reads_the_center_file_and_never_gets_null_quota() {
