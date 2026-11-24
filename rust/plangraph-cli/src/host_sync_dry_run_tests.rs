@@ -240,13 +240,13 @@ fn an_env_file_with_a_specifier_the_dry_run_cannot_expand_is_not_a_pass() {
     let home = tempfile::tempdir().unwrap();
     let needs = plan("u.service", dir.path(), None).unwrap();
     assert_eq!(missing(&needs, home.path()), ["file %t/p/a.env"]);
-    // A unit that reads no key from it has nothing to verify there.
-    let dir = units(&[(
-        "v.service",
-        "[Service]\nEnvironmentFile=%t/p/a.env\nExecStart=/bin/true\n",
-    )]);
-    let needs = plan("v.service", dir.path(), None).unwrap();
-    assert!(missing(&needs, home.path()).is_empty());
+    // A mandatory file that cannot be expanded is missing even when the unit reads no key; an optional one is not.
+    let mandatory = "[Service]\nEnvironmentFile=%t/p/a.env\nExecStart=/bin/true\n";
+    let optional = "[Service]\nEnvironmentFile=-%t/p/a.env\nExecStart=/bin/true\n";
+    let dir = units(&[("v.service", mandatory), ("w.service", optional)]);
+    let check = |name: &str| missing(&plan(name, dir.path(), None).unwrap(), home.path());
+    assert_eq!(check("v.service"), ["file %t/p/a.env"]);
+    assert!(check("w.service").is_empty());
 }
 
 #[test]
@@ -307,16 +307,40 @@ fn the_checked_in_state_shadow_unit_needs_its_token_config_and_read_paths() {
     }
     // Everything named, but the token, the transcript and the data repository are absent.
     let env = format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\n");
-    let config = format!("{{\"transcript\": \"{h}/t.jsonl\", \"data_repo\": \"{h}/data\"}}");
+    let config = format!(
+        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
+         \"transcript\":\"{h}/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"{h}/data\",\
+         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
+         \"quota\":\"{h}/quota.json\"}}",
+        "a".repeat(40)
+    );
     shadow_host(home.path(), &env, Some(&config));
     assert_eq!(
         missing(&needs, home.path()),
-        ["path ~/data", "path ~/t.jsonl", "path ~/token"]
+        ["path ~/data", "path ~/session.jsonl", "path ~/token"]
     );
     put(home.path(), "token", "x", 0o600);
-    put(home.path(), "t.jsonl", "", 0o600);
+    put(home.path(), "session.jsonl", "", 0o600);
     fs::create_dir_all(home.path().join("data")).unwrap();
     assert!(missing(&needs, home.path()).is_empty());
+    // A configuration `state wait` would refuse (here: only the two read paths) is a missing file.
+    let partial = format!("{{\"transcript\": \"{h}/session.jsonl\", \"data_repo\": \"{h}/data\"}}");
+    put(
+        home.path(),
+        ".config/plangraph/state-shadow/routing.json",
+        &partial,
+        0o600,
+    );
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["file ~/.config/plangraph/state-shadow/routing.json"]
+    );
+    put(
+        home.path(),
+        ".config/plangraph/state-shadow/routing.json",
+        &config,
+        0o600,
+    );
     // A configuration that is not JSON is a missing file, and PLANGRAPH_STATE_CONFIG moves it.
     put(
         home.path(),
