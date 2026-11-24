@@ -186,8 +186,37 @@ def test_a_pull_request_reads_the_ledger_of_its_base_not_its_own(tmp_path):
         ledger = re.search(r"PYTEST_QUARANTINE_FILE=(.*)", env_file.read_text()).group(1)
         assert Path(ledger).read_text() == expected
         assert f"PYTEST_QUARANTINE_AS_OF={as_of}" in env_file.read_text()
-    missing_base, _, _ = run_script(script, repo, {"BASE_SHA": git("rev-parse", "HEAD"), "AS_OF": "x", "FLAKE_BIN": str(flake)}, tmp_path)
-    assert missing_base.returncode == 0
+    # A base commit without a ledger file is an absent ledger; an unknown commit is a failed lookup.
+    git("rm", "-q", "-f", ".github/pytest-quarantine.json")
+    git("commit", "-qm", "no ledger")
+    bare = git("rev-parse", "HEAD")
+    done, env_file, _ = run_script(script, repo, {"BASE_SHA": bare, "AS_OF": "x", "FLAKE_BIN": str(flake)}, tmp_path)
+    assert done.returncode == 0 and Path(re.search(r"PYTEST_QUARANTINE_FILE=(.*)", env_file.read_text()).group(1)).read_text().strip() == "{}"
+    unknown, _, _ = run_script(script, repo, {"BASE_SHA": "f" * 40, "AS_OF": "x", "FLAKE_BIN": str(flake)}, tmp_path)
+    assert unknown.returncode != 0
+
+
+def test_a_shallow_checkout_fetches_the_base_before_reading_its_ledger(tmp_path):
+    origin = tmp_path / "origin"
+    (origin / ".github").mkdir(parents=True)
+    git = lambda root, *a: subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a],  # noqa: E731
+                                          check=True, capture_output=True, text=True).stdout.strip()
+    git(origin, "init", "-q", "-b", "main")
+    (origin / ".github/pytest-quarantine.json").write_text('{"base": {}}')
+    git(origin, "add", "-A")
+    git(origin, "commit", "-qm", "base")
+    base = git(origin, "rev-parse", "HEAD")
+    (origin / ".github/pytest-quarantine.json").write_text('{"head": {}}')
+    git(origin, "commit", "-qam", "head")
+    git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", "--depth", "1", f"file://{origin}", str(clone))
+    assert subprocess.run(["git", "-C", str(clone), "cat-file", "-e", f"{base}^{{commit}}"], capture_output=True).returncode != 0
+    flake = tmp_path / "flake"
+    stub(flake, 'echo "active=0" >> "$GITHUB_OUTPUT"\n')
+    done, env_file, _ = run_script(action_script("quarantine-ledger"), clone, {"BASE_SHA": base, "AS_OF": "2026-11-24T00:00:00+00:00", "FLAKE_BIN": str(flake)}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert Path(re.search(r"PYTEST_QUARANTINE_FILE=(.*)", env_file.read_text()).group(1)).read_text() == '{"base": {}}'
 
 
 def retry_fixture(tmp_path, failed):
@@ -224,3 +253,60 @@ def test_more_than_fifty_failures_are_classified_without_a_retry(tmp_path):
     assert done.returncode == 0, done.stderr
     calls = (tmp_path / "calls").read_text().splitlines()
     assert len(calls) == 1 and calls[0].startswith("classify")
+
+
+def cargo_fixture(tmp_path, entries, failing=""):
+    target = tmp_path / "target"
+    (target / "debug").mkdir(parents=True)
+    stub(target / "debug/ci-flake", f'printf "%s\\n" {entries}\n')
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub(bin_dir / "cargo", f'echo "cargo $*" >> "$RUNNER_TEMP/calls"\ncase "$*" in *"{failing}"*) test -z "{failing}" || exit 1;; esac\n')
+    return target, bin_dir
+
+
+def test_a_cargo_exclusion_names_its_package_and_every_other_package_runs_in_one_workspace_run(tmp_path):
+    target, bin_dir = cargo_fixture(tmp_path, "'pg-spawnd mod::case' 'pg-spawnd other::case' 'pg-keeper x::y'")
+    script = named("rust", "cargo test")["run"]
+    done, _, _ = run_script(script, tmp_path, {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target),
+                                               "GITHUB_WORKSPACE": str(tmp_path), "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[0].startswith("cargo test --no-fail-fast --workspace") and "--exclude pg-spawnd" in calls[0] and "--exclude pg-keeper" in calls[0]
+    assert "cargo test --no-fail-fast -p pg-spawnd -- --exact --skip mod::case --skip other::case" in calls
+    assert "cargo test --no-fail-fast -p pg-keeper -- --exact --skip x::y" in calls
+    assert (tmp_path / "cargo-first.log").is_file()
+
+
+def test_a_failing_package_run_fails_the_step_and_no_ledger_entry_runs_the_plain_workspace(tmp_path):
+    target, bin_dir = cargo_fixture(tmp_path, "'pg-spawnd mod::case'", failing="-p pg-spawnd")
+    script = named("rust", "cargo test")["run"]
+    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path),
+           "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}
+    done, _, _ = run_script(script, tmp_path, env, tmp_path)
+    assert done.returncode == 1
+    plain_target, plain_bin = cargo_fixture(tmp_path / "plain", "")
+    (tmp_path / "plain").mkdir(exist_ok=True)
+    (tmp_path / "plain" / "calls").unlink(missing_ok=True)
+    done, _, _ = run_script(script, tmp_path / "plain", env | {"PATH": f"{plain_bin}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(plain_target),
+                                                              "RUNNER_TEMP": str(tmp_path / "plain")}, tmp_path / "plain")
+    assert done.returncode == 0
+    assert (tmp_path / "plain" / "calls").read_text().strip() == "cargo test --no-fail-fast --workspace"
+
+
+@pytest.mark.parametrize("job", ["pytest", "pytest-postgres"])
+def test_one_classification_retry_across_both_paths_and_every_pytest_step_is_bounded(job):
+    retry = named(job, "Retry the failed tests once at the same SHA")
+    # The affected path (a pull request without the full run) already reruns its failures with -n0 and the first worker count.
+    assert "!(github.event_name == 'pull_request' && needs.select.outputs.full != 'true')" in retry["if"]
+    report = named(job, "Quarantined tests (reporting, never blocking)")
+    assert report["uses"] == "./.github/actions/bounded-step" and 0 < int(report["with"]["seconds"]) < report["timeout-minutes"] * 60
+    assert report["timeout-minutes"] < JOBS[job]["timeout-minutes"]
+
+
+def test_the_timing_merge_is_not_a_pytest_step_and_the_reuse_keeps_the_go_verifier_and_ci_full_honest():
+    assert "pytest" not in named("ci-gate", "Combine shard timings per suite")["run"]
+    go = named("ci-gate", "Verify computed GO")
+    assert go["if"] == "${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}"
+    assert "tested != 'true'" in named("ci-gate", "Post ci-full evidence")["if"]
+    assert "--old-jobs" in named("select", "Select test suites")["run"] and "attempts/" in named("select", "Select test suites")["run"]
