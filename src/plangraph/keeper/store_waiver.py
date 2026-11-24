@@ -22,6 +22,7 @@ The decision does not waive on its own: its D-row must carry the whole token
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from . import auth, context_sources, timing
@@ -154,7 +155,24 @@ class WaiverMixin:
         """Projects to read for the item's merge: its own first, then every scanned repository."""
         scan = getattr(self._adapter("git"), "scan_projects", None)
         names = list(scan()) if callable(scan) else []
-        return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        ordered = [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        return self._one_name_per_repository(ordered)
+
+    def _one_name_per_repository(self, names):
+        """*names* with each repository (resolved path and ref) kept once, under its first name.
+
+        keeper.json can register one directory under several names; the commits of
+        such a directory are one candidate, not an ambiguity.
+        """
+        git, seen, kept = self._adapter("git"), set(), []
+        for name in names:
+            path = git.repo_path(name) if callable(getattr(git, "repo_path", None)) else None
+            ref = git.repo_ref(name) if callable(getattr(git, "repo_ref", None)) else "main"
+            ident = (os.path.realpath(path), ref) if path else (name, None)
+            if ident not in seen:
+                seen.add(ident)
+                kept.append(name)
+        return kept
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
