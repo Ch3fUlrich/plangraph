@@ -4,6 +4,7 @@ pub mod baseline;
 pub mod batch_merge;
 pub mod batch_size;
 pub mod ci_watch;
+pub mod claim_heartbeat;
 pub mod codex_readiness;
 pub mod env;
 pub mod evidence;

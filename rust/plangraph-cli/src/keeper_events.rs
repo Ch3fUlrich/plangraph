@@ -57,6 +57,26 @@ impl Client {
             .map_err(|_| "invalid keeper response".into())
     }
 
+    pub(crate) fn post(
+        &self,
+        path: &str,
+        idempotency_key: &str,
+        body: &Value,
+    ) -> Result<Value, String> {
+        self.agent
+            .post(format!("{}/{path}", self.url))
+            .header("Authorization", format!("Bearer {}", self.token.trim()))
+            .header("Idempotency-Key", idempotency_key)
+            .send_json(body)
+            .map_err(|error| match error {
+                ureq::Error::StatusCode(status) => format!("keeper returned HTTP {status}"),
+                _ => "keeper request failed".into(),
+            })?
+            .body_mut()
+            .read_json()
+            .map_err(|_| "invalid keeper response".into())
+    }
+
     pub(crate) fn events(&self, since: u64, limit: u16) -> Result<Page, String> {
         self.get(&format!("v1/events?since={since}&limit={limit}"))
     }
