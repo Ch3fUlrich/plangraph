@@ -143,8 +143,10 @@ resume message of a native run).
    sibling function, a second path, another test) and fix what you find; write one line
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.
 4. Run the seconds-fast checks, the tests the findings name and the tests of the files you
-   touched; then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`
-   or `REFUTED <finding> <test>`.
+   touched; then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`,
+   `REFUTED <finding> <test>` or `BLOCKED evidence <finding>: orchestrator`. A round with a
+   BLOCKED evidence line is not accepted on that head: the orchestrator supplies the evidence
+   and has the same head reviewed again; you change nothing for that finding meanwhile.
 
 ## Learn as you go
 
