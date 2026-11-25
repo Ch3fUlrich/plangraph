@@ -47,3 +47,36 @@ def test_only_the_top_level_registry_counts(source):
 def test_a_missing_repeated_or_malformed_registry_is_refused(source):
     with pytest.raises(ValueError):
         registry_version(source)
+
+
+def _runtime_latest(source):
+    """What the keeper would load: run the registry source with a stand-in ``Migration`` and read ``LATEST``."""
+    from collections import namedtuple
+
+    namespace = {"Migration": namedtuple("Migration", "version name ddl", defaults=(None, None)), "X": 0, "Y": 0, "Z": 0}
+    exec(source + "\nLATEST = MIGRATIONS[-1].version\n", namespace)  # noqa: S102 - fixture text only
+    return namespace["LATEST"]
+
+
+@pytest.mark.parametrize("source", [
+    REAL,
+    "MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS.append(Migration(2, 'b', Y))\n",
+    "MIGRATIONS = [Migration(1, 'a', X), Migration(2, 'b', Y)]\n",
+    REAL + "MIGRATIONS += (Migration(3, 'c', Z),)\n",
+    REAL + "MIGRATIONS = MIGRATIONS + (Migration(3, 'c', Z),)\n",
+    "MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS.extend([Migration(2, 'b', Y)])\n",
+    "MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS[:] = [Migration(1, 'a', X), Migration(2, 'b', Y)]\n",
+    "if False: MIGRATIONS = (Migration(1, 'a', X),)\n" + REAL,
+])
+def test_the_reader_never_reports_a_version_other_than_the_one_the_keeper_loads(source):
+    """Every shape either raises or agrees with the runtime ``LATEST``: no write hides a schema rise."""
+    try:
+        read = registry_version(source)
+    except ValueError:
+        return
+    assert read == _runtime_latest(source)
+
+
+def test_a_list_registry_is_refused_because_it_can_be_appended_to():
+    with pytest.raises(ValueError, match="tuple"):
+        registry_version("MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS.append(Migration(2, 'b', Y))\n")
