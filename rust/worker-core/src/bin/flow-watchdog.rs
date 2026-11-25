@@ -30,6 +30,8 @@ struct Snapshot {
     host_idle_capacity: pg_worker_core::host_idle::Snapshot,
     #[serde(skip)]
     idle_messages: Vec<String>,
+    #[serde(skip)]
+    disks: Vec<hosts::Row>,
     #[serde(default)]
     hosts: Vec<hosts::Host>,
     #[serde(flatten)]
@@ -155,9 +157,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() != 3 {
         return Err("usage: flow-watchdog SNAPSHOT.json STATE_DIR".into());
     }
+    let dir = Path::new(&args[2]);
+    fs::create_dir_all(dir)?;
+    let pending = dir.join("pending.json");
+    let queue_path = dir.join("queue.json");
+    let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let names = hosts::Names::load();
+    let stored = fs::read_to_string(dir.join("active")).unwrap_or_default();
+    let mut previous = hosts::canonical(&stored, &names);
+    // A disk event queued before its key reached `active` (a crash between the two writes) is
+    // committed first, so neither this snapshot nor the queue drain can lose it or queue it again.
+    previous = hosts::reconcile(&previous, &queue);
+    if previous != stored {
+        atomic(&dir.join("active"), &previous)?;
+    }
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
         let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
         s.idle_messages = s.host_idle_capacity.messages()?;
+        for host in &s.hosts {
+            host.validate()?;
+        }
+        s.disks = hosts::observe(&s.hosts, &names, dir);
         if s.infra_failed > s.ci_failed || s.ci_failed > s.ci_total {
             return Err("inconsistent CI counts".into());
         }
@@ -169,21 +193,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = &validated {
         eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}");
     }
-    let dir = Path::new(&args[2]);
-    fs::create_dir_all(dir)?;
-    let pending = dir.join("pending.json");
     let mut messages = match &validated {
         Ok(s) => {
             let mut messages = s.stuck.messages();
             for message in &s.idle_messages {
                 println!("{message}");
             }
-            messages.extend(hosts::messages(&s.hosts));
+            let host_alerts = hosts::messages(&s.hosts, &s.disks, &previous);
             let legacy = findings(s).join(",");
             if !legacy.is_empty() {
                 messages.insert(0, legacy);
             }
             let mut alerts: Vec<Alert> = messages.into_iter().map(Alert::from).collect();
+            alerts.extend(host_alerts.into_iter().map(|(active, message)| Alert {
+                active,
+                message,
+                recipient: None,
+            }));
             alerts.extend(s.idle_messages.iter().map(|message| Alert {
                 active: format!("host-idle {}", message.split_whitespace().nth(1).unwrap()),
                 message: message.clone(),
@@ -220,13 +246,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(Alert::from),
         );
     }
-    let previous = fs::read_to_string(dir.join("active")).unwrap_or_default();
     let active = messages
         .iter()
         .map(|alert| alert.active.as_str())
         // A missing observation does not clear an active alert.
         .chain(previous.lines().filter(|line| {
-            (line.starts_with("busy-quiet ") && validated.is_err())
+            (hosts::is_host_line(line) && validated.is_err())
+                || validated
+                    .as_ref()
+                    .is_ok_and(|s| hosts::retained(line, &s.disks))
+                || (line.starts_with("busy-quiet ") && validated.is_err())
                 || (line.starts_with("writer-idle ")
                     && validated
                         .as_ref()
@@ -238,13 +267,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .collect::<Vec<_>>()
         .join("\n");
-    let queue_path = dir.join("queue.json");
-    let mut queue: Vec<serde_json::Value> = match fs::read(&queue_path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(e.into()),
-    };
     if active != previous {
+        // Retire what recovered before queueing anything: a later crossing is a new transition.
+        let recovered = hosts::recovered(&previous, &active);
+        if hosts::settle(&mut queue, &recovered) {
+            atomic(&queue_path, &serde_json::to_string(&queue)?)?;
+        }
+        hosts::record_recoveries(dir, &recovered)?;
         for alert in &messages {
             let message = &alert.active;
             if let Some(identity) = budget_identity(message) {
@@ -292,8 +321,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 format!("FLOW-WATCHDOG: {}", alert.message)
             };
             let recipient = alert.recipient.as_deref().unwrap_or("routing");
-            queue.push(serde_json::json!({"kind":"alert", "recipient":recipient,
-                "message":line, "active":message}));
+            let mut event = serde_json::json!({"kind":"alert", "recipient":recipient,
+                "message":line, "active":message});
+            if hosts::is_disk_key(message) {
+                if hosts::queued(&queue, message) {
+                    continue;
+                }
+                event["transition"] = hosts::next_transition(dir, message)?.into();
+            }
+            queue.push(event);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }
         atomic(&dir.join("active"), &active)?;
@@ -361,7 +397,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Remove pending first: interruption can repeat delivery, never lose it.
         fs::remove_file(&pending)?;
         let delivered: serde_json::Value = serde_json::from_str(&event)?;
-        if queue.first().is_some_and(|v| *v == delivered) {
+        if queue
+            .first()
+            .is_some_and(|v| hosts::same_event(v, &delivered))
+        {
             queue.remove(0);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }

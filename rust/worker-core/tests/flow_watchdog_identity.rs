@@ -42,7 +42,13 @@ fn standing_conditions_have_stable_single_line_identities() {
     let queue: Vec<serde_json::Value> =
         serde_json::from_slice(&fs::read(d.path().join("queue.json")).unwrap()).unwrap();
     assert_eq!(queue.len(), 3);
-    assert!(run(d.path(), &snapshot(), true).status.success());
+    // An omitted host is not a recovery; an explicitly healthy row of the same host is.
+    let mut healthy = snapshot();
+    healthy["hosts"] = serde_json::json!([{"host":"fixture\n1","tmp_used_percent":0,
+        "root_used_percent":0,"work_used_percent":[],"checkout_head":"a\n1","origin_main_head":"a\n1",
+        "behind_commits":0,"age_hours":0}]);
+    assert!(run(d.path(), &healthy, true).status.success());
+    assert_eq!(fs::read_to_string(d.path().join("active")).unwrap(), "");
     assert!(run(d.path(), &s, false).status.success());
     let queue: Vec<serde_json::Value> =
         serde_json::from_slice(&fs::read(d.path().join("queue.json")).unwrap()).unwrap();
