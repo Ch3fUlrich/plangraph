@@ -53,4 +53,9 @@ esac
         "2\n"
     );
     assert_eq!(text.unwrap(), SKIP);
+    // A late reply that is not a scan status is an invalid reply, never a skip.
+    for body in ["{\"scan\":\"broken\"}\n200", "{}\n200"] {
+        let error = run(root.path(), body).unwrap_err();
+        assert_eq!(error, "keeper reply has no valid merge index status");
+    }
 }

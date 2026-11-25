@@ -271,8 +271,10 @@ impl Transport for DeadlineKeeper<'_> {
         let reply = self.call_by(Instant::now(), until, |keeper, limit| {
             keeper.call_within(verb, body, limit)
         })?;
-        // A refresh answer that came after its wait ended does not start a close.
-        if Instant::now() > deadline {
+        // A valid refresh answer that came after its wait ended does not start a close. An
+        // answer that is not a scan status stays a reply, so the caller rejects it as invalid.
+        if Instant::now() > deadline && matches!(reply["scan"].as_str(), Some("ready" | "running"))
+        {
             return Err(MERGE_INDEX_EXPIRED.into());
         }
         Ok(reply)

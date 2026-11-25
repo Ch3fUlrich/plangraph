@@ -192,7 +192,7 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
     config = tmp_path / 'plangraph'
     config.mkdir()
     checkouts = {}
-    for name in ('alpha', 'beta', 'gamma'):
+    for name in ('alpha', 'beta', 'gamma', 'delta'):
         # A checkout whose src is the real source: the probe imports plangraph from it.
         (tmp_path / name).mkdir()
         (tmp_path / name / 'src').symlink_to(ROOT / 'src')
@@ -203,9 +203,12 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
                     state_dir=str(tmp_path / 'state' / name), caps=dict(mem_floor_mb=3000),
                     repos={'plangraph': {'root': checkouts[name]}}, **extra)
     excluded = dict(host('gamma'), repos={})  # no plangraph checkout, so no spawner source
+    roleless = host('delta', session=None)  # a valid registry host the projection leaves unmarked
+    for key in ('roles', 'state_dir', 'session'):
+        roleless.pop(key)
     registry = {'self': 'coord', 'hosts': [
         dict(id='coord', transport='local', os='linux', caps=dict(mem_floor_mb=3000), repos={}),
-        host('alpha'), host('beta'), excluded]}
+        host('alpha'), host('beta'), excluded, roleless]}
     (config / 'hosts.json').write_text(json.dumps(registry))
     genconfig.sync(registry, write=True, directory=config)
     binary = tmp_path / 'bin'
@@ -222,28 +225,43 @@ case "$script" in
   *rev-list*) echo 0;;
   *rev-parse*) echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;;
   *"doctor --json"*) echo '{"ok":true,"checks":[{"name":"keeper_whoami","status":"pass"}]}';;
-  *remote_ps*) echo '{"runs":[]}';;
+  *remote_ps*|*"cli ps"*) echo '{"runs":[]}';;
 esac
 ''')
     ssh.chmod(0o755)
     # The probes run the module for real on the "remote" side with the interpreter of this test.
-    (binary / 'python3').symlink_to(sys.executable)
+    # HOME is replaced, so user-installed test tools are not visible: provide the two modules the
+    # readiness probe looks for explicitly, behind (never instead of) the probe's own PYTHONPATH.
+    deps = tmp_path / 'deps'
+    for module in ('pytest', 'xdist'):
+        (deps / module).mkdir(parents=True)
+        (deps / module / '__init__.py').write_text('')
+    python = binary / 'python3'
+    python.write_text(f'#!/bin/sh\nPYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{deps}" exec {sys.executable} "$@"\n')
+    python.chmod(0o755)
     env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path), PYTHONSAFEPATH='1',
                PATH=str(binary) + os.pathsep + os.environ['PATH'], PYTHONPATH=str(ROOT / 'src'))
     env.pop('PLANGRAPH_HOST_NAME', None)
     command = [sys.executable, *unit_command()[1:]]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
-    assert result.returncode == 0, result.stdout + result.stderr
+    # delta has no session unit, so it is published as not ready, but its source must resolve.
+    expected = int(unit_command()[unit_command().index('--not-ready-exit') + 1])
+    assert result.returncode == expected, result.stdout + result.stderr
     check = subprocess.run([sys.executable, '-m', 'plangraph.spawner.host_ready', '--check-records'],
                            env=env, capture_output=True, text=True, timeout=60)
-    assert check.returncode == 0 and check.stdout.splitlines() == ['alpha ready', 'beta ready'], check
+    assert check.returncode == 0, check
+    assert check.stdout.splitlines() == [
+        'alpha ready', 'beta ready', 'delta not-ready session: not_configured'], check
     monkeypatch.setenv('HOME', str(tmp_path))
-    records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta')}
-    assert all(record['fresh'] and record['ok'] for record in records.values()), records
+    records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta', 'delta')}
+    assert all(record['fresh'] for record in records.values()), records
+    assert records['alpha']['ok'] and records['beta']['ok']
+    assert records['delta']['src_ok'] is True and records['delta']['failures'] == [
+        'session: not_configured']
     with pytest.raises(FileNotFoundError):
         overflow.read_readiness('gamma')
     assert sorted(path.name for path in overflow.readiness_dir().iterdir()) == [
-        'alpha.json', 'beta.json']
+        'alpha.json', 'beta.json', 'delta.json']
 
 
 def run_unit(tmp_path, registry, ssh_body=''):

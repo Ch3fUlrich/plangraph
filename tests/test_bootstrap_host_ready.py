@@ -39,7 +39,9 @@ os.execv(sys.executable, [sys.executable] + sys.argv[1:])
 ''')
     (bins / 'systemctl').chmod(0o755)
     monkeypatch.setenv('XDG_CONFIG_HOME', str(home / '.config'))
-    return home, log, lambda *args: run('--skip-ctx-watchdog', *args)
+    # The timer mode stands alone: no ctx-watchdog configuration, no other bootstrap step.
+    (home / '.config/plangraph/ctx-watchdog.json').unlink()
+    return home, log, run
 
 
 def test_installs_enables_runs_and_checks_the_records(bootstrap):
@@ -55,9 +57,15 @@ def test_installs_enables_runs_and_checks_the_records(bootstrap):
     assert calls[-1] == 'python3 -m plangraph.spawner.host_ready --check-records'
 
 
+def test_the_timer_mode_runs_no_other_bootstrap_step(bootstrap):
+    home, log, run = bootstrap
+    assert run('--host-ready-timer').returncode == 0
+    assert not any(word in log.read_text() for word in ('stall_watchdog', 'git ', 'ctx-watchdog'))
+
+
 def test_nothing_is_installed_without_the_flag(bootstrap):
     home, log, run = bootstrap
-    assert run().returncode == 0
+    assert run('--skip-ctx-watchdog').returncode == 0
     assert not (home / '.config/systemd/user/pg-host-ready.timer').exists()
     assert 'host_ready' not in log.read_text()
 

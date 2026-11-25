@@ -124,7 +124,8 @@ Exit 3 means every record was published and some host is not ready: a success of
 unpublished record exits 1 and a registry without candidates exits 2; both fail the unit.
 
 Deploy step: `deploy/bootstrap.sh --host-ready-timer` on the placement host, run from the checkout on
-main (host-sync keeps it there). It copies both units into `~/.config/systemd/user`, runs
+main (host-sync keeps it there). The flag is a mode of its own, like `--ci-tools-only`: no other
+bootstrap step or configuration (such as the ctx-watchdog config) is needed or run. It copies both units into `~/.config/systemd/user`, runs
 `daemon-reload`, `enable --now pg-host-ready.timer`, starts the service once, requires
 `Result=success`, then runs the record check below and fails when a host record is missing or stale.
 `--dry-run` prints the steps. Without the flag nothing is installed, so worker hosts are untouched.

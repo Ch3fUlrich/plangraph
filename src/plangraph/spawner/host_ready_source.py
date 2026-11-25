@@ -16,18 +16,24 @@ from .private_io import atomic_write_private
 from .remote_ps import configured_hosts
 
 
+def source_is_import_root(config):
+    """True when `spawner_src` already is the directory that holds the `plangraph` package.
+
+    Every host the registry projects does, with or without `roles`; an older hand-written config
+    names the checkout instead."""
+    return bool(config.get('registry') or config.get('src_is_import_root'))
+
+
 def import_root(config):
     """The directory that holds the `plangraph` package on that host.
 
-    A registry host's `spawner_src` is already `<checkout>/src`; an older config names the
-    checkout. Never a path relative to the working directory: PYTHONSAFEPATH keeps it off sys.path.
-    """
+    Never a path relative to the working directory: PYTHONSAFEPATH keeps it off sys.path."""
     source = config['spawner_src']
-    return source if config.get('registry') else source.rstrip('/') + '/src'
+    return source if source_is_import_root(config) else source.rstrip('/') + '/src'
 
 
 def check_sources(name, config, command, fail):
-    sources = [(config.get('ssh'), config['spawner_src'], False if config.get('registry') else True)]
+    sources = [(config.get('ssh'), config['spawner_src'], not source_is_import_root(config))]
     ok = True
     matched = bool(config.get('local'))
     seen_hosts = []

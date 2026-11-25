@@ -47,6 +47,39 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Placement host only (opt in, its own mode like --ci-tools-only: it needs none of the other
+# bootstrap steps or their configuration): publish host-ready/<host>.json every two minutes.
+install_host_ready_timer() {
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local script_dir repo_root unit python=python3
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  command -v python3 >/dev/null || python=python
+  repo_root="$(cd "$script_dir/.." && pwd)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] host-ready: would install pg-host-ready.service and .timer into $unit_dir, daemon-reload, enable --now the timer, run the service once and check every record"
+    return 0
+  fi
+  [[ "$OSTYPE" == linux* ]] && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1 \
+    || { echo "host-ready: needs a Linux host with systemd --user" >&2; return 1; }
+  mkdir -p "$unit_dir"
+  for unit in pg-host-ready.service pg-host-ready.timer; do
+    install -m 0644 "$script_dir/systemd/$unit" "$unit_dir/$unit"
+  done
+  if ! systemctl --user daemon-reload || ! systemctl --user enable --now pg-host-ready.timer \
+     || ! systemctl --user start pg-host-ready.service \
+     || [[ "$(systemctl --user show pg-host-ready.service -p Result --value)" != success ]]; then
+    echo "host-ready: the service did not run successfully; see journalctl --user -u pg-host-ready.service" >&2
+    return 1
+  fi
+  # Every placement host must have a fresh record; a host that is not ready is reported, not hidden.
+  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$repo_root/src" "$python" -m plangraph.spawner.host_ready --check-records \
+    || { echo "host-ready: a placement host has a missing or stale record" >&2; return 1; }
+}
+if [[ "$HOST_READY_TIMER" -eq 1 ]]; then
+  install_host_ready_timer
+  exit $?
+fi
+
 # Run as the runner user, including WSL2 runners; no sudo or distro Python pin.
 if [[ "$CI_TOOLS_ONLY" -eq 1 ]]; then
   version=8.30.1
@@ -318,34 +351,6 @@ install_worktree_sweep() {
     --repo-root "$repo_root"
 }
 install_worktree_sweep
-
-# Placement host only (opt in): publish host-ready/<host>.json every two minutes.
-install_host_ready_timer() {
-  [[ "$HOST_READY_TIMER" -eq 1 ]] || return 0
-  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-  local repo_root unit
-  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[DRY-RUN] host-ready: would install pg-host-ready.service and .timer into $unit_dir, daemon-reload, enable --now the timer, run the service once and check every record"
-    return 0
-  fi
-  [[ "$OSTYPE" == linux* ]] && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1 \
-    || { echo "host-ready: needs a Linux host with systemd --user" >&2; return 1; }
-  mkdir -p "$unit_dir"
-  for unit in pg-host-ready.service pg-host-ready.timer; do
-    install -m 0644 "$SCRIPT_DIR/systemd/$unit" "$unit_dir/$unit"
-  done
-  if ! systemctl --user daemon-reload || ! systemctl --user enable --now pg-host-ready.timer \
-     || ! systemctl --user start pg-host-ready.service \
-     || [[ "$(systemctl --user show pg-host-ready.service -p Result --value)" != success ]]; then
-    echo "host-ready: the service did not run successfully; see journalctl --user -u pg-host-ready.service" >&2
-    return 1
-  fi
-  # Every placement host must have a fresh record; a host that is not ready is reported, not hidden.
-  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$repo_root/src" "$PYTHON_CMD" -m plangraph.spawner.host_ready --check-records \
-    || { echo "host-ready: a placement host has a missing or stale record" >&2; return 1; }
-}
-install_host_ready_timer
 
 # Omnigraph: site config, cache client, session environment, health verification.
 if [[ "$DRY_RUN" -eq 1 ]]; then

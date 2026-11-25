@@ -672,6 +672,9 @@ def placement_hosts():
     from plangraph.fleet_sync.genconfig import work_mounts
     registry = registry_caps()
     hosts = placement_config(registry).get('hosts', {})
+    for config in hosts.values():
+        if isinstance(config, dict):
+            config['src_is_import_root'] = True  # genconfig names `<checkout>/src`, roles or not
     local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
     if local:
         if local['id'] in hosts:
