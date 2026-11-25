@@ -83,17 +83,32 @@ impl RunValues {
     }
 }
 
-/// Render a versioned batch input in the prompt transport. Plain briefs pass through.
-pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
+/// The parsed versioned batch input of `text`; none for a plain brief.
+fn parse(text: &str) -> Option<Result<BatchInput, String>> {
     let payload = text.strip_prefix(PREFIX).or_else(|| {
         text.strip_prefix(PREFIX.trim_end_matches('\n'))?
             .strip_prefix("\r\n")
-    });
-    let Some(payload) = payload else {
+    })?;
+    Some(serde_json::from_str(payload).map_err(|err| format!("invalid batch writer input: {err}")))
+}
+
+/// The item keys a versioned batch input assigns, in its own `items[].key` order: its typed
+/// membership, which no heading inside an item body can extend. None for a plain brief.
+pub fn typed_keys(text: &str) -> Option<Result<Vec<String>, String>> {
+    Some(parse(text)?.and_then(|input| {
+        if input.items.is_empty() {
+            return Err("batch writer input requires at least one item".into());
+        }
+        Ok(input.items.into_iter().map(|item| item.key).collect())
+    }))
+}
+
+/// Render a versioned batch input in the prompt transport. Plain briefs pass through.
+pub fn render(text: &str) -> Result<Cow<'_, str>, String> {
+    let Some(parsed) = parse(text) else {
         return Ok(Cow::Borrowed(text));
     };
-    let BatchInput { items, run } = serde_json::from_str(payload)
-        .map_err(|err| format!("invalid batch writer input: {err}"))?;
+    let BatchInput { items, run } = parsed?;
     if items.is_empty() {
         return Err("batch writer input requires at least one item".into());
     }

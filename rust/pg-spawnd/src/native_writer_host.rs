@@ -34,6 +34,23 @@ pub(crate) fn writer_effort(card: &Value) -> Result<String, String> {
     }
     Ok(effort.into())
 }
+/// A push target must be a branch ref.
+fn check_push_ref(card: &Value) -> Result<(), String> {
+    match card["push_ref"].as_str() {
+        Some(target) if !target.starts_with("refs/heads/") => {
+            Err("push_ref must name refs/heads/...".into())
+        }
+        _ => Ok(()),
+    }
+}
+/// The launch options of a native writer card that no host state decides: the supervisor refuses
+/// them after the run is registered, so a dispatch checks them before it admits or registers.
+pub(crate) fn check_launch_card(card: &Value) -> Result<(), String> {
+    check_push_ref(card)?;
+    writer_effort(card)?;
+    review_route::review_override(card)?;
+    Ok(())
+}
 /// Model and effort flags for the codex invocation; the ledger row records the same values.
 fn model_args(effort: &str) -> [String; 6] {
     [
