@@ -84,6 +84,15 @@ def test_scope_files_root_scope_names_the_whole_repo(tmp_path, scope):
     assert rd.scope_files(_scope_tree(tmp_path), [scope]) == ["src/b.py", "tools/a.py"]
 
 
+@pytest.mark.parametrize("scope", ["/", "/.", "//", "\\", r"\.", "/./", "C:", "C:/"])
+def test_scope_files_an_absolute_root_spelling_is_never_walked(tmp_path, monkeypatch, scope):
+    repo = _scope_tree(tmp_path)
+    walked = []
+    monkeypatch.setattr(rd.os, "walk", lambda top, *a, **k: walked.append(str(top)) or iter(()))
+    assert rd.scope_files(repo, [scope]) == []
+    assert walked == []
+
+
 @pytest.mark.parametrize("scope", ["pkg.v1/", "pkg.v1", "./pkg.v1//"])
 def test_scope_files_walks_a_dotted_directory(tmp_path, scope):
     repo = _scope_tree(tmp_path)

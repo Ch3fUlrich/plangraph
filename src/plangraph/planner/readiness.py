@@ -200,7 +200,8 @@ def scope_files(repo_root: Path | str, write_set: Sequence[str]) -> list[str]:
     root, found = Path(repo_root), set()
     for scope in write_set:
         raw = str(scope).strip().replace("\\", "/")
-        root_scope = bool(raw) and set(raw.split("/")) <= {"", "."}
+        # A relative spelling of the root only: /, //, /. and \ are absolute and stay rejected.
+        root_scope = raw.startswith(".") and set(raw.split("/")) <= {"", "."}
         # A scope the card check rejects (absolute, drive, parent step) is never walked.
         if not root_scope and path_problem("write_set", str(scope), normalise_path(raw)) is not None:
             continue

@@ -93,6 +93,16 @@ def test_plan_phase_root_and_dotted_directory_scopes_count_for_rule_33(w, repo, 
     assert plan["cards"][0]["route"]["review_seats"] == 2
 
 
+@pytest.mark.parametrize("scope", ["/", "/.", "//", "\\"])
+def test_plan_phase_does_not_walk_an_absolute_root_scope(w, repo, monkeypatch, scope):
+    walked = []
+    monkeypatch.setattr(readiness.os, "walk", lambda top, *a, **k: walked.append(str(top)) or iter(()))
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert walked == []
+
+
 def test_plan_phase_symlink_loop_scope_fails_that_card_only(w, repo):
     (repo / "loop").symlink_to(repo / "loop")
     make_phase(w)
