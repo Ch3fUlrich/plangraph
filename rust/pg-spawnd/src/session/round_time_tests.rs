@@ -24,20 +24,34 @@ impl Transcript {
     }
     pub fn request(&mut self, at: i64) {
         self.0
-            .push(json!({"type":"api-request","timestamp":stamp(at)}));
+            .push(json!({"type":"api-request","timestamp":stamp(at),"id":format!("r{at}")}));
+    }
+    /// Request id of the last request line: what the next output lines answer.
+    fn last_request(&self) -> String {
+        self.0
+            .iter()
+            .rev()
+            .find(|line| line["type"] == "api-request")
+            .and_then(|line| line["id"].as_str())
+            .unwrap_or("none")
+            .to_owned()
     }
     pub fn text(&mut self, at: i64, end_turn: bool) {
-        self.text_in(at, &format!("m{at}"), end_turn);
+        let request = self.last_request();
+        self.text_in(at, &request, end_turn);
     }
-    pub fn text_in(&mut self, at: i64, message: &str, end_turn: bool) {
-        self.0.push(json!({"type":"assistant","timestamp":stamp(at),
-            "message":{"id":message,"stop_reason": if end_turn {"end_turn"} else {"tool_use"},
+    pub fn text_in(&mut self, at: i64, request: &str, end_turn: bool) {
+        self.0.push(json!({"type":"assistant","timestamp":stamp(at),"requestRef":request,
+            "message":{"id":format!("m{at}"),"stop_reason": if end_turn {"end_turn"} else {"tool_use"},
             "content":[{"type":"text","text":"x"}]}}));
     }
     pub fn tool(&mut self, at: i64, id: &str, name: &str, input: Value) {
-        self.0.push(json!({"type":"assistant","timestamp":stamp(at),
+        let request = self.last_request();
+        self.0.push(
+            json!({"type":"assistant","timestamp":stamp(at),"requestRef":request,
             "message":{"id":format!("m{at}"),"stop_reason":"tool_use",
-            "content":[{"type":"tool_use","id":id,"name":name,"input":input}]}}));
+            "content":[{"type":"tool_use","id":id,"name":name,"input":input}]}}),
+        );
     }
     pub fn result(&mut self, at: i64, id: &str, background: Option<&str>) {
         let mut line = json!({"type":"user","timestamp":stamp(at),
@@ -270,13 +284,13 @@ fn a_new_round_closes_the_wait() {
 }
 
 #[test]
-fn writing_is_one_message_and_a_new_message_without_a_request_is_unknown() {
+fn writing_is_one_request_and_an_output_of_another_request_is_unknown() {
     let mut t = Transcript::new();
     t.prompt(0, "p1");
     t.request(1_000);
-    t.text_in(2_000, "m1", false);
-    t.text_in(5_000, "m1", false);
-    t.text_in(9_000, "m2", true);
+    t.text_in(2_000, "r1000", false);
+    t.text_in(5_000, "r1000", false);
+    t.text_in(9_000, "r-other", true);
     let row = &t.read().rows[0];
     assert_eq!(cause(row, Cause::ModelWrite), 3_000);
     assert_eq!(cause(row, Cause::Unknown), 4_000);
@@ -310,4 +324,62 @@ fn commands_are_classified() {
     assert_eq!(classify_command("cargo clippy"), Class::Build);
     assert_eq!(classify_command("until ls; do sleep 5; done"), Class::Wait);
     assert_eq!(classify_command("git status"), Class::Other);
+}
+
+#[test]
+fn a_first_output_of_another_request_is_not_model_wait() {
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    t.request(1_000);
+    t.text_in(4_000, "r-not-this-one", true);
+    let row = &t.read().rows[0];
+    assert_eq!(cause(row, Cause::ModelWait), 0);
+    assert_eq!(cause(row, Cause::Unknown), 3_000);
+}
+
+#[test]
+fn a_task_id_is_named_as_a_whole_word_never_as_a_prefix() {
+    let call = "until grep -q rc= /t/tasks/bg10.output; do sleep 15; done";
+    // bg1 is the only task: a wait for bg10 names none of the running tasks.
+    assert_eq!(
+        explicit_wait("bg1", call).read().open_wait(T0 + 60 * MIN),
+        None
+    );
+    let wait = explicit_wait("bg10", call)
+        .read()
+        .open_wait(T0 + 60 * MIN)
+        .unwrap();
+    assert_eq!(wait.task_id, "bg10");
+    assert_eq!(wait.call_id, "u2");
+}
+
+#[test]
+fn idle_time_before_a_wait_call_does_not_count_toward_the_cap() {
+    let mut t = Transcript(background_test_wait().0[..6].to_vec());
+    // The writer sat idle for 20 minutes, then opens a wait call on the still running task.
+    t.request(20 * MIN);
+    t.tool(
+        20 * MIN + 1_000,
+        "w9",
+        "Bash",
+        json!({"command":"until grep -q rc= /t/tasks/bg1.output; do sleep 15; done"}),
+    );
+    let reader = t.read();
+    let wait = reader.open_wait(T0 + 20 * MIN + 31_000).unwrap();
+    assert_eq!(wait.waited_ms, 30_000, "only the open wait call counts");
+    assert!(
+        cause(&reader.rows[0], Cause::WaitTest) > 19 * MIN,
+        "idle time is still booked"
+    );
+}
+
+#[test]
+fn lines_after_a_closed_round_are_not_booked() {
+    let t = background_test_wait();
+    let text: Vec<String> = t.0.iter().map(Value::to_string).collect();
+    let closed = std::collections::HashMap::from([("sess:p1".to_string(), T0 + 10 * MIN)]);
+    let reader = Reader::read_closed("sess", &text.join("\n"), closed);
+    // The 20 minute idle gap ends after the close time, so none of it is booked.
+    assert_eq!(reader.rows[0].ended_ms - reader.rows[0].started_ms, 6_000);
+    assert_eq!(cause(&reader.rows[0], Cause::WaitTest), 0);
 }

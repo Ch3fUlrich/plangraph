@@ -14,7 +14,11 @@ pub mod round_cli;
 #[cfg(test)]
 mod round_cli_tests;
 mod round_host;
+pub mod round_native;
+#[cfg(test)]
+mod round_native_tests;
 pub mod round_reader;
+pub mod round_state;
 pub mod round_store;
 pub mod round_time;
 #[cfg(test)]
@@ -79,24 +83,33 @@ impl Caps {
 }
 
 /// A session whose round the wait watchdog closed as BLOCKED is not restarted on its own.
-fn round_blocked(request: &Request) -> Option<String> {
+/// The block is stored under the numbered session name; a role-only respawn reaches that
+/// name through the saved launch record it restarts from.
+fn round_blocked(request: &Request, spawn_state: &Path) -> Option<String> {
     let args = &request.args;
     let source = args.option("session").unwrap_or(&args.name);
-    blocked_reason(args.respawn, source, &round_watch::spawn_state_dir())
+    let saved = request.spec["session_name"].as_str();
+    blocked_reason(args.respawn, &[Some(source), saved], spawn_state)
 }
 
-fn blocked_reason(respawn: bool, source: &str, spawn_state: &Path) -> Option<String> {
-    if !respawn || !paths::basename(source) {
+fn blocked_reason(respawn: bool, names: &[Option<&str>], spawn_state: &Path) -> Option<String> {
+    if !respawn {
         return None;
     }
-    let path = round_watch::state_file(spawn_state, source);
-    let blocked = round_watch::blocked_outcome(&path)?;
-    Some(format!(
-        "{source}: {} (command `{}`); clear {} after the operator has looked",
-        blocked["reason"].as_str().unwrap_or("blocked"),
-        blocked["command"].as_str().unwrap_or("?"),
-        path.display()
-    ))
+    names
+        .iter()
+        .flatten()
+        .filter(|name| paths::basename(name))
+        .find_map(|name| {
+            let path = round_watch::state_file(spawn_state, name);
+            let blocked = round_watch::blocked_outcome(&path)?;
+            Some(format!(
+                "{name}: {} (command `{}`); clear {} after the operator has looked",
+                blocked["reason"].as_str().unwrap_or("blocked"),
+                blocked["command"].as_str().unwrap_or("?"),
+                path.display()
+            ))
+        })
 }
 
 fn role_of(name: &str) -> &str {
@@ -151,7 +164,7 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     let Some(mut request) = Request::new(args, paths) else {
         return Ok(2);
     };
-    if let Some(reason) = round_blocked(&request) {
+    if let Some(reason) = round_blocked(&request, &round_watch::spawn_state_dir()) {
         if !request.args.dry {
             let admission = Admission::check(&request, policy.as_ref(), None, &paths.state);
             storage::record_outcome(&admission, "refused", None);
