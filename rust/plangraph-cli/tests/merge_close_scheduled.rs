@@ -238,10 +238,18 @@ fn the_merge_close_service_runs_the_scheduled_mode_with_a_state_directory() {
 #[cfg(unix)]
 #[test]
 fn a_scheduled_run_skips_while_another_run_holds_the_state() {
+    // A state file named like a lock must not be the lock: the streak write replaces its inode.
+    for name in ["pending.json", "pending.lock"] {
+        skips_while_held(name);
+    }
+}
+
+#[cfg(unix)]
+fn skips_while_held(name: &str) {
     use std::process::Command;
 
     let root = tempfile::tempdir().unwrap();
-    let state = root.path().join("state").join("pending.json");
+    let state = root.path().join("state").join(name);
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_plangraph"))
             .args(["merge-close", "--scheduled", "--state"])
@@ -256,9 +264,10 @@ fn a_scheduled_run_skips_while_another_run_holds_the_state() {
     };
     // The first run creates the state directory and the lock, then fails on the missing token.
     assert_eq!(run().status.code(), Some(1));
-    let held = pg_worker_core::lockfile::try_lock(&state.with_extension("lock"))
-        .unwrap()
-        .expect("lock free after the run");
+    let held =
+        pg_worker_core::lockfile::try_lock(&plangraph_cli::merge_close_unit::lock_path(&state))
+            .unwrap()
+            .expect("lock free after the run");
     for extra in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_plangraph"));
         command
