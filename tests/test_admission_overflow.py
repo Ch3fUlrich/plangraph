@@ -364,6 +364,23 @@ def test_orchestration_remote_first(orchestration, role):
     assert remote.call_args.args[-1] == ['--role', role]
 
 
+def test_remote_first_final_refusal_keeps_the_target_lane_reason_and_holder(orchestration, monkeypatch):
+    from plangraph.spawner import host_ready
+    service, rows, remote, _, _ = orchestration
+    # The local host is unhealthy too, so the origin has no room to fall back to.
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *a, **k: (None, 'cargo_target_cap: cache full'))
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    remote.side_effect = overflow.RemoteRefusal(held)
+    record = service.admit_spawn({'role': 'implement', 'prompt': 'task'})
+    assert record['status'] == 'refused' and record['exit_code'] == 2
+    assert record['error'].startswith(held), record
+    assert rows['host-b']['refusal'] == held
+    # A refusal that is not a lane keeps its record as it was.
+    remote.side_effect = overflow.RemoteRefusal('remote copy failed')
+    rows['host-b'].pop('refusal')
+    assert 'error' not in service.admit_spawn({'role': 'implement', 'prompt': 'task'})
+
+
 @pytest.mark.parametrize('headroom,tied', [(False, False), (True, False), (False, True)])
 def test_orchestration_remote_ranking(orchestration, headroom, tied):
     service, rows, _, path, _ = orchestration

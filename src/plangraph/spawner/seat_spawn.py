@@ -195,10 +195,10 @@ def _no_hosts_hint(config):
         return {}
     return {'hint': 'hosts.json has no eligible remote host. Check the registry, then run fleet_sync genconfig write and host_ready.'}
 
-def _open_queue(service, role, decision, window, host=None, card=None, prompt=''):
-    """The queued record of a spawn waiting for room, owned by this process; a native launch whose key a live writer holds is refused first."""
+def _open_queue(service, role, decision, window, host=None, card=None, options=None):
+    """The queued record of a spawn waiting for room, owned by this process; a native launch is checked and its keys admitted first."""
     if (card or {}).get('run_kind') == 'native-codex':
-        from .overflow import lane_admit; lane_admit(service, card, prompt)
+        from .overflow import native_queue_card; card = native_queue_card(service, card, options or {})
     from .proc_kill import _stat
     now = time.time()
     record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued', 'role': role or 'implement',
@@ -382,7 +382,7 @@ def admit(service, options, *, card=None, preview=False):
                     return use_local()
             if decision.host is None:
                 if window > 0 and queued is None:
-                    queued = _open_queue(service, role, decision, window, local, card, options.get('prompt', ''))
+                    queued = _open_queue(service, role, decision, window, local, card, options)
                 if queued is not None:
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
@@ -399,11 +399,11 @@ def admit(service, options, *, card=None, preview=False):
                         continue
                     return _close_queue(service, queued, status='refused', reason=decision.reason,
                                         overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
-                                        error=f'{decision.reason} (admission window {window:g}s elapsed)')
+                                        error=overflow.lane_text(rows, f'{decision.reason} (admission window {window:g}s elapsed)'))
                 record = {'run_id': 'run-' + uuid.uuid4().hex,
                           'status': 'refused',
                           'reason': decision.reason, 'overflow_reason': decision.reason,
-                          'exit_code': 2, **_no_hosts_hint(config)}
+                          'exit_code': 2, **_no_hosts_hint(config), **overflow.lane_error(rows, decision.reason)}
                 if native:
                     now = time.time()
                     record.update(run_kind='native-codex', started=now, ended=now)
