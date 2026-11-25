@@ -5,6 +5,7 @@ pub mod batch_merge;
 pub mod batch_size;
 pub mod ci_watch;
 pub mod codex_readiness;
+pub mod deploy_manifest;
 pub mod env;
 pub mod evidence;
 mod fast_check_dispatch;
