@@ -61,14 +61,34 @@ impl<R: CommandRunner> KeeperCli<R> {
     }
 
     /// Release one claim of this attempt at the epoch it was granted: the CLI would otherwise
-    /// look up the current epoch, which may belong to a claim another batch holds.
+    /// look up the current epoch, which may belong to a claim another batch holds. A release
+    /// whose answer was lost after the keeper committed it is refused on replay (the item is
+    /// no longer claimed), so a failed release is confirmed against the item: not claimed, or
+    /// claimed at another epoch, means this attempt's grant is gone.
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String> {
         let mut argv = vec!["env".to_owned(), format!("PG_EPOCH={epoch}")];
         argv.extend(self.argv("release", &[key.to_owned()]));
-        self.runner
-            .run(&self.dir, &argv)
-            .map(drop)
-            .map_err(|err| format!("{key}@{epoch}: {err}"))
+        let Err(error) = self.runner.run(&self.dir, &argv) else {
+            return Ok(());
+        };
+        let show = self.argv("show", &[key.to_owned()]);
+        let shown = self
+            .runner
+            .run_lenient(&self.dir, &show)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let still_held = match &shown {
+            Some(item) => match (item["state"].as_str(), item["epoch"].as_u64()) {
+                (Some("claimed"), Some(held)) => held == epoch,
+                (Some(_), Some(_)) => false,
+                _ => true,
+            },
+            None => true,
+        };
+        if still_held {
+            return Err(format!("{key}@{epoch}: {error}"));
+        }
+        Ok(())
     }
 }
 
@@ -124,8 +144,13 @@ pub struct GhCi<R: CommandRunner> {
 }
 
 impl<R: CommandRunner> CiRuns for GhCi<R> {
-    fn draft_lane_part(&mut self, pr: u64) -> Result<bool, String> {
+    fn draft_lane_part(&mut self, pr: u64, head: &str) -> Result<bool, String> {
         let pull = self.pull(pr)?;
+        // The draft flag and branch are those of the pull request's current head; they say
+        // nothing about a run of an older head.
+        if pull["head"]["sha"].as_str() != Some(head) {
+            return Ok(false);
+        }
         let draft = pull["draft"]
             .as_bool()
             .ok_or("gh api pull: no draft flag")?;

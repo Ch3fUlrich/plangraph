@@ -42,7 +42,7 @@ impl Keeper for FakeKeeper {
 struct FakeCi(VecDeque<Vec<CiRun>>, usize, bool);
 
 impl CiRuns for FakeCi {
-    fn draft_lane_part(&mut self, _: u64) -> Result<bool, String> {
+    fn draft_lane_part(&mut self, _: u64, _: &str) -> Result<bool, String> {
         Ok(self.2)
     }
     fn runs(&mut self, _: &str, _: u64) -> Result<Vec<CiRun>, String> {

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const USAGE: &str = "usage: pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE [--state DIR] --train-cmd ARGV --ci-workflow NAME... [--branch NAME] [--keeper-cmd ARGV] [--no-journal]";
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Args {
     pub run_id: String,
     pub state: Option<String>,
@@ -138,7 +138,7 @@ pub(crate) fn sidecar(steps: &Path, suffix: &str) -> PathBuf {
 
 /// The immutable inputs of the batch, saved before the first step and compared on every
 /// start. The rows alone cannot bind a claim-only prefix, which holds no base or brief.
-fn bind_inputs(args: &Args, worktree: Option<&Path>) -> Result<(), String> {
+pub(crate) fn bind_inputs(args: &Args, worktree: Option<&Path>) -> Result<(), String> {
     let inputs = &args.inputs;
     let now = json!({
         "run_id": args.run_id, "repo": inputs.repo, "batch_key": inputs.batch_key,
@@ -171,10 +171,27 @@ fn bind_inputs(args: &Args, worktree: Option<&Path>) -> Result<(), String> {
             Ok(())
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let tmp = sidecar(&args.steps, ".inputs.tmp");
+            // Linked into place, never renamed over: two calls on one steps path cannot both
+            // establish the binding. The loser reads the winner's file and compares.
+            let tmp = sidecar(
+                &args.steps,
+                &format!(
+                    ".inputs.{}.{:?}.tmp",
+                    std::process::id(),
+                    std::thread::current().id()
+                ),
+            );
             std::fs::write(&tmp, now.to_string())
-                .and_then(|()| std::fs::rename(&tmp, &path))
-                .map_err(|err| format!("inputs not saved at {}: {err}", path.display()))
+                .map_err(|err| format!("inputs not saved at {}: {err}", path.display()))?;
+            let linked = std::fs::hard_link(&tmp, &path);
+            let _ = std::fs::remove_file(&tmp);
+            match linked {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    bind_inputs(args, worktree)
+                }
+                Err(err) => Err(format!("inputs not saved at {}: {err}", path.display())),
+            }
         }
         Err(err) => Err(format!("saved inputs {}: {err}", path.display())),
     }

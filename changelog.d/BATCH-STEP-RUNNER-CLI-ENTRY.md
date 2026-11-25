@@ -3,3 +3,5 @@
 A saved steps file is refused unless its items, base, brief and worktree are those of this call and native run. The push verifies a recorded accepting review of the exact head, not only the stamp. The clean-tree check rejects every tracked change and exempts only untracked review artifacts.
 
 The run, repo, batch key, items, base, brief and worktree are saved in a sidecar before the first step and compared on every start; sidecars are the steps file name plus a suffix, never the steps file itself. The push takes the review verdict from the kept review run, so a steps row that disagrees with it authorizes nothing.
+
+The `.inputs` binding is linked into place without overwriting, so two native runs on one steps path cannot both establish it.
