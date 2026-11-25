@@ -450,6 +450,17 @@ def export_units(wt, head, into):
     return units
 
 
+def run_deploy_plan(argv):
+    """Run one ``plangraph land-train deploy-plan`` call; a launch failure, a timeout and a refusal are one error."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MergeBatchError(f"deploy-plan failed: {exc}") from None
+    if proc.returncode:
+        raise MergeBatchError(f"deploy-plan failed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}")
+    return proc
+
+
 def deploy_report(st, active):
     """The deploy part of the GO-REQ: ``plangraph land-train deploy-plan`` over the train parts, with the host
     install dry run as the probe. A refused target is listed with its blocker item key and its MISSING lines; the
@@ -470,26 +481,20 @@ def deploy_report(st, active):
         spans_file, blockers, declared = Path(tmp) / "spans.json", Path(tmp) / "blockers.json", Path(tmp) / "declared.json"
         spans_file.write_text(json.dumps(spans))
         # Which parts ship a family comes first: only their items need a declaration looked up.
-        derived = subprocess.run([binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file),
-                                  "--derive-only", "1"], capture_output=True, text=True, timeout=600, check=False)
+        derived = run_deploy_plan([binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file),
+                                   "--derive-only", "1"])
         try:
-            parts = json.loads(derived.stdout.splitlines()[0]) if derived.returncode == 0 else None
+            parts = json.loads(derived.stdout.splitlines()[0])
         except (ValueError, IndexError):
             parts = None
         if not isinstance(parts, list):
-            raise MergeBatchError("deploy-plan failed: " +
-                                  (derived.stderr.strip().splitlines() or ["no list of parts"])[-1])
+            raise MergeBatchError("deploy-plan failed: no list of parts")
         keys = [key for part in parts if part.get("families") for key in part.get("items", [])]
         declared.write_text(json.dumps(declared_hosts(keys)))
         probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt} --units {units}"
         argv = [binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file), "--registry",
                 str(registry), "--probe-cmd", probe, "--declared", str(declared), "--blockers-out", str(blockers)]
-        try:
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise MergeBatchError(f"deploy-plan failed: {exc}") from None
-        if proc.returncode:
-            raise MergeBatchError(f"deploy-plan failed: {(proc.stderr.strip().splitlines() or ['no output'])[-1]}")
+        proc = run_deploy_plan(argv)
         if blockers.is_file() and json.loads(blockers.read_text()).get("items"):
             file_deploy_blockers(blockers)
     segments, missing = [], []

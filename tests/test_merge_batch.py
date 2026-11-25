@@ -620,3 +620,14 @@ def test_a_unitless_part_needs_no_keeper_lookup_but_a_unit_part_does(env, monkey
                                   "trailer_hosts": []}]))
     with pytest.raises(merge_batch_plan.MergeBatchError, match="Deploy-Hosts of plangraph:ITEM-A"):
         merge_batch_plan.deploy_report(st, active)
+
+
+def test_a_stale_plangraph_binary_is_a_go_req_error_not_a_traceback(env):
+    from test_merge_batch_land import go_ready
+
+    deploy_fixture(env, "deploy: none\n")
+    env.env["PLANGRAPH_BIN"] = str(env.tmp / "gone" / "plangraph")
+    go_ready(env)
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 1
+    assert "deploy-plan failed" in result.stderr and "Traceback" not in result.stderr
