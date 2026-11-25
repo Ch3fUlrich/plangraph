@@ -178,8 +178,9 @@ enum Liveness {
     Unreadable,
 }
 
-fn truthy(value: &Value) -> bool {
-    !matches!(value, Value::Null | Value::Bool(false))
+/// The explicit receipt marker the spawner writes: only `true` marks another host's run.
+fn receipt(value: &Value) -> bool {
+    *value == Value::Bool(true)
 }
 
 /// A record is judged in this order: a receipt of another host's run first, then its status by
@@ -189,7 +190,7 @@ fn liveness(record: &Value) -> Liveness {
     if !record.is_object() {
         return Liveness::Unreadable;
     }
-    if truthy(&record["overflow_remote"]) || truthy(&record["origin_receipt"]) {
+    if receipt(&record["overflow_remote"]) || receipt(&record["origin_receipt"]) {
         return Liveness::Free;
     }
     let owns = if record["status"] == "stopped" {
@@ -264,12 +265,21 @@ fn record_keys(record: &Value) -> BTreeSet<String> {
     for key in record["item_keys"].as_array().into_iter().flatten() {
         keys.extend(key.as_str().and_then(record_key));
     }
-    if record["lane_keys_admitted"] != true {
+    if record["lane_admitted"] != true {
         if let Some(brief) = record["manifest"]["brief"].as_str() {
             keys.extend(item_keys(brief));
         }
     }
     keys
+}
+
+/// The supervisor publishes that the `item_keys` of its run were admitted by `lane-admit`, as the
+/// private launch request says. Only `overflow.native_spawn` writes that request, and only after
+/// `lane-admit` set the mark: a mark on a public card never reaches it.
+pub fn publish_marker(request: &Value, record: &mut Value) {
+    if request["card"]["lane_admitted"] == true {
+        record["lane_admitted"] = Value::Bool(true);
+    }
 }
 
 /// A live writer run holds its `item_key`, its `item_keys` and the keys of its brief, as

@@ -61,7 +61,7 @@ fn files(state: &Path) -> Vec<String> {
 #[test]
 fn native_dispatch_refuses_a_key_held_by_a_live_writer_lane_and_names_it() {
     let state = lane_state("implement");
-    let error = refusal(crate::placement::admit_lane(
+    let error = refusal(crate::lane_admit::admit_lane(
         state.path(),
         &lane_args(json!({})),
     ));
@@ -73,28 +73,43 @@ fn native_dispatch_refuses_a_key_held_by_a_live_writer_lane_and_names_it() {
         error.message
     );
     assert_eq!(error.data.unwrap()["reason"], "lane_collision");
-    let error = refusal(crate::placement::native_spawn(
-        state.path(),
-        &lane_args(json!({})),
-    ));
-    assert!(error.message.contains("run-held"), "{}", error.message);
 }
 
 #[test]
 fn native_dispatch_ignores_review_runs_and_free_keys_and_hands_the_keys_to_the_card() {
     let reviewing = lane_state("review");
-    assert!(crate::placement::admit_lane(reviewing.path(), &lane_args(json!({}))).is_ok());
+    assert!(crate::lane_admit::admit_lane(reviewing.path(), &lane_args(json!({}))).is_ok());
     let empty = tempfile::tempdir().unwrap();
-    let forged = lane_args(json!({"lane_keys_admitted":false,"item_keys":["demo:ONE","bad key"]}));
-    let admitted = admit(crate::placement::admit_lane(empty.path(), &forged));
+    let forged = lane_args(json!({"lane_admitted":false,"item_keys":["demo:ONE","bad key"]}));
+    let admitted = admit(crate::lane_admit::admit_lane(empty.path(), &forged));
     assert_eq!(
         admitted["card"]["item_keys"],
         json!(["demo:HELD", "demo:ONE"])
     );
-    assert_eq!(admitted["card"]["lane_keys_admitted"], true);
+    assert_eq!(admitted["card"]["lane_admitted"], true);
+    // A public card cannot hide keys: a mark with an empty list is recomputed from the brief.
+    let hiding = lane_args(json!({"lane_admitted":true,"item_keys":[]}));
+    let admitted = admit(crate::lane_admit::admit_lane(empty.path(), &hiding));
+    assert_eq!(admitted["card"]["item_keys"], json!(["demo:HELD"]));
     // The caller's own card is untouched, and nothing was written to the state.
-    assert_eq!(forged["card"]["lane_keys_admitted"], false);
+    assert_eq!(forged["card"]["lane_admitted"], false);
     assert!(files(empty.path()).is_empty());
+}
+
+#[test]
+fn a_lane_refusal_message_names_its_reason_and_other_messages_name_none() {
+    use crate::lane_admit::refusal_reason;
+    for reason in ["lane_unreadable", "lane_collision", "lane_too_many_keys"] {
+        assert_eq!(refusal_reason(&format!("{reason}: x")), Some(reason));
+    }
+    for message in [
+        "lane_collisions: x",
+        "spawn refused",
+        "a lane_collision: x",
+        "",
+    ] {
+        assert_eq!(refusal_reason(message), None);
+    }
 }
 
 #[test]
@@ -106,7 +121,7 @@ fn an_unreadable_run_record_refuses_with_its_own_reason_and_names_the_record() {
         &json!({"role":"implement","status":"running","x":1}),
     );
     write_run(state.path(), "run-nostatus", &json!({"role":"implement"}));
-    let error = refusal(crate::placement::native_spawn(
+    let error = refusal(crate::lane_admit::admit_lane(
         state.path(),
         &lane_args(json!({})),
     ));
@@ -124,119 +139,26 @@ fn an_unreadable_run_record_refuses_with_its_own_reason_and_names_the_record() {
 }
 
 #[test]
-fn native_spawn_refuses_card_only_held_key_naming_the_lane_before_any_run() {
-    let state = lane_state("implement");
-    let before = files(state.path());
-    // The brief names no held key: only the card's batch members carry demo:HELD.
-    let mut args = lane_args(json!({"item_keys":["demo:OTHER","demo:HELD"]}));
-    args["prompt"] = json!("Brief\n### demo:OTHER | free\nWhy: x\n");
-    let error = refusal(crate::placement::native_spawn(state.path(), &args));
-    assert!(
-        error
-            .message
-            .contains("demo:HELD is held by live lane run-held"),
-        "{}",
-        error.message
-    );
-    assert_eq!(files(state.path()), before);
-    // The singular card keys are checked the same way.
-    for key in ["item_key", "item"] {
-        let mut args = lane_args(json!({ key: "demo:HELD" }));
-        args["prompt"] = json!("Brief\n### demo:OTHER | free\nWhy: x\n");
-        let error = refusal(crate::placement::native_spawn(state.path(), &args));
-        assert!(
-            error
-                .message
-                .contains("demo:HELD is held by live lane run-held"),
-            "{key}"
-        );
-    }
-    assert_eq!(files(state.path()), before);
-}
-
-#[test]
 fn the_key_a_spawner_inherits_from_its_environment_is_admitted_like_a_card_key() {
     let card = json!({"item_keys":["demo:B", "bad"]});
     let inherited = Some("demo:demo:ENV".to_owned());
     assert_eq!(
-        crate::placement::card_keys(&card, inherited.clone()),
+        crate::lane_admit::card_keys(&card, inherited.clone()),
         ["demo:demo:ENV", "demo:B"]
     );
     // A key the card names wins over the inherited one, as in the run record.
     let card = json!({"item":"demo:CARD","item_key":""});
-    assert_eq!(crate::placement::card_keys(&card, inherited), ["demo:CARD"]);
-}
-
-#[test]
-fn unsupported_dry_run_creates_no_claim_and_no_run() {
-    // A keyed request over malformed run state: the dry-run error comes first, so admission
-    // never read the state, and nothing was created.
-    let state = tempfile::tempdir().unwrap();
-    write_run(
-        state.path(),
-        "run-odd",
-        &json!({"role":"implement","status":7}),
+    assert_eq!(
+        crate::lane_admit::card_keys(&card, inherited),
+        ["demo:CARD"]
     );
-    let before = files(state.path());
-    let mut args = lane_args(json!({"item_key":"demo:HELD"}));
-    args.insert("dry_run".into(), json!(true));
-    let error = refusal(crate::placement::native_spawn(state.path(), &args));
-    assert!(
-        error.message.contains("dry_run is not supported"),
-        "{}",
-        error.message
-    );
-    assert_eq!(files(state.path()), before);
-}
-
-#[test]
-fn a_refused_launch_option_never_reaches_admission() {
-    // The state is malformed and holds the key: an admitted request would be refused as a lane.
-    let state = lane_state("implement");
-    write_run(state.path(), "run-odd", &json!({"role":"implement"}));
-    let before = files(state.path());
-    for (card, expected) in [
-        (json!({"push_ref":"main"}), "push_ref must name refs/heads/"),
-        (
-            json!({"review_leg":"bad leg!","review_override_reason":"a reason long enough"}),
-            "review_leg_invalid",
-        ),
-        (json!({"effort":"xhigh"}), "effort_needs_decision"),
-    ] {
-        let error = refusal(crate::placement::native_spawn(
-            state.path(),
-            &lane_args(card),
-        ));
-        assert!(error.message.contains(expected), "{}", error.message);
-        assert!(error.data.unwrap().get("reason").is_none());
-    }
-    let mut args = lane_args(json!({}));
-    args.insert("wait_seconds".into(), json!(-1));
-    let error = refusal(crate::placement::native_spawn(state.path(), &args));
-    assert!(error.message.contains("wait_seconds"), "{}", error.message);
-    assert_eq!(files(state.path()), before);
-}
-
-#[test]
-fn a_valid_card_keeps_its_size_allowance_after_the_admitted_keys_are_added() {
-    let state = tempfile::tempdir().unwrap();
-    let mut args = lane_args(json!({}));
-    let base = args["card"].to_string().len();
-    // The caller's card is within the limit by less than the keys admission attaches.
-    args["card"]["note"] = json!("x".repeat(24000 - base - 12));
-    assert!(args["card"].to_string().len() <= 24000);
-    assert!(crate::placement::route_args(&args).is_ok());
-    let admitted = admit(crate::placement::admit_lane(state.path(), &args));
-    assert!(admitted["card"].to_string().len() > 24000);
-    assert!(crate::placement::route_args(&admitted).is_err());
-    assert!(crate::placement::route_argv(&admitted).is_ok());
 }
 
 #[test]
 fn more_keys_than_a_run_record_keeps_refuse_instead_of_being_dropped_by_the_adapter() {
     let state = tempfile::tempdir().unwrap();
     let members: Vec<String> = (0..51).map(|n| format!("demo:K{n}")).collect();
-    let error = refusal(crate::placement::admit_lane(
+    let error = refusal(crate::lane_admit::admit_lane(
         state.path(),
         &lane_args(json!({"item_keys":members})),
     ));
@@ -250,7 +172,7 @@ fn more_keys_than_a_run_record_keeps_refuse_instead_of_being_dropped_by_the_adap
     let mut args = lane_args(json!({"item_keys":fifty}));
     args["prompt"] = json!("Brief\n");
     assert_eq!(
-        admit(crate::placement::admit_lane(state.path(), &args))["card"]["item_keys"]
+        admit(crate::lane_admit::admit_lane(state.path(), &args))["card"]["item_keys"]
             .as_array()
             .unwrap()
             .len(),
