@@ -66,6 +66,21 @@ authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
 `pg define` file with a blocker item for each.
 
+The deploy runner (`land/deploy_post.rs`, `deploy_run.rs`; no CLI yet) installs the targets of a given plan: it
+reads every unit before the install (`{"is_active":"absent"}` for one not installed yet; a failed read stops that
+target first), installs it (printing the invocation it started), reads one run and writes the keeper `deploy`
+rows only after that run is proven. A oneshot needs `result=success`, an exit time (to the microsecond, written
+to the row as RFC 3339) after the landed head and the one shown before, not after the clock, and an active
+`.timer`; any other service needs `active` with `result=success`. Both must show the invocation the install
+started, which differs from the one shown before; a blank id is no id, and an already-running unit whose id could
+not be read before proves no restart. A failed first run (or a row-write error) writes no row, switches off the
+timers this attempt installed for the plan, saves the failure and any failed disable in one checkpoint, and
+stops. The state belongs to one plan on one landed revision: another one's state, or one with entries and no plan,
+is refused before any command; each saved (host, unit) pair must be a target of the current plan, is retried
+first, and the run goes on only when they are off. Settlement wiring, GO binding and landed-path derivation are
+other keeper items (`plangraph:TRAIN-SETTLE-RUNS-DEPLOY-APPLY`,
+`plangraph:TRAIN-DEPLOY-DERIVE-LANDED-PATH-ATTRIBUTION`).
+
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
 binary's `tests.yml` digest and job matrix, binds repository, pull request, base, head, tree, manifest,
