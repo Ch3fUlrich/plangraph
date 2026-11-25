@@ -146,3 +146,84 @@ fn subprocess_capture_times_out_without_waiting_for_exit() {
     assert_eq!(error.kind(), ErrorKind::TimedOut);
     assert!(start.elapsed() < Duration::from_secs(2));
 }
+
+fn role_args(extra: &[&str]) -> Vec<String> {
+    let mut all = args(extra);
+    all[0] = "writer".into();
+    all
+}
+
+fn blocked_world() -> (tempfile::TempDir, std::path::PathBuf, Paths) {
+    let dir = tempfile::tempdir().unwrap();
+    let spawn = dir.path().join("spawn");
+    let path = round_watch::state_file(&spawn, "writer-0884");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"actions": {}, "blocked": {"round_key": "k", "command": "cargo test -p x",
+            "reason": "second wait over the cap in one round"}})
+        .to_string(),
+    )
+    .unwrap();
+    let routing = dir.path().join("routing");
+    std::fs::create_dir_all(routing.join("launch")).unwrap();
+    std::fs::write(
+        routing.join("launch/writer.json"),
+        json!({"session_name": "writer-0884", "session_id": "abc", "cwd": "/work"}).to_string(),
+    )
+    .unwrap();
+    let paths = Paths {
+        state: routing,
+        home: dir.path().join("home"),
+        ops: dir.path().join("ops"),
+    };
+    (dir, spawn, paths)
+}
+
+#[test]
+fn a_role_only_respawn_of_a_blocked_session_is_refused_through_its_launch_record() {
+    let (_dir, spawn, paths) = blocked_world();
+    // The watchdog respawns by role: the block is under the numbered name in the record.
+    let request =
+        Request::new(Arguments::parse(role_args(&["--respawn"])).unwrap(), &paths).unwrap();
+    let reason = round_blocked(&request, &spawn).expect("blocked");
+    assert!(
+        reason.contains("writer-0884") && reason.contains("cargo test -p x"),
+        "{reason}"
+    );
+    assert!(reason.contains("second wait"), "{reason}");
+    // By session name, too.
+    let named = Arguments::parse(role_args(&["--respawn", "--session", "writer-0884"])).unwrap();
+    let request = Request::new(named, &paths).unwrap();
+    assert!(round_blocked(&request, &spawn).is_some());
+}
+
+#[test]
+fn a_plain_launch_or_another_session_is_not_refused() {
+    let (_dir, spawn, paths) = blocked_world();
+    let plain = Request::new(Arguments::parse(role_args(&[])).unwrap(), &paths).unwrap();
+    assert_eq!(round_blocked(&plain, &spawn), None, "a plain launch");
+    assert_eq!(
+        blocked_reason(true, &[Some("writer-0885"), None], &spawn),
+        None
+    );
+    assert_eq!(blocked_reason(true, &[Some("../x")], &spawn), None);
+}
+
+#[test]
+fn the_refusal_redacts_a_command_stored_raw_by_an_older_watchdog() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = round_watch::state_file(dir.path(), "writer-0884");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"actions": {}, "blocked": {"round_key": "k",
+            "command": "deploy API_TOKEN=hunter2hunter2hunter2",
+            "reason": "second wait over the cap in one round"}})
+        .to_string(),
+    )
+    .unwrap();
+    let reason = blocked_reason(true, &[Some("writer-0884")], dir.path()).unwrap();
+    assert!(reason.contains("deploy"), "{reason}");
+    assert!(!reason.contains("hunter2"), "{reason}");
+}
