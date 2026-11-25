@@ -28,20 +28,20 @@ const OWN_SOURCES: [&str; 7] = [
     "sqlite",
 ];
 
-/// Phrases of a measurement that found nothing, or a configured value that was never measured.
-const EMPTY: [&str; 7] = [
+/// Phrases of a measurement that found nothing.
+const EMPTY: [&str; 6] = [
     "no result",
     "no data",
     "n/a",
     "not yet",
     "nothing found",
     "none found",
-    "configured",
 ];
 
-/// Phrases that say the query did not finish: refused unless right after a number, where they
-/// describe what was counted (a pending queue of trains, 12 aborted launches).
-const UNFINISHED: [&str; 17] = [
+/// Phrases that say the query did not finish or that a value was configured, not measured: refused
+/// unless right after a measured value, where they describe what was counted (a pending queue of
+/// trains, 12 aborted launches, 12 configured projects).
+const UNFINISHED: [&str; 18] = [
     "query failed",
     "request failed",
     "timed out",
@@ -59,6 +59,7 @@ const UNFINISHED: [&str; 17] = [
     "never ran",
     "did not run",
     "not run",
+    "configured",
 ];
 
 /// Another party's system named in the field (refused unless right after a number). Ownership
@@ -140,22 +141,56 @@ fn metric(token: &str) -> bool {
         && !OWN_SOURCES.contains(&token)
 }
 
-/// Whether the phrase occurrences in `cell` are all right after a number (or there are none).
+/// Words that join two counted things (`3 interrupted runs and 5 cancelled jobs`).
+const JOINERS: [&str; 6] = ["and", "or", "of", "the", "our", "in"];
+
+/// Whether `before` (the text in front of a phrase) ends in a measured value: a number whose
+/// metric word stands right before it (`counted 12`, `trains=12`), skipping joiners. A number after
+/// `attempt` or `status` is no measured value.
+fn ends_in_measured_value(before: &str) -> bool {
+    let mut words: Vec<&str> = before
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '(')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let Some(last) = words.pop() else {
+        return false;
+    };
+    if let Some((name, number)) = last.split_once('=') {
+        return metric(name) && value(number);
+    }
+    if !value(last) {
+        return false;
+    }
+    while words.last().is_some_and(|w| JOINERS.contains(w)) {
+        words.pop();
+    }
+    words
+        .last()
+        .is_some_and(|w| metric(w.trim_end_matches(':')))
+}
+
+/// Whether the phrase occurrences in `cell` all stand right after a measured value (or there are
+/// none): there they describe what was counted, anywhere else they describe the query or its
+/// source.
 fn only_after_numbers(cell: &str, phrases: &[&str]) -> bool {
     phrases.iter().all(|phrase| {
-        cell.match_indices(phrase).all(|(at, _)| {
-            cell[..at]
-                .split_whitespace()
-                .next_back()
-                .is_some_and(|before| value(before.trim_matches(|c: char| c == ',' || c == '(')))
-        })
+        cell.match_indices(phrase)
+            .all(|(at, _)| ends_in_measured_value(&cell[..at]))
     })
 }
 
-/// The `owner/name` a token attributes a result to, if it names a repository. A unit after a number
-/// (`jobs/hour`) and `and/or` are not repositories.
-fn repository(token: &str, previous: Option<&str>) -> Option<String> {
-    if previous.is_some_and(value) || token == "and/or" {
+/// Denominators of a rate (`jobs/hour`, `and/or`): such a token is a unit, not a repository.
+const RATE_DENOMINATORS: [&str; 32] = [
+    "s", "sec", "second", "seconds", "min", "minute", "minutes", "h", "hr", "hour", "hours", "day",
+    "days", "week", "weeks", "month", "run", "runs", "job", "jobs", "build", "builds", "train",
+    "trains", "pr", "prs", "commit", "commits", "item", "items", "or", "ms",
+];
+
+/// The `owner/name` a token attributes a result to, if it names a repository. A number with an
+/// attached unit (`3jobs/hour`) and a rate (`jobs/hour`, `and/or`) are not repositories, wherever
+/// the metric stands.
+fn repository(token: &str) -> Option<String> {
+    if value(token) {
         return None;
     }
     let path = token
@@ -164,6 +199,9 @@ fn repository(token: &str, previous: Option<&str>) -> Option<String> {
         .trim_start_matches("github.com/");
     let mut parts = path.split('/');
     let (owner, name) = (parts.next()?, parts.next()?);
+    if RATE_DENOMINATORS.contains(&name) && !token.contains("github.com/") {
+        return None;
+    }
     let plain = |part: &str| {
         !part.is_empty()
             && part.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -194,10 +232,9 @@ fn measured_field(cell: &str, own_repos: &[String]) -> bool {
         .filter(|t| !t.is_empty())
         .map(str::to_owned)
         .collect();
-    let foreign = tokens.iter().enumerate().any(|(i, token)| {
-        let previous = i.checked_sub(1).map(|j| tokens[j].as_str());
-        repository(token, previous).is_some_and(|repo| !own_repos.contains(&repo))
-    });
+    let foreign = tokens
+        .iter()
+        .any(|token| repository(token).is_some_and(|repo| !own_repos.contains(&repo)));
     if foreign {
         return false;
     }
@@ -378,6 +415,10 @@ mod tests {
             "cause: slow CI\nMeasured: ci-runs repo=Rails/Rails 2026-11-24 trains=42",
             "cause: slow CI\nMeasured: keeper query that never ran, configured limit 5 on 2026-11-24",
             "cause: slow CI\nMeasured: keeper 2026-11-24 query never ran, limit 5",
+            "cause: slow CI\nMeasured: ci-runs trains=42 https://github.com/rails/rails/actions 2026-11-24",
+            "cause: slow CI\nMeasured: ci-runs 2026-11-24 trains 42 rails/rails",
+            "cause: slow CI\nMeasured: keeper query 2026-11-24 attempt 3 aborted, limit 42",
+            "cause: slow CI\nMeasured: keeper query 2026-11-24 status 503 aborted, limit 42",
         ] {
             assert!(refusal_with(row, &mine()).is_some(), "{row}");
         }
@@ -385,6 +426,8 @@ mod tests {
             "cause: slow CI\nMeasured: ci-runs acme/plangraph 2026-11-24 trains=42",
             "cause: slow CI\nMeasured: ci-runs https://github.com/Acme/Plangraph.git 2026-11-24 trains=42",
             "cause: slow CI\nMeasured: telemetry 2026-11-24 throughput delta -6.5 jobs/hour and/or 3 retries",
+            "cause: slow CI\nMeasured: telemetry 2026-11-24 throughput 3jobs/hour",
+            "cause: slow CI\nMeasured: telemetry 2026-11-24 throughput 3 jobs/hour",
         ] {
             assert_eq!(refusal_with(row, &mine()), None, "{row}");
         }
@@ -396,6 +439,8 @@ mod tests {
             "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 aborted launches",
             "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 third-party API timeouts in our launches",
             "cause: queue\nMeasured: ledger 2026-11-24 counted 3 interrupted runs and 5 cancelled jobs",
+            "cause: queue\nMeasured: keeper query 2026-11-24 counted 12 configured projects",
+            "cause: queue\nMeasured: keeper query 2026-11-24 projects=12 aborted launches=3",
         ] {
             assert_eq!(refusal_with(row, &mine()), None, "{row}");
         }
