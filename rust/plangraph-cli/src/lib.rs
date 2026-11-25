@@ -26,7 +26,6 @@ pub mod review;
 mod review_git;
 pub mod route_shadow;
 pub mod router_batch;
-pub mod router_ruling;
 pub mod runner;
 pub mod setup;
 pub mod state_shadow;

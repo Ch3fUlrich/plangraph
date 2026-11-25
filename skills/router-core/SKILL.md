@@ -73,9 +73,7 @@ Single items stay single: this section is for two or more. Read each command's r
 answer; never edit its output to pass.
 
 ## Logging (after every decision)
-1. Row in `docs/decisions-log.md` (newest first): id, project, decision, by, why/evidence. A row that states a
-   cause, size or time of this system carries a `Measured:` line with our own numbers and their source; other
-   companies' practice is never the evidence. Run `plangraph router ruling-row ROW.txt` first: it refuses without one.
+1. Row in `docs/decisions-log.md` (newest first): id, project, decision, by, why/evidence.
 2. Matching rule edit in `DECISIONS.md` if a rule changes.
 3. One `CHANGELOG.md` line.
 4. Operator steps → `QUESTIONS.md` (open only); done/answered → `ANSWERS.md` (never delete).

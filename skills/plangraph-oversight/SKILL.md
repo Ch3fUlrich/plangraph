@@ -55,8 +55,6 @@ number with its time.
 - Every proposal, priority, cap, threshold and cause you send names its data and reasoning:
   the source (telemetry query, keeper read, git range, file and line) and the number
   (rule 3.76).
-- A proposal or row that states a cause, size or time carries a `Measured:` line with our own
-  numbers and their source; `plangraph router ruling-row FILE` refuses it without one.
 - Where the data is missing, mark the proposal `EXPERIMENT` with a measurement plan: what is
   measured, for how long, and which result keeps it. Never decide on a number or a cause
   without one of the two.

@@ -307,12 +307,9 @@ fn keeper_family_table(
 /// `plangraph router (go-row|grant-rows|ask-group) INPUT.json [OUT]`.
 pub fn run(args: &[String]) -> i32 {
     let (Some(verb), Some(input)) = (args.first(), args.get(1)) else {
-        eprintln!("usage: plangraph router go-row|grant-rows|ask-group INPUT.json [OUT] | ruling-row ROW.txt");
+        eprintln!("usage: plangraph router go-row|grant-rows|ask-group INPUT.json [OUT]");
         return 2;
     };
-    if verb == "ruling-row" {
-        return crate::router_ruling::run(input);
-    }
     let text = match verb.as_str() {
         "go-row" => read(input)
             .and_then(|i: GoInput| {
