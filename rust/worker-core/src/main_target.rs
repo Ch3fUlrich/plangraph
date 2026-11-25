@@ -128,7 +128,16 @@ fn sweep_owned(
         ));
         return Ok(());
     }
-    // The sibling lease a build holds shared is taken before anything below the target is read, and held through the scan and the removal.
+    if names_target(guards, &canonical) {
+        report.skipped.push(format!(
+            "{}: main checkout target pinned or live; not touched",
+            target.display()
+        ));
+        return Ok(());
+    }
+    // The sibling lease a build holds shared is taken after the pin check (a pinned target is never
+    // touched, not even its lease file) and before anything below the target is read, and held through
+    // the scan and the removal.
     let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&canonical)? else {
         report.skipped.push(format!(
             "{}: main checkout target cache lease held; not touched",
@@ -162,13 +171,6 @@ fn sweep_owned(
     if holds_git_repository(&canonical)? {
         report.skipped.push(format!(
             "{}: main checkout target holds a git repository; not touched",
-            target.display()
-        ));
-        return Ok(());
-    }
-    if names_target(guards, &canonical) {
-        report.skipped.push(format!(
-            "{}: main checkout target pinned or live; not touched",
             target.display()
         ));
         return Ok(());
@@ -470,6 +472,29 @@ mod tests {
         assert_eq!(report.freed_bytes, 0);
         assert!(bare.join("HEAD").exists());
         assert!(report.skipped.iter().any(|s| s.contains("git repository")));
+    }
+
+    #[test]
+    fn a_pinned_target_is_refused_before_its_lease_file_is_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, repo) = fixture(7200);
+        let target = repo.join("rust/target").canonicalize().unwrap();
+        // A lease file this user cannot open for writing: opening it would fail the sweep.
+        let lock = target.parent().unwrap().join("target.plangraph-lock");
+        fs::write(&lock, b"").unwrap();
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).unwrap();
+        let pinned = Guards {
+            pinned: vec![target.clone()],
+            live: vec![],
+        };
+        let mut report = Report::default();
+        sweep_main_checkout_target(&repo, &pinned, SystemTime::now(), true, &mut report, || {
+            Ok((vec![], false))
+        })
+        .unwrap();
+        assert_eq!(report.freed_bytes, 0);
+        assert!(report.skipped[0].contains("pinned or live"));
+        assert!(target.join("debug/blob").exists());
     }
 
     #[test]
