@@ -363,3 +363,25 @@ def test_a_transient_git_failure_does_not_leave_the_served_sha_empty(tmp_path, m
     assert server._served_head == 'b' * 40
     published = json.loads((tmp_path / mcp_limits.SERVED_DIR / f'{os.getpid()}.json').read_text())
     assert published['served_sha'] == 'b' * 40
+
+
+def test_a_real_python_process_reading_its_script_from_stdin_is_not_a_server():
+    import subprocess
+    child = subprocess.Popen([sys.executable, '-', '-m', 'plangraph.spawner.mcp'], stdin=subprocess.PIPE)
+    try:
+        assert child.pid not in mcp_limits.running_mcp_pids()
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_a_windows_invocation_with_a_quoted_executable_path_containing_spaces_is_a_server(monkeypatch):
+    listing = '\n'.join([
+        r'20 "C:\Program Files\Python312\python.exe" -m plangraph.spawner.mcp',
+        r'21 "C:\Program Files\Python312\python.exe" -X utf8 -m plangraph.spawner.mcp',
+        r'22 C:\Python312\python.exe -m plangraph.spawner.mcp',
+        r'23 "C:\Program Files\Python312\python.exe" -c "print(1)" -m plangraph.spawner.mcp',
+        r'24 "C:\Program Files\Python312\python.exe" - -m plangraph.spawner.mcp',
+        r'25 "C:\Program Files\Notes\notepad.exe" -m plangraph.spawner.mcp'])
+    monkeypatch.setattr(mcp_limits.subprocess, 'run', lambda *a, **k: Mock(stdout=listing))
+    assert mcp_limits.running_mcp_pids(platform='win32') == {20, 21, 22}

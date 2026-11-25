@@ -256,7 +256,7 @@ _VALUE_OPTIONS = ('-W', '-X', '--check-hash-based-pycs')
 def _is_mcp_server(argv):
     """True for `<python> [interpreter options] -m plangraph.spawner.mcp` with nothing after the module.
 
-    Python's own parsing rules: `-c CODE` and a script path end the interpreter options, so a later
+    Python's own parsing rules: `-c CODE`, `-` (script on stdin) and a script path end the interpreter options, so a later
     `-m plangraph.spawner.mcp` is an argument of that program, not the module being run."""
     if not argv or not re.fullmatch(r'python[\d.]*(?:\.exe)?', re.split(r'[\\/]', argv[0])[-1], re.I):
         return False
@@ -265,16 +265,24 @@ def _is_mcp_server(argv):
         option = argv[i]
         if option == '-m':
             return argv[i + 1:] == ['plangraph.spawner.mcp']
-        if option == '-c' or not option.startswith('-'):
+        if option in ('-c', '-') or not option.startswith('-'):   # code, stdin script or script path
             return False
         i += 2 if option in _VALUE_OPTIONS else 1
     return False
 
 
-def running_mcp_pids():
+def _split_command(text, windows):
+    """Command-line tokens; on Windows a double-quoted path with spaces is one token."""
+    if windows:
+        return [quoted or bare for quoted, bare in re.findall(r'"([^"]*)"|(\S+)', text)]
+    return text.split()
+
+
+def running_mcp_pids(platform=None):
     """pids of live ``python -m plangraph.spawner.mcp`` servers, registered or not; None when unavailable."""
+    platform = platform or sys.platform
     try:
-        if sys.platform == 'win32':
+        if platform == 'win32':
             out = subprocess.run(['powershell', '-NoProfile', '-Command',
                                   'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'],
                                  capture_output=True, text=True, timeout=20, check=True).stdout
@@ -286,7 +294,7 @@ def running_mcp_pids():
     pids = set()
     for line in out.splitlines():
         pid, _, args = line.strip().partition(' ')
-        if pid.isdigit() and _is_mcp_server(args.split()):
+        if pid.isdigit() and _is_mcp_server(_split_command(args, platform == 'win32')):
             pids.add(int(pid))
     return pids - {os.getpid()}
 
