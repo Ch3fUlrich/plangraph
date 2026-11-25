@@ -5,6 +5,8 @@
 //!   ci-flake quarantine --ledger FILE --as-of ISO   markdown of the active owners and expiries; writes active=N
 //!   ci-flake cargo-quarantine --ledger FILE --as-of ISO --mode blocking|quarantine
 //!   ci-flake combine-durations --out FILE IN...
+//!   ci-flake cargo-test --package P [--ledger FILE --as-of ISO] [--quarantine-only 1] [--log FILE]
+mod cargo_test;
 mod classify;
 mod durations;
 mod ledger;
@@ -59,6 +61,11 @@ fn output(line: &str) {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    let args: Vec<String> = args
+        .iter()
+        .filter(|a| *a != "--no-fail-fast")
+        .cloned()
+        .collect();
     let (named, rest) = options(args.get(1..).unwrap_or_default())?;
     match args.first().map(String::as_str) {
         Some("failed-ids") => {
@@ -112,6 +119,43 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             for (package, test) in ledger::cargo_tests(&entries, as_of) {
                 println!("{package} {test}");
+            }
+        }
+        Some("cargo-test") => {
+            // The ledger comes from the options or, in CI, from the environment the quarantine-ledger action sets.
+            let from_env = |name: &str| std::env::var(name).ok();
+            let ledger_path = named
+                .get("ledger")
+                .cloned()
+                .or_else(|| from_env("PYTEST_QUARANTINE_FILE"));
+            let as_of = named
+                .get("as-of")
+                .cloned()
+                .or_else(|| from_env("PYTEST_QUARANTINE_AS_OF"));
+            let package = need(&named, "package")?;
+            let names: Vec<String> = match (ledger_path, as_of) {
+                (Some(file), Some(at)) => {
+                    let (entries, when) =
+                        (ledger::parse(&read(&file)?)?, ledger::parse_as_of(&at)?);
+                    ledger::cargo_tests(&entries, when)
+                        .into_iter()
+                        .filter(|(p, _)| p == package)
+                        .map(|(_, t)| t)
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            let only = named.contains_key("quarantine-only");
+            if only && names.is_empty() {
+                println!("no active quarantined tests of {package}");
+                return Ok(());
+            }
+            let code = cargo_test::run(
+                &cargo_test::cargo_args(package, &names, only),
+                named.get("log").map(std::path::Path::new),
+            )?;
+            if code != 0 {
+                std::process::exit(code); // cargo's own status: the step fails with it
             }
         }
         Some("combine-durations") => {

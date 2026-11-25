@@ -479,8 +479,11 @@ def ready_problems(facts: dict) -> list[str]:
     if (facts.get("truncated") or any(re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py|rust/.*\.rs", f) for f in facts.get("files", []))) \
             and not (replay.get("ok") and replay.get("head") == facts.get("head") and replay.get("runs", 0) >= 5):
         problems.append("no passing five-run replay of the changed tests bound to this head")
-    if replay and not facts.get("truncated") and sorted(replay.get("changed", {}).get("files", [])) != sorted(facts.get("files", [])):
-        problems.append("the replay receipt was made against another comparison base: its changed-file list differs from this change's")
+    if replay and not facts.get("truncated"):   # the receipt must cover this change's own diff: its file list and, when known, its test inventory
+        norm = lambda d: {k: sorted(map(str, d.get(k, []))) for k in ("python", "rust")}  # noqa: E731
+        got = replay.get("changed", {})
+        if sorted(got.get("files", [])) != sorted(facts.get("files", [])) or (facts.get("expected") is not None and norm(got) != norm(facts["expected"])):
+            problems.append("the replay receipt was made against another comparison base: its changed files or test inventory differ from this change's")
     problems += [f"FLAKY: {t} (logs {' and '.join(replay['logs'][t])})" for t in replay.get("flaky", [])]
     if facts.get("windows_required"):
         if facts.get("windows") is None:

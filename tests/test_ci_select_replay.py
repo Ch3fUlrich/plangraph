@@ -136,6 +136,48 @@ def test_c(x):
     assert plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs2", head=head)["ok"] is True
 
 
+def test_a_stable_parameter_id_with_a_dash_keeps_its_full_node_id(tmp_path, monkeypatch):
+    dashed = """import pytest
+
+
+@pytest.mark.parametrize('x', ['a - b', 'c'])
+def test_p(x):
+    pass
+"""
+    root, base, head = tree(tmp_path, {"tests/test_dash.py": dashed}, BASE)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
+    result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", workers=False, head=head)
+    assert result["ok"] is True and result["incomplete"] == [], result["incomplete"]
+
+
+def test_a_pass_with_a_failing_teardown_is_one_failed_outcome_per_run_never_flaky(tmp_path, monkeypatch):
+    teardown = """import pytest
+
+
+@pytest.fixture
+def boom():
+    yield
+    raise RuntimeError('teardown')
+
+
+def test_t(boom):
+    pass
+"""
+    root, base, head = tree(tmp_path, {"tests/test_td.py": teardown}, BASE)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
+    result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", workers=False, head=head)
+    assert result["flaky"] == [] and result["failed"] == ["tests/test_td.py::test_t"] and result["ok"] is False
+
+
+def test_the_last_rust_run_is_the_whole_crate_with_its_peers_and_default_threads():
+    commands = plan.replay_commands({"python": [], "rust": [["rust/x/Cargo.toml", "a"], ["rust/x/Cargo.toml", "b"], ["rust/y/Cargo.toml", "c"]]})
+    cargo = [(c, w) for c, w in commands if c[0] == "cargo"]
+    assert len(cargo) == 4 * 3 + 2   # four filtered serial runs per test, one whole-crate run per manifest
+    whole = [(c, w) for c, w in cargo if "--" not in c]
+    assert [(c[3], w) for c, w in whole] == [("rust/x/Cargo.toml", ["a", "b"]), ("rust/y/Cargo.toml", ["c"])]
+    assert all("--test-threads=1" in c for c, _ in cargo if "--" in c)
+
+
 def test_a_runner_error_or_interrupted_run_is_a_failure_even_when_it_printed_passes(tmp_path, monkeypatch):
     root, _, head = tree(tmp_path, {"docs/x.md": "x\n"}, BASE)
     for code in (2, 3, 4, 5):
@@ -203,7 +245,7 @@ def test_the_replay_command_runs_serial_four_times_then_once_with_every_worker(t
     assert len(python) == 5 and sum("-n" in c and "auto" in c for c in python) == 1
     assert [wanted for _, wanted in commands][0] == ["tests/test_a.py::"] and [w for _, w in commands][-1] == ["case"]
     cargo = [c for c, _ in commands if c[0] == "cargo"]
-    assert len(cargo) == 5 and sum("--test-threads=1" in c for c in cargo) == 4
+    assert len(cargo) == 5 and sum("--test-threads=1" in c for c in cargo) == 4 and "--" not in cargo[-1]
 
 
 def test_entry_set_run_blocks_with_flaky_when_the_replay_finds_one(tmp_path, monkeypatch, capfd):
@@ -240,6 +282,17 @@ def test_changed_tests_need_a_replay_receipt_bound_to_the_part_head():
 def test_a_one_in_five_failure_blocks_ready_with_flaky_and_both_logs():
     flaky = receipt(ok=False, flaky=["tests/test_a.py::t"], logs={"tests/test_a.py::t": ["fail.log", "pass.log"]})
     assert "FLAKY: tests/test_a.py::t (logs fail.log and pass.log)" in ci_select.ready_problems(facts(flaky))
+
+
+def test_a_receipt_that_omits_a_changed_rust_test_of_the_same_file_list_does_not_make_the_part_ready():
+    """Both diffs list lib.rs, but the part changes two tests and the replay covered one of them."""
+    files = ["rust/pg-spawnd/src/lib.rs"]
+    one = receipt(changed={"python": [], "rust": [["rust/pg-spawnd/Cargo.toml", "kept"]], "files": files})
+    two = {"python": [], "rust": [["rust/pg-spawnd/Cargo.toml", "kept"], ["rust/pg-spawnd/Cargo.toml", "other"]]}
+    problems = ci_select.ready_problems(facts(one, files=files) | {"expected": two})
+    assert any("another comparison base" in p for p in problems)
+    full = receipt(changed={**two, "files": files})
+    assert ci_select.ready_problems(facts(full, files=files) | {"expected": two}) == []
 
 
 def test_a_part_that_changes_no_test_needs_no_replay_receipt():

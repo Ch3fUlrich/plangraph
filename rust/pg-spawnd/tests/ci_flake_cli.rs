@@ -201,3 +201,132 @@ fn an_expired_or_not_yet_started_cargo_entry_is_not_quarantined_on_any_runner() 
     assert_eq!(ask("2026-11-25T00:00:00Z", "blocking"), "");
     assert_eq!(ask("2026-11-23T23:59:59Z", "blocking"), "");
 }
+
+#[cfg(unix)]
+fn fake_cargo(dir: &Path, exit: i32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("cargo");
+    std::fs::write(&script, format!("#!/bin/sh\necho \"cargo $*\" >> \"{}/calls\"\necho out-line\necho err-line >&2\nexit {exit}\n", dir.display())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[cfg(unix)]
+fn with_path(bin: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ci-flake"));
+    command.args(args).env(
+        "PATH",
+        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+    );
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.output().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_test_without_a_ledger_is_the_plain_run_the_pre_push_caller_wants() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_cargo(dir.path(), 0);
+    let out = with_path(
+        &bin,
+        &["cargo-test", "--package", "pg-spawnd", "--no-fail-fast"],
+        &[],
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .trim(),
+        "cargo test --no-fail-fast -p pg-spawnd"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cargo_test_skips_only_the_active_entries_of_its_package_and_keeps_a_log_and_the_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_cargo(dir.path(), 101);
+    let ledger = dir.path().join("ledger.json");
+    std::fs::write(&ledger, r#"{
+      "cargo:pg-spawnd:m::active": {"owner": "plangraph:FIX", "starts": "2026-11-24T00:00:00Z", "expires": "2026-11-25T00:00:00Z"},
+      "cargo:pg-spawnd:m::expired": {"owner": "plangraph:FIX", "starts": "2026-11-20T00:00:00Z", "expires": "2026-11-21T00:00:00Z"},
+      "cargo:pg-worker-core:w::other": {"owner": "plangraph:FIX", "starts": "2026-11-24T00:00:00Z", "expires": "2026-11-25T00:00:00Z"}}"#).unwrap();
+    let log = dir.path().join("first.log");
+    let envs = [
+        ("PYTEST_QUARANTINE_FILE", ledger.to_str().unwrap()),
+        ("PYTEST_QUARANTINE_AS_OF", "2026-11-24T12:00:00+00:00"),
+    ];
+    let out = with_path(
+        &bin,
+        &[
+            "cargo-test",
+            "--package",
+            "pg-spawnd",
+            "--log",
+            log.to_str().unwrap(),
+        ],
+        &envs,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "cargo's status is the step's status"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .trim(),
+        "cargo test --no-fail-fast -p pg-spawnd -- --exact --skip m::active"
+    );
+    let kept = std::fs::read_to_string(&log).unwrap();
+    assert!(kept.contains("out-line") && kept.contains("err-line"));
+    // The reporting run: only the quarantined tests of the package, and nothing when it has none.
+    std::fs::remove_file(dir.path().join("calls")).unwrap();
+    let out = with_path(
+        &bin,
+        &[
+            "cargo-test",
+            "--package",
+            "pg-spawnd",
+            "--quarantine-only",
+            "1",
+        ],
+        &envs,
+    );
+    assert_eq!(out.status.code(), Some(101));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .trim(),
+        "cargo test --no-fail-fast -p pg-spawnd -- --exact m::active"
+    );
+    std::fs::remove_file(dir.path().join("calls")).unwrap();
+    let none = with_path(
+        &bin,
+        &[
+            "cargo-test",
+            "--package",
+            "pg-keeper",
+            "--quarantine-only",
+            "1",
+        ],
+        &envs,
+    );
+    assert!(none.status.success() && !dir.path().join("calls").exists());
+    // At the expiry instant the entry no longer excludes anything.
+    let later = [
+        ("PYTEST_QUARANTINE_FILE", ledger.to_str().unwrap()),
+        ("PYTEST_QUARANTINE_AS_OF", "2026-11-25T00:00:00Z"),
+    ];
+    with_path(&bin, &["cargo-test", "--package", "pg-spawnd"], &later);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .trim(),
+        "cargo test --no-fail-fast -p pg-spawnd"
+    );
+}

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _split_ci_environment import python_test_env
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
@@ -328,27 +329,21 @@ WINDOWS = {"pg-spawnd": "cargo test -p pg-spawnd", "pg-worker-core": "cargo test
 
 
 @pytest.mark.parametrize("package", sorted(WINDOWS))
-def test_the_native_windows_blocking_run_skips_only_its_own_package_entries(tmp_path, package):
+def test_the_native_windows_blocking_run_is_the_shared_entry_point_for_its_own_package(tmp_path, package):
+    """CI and the pre-push Windows check run the same `ci-flake cargo-test --package P`; the skips live in that binary."""
+    step = named("rust-windows", WINDOWS[package])
     target = tmp_path / "target"
     (target / "debug").mkdir(parents=True)
-    stub(target / "debug/ci-flake.exe", "printf '%s\\n' 'pg-spawnd a::b' 'pg-worker-core c::d' 'other e::f'\n")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub(bin_dir / "cargo", 'echo "cargo $*" >> "$RUNNER_TEMP/calls"\n')
-    other = "pg-worker-core" if package == "pg-spawnd" else "pg-spawnd"
-    skip = {"pg-spawnd": "a::b", "pg-worker-core": "c::d"}[package]
-    done, _, _ = run_script(named("rust-windows", WINDOWS[package])["run"], tmp_path, {
-        "PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path),
-        "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
+    stub(target / "debug/ci-flake.exe", 'echo "$*" >> "$RUNNER_TEMP/calls"\n')
+    done, _, _ = run_script(step["run"], tmp_path, {"CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path)}, tmp_path)
     assert done.returncode == 0, done.stderr
-    assert (tmp_path / "calls").read_text().strip() == f"cargo test --no-fail-fast -p {package} -- --exact --skip {skip}"
-    assert other not in (tmp_path / "calls").read_text()
+    assert (tmp_path / "calls").read_text().strip() == f"cargo-test --package {package} --log {tmp_path}/cargo-win-{'spawnd' if package == 'pg-spawnd' else 'core'}.log"
 
 
 def test_the_windows_job_pins_the_same_ledger_and_runs_the_reporting_step_without_blocking():
     assert named("rust-windows", "Quarantine ledger and run timestamp")["with"]["as-of"] == "${{ needs.select.outputs.as-of }}"
     report = named("rust-windows", "Quarantined Rust tests on Windows (reporting, never blocking)")
-    assert report["continue-on-error"] is True and "--mode quarantine" in report["run"]
+    assert report["continue-on-error"] is True and report["run"].count("--quarantine-only 1") == 2
     assert index("rust-windows", "Quarantine ledger and run timestamp") < index("rust-windows", "cargo test -p pg-spawnd")
 
 
@@ -461,13 +456,34 @@ def test_a_binary_built_from_another_commit_is_not_staged(tmp_path):
 
 
 @pytest.mark.parametrize("job", ["pytest", "pytest-postgres"])
-def test_the_real_fleet_fixture_runs_on_the_downloaded_binary_in_every_shard(job):
+def test_the_real_fleet_fixture_runs_on_the_downloaded_binary_in_every_shard_under_the_pinned_ledger(job):
     names = [step.get("name") for step in steps(job)]
-    assert names.index("Fetch the fleet projection helper built once for this run") < names.index("Exercise the fleet fixture on the downloaded pg-spawnd")
-    step = named(job, "Exercise the fleet fixture on the downloaded pg-spawnd")
-    assert step["env"]["PYTEST_SHARD"] == "" and step["uses"] == "./.github/actions/bounded-step"
+    smoke = "Exercise the fleet fixture on the downloaded pg-spawnd"
+    assert names.index("Fetch the fleet projection helper built once for this run") < names.index("Install test deps") < names.index("Quarantine ledger and run timestamp")
+    assert names.index("Quarantine ledger and run timestamp") < names.index(smoke) < names.index(
+        "pytest" if job == "pytest" else "pytest (contract suite + keeper storage tests on Postgres)")
+    step = named(job, smoke)
+    # PYTEST_SHARD 0/1 keeps every test and lets a run that deselects its only test finish green (tests/conftest.py).
+    assert step["env"]["PYTEST_SHARD"] == "0/1" and step["uses"] == "./.github/actions/bounded-step"
     assert "test_fleet_samples_and_missing_host" in step["with"]["command"]
-    assert names.index("Install test deps") < names.index("Exercise the fleet fixture on the downloaded pg-spawnd")
+
+
+def test_an_active_quarantine_entry_for_the_fleet_test_leaves_the_smoke_run_and_an_expired_one_does_not(tmp_path):
+    test_id = "tests/test_fleet_snapshot.py::test_fleet_samples_and_missing_host"
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(json.dumps({test_id: {"owner": "plangraph:FIX", "starts": "2026-11-24T00:00:00+00:00", "expires": "2026-11-25T00:00:00+00:00"}}))
+    command = named("pytest", "Exercise the fleet fixture on the downloaded pg-spawnd")["with"]["command"].split()
+
+    def smoke(as_of):
+        python, env = python_test_env()
+        env.pop("PLANGRAPH_TEST_FLEET_SPAWND", None)
+        env |= {"PYTEST_SHARD": "0/1", "PYTEST_QUARANTINE_FILE": str(ledger), "PYTEST_QUARANTINE_AS_OF": as_of}
+        return subprocess.run([python, *command[1:]], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+
+    active = smoke("2026-11-24T12:00:00+00:00")
+    assert active.returncode == 0 and "60 deselected" in active.stdout, active.stdout[-300:]   # the -k filter's 59 plus the test itself
+    expired = smoke("2026-11-25T00:00:00+00:00")   # the expiry instant: the test blocks again and runs (no binary is built here)
+    assert "59 deselected" in expired.stdout and any(f"1 {word}" in expired.stdout for word in ("passed", "failed", "error"))
 
 
 def test_the_build_job_ships_a_manifest_with_the_binaries():

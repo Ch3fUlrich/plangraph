@@ -83,13 +83,15 @@ missing or unverified run, or a newer or red attempt runs the suite again.
 
 `tools/ci_select.py entry-set --run` also replays the tests a part changed: every `tests/**/test_*.py` it added or changed (not `tests/browser`) and
 every Rust `#[test]` fn whose lines it touched, a body-only edit included, five runs each in a clean detached checkout of the part's own head (verified to be that commit; the working tree never counts). The Python files run four
-times serially and once with `-n auto` (the full-worker run); each Rust test runs four times with `--test-threads=1` and once with the default
-threads. Every log is kept with `replay.json` (`python-run-N.log`, `cargo-run-N.log`) under `--replay-dir`, by default
+times serially and once with `-n auto` (the full-worker run); each Rust test runs four times alone with `--test-threads=1` and its fifth run is the whole crate with the default
+threads, beside its peers. Every log is kept with `replay.json` (`python-run-N.log`, `cargo-run-N.log`) under `--replay-dir`, by default
 `<telemetry>/entry-replay/<head>` (`PLANGRAPH_TELEMETRY_DIR`). A test that passed and failed among the runs is printed as
 `entry-set: FLAKY: <test id> (logs <failing log> and <passing log>)`; a test that fails every run, or a run with no test outcome, is `FAIL`.
 A run is `failed` when its process exits with anything but 0 or 1 (pytest) or 101 (cargo), even if it printed passes; a test pytest reports `SKIPPED` on the platform is not applicable and needs no outcome. A run that reports no outcome for any collected test id of a changed file (not just one id of it) or for a changed Rust test is `incomplete`, so five invocations that skipped the test are no receipt. Either one makes the entry run fail. The receipt covers the invoking environment only; Postgres-backed Python tests and the native Windows Rust run are a follow-up slice. `replay.json` is the receipt bound to the head: `merge_batch build` readiness (`ready_problems`) needs a
 passing five-run receipt for the exact head of every part that changes a test or Rust file, and names `FLAKY: <test id> (logs ...)` from it.
-`replay.json` also records the changed-file list of the diff it replayed, and readiness refuses a receipt whose list differs from the part's own (a replay against another comparison base). Green CI alone never stands for the replay.
+`replay.json` also records the changed-file list of the diff it replayed, and readiness refuses a receipt whose list differs from the part's own (a replay against another comparison base), and recomputes the part's test inventory from its own diff (`changed_tests` against the batch base),
+refusing a receipt that covers fewer or other tests. A test id keeps its full node id (a parameter id may hold ` - `); each test has one outcome
+per run, and a failing teardown after a pass makes it failed, never flaky. Green CI alone never stands for the replay.
 
 ## CI speed and flake handling (tests.yml)
 
@@ -97,7 +99,7 @@ passing five-run receipt for the exact head of every part that changes a test or
   `pg-spawnd-bin` artifact (`.github/actions/fetch-spawnd`) instead of building. The artifact carries a manifest (`pg-spawnd.sha256`,
   `pg-spawnd.source`); the action checks the digests and that the binary was built from this run's checkout, exports
   `PLANGRAPH_TEST_FLEET_SPAWND` (the fleet fixture cannot judge an artifact without Cargo dep-info) and every shard runs
-  `test_fleet_samples_and_missing_host` on the downloaded binary. Cargo caches (`rust`, `rust-windows`, `rust-worker`,
+  `test_fleet_samples_and_missing_host` on the downloaded binary, after the quarantine ledger is pinned (an active entry for it leaves that run). Cargo caches (`rust`, `rust-windows`, `rust-worker`,
   `rust-spike`, `build-spawnd`) are restored on every run with a `restore-keys` prefix and saved only by a push to the default branch, so a
   pull request starts from main's build and never plants one.
 - **Balanced shards.** Every shard of a suite reads the same pinned map, `.github/pytest-durations-sqlite.json` or
@@ -112,3 +114,11 @@ passing five-run receipt for the exact head of every part that changes a test or
   request's or merge group's base (`.github/actions/quarantine-ledger`; a shallow checkout fetches the base, and a base that cannot be read fails the job, only a base without a ledger file means none). The blocking pytest and `cargo test` steps leave out the active entries; shard 0
   (and the `rust`, standalone worker and native Windows jobs, and the Python 3.14 native-writer run, which skip an entry of their own package in the blocking run) runs only them in a reporting step that never blocks (bounded like every pytest step); `ci-gate` publishes the owner and expiry of every entry in its
   summary. An entry past its expiry blocks again. A Rust entry is `cargo:<package>:<test path>`.
+
+## The native Windows test entry point
+
+The `rust-windows` job and the pre-push Windows check (`merge_batch_plan.windows_commands`, which reads the job's steps) run one command,
+`ci-flake cargo-test --package <package>`: a plain `cargo test --no-fail-fast -p <package>`, except that with the pinned ledger
+(`PYTEST_QUARANTINE_FILE`, `PYTEST_QUARANTINE_AS_OF`) it leaves the active quarantined tests of that package out (`--exact --skip`), and
+`--quarantine-only 1` runs only them for the reporting step. The step keeps no Bash array, pipe or redirect, so nothing of it reaches PowerShell;
+`--log FILE` keeps the output for `cargo-retry`. `tests/test_merge_batch_windows.py` checks the commands read from the real workflow.

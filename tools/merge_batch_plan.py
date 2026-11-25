@@ -199,6 +199,7 @@ def render_table(plan):
     return "\n".join(out)
 
 
+_FLAKE_TEST = re.compile(r'^\s*"\$flake" cargo-test --package (\S+)')
 WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"
 WINDOWS_TARGET_CAP_GB = 20
 WINDOWS_TIMEOUT = 3600
@@ -221,8 +222,12 @@ def windows_commands(workflow_text):
     try:
         for step in steps:
             value = step.get("run", "")
-            commands.extend(shlex.split(line) for line in value.splitlines()
-                            if line.lstrip().startswith("cargo test "))
+            for line in value.splitlines():
+                if line.lstrip().startswith("cargo test "):
+                    commands.append(shlex.split(line))
+                elif (found := _FLAKE_TEST.match(line)) and "--quarantine-only" not in line:
+                    # The CI step runs the shared entry point from its own build; the pre-push run builds and runs the same one.
+                    commands.append(["cargo", "run", "--quiet", "-p", "pg-spawnd", "--bin", "ci-flake", "--", "cargo-test", "--package", found[1]])
     except (AttributeError, TypeError, ValueError) as exc:
         raise MergeBatchError(f"invalid run step in the Windows job of tests.yml: {exc}") from exc
     if not commands:
@@ -385,7 +390,12 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
 # --- entry replay: the tests a part changed run five times on a clean checkout of its head (LE-CI-FLAKE-ENTRY-REPLAY)
 
 _SKIPPED = re.compile(r"^(?:(\S+::.+?) SKIPPED\b.*|\[gw\d+\] \[ *\d+%\] SKIPPED (\S+::.+?)\s*)$", re.M)
-_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (.+?)(?: - .*)?|test (\S+) \.\.\. (ok|FAILED))$", re.M)
+_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (.+)|test (\S+) \.\.\. (ok|FAILED))$", re.M)
+
+
+def _node(rest: str, ids) -> str:
+    """The node id of a short-summary line: a failed one reads ``<id> - <reason>`` and an id may itself hold `` - ``."""
+    return next((i for i in sorted(ids, key=len, reverse=True) if rest == i or rest.startswith(i + " - ")), rest.split(" - ")[0])
 
 
 def changed_tests(root, base: str, head: str) -> dict:
@@ -410,14 +420,18 @@ def changed_tests(root, base: str, head: str) -> dict:
 
 
 def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[tuple[list[str], list[str]]]:
-    """``(command, wanted)`` per run: each changed test ``runs`` times on one head, the last run with every worker or
-    thread. ``wanted`` names what the run must report an outcome for (a test file prefix or a Rust test name)."""
+    """``(command, wanted)`` per run: each changed test ``runs`` times on one head. The last Python run uses every worker;
+    each Rust test runs ``runs - 1`` times alone, and the last run is its whole crate (peers, default threads).
+    ``wanted`` names what the run must report an outcome for (a test file prefix or a Rust test name)."""
     py = [sys.executable, "-m", "pytest", "-v", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
     commands = [(py + (["-n", "auto"] if workers and i == runs - 1 else []), [f"{f}::" for f in changed["python"]])
                 for i in range(runs)] if changed["python"] else []
+    by_manifest: dict[str, list[str]] = {}
     for manifest, name in changed["rust"]:
-        commands += [(["cargo", "test", "--manifest-path", manifest, name, "--", *(["--test-threads=1"] if i < runs - 1 else [])], [name])
-                     for i in range(runs)]
+        by_manifest.setdefault(manifest, []).append(name)
+    for manifest, names in by_manifest.items():
+        commands += [(["cargo", "test", "--manifest-path", manifest, name, "--", "--test-threads=1"], [name]) for name in names for _ in range(runs - 1)]
+        commands.append((["cargo", "test", "--manifest-path", manifest], names))   # the last run: the whole crate, peers and default threads
     return commands
 
 
@@ -445,7 +459,11 @@ def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: 
             done = subprocess.run(command, cwd=checkout, env=env, capture_output=True, text=True)
             log = out / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
             log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
-            outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
+            by_test = {}   # one outcome per test per run: a failed teardown after a pass makes the test failed
+            for m in _OUTCOME.finditer(text):
+                test = m[3] or (m[2] if m[1] == "PASSED" else _node(m[2], ids))
+                by_test[test] = by_test.get(test, True) and (m[1] == "PASSED" or m[4] == "ok")
+            outcomes = list(by_test.items())
             skipped = {m[1] or m[2] for m in _SKIPPED.finditer(text)}   # not applicable on this platform: no outcome expected
             for test, ok in outcomes:
                 seen.setdefault(test, {}).setdefault(ok, str(log))

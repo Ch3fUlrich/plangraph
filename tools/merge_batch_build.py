@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_plan import (high_patterns, plan_batches, replay_receipt, runner_wide_receipts, set_problems, stack_parents,
+from merge_batch_plan import (changed_tests, high_patterns, plan_batches, replay_receipt, runner_wide_receipts, set_problems, stack_parents,
                               stack_sorted)
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
@@ -356,7 +356,7 @@ def ci_attempts(repo, pr, head):
     return rows
 
 
-def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
+def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts, base=None):
     """The readiness verdict (tools/ci_select.py ready_problems) of every part, from its own CI on its head.
 
     ci-gate is green only when every selected job passed: the always-on checks, the entry suites and, when the
@@ -373,7 +373,8 @@ def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
         found = ci_select.ready_problems({
             "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
             "attempts": attempts, "flake_dispositions": dispositions, "head": pr["head"], "files": pr["files"],
-            "truncated": pr["truncated"], "replay": replay_receipt(pr["head"])})
+            "truncated": pr["truncated"], "replay": replay_receipt(pr["head"]),
+            "expected": changed_tests(Path.cwd(), f"{REMOTE}/{base}", pr["head"]) if base else None})
         problems += [f"PR #{num}: {p}" for p in found]
     return problems
 
@@ -407,7 +408,7 @@ def cmd_build(args):
         opens = open_pr_heads(name, repo, infos)
         entry = (part_entry_problems(base, order, heads, parent, opens=opens,
                                      refs={n: infos[n]["ref"] for n in order})
-                 + part_readiness_problems(repo, infos, order))
+                 + part_readiness_problems(repo, infos, order, base=base))
         if entry and not args.force_set:
             raise MergeBatchError("part entry refused: " + "; ".join(entry) + " (--force-set builds it anyway and logs it)")
         if entry:

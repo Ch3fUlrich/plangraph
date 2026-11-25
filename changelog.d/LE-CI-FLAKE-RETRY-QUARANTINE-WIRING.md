@@ -2,3 +2,4 @@ New `ci-flake` helper in `pg-spawnd`: classifies a red job's first and same-SHA 
 The affected pull request path is classified by the same single retry, and the native Windows jobs skip an active entry of their own package and report it separately.
 The retry's own failure no longer stops the classification, CI keeps exactly one retry (`CI_CLASSIFY_RETRY` turns off the reruns of `tools/affected_tests.py`), merge-group runs read the trusted base ledger, and the standalone worker job and the native Windows jobs get the same ledger and `cargo-retry` classification.
 The Python 3.14 native-writer run gets the same ledger skips and `cargo-retry` classification as the workspace run.
+The native Windows job and the pre-push Windows check share one test entry point, `ci-flake cargo-test --package P` (ledger skips, `--quarantine-only` reporting, `--log`); the fleet smoke test runs under the pinned ledger.

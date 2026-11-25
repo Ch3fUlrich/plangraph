@@ -3,3 +3,4 @@ A body-only edit of a Rust test selects that test; `entry-set --run` writes a `r
 The replay runs in a clean detached checkout of the requested head and reports `incomplete` when a run has no outcome for a changed test, so a receipt cannot pass on invocations that skipped it.
 The replay needs an outcome for every collected test id of a changed file on every run, so a passing sibling cannot stand in for a changed test.
 A replay run that exits with a runner error is a failure even if it printed passes, a platform `SKIPPED` test needs no outcome, and the receipt records the changed-file list so readiness refuses a replay of another comparison base.
+The replay keeps full node ids (a parameter id with ` - `), records one outcome per test per run (a failing teardown after a pass is failed, never flaky), ends each Rust test with a whole-crate run, and readiness recomputes the part's test inventory from its own diff.

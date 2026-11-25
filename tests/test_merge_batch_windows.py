@@ -49,8 +49,8 @@ def state(root, base, head, branch="batch/t"):
 
 
 def test_the_windows_selection_is_the_one_the_ci_windows_job_runs():
-    assert land.windows_commands(WORKFLOW) == [["cargo", "test", "-p", "pg-spawnd"],
-                                               ["cargo", "test", "-p", "pg-worker-core"]]
+    entry = ["cargo", "run", "--quiet", "-p", "pg-spawnd", "--bin", "ci-flake", "--", "cargo-test", "--package"]
+    assert land.windows_commands(WORKFLOW) == [[*entry, "pg-spawnd"], [*entry, "pg-worker-core"]]
 
 
 def test_a_workflow_without_the_windows_job_is_an_error():
@@ -260,3 +260,14 @@ def test_part_cost_distinguishes_two_prs_with_the_same_head(tmp_path, monkeypatc
     rows = land.record_part_cost(st, 99, HEAD, telemetry_dir=tmp_path)
     assert [(row["pr"], row["jobs"][0]["name"]) for row in rows] == [
         (11, "run-11"), (12, "run-12"), (90, "run-99")]
+
+
+def test_the_real_workflow_gives_the_pre_push_check_the_shared_entry_point_and_no_shell_syntax():
+    """The Windows pre-push check feeds these commands to PowerShell: no Bash array, pipe, redirect or expansion may reach it."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text()
+    commands = land.windows_commands(workflow)
+    entry = ["cargo", "run", "--quiet", "-p", "pg-spawnd", "--bin", "ci-flake", "--", "cargo-test", "--package"]
+    assert commands == [[*entry, "pg-spawnd"], [*entry, "pg-worker-core"]]
+    assert not any(ch in token for command in commands for token in command for ch in '$|<>&;"\'[]*')
+    script = land.windows_script("bundle.bundle", "a" * 40, commands, 20)
+    assert "cargo-test --package pg-spawnd --no-fail-fast" in script and "tee" not in script and "${" not in script

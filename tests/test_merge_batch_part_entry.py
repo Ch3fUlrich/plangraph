@@ -254,3 +254,20 @@ def test_a_part_without_changed_tests_needs_no_replay_receipt(tmp_path, monkeypa
     monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path))
     ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
     assert build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=ok) == []
+
+
+def test_readiness_compares_the_receipt_with_the_inventory_of_the_parts_own_diff(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path))
+    ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
+    part = info(files=("rust/pg-spawnd/src/lib.rs",))
+    covered = {"python": [], "rust": [["rust/pg-spawnd/Cargo.toml", "kept"]], "files": list(part["files"])}
+    folder = tmp_path / "entry-replay" / part["head"]
+    folder.mkdir(parents=True)
+    (folder / "replay.json").write_text(json.dumps(dict(head=part["head"], ok=True, runs=5, flaky=[], failed=[], logs={}, changed=covered)))
+    seen = []
+    monkeypatch.setattr(build, "changed_tests", lambda root, base, head: seen.append((base, head)) or
+                        {"python": [], "rust": covered["rust"] + [["rust/pg-spawnd/Cargo.toml", "other"]], "files": covered["files"]})
+    problems = build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok, base="main")
+    assert any("another comparison base" in p for p in problems) and seen == [("origin/main", part["head"])]
+    monkeypatch.setattr(build, "changed_tests", lambda *_a: covered)
+    assert build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok, base="main") == []
