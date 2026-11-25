@@ -67,6 +67,15 @@ def _runtime_latest(source):
     "MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS.extend([Migration(2, 'b', Y)])\n",
     "MIGRATIONS = [Migration(1, 'a', X)]\nMIGRATIONS[:] = [Migration(1, 'a', X), Migration(2, 'b', Y)]\n",
     "if False: MIGRATIONS = (Migration(1, 'a', X),)\n" + REAL,
+    # a pattern capture rebinds the name at runtime
+    "MIGRATIONS = (Migration(1, 'a', X),)\n"
+    "match (Migration(1, 'a', X), Migration(2, 'b', Y)):\n    case MIGRATIONS:\n        pass\n",
+    "MIGRATIONS = (Migration(1, 'a', X),)\n"
+    "match [Migration(1, 'a', X), Migration(2, 'b', Y)]:\n    case [*MIGRATIONS]:\n        pass\n",
+    "MIGRATIONS = (Migration(1, 'a', X),)\n"
+    "match {'k': 1}:\n    case {**MIGRATIONS}:\n        pass\n",
+    "MIGRATIONS = (Migration(1, 'a', X),)\n"
+    "match 1:\n    case 1 as MIGRATIONS:\n        pass\n",
 ])
 def test_the_reader_never_reports_a_version_other_than_the_one_the_keeper_loads(source):
     """Every shape either raises or agrees with the runtime ``LATEST``: no write hides a schema rise."""

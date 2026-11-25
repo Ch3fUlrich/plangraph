@@ -401,7 +401,7 @@ def registry_version(source):
     (``plangraph land-train keeper-schema``, which embeds this function). ``ValueError`` when the registry is
     missing, repeated, not a tuple of ``Migration(N, ...)`` calls numbered 1..n, written by anything but
     the one top-level assignment (``+=``, an annotated assignment, an import, a def, ``global``, a loop
-    target), or when the source does not parse."""
+    target, a ``match`` capture), or when the source does not parse."""
     try:
         tree = ast.parse(source)
         registry, = [node.value for node in tree.body if isinstance(node, ast.Assign)
@@ -417,6 +417,10 @@ def registry_version(source):
                 writes += (node.asname or node.name.split(".")[0]) == "MIGRATIONS"
             elif isinstance(node, (ast.Global, ast.Nonlocal)):
                 writes += "MIGRATIONS" in node.names
+            elif type(node).__name__ in ("MatchAs", "MatchStar"):  # pattern captures (3.10+)
+                writes += node.name == "MIGRATIONS"
+            elif type(node).__name__ == "MatchMapping":
+                writes += node.rest == "MIGRATIONS"
         if writes != 1:
             raise ValueError("MIGRATIONS is written other than by its one top-level assignment")
         if not isinstance(registry, ast.Tuple):
