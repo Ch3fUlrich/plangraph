@@ -34,21 +34,17 @@ fn environ_has(environ: &[u8], session_id: &str) -> bool {
         .any(|entry| entry == wanted.as_bytes())
 }
 
-/// The command text appears in the shell's argv, joined by NUL bytes.
-pub(super) fn cmdline_runs(cmdline: &[u8], command: &str) -> bool {
-    let text = String::from_utf8_lossy(cmdline);
-    let flat = text.replace('\0', " ");
-    let needle: String = command.split_whitespace().collect::<Vec<_>>().join(" ");
-    !needle.is_empty()
-        && flat
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .contains(&needle)
+/// The task a command shell writes for: the harness points the shell's stdout at
+/// `.../tasks/<task id>.output`, which names the task exactly.
+fn output_task(proc_dir: &std::path::Path) -> Option<String> {
+    let target = fs::read_link(proc_dir.join("fd/1")).ok()?;
+    let name = target.file_name()?.to_str()?;
+    let folder = target.parent()?.file_name()?.to_str()?;
+    (folder == "tasks").then(|| name.strip_suffix(".output").map(str::to_owned))?
 }
 
 impl Host for LocalHost {
-    fn resolve_owner(&self, _session: &str, command: &str) -> Option<Owner> {
+    fn resolve_owner(&self, _session: &str, task_id: &str) -> Option<Owner> {
         let mut found = Vec::new();
         for entry in fs::read_dir(&self.roots.proc).ok()?.flatten() {
             let Some(pid) = entry
@@ -59,12 +55,12 @@ impl Host for LocalHost {
                 continue;
             };
             let dir = entry.path();
-            let (Ok(environ), Ok(cmdline)) =
-                (fs::read(dir.join("environ")), fs::read(dir.join("cmdline")))
-            else {
+            let Ok(environ) = fs::read(dir.join("environ")) else {
                 continue;
             };
-            if !environ_has(&environ, &self.session_id) || !cmdline_runs(&cmdline, command) {
+            if !environ_has(&environ, &self.session_id)
+                || output_task(&dir).as_deref() != Some(task_id)
+            {
                 continue;
             }
             // Only a group leader owns a command; its group is what is ended.
@@ -85,14 +81,14 @@ impl Host for LocalHost {
         (found.len() == 1).then(|| found.remove(0))
     }
 
-    fn stop(&self, owner: &Owner, command: &str) -> Stop {
+    fn stop(&self, owner: &Owner, task_id: &str) -> Stop {
         // The record names one process by pid and start time. A process that is gone,
-        // reused by another start, or no longer running the command is not ours to end.
+        // reused by another start, or no longer writing this task's output is not ours.
+        let dir = self.roots.proc.join(owner.pid.to_string());
         let alive = proc_start_time(&self.roots.proc, owner.pid);
-        let cmdline = fs::read(self.roots.proc.join(owner.pid.to_string()).join("cmdline"));
         let same = alive.is_some()
             && alive == owner.start_time
-            && cmdline.is_ok_and(|bytes| cmdline_runs(&bytes, command));
+            && output_task(&dir).as_deref() == Some(task_id);
         if !same {
             return Stop::Gone;
         }
@@ -111,6 +107,20 @@ impl Host for LocalHost {
             StopOutcome::Empty => Stop::Ended,
             StopOutcome::Survivors(_) => Stop::Survivors,
         }
+    }
+
+    fn end_session(&self, _session: &str) -> bool {
+        // `claude stop` takes the short job id: the first eight characters of the session id.
+        let job: String = self.session_id.chars().take(8).collect();
+        let bin = std::env::var("PLANGRAPH_CLAUDE_BIN")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "claude".into());
+        std::process::Command::new(bin)
+            .args(["stop", &job])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success())
     }
 
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {

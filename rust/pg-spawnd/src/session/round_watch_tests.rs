@@ -7,6 +7,8 @@ struct Fake {
     owner: Option<Owner>,
     stop: RefCell<Stop>,
     fail_notify: bool,
+    asked: RefCell<Vec<String>>,
+    ended: RefCell<u32>,
     stopped: RefCell<Vec<(u32, String)>>,
     sent: RefCell<Vec<(String, String, String)>>,
 }
@@ -20,6 +22,8 @@ impl Fake {
             }),
             stop: RefCell::new(stop),
             fail_notify: false,
+            asked: RefCell::default(),
+            ended: RefCell::default(),
             stopped: RefCell::default(),
             sent: RefCell::default(),
         }
@@ -30,12 +34,17 @@ impl Fake {
 }
 
 impl Host for Fake {
-    fn resolve_owner(&self, _: &str, _: &str) -> Option<Owner> {
+    fn resolve_owner(&self, _: &str, task_id: &str) -> Option<Owner> {
+        self.asked.borrow_mut().push(task_id.into());
         self.owner.clone()
     }
-    fn stop(&self, owner: &Owner, command: &str) -> Stop {
-        self.stopped.borrow_mut().push((owner.pid, command.into()));
+    fn stop(&self, owner: &Owner, task_id: &str) -> Stop {
+        self.stopped.borrow_mut().push((owner.pid, task_id.into()));
         *self.stop.borrow()
+    }
+    fn end_session(&self, _: &str) -> bool {
+        *self.ended.borrow_mut() += 1;
+        true
     }
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {
         if self.fail_notify {
@@ -111,10 +120,7 @@ fn watchdog_fires_during_silence_and_blocks_on_second_wait() {
             },
         ]
     );
-    assert_eq!(
-        *host.stopped.borrow(),
-        vec![(4242, "cargo test -p a".to_string())]
-    );
+    assert_eq!(*host.stopped.borrow(), vec![(4242, "a".to_string())]);
     {
         let sent = host.sent.borrow();
         assert_eq!(sent.len(), 1);
@@ -150,6 +156,19 @@ fn watchdog_fires_during_silence_and_blocks_on_second_wait() {
     assert_eq!(to, ["writer-1", "writer-1", "routing"]);
     assert!(sent[2].2.starts_with("BLOCKED"));
     drop(sent);
+    assert!(
+        second.contains(&Action::RoundEnded {
+            round_key: "writer-1:p1".into()
+        }),
+        "{second:?}"
+    );
+    assert_eq!(*host.ended.borrow(), 1, "the live session is stopped once");
+    assert_eq!(
+        blocked_outcome(&dir.path().join("w.json")).unwrap()["closed_ms"],
+        T0 + 34 * MIN
+    );
+    // Owners are asked for by task id, never by command text.
+    assert_eq!(host.asked.borrow().iter().filter(|t| *t == "a").count(), 1);
     assert!(run(&t, 40, dir.path(), &host).is_empty());
 }
 
@@ -287,4 +306,72 @@ fn a_pending_stop_is_released_when_its_wait_closed_before_the_stop() {
     assert!(retry.sent.borrow().is_empty());
     let state = std::fs::read_to_string(dir.path().join("w.json")).unwrap();
     assert!(state.contains("released"));
+}
+
+#[test]
+fn a_crash_before_the_signal_and_a_natural_exit_is_no_strike() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = first_wait("a");
+    let host = Fake::new(true, Stop::Gone);
+    run(&t, 1, dir.path(), &host);
+    // The watchdog wrote its stop and died before it signalled anything.
+    let path = dir.path().join("w.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    state["actions"]["writer-1:p1|a"] = json!({"phase": "stopping", "round_key": "writer-1:p1",
+        "task_id": "a", "call_id": "w-a", "command": "cargo test -p a", "waited_ms": 1});
+    std::fs::write(&path, state.to_string()).unwrap();
+    let done = run(&t, 16, dir.path(), &host);
+    assert_eq!(
+        done,
+        vec![Action::Finished {
+            task_id: "a".into()
+        }]
+    );
+    assert!(host.sent.borrow().is_empty());
+    assert_eq!(*host.ended.borrow(), 0);
+}
+
+#[test]
+fn a_stop_needs_the_very_wait_call_that_earned_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::new(true, Stop::Survivors);
+    let mut t = first_wait("a");
+    run(&t, 1, dir.path(), &host);
+    assert_eq!(run(&t, 16, dir.path(), &host).len(), 1);
+    // The first wait call returns; the writer opens a new one on the same, still running task.
+    t.result(16 * MIN + 10_000, "w-a", None);
+    t.request(16 * MIN + 11_000);
+    t.tool(
+        16 * MIN + 12_000,
+        "w2-a",
+        "Bash",
+        json!({"command":"until grep -q rc= /t/tasks/a.output; do sleep 15; done"}),
+    );
+    let retry = Fake::new(true, Stop::Ended);
+    assert!(run(&t, 17, dir.path(), &retry).is_empty());
+    assert!(
+        retry.stopped.borrow().is_empty(),
+        "the new call has not earned a stop"
+    );
+}
+
+#[test]
+fn a_wait_on_a_prefix_task_id_stops_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    waiting("bg1", 0, &mut t);
+    // The writer's call names bg10, which is not running.
+    t.0.pop();
+    t.tool(
+        6_000,
+        "w-x",
+        "Bash",
+        json!({"command":"until grep -q rc= /t/tasks/bg10.output; do sleep 15; done"}),
+    );
+    run(&t, 1, dir.path(), &host);
+    assert!(run(&t, 40, dir.path(), &host).is_empty());
+    assert!(host.stopped.borrow().is_empty());
 }

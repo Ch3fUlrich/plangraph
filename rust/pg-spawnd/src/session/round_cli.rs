@@ -33,7 +33,7 @@ pub fn routing_state_dir() -> std::path::PathBuf {
         })
 }
 
-/// One snapshot per launched session: a replacement launch of the same role does not
+/// One snapshot per launched writer session: a replacement launch of the same role does not
 /// hide the session it replaced.
 fn sessions(routing: &Path) -> Vec<Value> {
     let Ok(dir) = fs::read_dir(routing.join("launch/sessions")) else {
@@ -44,6 +44,8 @@ fn sessions(routing: &Path) -> Vec<Value> {
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| serde_json::from_str(&fs::read_to_string(e.path()).ok()?).ok())
         .filter(|spec: &Value| spec["session_id"].is_string() && spec["cwd"].is_string())
+        // Reviews and planning sessions wait on purpose; only writer rounds are measured.
+        .filter(|spec: &Value| spec["name"] == "writer")
         .collect();
     specs.sort_by_key(|s| s["session_name"].as_str().unwrap_or("").to_owned());
     specs
@@ -73,7 +75,7 @@ pub fn run(state: &Path, routing: &Path, home: &Path, host: &str, now_ms: i64) -
             ),
         }
         let blocked = round_watch::blocked_outcome(&path);
-        let rows: Vec<Value> = Reader::read(name, &text)
+        let rows: Vec<Value> = Reader::read_closed(name, &text, round_watch::closed_rounds(&path))
             .rows
             .iter_mut()
             .map(|row| {
@@ -83,14 +85,47 @@ pub fn run(state: &Path, routing: &Path, home: &Path, host: &str, now_ms: i64) -
                 {
                     row.outcome = Some("BLOCKED".into());
                 }
-                row.to_json(host, name)
+                let mut json = row.to_json(host, name);
+                if let Some(closed) = blocked
+                    .as_ref()
+                    .filter(|b| b["round_key"] == row.round_key)
+                    .and_then(|b| b["closed_ms"].as_i64())
+                {
+                    json["closed_ms"] = serde_json::json!(closed);
+                }
+                json
             })
             .collect();
         if let Err(error) = round_store::upsert(&state.join("round-telemetry/rows.jsonl"), &rows) {
             log.push(json!({"rule": "round-telemetry-error", "session": name, "error": error.to_string()}));
         }
     }
+    ingest_native_runs(state, host, &mut log);
     log
+}
+
+/// Native Codex writer runs book their rows from the stage intervals of their own record.
+fn ingest_native_runs(state: &Path, host: &str, log: &mut Vec<Value>) {
+    let Ok(dir) = fs::read_dir(state.join("runs")) else {
+        return;
+    };
+    let rows: Vec<Value> = dir
+        .flatten()
+        .filter_map(|e| {
+            serde_json::from_str::<Value>(&fs::read_to_string(e.path().join("record.json")).ok()?)
+                .ok()
+        })
+        .filter_map(|record| {
+            let row = super::round_native::row(&record)?;
+            Some(row.to_json(host, record["run_id"].as_str()?))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    if let Err(error) = round_store::upsert(&state.join("round-telemetry/rows.jsonl"), &rows) {
+        log.push(json!({"rule": "round-telemetry-error", "session": "native", "error": error.to_string()}));
+    }
 }
 
 fn event(session: &str, action: &Action) -> Value {
@@ -103,6 +138,9 @@ fn event(session: &str, action: &Action) -> Value {
         }
         Action::OwnerUnknown { task_id } => {
             json!({"rule": "round-wait-owner-unknown", "session": session, "task": task_id})
+        }
+        Action::RoundEnded { round_key } => {
+            json!({"rule": "round-session-ended", "session": session, "round": round_key})
         }
         Action::StopPending { task_id } => {
             json!({"rule": "round-wait-stop-pending", "session": session, "task": task_id})

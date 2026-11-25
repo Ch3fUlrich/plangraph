@@ -24,12 +24,16 @@ pub enum Cause {
     WaitOther,
     WaitSleep,
     Harness,
+    /// A native Codex turn: model, tools and waits, which its log does not split.
+    NativeTurn,
+    Review,
+    Push,
     BetweenRounds,
     Unknown,
 }
 
 impl Cause {
-    pub const ALL: [Cause; 14] = [
+    pub const ALL: [Cause; 17] = [
         Cause::ModelWait,
         Cause::ModelWrite,
         Cause::Test,
@@ -42,6 +46,9 @@ impl Cause {
         Cause::WaitOther,
         Cause::WaitSleep,
         Cause::Harness,
+        Cause::NativeTurn,
+        Cause::Review,
+        Cause::Push,
         Cause::BetweenRounds,
         Cause::Unknown,
     ];
@@ -60,6 +67,9 @@ impl Cause {
             Cause::WaitOther => "wait_other",
             Cause::WaitSleep => "wait_sleep",
             Cause::Harness => "harness",
+            Cause::NativeTurn => "native_turn",
+            Cause::Review => "review",
+            Cause::Push => "push",
             Cause::BetweenRounds => "between_rounds",
             Cause::Unknown => "unknown",
         }
@@ -174,8 +184,10 @@ impl RoundRow {
 pub struct OpenWait {
     pub round_key: String,
     pub task_id: String,
+    /// The open wait call; a stop is authorised only while this very call is open.
+    pub call_id: String,
     pub command: String,
     pub class: Class,
-    /// Wait time already booked against the task plus the open tail.
+    /// Time of waits that named the task, plus the open tail; idle time does not count.
     pub waited_ms: i64,
 }
