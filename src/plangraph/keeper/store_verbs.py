@@ -48,8 +48,10 @@ class VerbsMixin:
             subject = inspect(repo, sha) if repo and inspect else None
             if subject not in {merge_subject(gate) for gate in gates}:
                 raise Refused("forbidden", "system evidence requires a two-parent phase merge")
-        self._assert_unlocked(item)
-        states = ("claimed", "in_review") + (("open",) if kind == "deploy" else ())
+        # A unit that runs after its item closed is the one proof a completed item may still take.
+        states = ("claimed", "in_review") + (("open", "done") if kind == "deploy" else ())
+        if not (kind == "deploy" and item["state"] == "done"):
+            self._assert_unlocked(item)
         if item["state"] not in states:
             raise Refused("bad_state", f"{key} is {item['state']}")
         # Slow verification (git/gh/http) happens before the write lock.
@@ -62,11 +64,17 @@ class VerbsMixin:
                 gates = self._phase_evidence_scope(fresh)
                 if subject not in {merge_subject(gate) for gate in gates}:
                     raise Refused("forbidden", "phase merge no longer matches the card's gate")
-            self._assert_unlocked(fresh)
+            if not (kind == "deploy" and fresh["state"] == "done"):
+                self._assert_unlocked(fresh)
             if fresh["state"] not in states:
                 raise Refused("conflict",
                               f"{fresh['key']} is {fresh['state']}")
-            self._guarded_touch(fresh["key"], states, fresh["epoch"])
+            if fresh["state"] == "done":
+                # The item row is frozen: only the epoch is rechecked, no row is touched.
+                if fresh["epoch"] != item["epoch"]:
+                    raise Refused("conflict", f"{key} changed under the transaction")
+            else:
+                self._guarded_touch(fresh["key"], states, fresh["epoch"])
             return self._record_evidence(principal, fresh, kind, ref, now,
                                          result)
 

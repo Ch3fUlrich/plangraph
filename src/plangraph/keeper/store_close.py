@@ -45,7 +45,7 @@ from . import context_sources, timing
 from .errors import Refused
 from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
-from .evidence_types import valid_commit_ref
+from .evidence_types import as_epoch, valid_commit_ref
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -483,11 +483,17 @@ class CloseMixin:
         tagged = frozenset(commit["sha"] for commit in commits)
         named = self._named_merge_proof(item)
         landed = tagged | {named["landed"]} if named else tagged
-        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
+        raw = {sha: git.deploy_changes(repo, sha, head, item["key"]) for sha in landed}
+        found = {sha: self._live_changes(git, repo, head, each) for sha, each in raw.items()}
+        changes = {change for each in found.values() for change in each}
         per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])
                     if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
                     else {})
-        return (head, tagged, per_unit), changes
+        # The named merge's commit time joins the token: proof older than any landing proves nothing.
+        named_at = (git.commit_time(repo, named["landed"]) or float("inf")) if named else None
+        units = {sha: frozenset(deploy_targets(each)) for sha, each in found.items()}
+        seen = any(deploy_targets([("A", path)]) for each in raw.values() for _, path in each)
+        return (head, tagged, per_unit, named_at, units, named["landed"] if named else None, seen), changes
 
     @staticmethod
     def _part_deploy_hosts(git, repo, landed, head, key):
@@ -515,12 +521,18 @@ class CloseMixin:
         except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
             raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
 
-    def _deploy_pending(self, item, changes, token):
-        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
+    def _deploy_pending(self, item, changes, token, since=None):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+
+        ``since`` (epoch seconds) counts only proof of the item's current epoch recorded at or after it.
+        """
         targets = deploy_targets(changes)
         if not targets:
             return []
         hosts, evidence = deploy_hosts(item), self._evidence(item["key"])
+        if since is not None:
+            evidence = [row for row in evidence
+                        if row["epoch"] == item["epoch"] and (as_epoch(row["at"]) or 0) >= since]
         per_unit = token[2] if token is not None else {}
         if hosts or not per_unit:
             return deploy_missing(targets, hosts, evidence)
@@ -546,8 +558,11 @@ class CloseMixin:
             head = index.get("target")
             if head is None:
                 head = self._pin_close(tagged)["_close_head"]
+            # Targets are filtered against the tip they were scanned at: another item may have retired a
+            # unit since, so a scan that saw deployable paths is redone when the tip moved.
             if (revision is None and previous and previous["changes"] is not None
-                    and previous["text"] == text and previous["commits"] == commits):
+                    and previous["text"] == text and previous["commits"] == commits
+                    and (previous["token"][0] == head or not previous["token"][6])):
                 token, changes = (head, *previous["token"][1:]), previous["changes"]
             else:
                 token, changes = self._deploy_changes(dict(tagged, _close_head=head))
@@ -559,7 +574,7 @@ class CloseMixin:
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""
         git, project = self._adapter("git"), self._merge_project(item)
-        pinned, tagged, _ = token
+        pinned, tagged, *_ = token
         try:
             repo, ref = git.repo_path(project), git.repo_ref(project)
             if self.__dict__.get("_frozen_lanes"):
@@ -645,24 +660,32 @@ class CloseMixin:
     AUTO_STATES = ("open", "claimed", "in_review")
 
     def close_merged_auto(self, principal, project=None, require_seats=None, apply=True, repos_only=False,
-                          frozen=False, limit=None, after=None):
+                          frozen=False, limit=None, after=None, inventory=False):
         return self._run(principal, "close_merged_auto", None,
                          lambda now: self._close_merged_auto(
-                             principal, project, require_seats, apply, now, repos_only, frozen, limit, after),
+                             principal, project, require_seats, apply, now, repos_only, frozen, limit, after,
+                             inventory),
                          success_message=None)
 
-    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only, frozen, limit, after):
+    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only, frozen, limit, after,
+                           inventory=False):
         # ``frozen`` (the API, which holds the keeper lock): read only the warm scan, ask git and the forge nothing.
         self.__dict__["_frozen_lanes"] = bool(frozen)
         try:
-            return self._close_merged_auto_run(principal, project, require_seats, apply, now, repos_only, limit, after)
+            return self._close_merged_auto_run(principal, project, require_seats, apply, now, repos_only, limit,
+                                               after, inventory)
         finally:
             self.__dict__["_frozen_lanes"] = False
 
-    def _close_merged_auto_run(self, principal, project, require_seats, apply, now, repos_only, limit, after):
+    def _close_merged_auto_run(self, principal, project, require_seats, apply, now, repos_only, limit, after,
+                               inventory=False):
         self._require_role(principal, "system", "router")
-        if any(type(value) is not bool for value in (apply, repos_only)):
-            raise Refused("validation", "apply and repos_only must be booleans")
+        if any(type(value) is not bool for value in (apply, repos_only, inventory)):
+            raise Refused("validation", "apply, repos_only and inventory must be booleans")
+        if inventory and apply:
+            raise Refused("validation", "inventory is a dry run")
+        if inventory and not self.include_done_in_scan:
+            raise Refused("validation", "deploy_inventory_done is off: completed items are not scanned")
         require_seats = self._seats_required(require_seats)
         if project is not None and not isinstance(project, str):
             raise Refused("validation", "project must be a string")
@@ -676,7 +699,7 @@ class CloseMixin:
         if after is not None and not isinstance(after, str):
             raise Refused("validation", "after must be an item key")
         indexes, closed, listed, pending, parts = {}, [], [], [], []
-        deployments = []
+        deployments, expected = [], []
         frozen = self.__dict__.get("_frozen_lanes")
         scan_errors = dict(self.__dict__.get("_merge_scan_errors", {})) if frozen else {}
 
@@ -697,7 +720,7 @@ class CloseMixin:
                 indexes[repo_project] = index
             return indexes[repo_project]
 
-        candidates = self._auto_merge_candidates(project, after, limit)
+        candidates = self._auto_merge_candidates(project, after, limit, inventory)
         next_after = None
         for processed, item in enumerate(candidates):
             if processed and (processed == limit or timing.io_timeout(1) < 1):
@@ -713,9 +736,15 @@ class CloseMixin:
                 projects = [hinted] if hinted else self._scan_projects(item)
                 found = [p for p in projects if (index := index_of(p)) is not None
                          and (revision or context_sources.indexed_work(index, key)["commits"])]
+                delivered = [{"key": key, "project": p, "pr": part["pr"], "merge_sha": part["sha"]}
+                             for p in projects if (index := index_of(p)) is not None
+                             for part in context_sources.indexed_parts(index, key)]
                 if not found:
-                    delivered = [{"key": key, "project": p, "pr": part["pr"], "merge_sha": part["sha"]}
-                                 for p in projects for part in context_sources.indexed_parts(indexes[p], key)]
+                    # A unit that landed under Plan-Item-Part is deployable work whatever the item's state.
+                    self._collect_deployments(key, item, self._parts_deployment(item, delivered, indexes, now),
+                                              deployments, expected)
+                    if inventory:
+                        continue
                     if apply and delivered:
                         self._note_merged_parts(principal, item, delivered, indexes, now)
                     parts.extend(delivered)
@@ -724,12 +753,18 @@ class CloseMixin:
                     raise Refused("evidence_unverified",
                                   f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
                 tagged = item if found[0] == item["project"] else dict(item, _merge_project=found[0])
-                result = self._auto_close_one(principal, tagged, require_seats, apply, now)
+                result = self._auto_close_one(principal, tagged, require_seats, apply, now, inventory,
+                                              (delivered, indexes))
             except Refused as exc:
                 listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
+                self._collect_deployments(key, item, getattr(exc, "deployment", None), deployments, expected)
                 continue
-            if deployment := result.pop("deployment_pending", None):
-                deployments.append({"key": key, **deployment})
+            deployment = result.get("deployment_pending")
+            self._collect_deployments(key, item, result, deployments, expected)
+            result.pop("deployment_pending", None)
+            result.pop("deployment_expected", None)
+            if inventory:
+                continue
             if result:
                 (closed if apply else pending).append(result)
             else:
@@ -737,7 +772,8 @@ class CloseMixin:
                                "reason": "evidence_unverified: deploy_pending: " + ", ".join(deployment["missing"])})
         return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
                 "merged_not_done": len(pending) + len(listed), "require_seats": require_seats,
-                "next_after": next_after, "scan_errors": scan_errors, "parts": parts, "deployment_pending": deployments}
+                "next_after": next_after, "scan_errors": scan_errors, "parts": parts, "deployment_pending": deployments,
+                "deployment_expected": expected}
 
     def _note_merged_parts(self, principal, item, parts, indexes, now):
         key = item["key"]
@@ -761,32 +797,3 @@ class CloseMixin:
                     (note, self._iso(now), key, fresh["epoch"], fresh["state"]))
                 self._race_guard(cursor, key, fresh["state"], fresh["epoch"])
                 self._append(principal, key, "item_defined", {"note": note}, now)
-
-    def _auto_merge_candidates(self, project, after, limit):
-        if limit is None:
-            return [item for item in self._all_items()
-                    if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")
-                    and (project is None or item["project"] == project)
-                    and (after is None or item["key"] > after)]
-        states = ",".join("?" for _ in self.AUTO_STATES)
-        sql = (f"SELECT * FROM items WHERE state IN ({states})"
-               " AND kind NOT IN ('goal','operator_task')")
-        args = list(self.AUTO_STATES)
-        if project is not None:
-            sql += " AND project=?"
-            args.append(project)
-        if after is not None:
-            sql += " AND key>?"
-            args.append(after)
-        sql += " ORDER BY key LIMIT ?"
-        args.append(limit + 1)
-        rows = self.conn.execute(sql, args).fetchall()
-        if not rows:
-            return []
-        keys = [row["key"] for row in rows]
-        predicates = ",".join("?" for _ in keys)
-        deps = {key: [] for key in keys}
-        for edge in self.conn.execute(
-                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
-            deps[edge["src"]].append(edge["dst"])
-        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]

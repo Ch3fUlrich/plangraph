@@ -16,7 +16,8 @@ from .. import views
 from . import events
 from .errors import Refused
 from .evidence_floor import event_bases, ref_head
-from .evidence_types import Context, valid_commit_ref
+from .evidence import deploy_hosts, deploy_targets
+from .evidence_types import Context, as_epoch, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
@@ -684,3 +685,96 @@ class SupportMixin:
         return self.conn.execute(
             "SELECT 1 FROM audit_findings WHERE key=? AND code=? LIMIT 1",
             (key, code)).fetchone() is not None
+
+    # --- deployment rows (docs/deploy-evidence.md); the scan itself is in store_context ---
+    def _deployment_rows(self, item, now, landings, changes, token):
+        """``(pending pairs, {"deployment_pending": row} | {"deployment_expected": row} | {})``."""
+        stamps = [landing["at"] for landing in landings]
+        cutoff = float("inf") if not stamps or None in stamps else max(stamps)
+        pending = self._deploy_pending(item, changes, token, cutoff)
+        missing = self._deploy_missing(item, pending, cutoff)
+        expected = self._expected_targets(item, changes, token)
+        if not (missing or expected):
+            return pending, {}
+        # Every target ages alike, receipted or not: from the landing that made it deployable.
+        owed = {entry: self._owed_since(entry, landings) for entry in dict.fromkeys(missing + expected)}
+        hours = {entry: None if at is None else int(max(0, now - at) // 3600) for entry, at in owed.items()}
+        oldest = None if not owed or None in owed.values() else min(owed.values())
+        row = {"missing": missing, "expected": expected, "landed": sorted(l["sha"] for l in landings),
+               "merged_at": self._landing_iso(oldest), "ages": hours,
+               "age_hours": None if oldest is None else int(max(0, now - oldest) // 3600)}
+        return pending, {("deployment_pending" if missing else "deployment_expected"): row}
+
+    @staticmethod
+    def _owed_since(entry, landings):
+        """When the work behind a missing entry landed: the unit's first landing, else the item's first."""
+        unit = entry.split(":", 1)[1] if ":" in entry and entry != "(hosts unnamed)" else None
+        touched = [l["at"] for l in landings if unit is not None and unit in l["units"]] or [
+            l["at"] for l in landings]
+        return None if not touched or None in touched or float("inf") in touched else min(touched)
+
+    @staticmethod
+    def _landing_iso(epoch):
+        return None if epoch is None or epoch == float("inf") else datetime.fromtimestamp(
+            epoch, timezone.utc).isoformat()
+
+    def _expected_targets(self, item, changes, token):
+        """Every ``host:unit`` the landed work ships to, whether or not proof exists."""
+        targets, hosts = deploy_targets(changes), deploy_hosts(item)
+        per_unit = token[2] if token is not None else {}
+        if hosts:
+            return sorted(f"{host}:{unit}" for host in hosts for unit in targets)
+        return sorted(f"{host}:{unit}" for unit in targets for host in per_unit.get(unit, ()))
+
+    def _deploy_missing(self, item, pending, cutoff):
+        """The unproven ``host:unit`` pairs, plus ``live_evidence_missing`` for an unproven ``Live:`` clause."""
+        missing = list(pending)
+        if self._live_evidence_missing(item, cutoff):
+            missing.append("live_evidence_missing")
+        return missing
+
+    @staticmethod
+    def _collect_deployments(key, item, rows, deployments, expected):
+        """Add the item's rows to the reply lists (``rows`` is a ``{"deployment_pending": ...}`` dict or None)."""
+        for field, bucket in (("deployment_pending", deployments), ("deployment_expected", expected)):
+            if rows and rows.get(field):
+                bucket.append({"key": key, "state": item["state"], **rows[field]})
+
+    def _auto_merge_candidates(self, project, after, limit, inventory=False):
+        states = ("done",) if inventory else self.AUTO_STATES
+        if limit is None:
+            return [item for item in self._all_items()
+                    if item["state"] in states and item["kind"] not in ("goal", "operator_task")
+                    and (project is None or item["project"] == project)
+                    and (after is None or item["key"] > after)]
+        marks = ",".join("?" for _ in states)
+        sql = (f"SELECT * FROM items WHERE state IN ({marks})"
+               " AND kind NOT IN ('goal','operator_task')")
+        args = list(states)
+        if project is not None:
+            sql += " AND project=?"
+            args.append(project)
+        if after is not None:
+            sql += " AND key>?"
+            args.append(after)
+        sql += " ORDER BY key LIMIT ?"
+        args.append(limit + 1)
+        rows = self.conn.execute(sql, args).fetchall()
+        if not rows:
+            return []
+        keys = [row["key"] for row in rows]
+        predicates = ",".join("?" for _ in keys)
+        deps = {key: [] for key in keys}
+        for edge in self.conn.execute(
+                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
+            deps[edge["src"]].append(edge["dst"])
+        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]
+
+    def _names_merge_in(self, key, project):
+        """True when the item's ``Merge-Repo:`` line names a merge in *project*: it is scanned with no tagged commit."""
+        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+        try:
+            hinted, revision = self._merge_repository(item) if item else (None, None)
+        except Exception:  # noqa: BLE001 - an unreadable hint warms nothing
+            return False
+        return revision is not None and hinted == project

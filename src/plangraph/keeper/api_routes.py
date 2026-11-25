@@ -360,7 +360,8 @@ class MergeRefresh:
             projects = sorted({project for _, project in server.store.merge_candidates()})
             if not projects and self.state == "ready":
                 self.used = True
-            return {"projects": projects}
+            # Whether completed items are scanned: an empty list is only "nothing to do" when they are.
+            return {"projects": projects, "inventory_done": bool(server.store.include_done_in_scan)}
         if action not in ("start", "status"):
             raise Refused("validation", "refresh must be start, status or projects")
         if action == "start" and self.state != "running":
@@ -410,13 +411,15 @@ def _close_merged_auto(store, principal, body, need):
     if type(watch) is not bool or watch and (
             apply is not False or repos_only or project is not None or limit is not None or after is not None):
         raise Refused("validation", "watch requires a complete dry run across all repositories")
+    if watch and body.get("inventory", False) is not False:
+        raise Refused("validation", "watch cannot combine with inventory")
     if not watch and limit is None:
         limit = 25
     with timing.io_budget(90):
         report = store.close_merged_auto(
             principal, project, require_seats=body.get("require_seats"),
             apply=apply, repos_only=repos_only, frozen=True,
-            limit=limit, after=after)
+            limit=limit, after=after, inventory=body.get("inventory", False))
         if watch:
             if report["scan_errors"] or report["next_after"] is not None:
                 raise Refused("evidence_unverified", "merged-open watcher scan incomplete")

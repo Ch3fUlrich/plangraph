@@ -303,8 +303,9 @@ class RunsMixin:
 
     def merge_candidates(self):
         """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
+        states = self.AUTO_STATES + (("done",) if self.include_done_in_scan else ())
         items = [item for item in self._all_items()
-                 if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+                 if item["state"] in states and item["kind"] not in ("goal", "operator_task")]
         # What the deploy scan needs of each item, read here under the lock so the scan does not touch the database.
         self.__dict__["_deploy_inputs"] = {item["key"]: dict(item) for item in items}
         return [(item["key"], item["project"]) for item in items]
@@ -339,7 +340,7 @@ class RunsMixin:
     def _warm_merge_candidates(self, git, project, index, candidates, previous):
         for key, _ in candidates:
             commits = context_sources.indexed_work(index, key, limit=None)["commits"]
-            if commits:
+            if commits or self._names_merge_in(key, project):
                 self._warm_landings(project, commits)
                 context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"],
                                           head=index.get("target"), fresh=False)

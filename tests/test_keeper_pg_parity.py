@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from keeper_util import World, defn, pass_review, seed, to_claimed
+from keeper_util import World, defn, pass_review, seed, to_claimed, to_done
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
 
@@ -384,7 +384,7 @@ def test_pg_v25_upgrade_records_and_protects_criteria_amendments(tmp_path, monke
                     step for step in schema_pg.MIGRATIONS if step.version <= 25))
                 with closing(db.open_db(path, create=True, **options)) as conn:
                     auth.add_principal(conn, "router", "router", [])
-            assert db_pg.migrate(raw, name) == [26, 27]
+            assert db_pg.migrate(raw, name) == [26, 27, 28]
             with closing(db.open_db(path, **options)) as conn:
                 store = Store(conn)
                 router = auth.get_principal(conn, "router")
@@ -421,3 +421,29 @@ def test_pg_v25_upgrade_records_and_protects_criteria_amendments(tmp_path, monke
             assert raw.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
         finally:
             raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=needs_pg)])
+def test_a_closed_key_takes_only_deploy_proof_and_a_cancelled_one_takes_none(tmp_path, backend):
+    """The migration-28 lock on both backends: a missing or null kind is a refusal, not an unknown."""
+    from plangraph.keeper import db_errors
+    w = World(tmp_path, backend=backend, dsn=DSN)
+    done, cancelled = seed(w, [("D", []), ("X", [])])
+    to_done(w, done)
+    w.store.cancel(w.p("router"), cancelled, "drop")
+    refused = db_errors.DENIED + db_errors.INTEGRITY
+    event = ("INSERT INTO events(ts,actor,role,model,key,type,payload,prev_hash,hash)"
+             " VALUES('t','x','router',NULL,?,?,?,'','h')")
+    for key, kind, payload in [(done, "evidence_added", "{}"), (done, "evidence_added", '{"kind": null}'),
+                               (done, "evidence_added", '{"kind": "commit"}'),
+                               (done, "item_defined", '{"kind": "deploy"}'),
+                               (cancelled, "evidence_added", '{"kind": "deploy"}')]:
+        with pytest.raises(refused):
+            w.conn.execute(event, (key, kind, payload))
+    evidence = ("INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at)"
+                " VALUES(?,0,?,'{}',1,'','t')")
+    for key, kind in [(done, "commit"), (cancelled, "deploy")]:
+        with pytest.raises(refused):
+            w.conn.execute(evidence, (key, kind))
+    w.conn.execute(event, (done, "evidence_added", '{"kind": "deploy"}'))
+    w.conn.execute(evidence, (done, "deploy"))

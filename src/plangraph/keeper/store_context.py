@@ -31,6 +31,7 @@ import json
 import re
 import time
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 
@@ -40,7 +41,8 @@ from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
-from .evidence_types import valid_commit_ref
+from .evidence import deploy_targets
+from .evidence_types import as_epoch, valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
 
@@ -667,3 +669,90 @@ class ContextMixin:
                 bits.append(f"dep {dep}={state}"
                             + (f" ({ctx_reasons[dep]})" if dep in ctx_reasons else ""))
         return "; ".join(bits)
+
+    # --- deployment inventory of merged work, open and completed items (docs/deploy-evidence.md) ---
+    # Keeper setting ``deploy_inventory_done``: completed items join the merge-index warm-up.
+    include_done_in_scan = False
+
+    def _deploy_inventory_row(self, item, now, parts=None):
+        """``{"deployment_pending": row}`` and/or ``{"deployment_expected": row}`` for merged work; never closes."""
+        return self._deploy_state(item, now, parts)[2]
+
+    def _deploy_state(self, item, now, parts=None):
+        """``(pinned item, pending host:unit pairs, rows of the item, scan token)``.
+
+        The rows come from the landed changes alone: a direct commit with no PR, an open lane, a
+        ``Merge-Repo:`` delivery and ``Plan-Item-Part`` merges (``parts``: ``(delivered, indexes)``) all
+        count together, and only the close needs PR proof.
+        """
+        token, changes = self._auto_deploy_scan(item)
+        pinned = dict(item, _close_head=token[0])
+        landings = self._item_landings(pinned, token)
+        if parts and parts[0]:
+            more, found = self._part_landings(item, *parts)
+            landings, changes = landings + more, set(changes) | found
+        pending, rows = self._deployment_rows(item, now, landings, changes, token)
+        return pinned, pending, rows, token
+
+    def _item_landings(self, item, token):
+        """``[{sha, at, units}]``: every landing of the item with its merge time and the units it touched."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        units = token[4] if len(token) > 4 else {}
+        landings = []
+        try:
+            commits = self._merged_work_commits(item, lanes=False)
+        except Refused as exc:
+            if token[3] is None or exc.msg != "merged_on_default_missing":
+                raise
+            commits = []
+        for commit in commits:
+            try:
+                at = as_epoch(self._merged_commit_proof(git, project, commit)[2])
+            except Refused:
+                at = as_epoch(commit.get("date"))
+            # The landing is the merge on the default ref: a tagged topic commit may predate the unit.
+            landed = (commit.get("merge") or {}).get("sha") or commit["sha"]
+            landings.append({"sha": landed, "at": at, "units": units.get(commit["sha"], frozenset())})
+        if token[3] is not None and token[5] is not None:
+            landings.append({"sha": token[5], "at": token[3], "units": units.get(token[5], frozenset())})
+        return landings
+
+    def _parts_deployment(self, item, delivered, indexes, now):
+        """Rows of an item whose only landings are ``Plan-Item-Part`` merges; ``{}`` without any."""
+        if not delivered:
+            return {}
+        landings, changes = self._part_landings(item, delivered, indexes)
+        return self._deployment_rows(item, now, landings, changes, None)[1]
+
+    def _part_landings(self, item, delivered, indexes):
+        """``([{sha, at, units}], changes)`` of the ``Plan-Item-Part`` merges that delivered part of the item."""
+        git, landings, changes = self._adapter("git"), [], set()
+        try:
+            for part in delivered:
+                repo = git.repo_path(part["project"])
+                head = indexes[part["project"]].get("target") or git.ref_commit(repo, git.repo_ref(part["project"]))
+                found = self._live_changes(git, repo, head, git.deploy_changes(repo, part["merge_sha"], head, item["key"]))
+                landings.append({"sha": part["merge_sha"], "at": git.commit_time(repo, part["merge_sha"]),
+                                 "units": frozenset(deploy_targets(found))})
+                changes |= set(found)
+        except (OSError, RuntimeError, ValueError):
+            raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+        return landings, changes
+
+    @staticmethod
+    def _live_changes(git, repo, head, changes):
+        """The changes without the units and binaries that no longer exist at *head* (retired work)."""
+        present = {}
+        kept = []
+        for status, path in changes:
+            if deploy_targets([("A", path)]):
+                if path not in present:
+                    # An unreadable tree is a failed scan, never a retired target.
+                    tree = git._run(repo, ["ls-tree", "--name-only", head, "--", path])
+                    if tree.returncode != 0:
+                        raise RuntimeError("cannot read the tree")
+                    present[path] = bool(tree.stdout.strip())
+                if not present[path]:
+                    continue
+            kept.append((status, path))
+        return kept

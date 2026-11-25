@@ -254,8 +254,12 @@ class WaiverMixin:
             return set()
         return {head} if merged and merged["pr"] == pr else set()
 
-    def _merged_work_commits(self, item):
-        """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
+    def _merged_work_commits(self, item, lanes=True):
+        """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown.
+
+        ``lanes=False`` skips that check: the deployment inventory reports what has landed whether or not
+        the close is allowed.
+        """
         git, project = self._adapter("git"), self._merge_project(item)
         warm = self._warm(project)
         if self.__dict__.get("_frozen_lanes") and not warm:   # the proof never refreshes a frozen scan
@@ -268,7 +272,7 @@ class WaiverMixin:
               if warm or self.__dict__.get("_frozen_lanes") else {})
         if head is not None:
             kw["head"] = head
-        if context_sources.open_lanes(git, project, item["key"], **kw) != []:
+        if lanes and context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         index = self.__dict__.get("_warmed", {}).get(project)
         if self.__dict__.get("_frozen_lanes") and index and head == index.get("target"):
@@ -626,30 +630,31 @@ class WaiverMixin:
         return dict(self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats),
                                release=release, flags=flags), closed=True)
 
-    def _auto_close_one(self, principal, item, require_seats, apply, now):
+    def _auto_close_one(self, principal, item, require_seats, apply, now, inventory=False, parts=None):
+        if inventory:
+            return self._deploy_inventory_row(item, now, parts)
+        # The deployment scan does not depend on whether the close is allowed: every refusal below
+        # carries the item's rows, whatever stage refuses.
+        pinned, pending, result, token = self._deploy_state(item, now, parts)
+        try:
+            return self._auto_close_checked(principal, item, require_seats, apply, now,
+                                            (pinned, pending, result, token))
+        except Refused as exc:
+            exc.deployment = result
+            raise
+
+    def _auto_close_checked(self, principal, item, require_seats, apply, now, scan):
         key = item["key"]
+        pinned, pending, result, token = scan
         tier = item.get("review_tier")
         if tier not in ("standard", "high", "none"):
             raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
         if self._card_requires_non_anthropic_seats(item):
             raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
         self._assert_unlocked(item)
-        seated = tier != "none"
-        token, changes = self._auto_deploy_scan(item)
-        pinned = dict(item, _close_head=token[0])
+        # The close, unlike the deployment rows, needs a PR for every commit and waits for every open lane.
         proofs = self._merged_auto_proofs(pinned)
-        pending = self._deploy_pending(pinned, changes, token)
-        missing = list(pending)
-        if self._live_evidence_missing(item, proofs):
-            missing.append("live_evidence_missing")
-        result = {}
-        if missing:
-            landed = [(stamp, proof["merged_at"]) for proof in proofs
-                      if (stamp := as_epoch(proof["merged_at"])) is not None]
-            earliest = min(landed, default=None)
-            result["deployment_pending"] = {
-                "missing": missing, "merged_at": earliest[1] if earliest else None,
-                "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
+        seated = tier != "none"
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)
@@ -687,23 +692,21 @@ class WaiverMixin:
             return {**result, "key": key, "state": done["state"], "prs": proofs, "seats": seats,
                     **self._flags_of(flags), **gaps}
 
-    def _live_evidence_missing(self, item, proofs):
+    def _live_evidence_missing(self, item, cutoff):
+        """A ``Live:`` clause needs verified deploy proof of this epoch recorded at or after *cutoff*."""
         criteria = item.get("done_criteria") or ""
         if not re.search(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S", criteria):
             return False
-        stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
-        if any(stamp is None for stamp in stamps):
-            return True
-        last_merge = max(stamps)
         return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
-                       and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
+                       and (as_epoch(row["at"]) or 0) >= cutoff for row in self._evidence(item["key"]))
 
-    def _merged_auto_proofs(self, item):
-        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
+    def _merged_auto_proofs(self, item, lanes=True):
+        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open
+        (unless ``lanes=False``, see :meth:`_merged_work_commits`)."""
         git, project = self._adapter("git"), self._merge_project(item)
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
-        for commit in self._merged_work_commits(item):
+        for commit in self._merged_work_commits(item, lanes):
             pr, head, date = self._merged_commit_proof(git, project, commit)
             merge = commit.get("merge") or {}
             sha = merge.get("sha")

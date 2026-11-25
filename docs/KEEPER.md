@@ -353,6 +353,11 @@ These lanes no longer block a merged close.
 
 ## API (threaded `http.server`, bind 127.0.0.1 by default)
 
+`close_merged_auto` also returns the landed-work inventory: `deployment_pending` rows (a unit or `Live:` clause
+with no deploy proof newer than its last landing) and `deployment_expected` rows (fully receipted targets), with
+per-target `ages` and the landing merges in `landed`. `inventory: true` (a dry run, needs the keeper setting
+`deploy_inventory_done`) reads completed items too; `add_evidence_router` takes `deploy` proof for a closed item.
+
 A router can send the keyless body `{"dry_run": true}` to `POST /v1/close_merged` as a deploy probe.
 A permitted probe returns `{"dry_run": true, "route": "close_merged"}` with
 zero item, audit, evidence, or event writes.

@@ -353,6 +353,31 @@ CREATE TRIGGER trg_criteria_amendments_truncate BEFORE TRUNCATE ON criteria_amen
     FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('criteria amendments are append-only');
 """
 
+_DEPLOY_PROOF_PG = """
+CREATE OR REPLACE FUNCTION pgk_cancelled(k TEXT) RETURNS boolean
+LANGUAGE sql STABLE SET search_path FROM CURRENT AS $$
+    SELECT EXISTS (SELECT 1 FROM items i WHERE i.key = k AND i.state = 'cancelled')
+$$;
+CREATE OR REPLACE FUNCTION pgk_deploy_proof_event(t TEXT, p TEXT) RETURNS boolean
+LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+    RETURN COALESCE(t = 'evidence_added' AND COALESCE(p::jsonb ->> 'kind', '') = 'deploy', false);
+EXCEPTION WHEN others THEN
+    RETURN false;
+END
+$$;
+DROP TRIGGER trg_events_locked_insert ON events;
+CREATE TRIGGER trg_events_locked_insert BEFORE INSERT ON events
+    FOR EACH ROW WHEN (pgk_locked(NEW.key)
+                       AND NOT (pgk_deploy_proof_event(NEW.type, NEW.payload) AND NOT pgk_cancelled(NEW.key)))
+    EXECUTE FUNCTION pgk_reject('key is locked');
+DROP TRIGGER trg_evidence_locked_insert ON evidence;
+CREATE TRIGGER trg_evidence_locked_insert BEFORE INSERT ON evidence
+    FOR EACH ROW WHEN (pgk_locked(NEW.key)
+                       AND NOT COALESCE(NEW.kind = 'deploy' AND NOT pgk_cancelled(NEW.key), false))
+    EXECUTE FUNCTION pgk_reject('key is locked');
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -386,7 +411,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(25, "claim definition event index", CLAIM_DEFINITION_INDEX_DDL),
               Migration(26, "criteria amendments", _CRITERIA_AMENDMENTS_PG),
               Migration(27, "definition design reference",
-                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'))
+                        'ALTER TABLE items ADD COLUMN IF NOT EXISTS design_ref TEXT COLLATE "C";'),
+              Migration(28, "deploy proof may follow the close of its item", _DEPLOY_PROOF_PG))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

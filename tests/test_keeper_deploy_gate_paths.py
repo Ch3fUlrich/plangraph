@@ -4,6 +4,8 @@ import sys
 
 import pytest
 
+from plangraph.keeper.errors import Refused
+
 from plangraph.keeper import context_sources
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
@@ -464,6 +466,7 @@ def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # 
 
     from plangraph.keeper.evidence import VERIFIERS
     env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    env.clock.t = 4_000_000_000.0  # the proof is recorded after the merge, not before it
     for host in ("alpha", "beta"):
         env.store.add_evidence_router(env.p("router"), "demo:B", "deploy",
                                       {"host": host, "unit": "train.service", "is_active": "active"})

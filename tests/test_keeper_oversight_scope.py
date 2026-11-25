@@ -1149,7 +1149,7 @@ def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
     versions = [m.version for m in steps]
     assert versions == list(range(1, schema_pg.LATEST + 1))
     assert versions == sorted(set(versions))
-    assert schema_pg.LATEST == 27
+    assert schema_pg.LATEST == 28
 
     import re
     exec_cols = re.findall(

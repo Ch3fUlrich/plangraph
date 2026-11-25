@@ -620,7 +620,7 @@ def deploy_targets(changes) -> list[str]:
         status, path = ("A", change) if isinstance(change, str) else change
         unit = _UNIT_RE.match(path)
         binary = _BIN_RE.match(path)
-        if unit:
+        if unit and status != "D":  # a deleted unit is retired, not shipped
             out.add(unit.group(1))
         elif binary and status == "A":
             out.add("bin:" + (binary.group(2) or binary.group(1)))
