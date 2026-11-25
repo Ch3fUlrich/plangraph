@@ -122,6 +122,8 @@ Use grep for text that is not a symbol.
   echo rc=$?`, and you wait for the harness notification. A command that hits its limit is
   ended: write `LESSON <command> hit its limit` and go on with a narrower one.
 - Never run a test selection again that already passed, unless the code under it changed.
+  The one exception is FAST_CHECKS in step 7: it runs on the committed head and writes the
+  stamp for that exact head, also when a pre-commit run chose the same tests.
 
 ## Fix round
 
