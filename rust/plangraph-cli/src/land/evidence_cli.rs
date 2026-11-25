@@ -70,18 +70,11 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         trains,
     )?;
     if let Some(out) = flags.get("records-out") {
-        let head = need(flags, "head")?;
         let records = records_of(
             &d,
             need(flags, "day")?,
             need(flags, "batch")?,
-            head,
-            evidence_git::was_rebased(
-                Path::new(need(flags, "repo")?),
-                &old,
-                need(flags, "main")?,
-                head,
-            )?,
+            need(flags, "head")?,
         );
         append(out, &records)?;
     }
@@ -119,6 +112,7 @@ fn append(path: &str, records: &[Record]) -> Result<(), String> {
 /// a rebase caused, or a batch that landed.
 pub(super) fn record_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let kind = match need(flags, "kind")?.as_str() {
+        "rebase" => Kind::Rebase,
         "fix-round-after-rebase" => Kind::FixRoundAfterRebase,
         "landed" => Kind::Landed,
         other => {

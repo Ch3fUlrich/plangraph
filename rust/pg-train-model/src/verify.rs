@@ -21,7 +21,8 @@ impl Model {
                     && was < policy.bound
                     && !(policy.order == Order::Count && deferrals >= policy.due_after)
             }
-            None => true,
+            // A part that was not ready at the cut was not deferred by it.
+            None => false,
         }
     }
 

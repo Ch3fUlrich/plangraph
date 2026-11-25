@@ -29,6 +29,8 @@ fn in_tested_ff_a_retry_train_stale_twice_lands_on_the_current_main_with_no_thir
     stale_once(&mut m);
     stale_once(&mut m);
     assert_eq!((m.run(1), m.rebuilds(1)), (3, 2));
+    // The green result of the third run is there to land when main moves again.
+    ci(&mut m, 1, true);
     ok(&mut m, Event::MainMove { paths: 0 });
     assert_eq!(
         denied(&mut m, Event::Rebuild { train: 1 }),
@@ -36,7 +38,6 @@ fn in_tested_ff_a_retry_train_stale_twice_lands_on_the_current_main_with_no_thir
     );
     assert_eq!(denied(&mut m, Event::Select), Denied::RetryFirst);
     // The tested train lands on the main that moved; the third run never happens.
-    ci(&mut m, 1, true);
     ok(&mut m, Event::Settle { train: 1 });
     assert_eq!((m.run(1), m.stale_landings()), (3, 1));
     // The ordinary part waited behind exactly the two rebuilds, then rides.
@@ -143,4 +144,27 @@ fn in_pr_merge_mode_the_ordinary_train_and_the_queued_groups_go_on_after_the_ret
     ok(&mut m, Event::Settle { train: 2 });
     assert_eq!(ok(&mut m, Event::StartRetry), Outcome::Train(3));
     assert_eq!(m.train_parts(3), [2]);
+}
+
+#[test]
+fn main_moving_before_the_bind_or_before_a_green_result_does_not_strand_the_retry_train() {
+    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    stale_once(&mut m);
+    // The second rebuild is made but not bound yet when main moves again.
+    ok(&mut m, Event::MainMove { paths: 0 });
+    ok(&mut m, Event::Rebuild { train: 1 });
+    ok(&mut m, Event::MainMove { paths: 0 });
+    let stale = Event::Bind {
+        train: 1,
+        build: 1,
+        base: m.main() - 1,
+        policy: POLICY,
+    };
+    assert_eq!(denied(&mut m, stale), Denied::Stale);
+    // No green result exists to land: the rebuild is allowed, not refused as a third.
+    ok(&mut m, Event::Rebuild { train: 1 });
+    start(&mut m, 1);
+    ci(&mut m, 1, true);
+    ok(&mut m, Event::Settle { train: 1 });
+    assert_eq!(m.landed(), 1);
 }

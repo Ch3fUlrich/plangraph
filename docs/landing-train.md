@@ -87,8 +87,8 @@ conflict. The patch identity keeps whitespace, and the paths main touched are re
 evidence base, so a path touched and reverted still voids. `--carry-out FILE` keeps one carry per head in a JSON array (a later assessment that no longer carries
 clears it), and `plangraph land-train build|verify|admit --carries FILE --trains-landed N` assesses each
 carry again against the base being built and the trains landed now before the builder accepts the receipt
-of the old head. A rebase counted in the log is a new head that does not contain the old one; an amendment on top or a merge
-of main is not. A flake verdict (a red that also fails without the patch, or a hung test) decides only what
+of the old head. The rebase itself is logged by whoever ran it, with `evidence-record --kind rebase --batch B --head H`: an
+assessment logs what it decided, not how the head came about.
 voids an ACCEPT; it never lets a red required CI merge. `evidence-red --red FILE --ci-green BOOL --main-state FILE` prints whether a red is a flake and, separately,
 whether the merge gate lets the batch in. `evidence-assess --records-out FILE --day D --batch B` and `evidence-record` append the log lines (one
 event counts once however often it is logged; `--kind landed` logs the denominator); `evidence-report --records FILE` prints per day the rebases (assessments where the head changed), carried ACCEPTs and CI

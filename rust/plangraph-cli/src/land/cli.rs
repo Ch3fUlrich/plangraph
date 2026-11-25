@@ -4,7 +4,9 @@ use super::git::POLICY_VERSION;
 use super::main_gh;
 use super::main_state::State;
 use super::resolve::{self, Adopted, Append, Outcome, Refusal};
-use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest, PartIn};
+use super::train::{
+    check_freeze, require_open_main, selection_identity, BuildOpen, Freeze, Manifest, PartIn,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -14,7 +16,7 @@ const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA 
   plangraph land-train go-verify --evidence FILE\n\
   plangraph land-train evidence-assess --repo DIR --evidence FILE --main SHA --head SHA --trains-now N [--records-out FILE --day D --batch B] [--carry-out FILE]\n\
   plangraph land-train evidence-report --records FILE\n\
-  plangraph land-train evidence-record --records-out FILE --day D --batch B --head H --kind fix-round-after-rebase|landed\n\
+  plangraph land-train evidence-record --records-out FILE --day D --batch B --head H --kind rebase|fix-round-after-rebase|landed\n\
   plangraph land-train evidence-red --red FILE --ci-green true|false --main-state FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
@@ -231,48 +233,7 @@ pub(super) fn run_inner(
             let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
             let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
             let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
-            let name = need("name")?;
-            let base = need("base")?;
-            super::evidence_cli::admit_carries(&repo_dir, &base, &flags, &mut parts)?;
-            let adopted = match flags.get("resolution-log") {
-                Some(p) => adopted_from_log(p, &name)?,
-                None => vec![],
-            };
-            build_train(
-                &Build {
-                    repo: repo_dir,
-                    base: base.clone(),
-                    parts,
-                    attributes: flags
-                        .get("attributes")
-                        .map(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()))
-                        .transpose()?
-                        .unwrap_or_default(),
-                    cap: flags
-                        .get("cap")
-                        .map(|c| c.parse().map_err(|_| "cap must be a number".to_owned()))
-                        .transpose()?,
-                    resolutions: adopted,
-                    protected,
-                    open: BuildOpen {
-                        build: name.clone(),
-                        policy_version: POLICY_VERSION.into(),
-                        base,
-                        grant_digest: need("grant-digest")?,
-                        snapshot_position: need("snapshot-position")?
-                            .parse()
-                            .map_err(|_| "snapshot-position must be a number".to_owned())?,
-                    },
-                    out: PathBuf::from(flags.get("out").cloned().unwrap_or_else(|| ".".into())),
-                    branch: flags
-                        .get("branch")
-                        .cloned()
-                        .unwrap_or_else(|| format!("land/train-{name}")),
-                    name,
-                },
-                &answer.state,
-                &answer.tip,
-            )
+            run_build(&flags, parts, protected, &answer.state, &answer.tip)
         }
         "verify" | "review" | "admit" => {
             let manifest: Manifest = read(&need("manifest")?)?;
@@ -288,7 +249,7 @@ pub(super) fn run_inner(
             bind_artifacts(&open, &freeze, &manifest, &result)?;
             check_freeze(&open, &result.snapshot, &freeze)
                 .map_err(|e| format!("freeze refused: {e:?}"))?;
-            if freeze.selection != parts {
+            if selection_identity(&freeze.selection) != selection_identity(&parts) {
                 return Err(
                     "freeze refused: the selection is not the one recomputed by the verifier"
                         .into(),
@@ -324,4 +285,64 @@ pub(super) fn run_inner(
         }
         _ => Err(USAGE.into()),
     }
+}
+
+/// The `build` command once main has been read: the carries are admitted, the train is built and its
+/// artifacts are written. Separate from the read of main so the command can be driven without the network.
+pub(super) fn run_build(
+    flags: &std::collections::BTreeMap<String, String>,
+    mut parts: Vec<PartIn>,
+    protected: Vec<String>,
+    state: &State,
+    tip: &str,
+) -> Result<Vec<String>, String> {
+    let need = |k: &str| {
+        flags
+            .get(k)
+            .cloned()
+            .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
+    };
+    let repo_dir = PathBuf::from(need("repo")?);
+    let name = need("name")?;
+    let base = need("base")?;
+    super::evidence_cli::admit_carries(&repo_dir, &base, flags, &mut parts)?;
+    let adopted = match flags.get("resolution-log") {
+        Some(p) => adopted_from_log(p, &name)?,
+        None => vec![],
+    };
+    build_train(
+        &Build {
+            repo: repo_dir,
+            base: base.clone(),
+            parts,
+            attributes: flags
+                .get("attributes")
+                .map(|p| std::fs::read_to_string(p).map_err(|e| e.to_string()))
+                .transpose()?
+                .unwrap_or_default(),
+            cap: flags
+                .get("cap")
+                .map(|c| c.parse().map_err(|_| "cap must be a number".to_owned()))
+                .transpose()?,
+            resolutions: adopted,
+            protected,
+            open: BuildOpen {
+                build: name.clone(),
+                policy_version: POLICY_VERSION.into(),
+                base,
+                grant_digest: need("grant-digest")?,
+                snapshot_position: need("snapshot-position")?
+                    .parse()
+                    .map_err(|_| "snapshot-position must be a number".to_owned())?,
+            },
+            out: PathBuf::from(flags.get("out").cloned().unwrap_or_else(|| ".".into())),
+            branch: flags
+                .get("branch")
+                .cloned()
+                .unwrap_or_else(|| format!("land/train-{name}")),
+            name,
+        },
+        state,
+        tip,
+    )
 }
