@@ -346,25 +346,33 @@ impl Driver for Host {
         self.review_run(head, previous)
     }
     fn classify_review(&mut self, review: &Value) -> Result<ReviewClass, String> {
-        let text = review["text"].as_str().unwrap_or_default();
-        let prompt = review["prompt_path"]
-            .as_str()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .unwrap_or_default();
-        let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
-        let head = review["head"].as_str().unwrap_or("HEAD");
-        let paths: Vec<String> = self
-            .git(&["diff", "--name-only", &base, head])?
-            .lines()
-            .map(str::to_owned)
-            .collect();
+        // The serving attempt's own saved final prompt and diff binding, read from its run
+        // directory: the same for an immediate and a late-completed review.
+        let run = self
+            .state
+            .join("runs")
+            .join(review["run_id"].as_str().unwrap_or("none"));
+        let record: Value = fs::read_to_string(run.join("record.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(Value::Null);
+        let attempt = json!({
+            "prompt": fs::read_to_string(run.join("prompt.txt")).unwrap_or_default(),
+            "prompt_sha256": record["prompt_sha256"],
+            "binding": record["review_binding"],
+            "cwd": self.cwd,
+        });
         let python = || {
             let mut python =
                 pg_worker_core::writer_families::python_command(self.python_src.as_deref());
             python.env("PATH", &self.tool_path);
             python
         };
-        pg_worker_core::writer_families::classify_review(text, &prompt, &paths, &python)
+        pg_worker_core::writer_families::classify_review(
+            review["text"].as_str().unwrap_or_default(),
+            &attempt,
+            &python,
+        )
     }
     fn gates(&mut self) -> Result<(), String> {
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;

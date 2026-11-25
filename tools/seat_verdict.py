@@ -159,30 +159,25 @@ def findings(text, idx, limit=600):
     after = "\n".join(lines[idx + 1:]).strip()
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
-def _process_diagnostics(seat_dir, text, evidence, cwd=None):
-    """Classify findings against the seat's saved final prompt and its dispatched diff scope.
-
-    The saved prompt counts only when its digest is the serving attempt's `prompt_sha256`;
-    any other prompt text suppresses nothing (fail closed)."""
+def _classifier():
     try:
-        from plangraph.review import verdict as classifier
-    except ImportError:  # run from a checkout without an installed package
+        from plangraph.review import verdict
+    except ImportError:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-        from plangraph.review import verdict as classifier
+        from plangraph.review import verdict
+    return verdict
+
+
+def _process_diagnostics(seat_dir, text, evidence, cwd=None):
+    """Classify findings against the seat's saved final prompt and its dispatched diff scope
+    (the one implementation is plangraph.review.verdict.classify_run)."""
+    classifier = _classifier()
     try:
         prompt = (seat_dir / "prompt.txt").read_text("utf-8")
     except (OSError, ValueError):
         prompt = ""
-    if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(evidence.get("prompt_sha256") or "").lower():
-        prompt = ""
-    # The serving attempt's own diff binding (digest recomputed in its checkout) fixes the scope;
-    # seats without one fall back to the diff the verified prompt carries.
-    # A recorded binding that fails verification leaves the scope unknown: no fallback.
-    if evidence.get("review_binding") is not None:
-        scope = classifier.bound_diff_paths(evidence["review_binding"], cwd)
-    else:
-        scope = classifier.diff_paths(prompt, cwd) if prompt else None
-    found = classifier.classify_findings(text, prompt=prompt, changed_paths=scope)
+    found = classifier.classify_run(text, prompt=prompt, prompt_sha256=evidence.get("prompt_sha256"),
+                                    binding=evidence.get("review_binding"), cwd=cwd)
     return {"lines": list(found.process), "blocking": found.blocking,
             "prompt_sha256": evidence.get("prompt_sha256")}
 
@@ -434,17 +429,20 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         return EXIT_NO_VERDICT
     process = _process_diagnostics(args.seat_dir, text, evidence,
                                    identity.get("cwd") if isinstance(identity.get("cwd"), str) else None)
+    cwd = identity.get("cwd") if isinstance(identity.get("cwd"), str) else None
     if process["lines"]:
         _save_process(args.seat_dir, args.key, evidence, process)
         if not process["blocking"]:
             # A verdict given under a defective brief is held, accept or fix alike: nothing is
             # posted and a fresh passing review on the same head releases it.
+            if not args.dry_run:
+                _classifier().record_hold(cwd, str(evidence.get("head_sha") or ""), str(evidence.get("run_id")))
             print(json.dumps({"process": process}, indent=2) if args.dry_run else
                   "seat_verdict: process findings about the review prompt; verdict held, not posted "
                   f"(see {args.seat_dir / 'process.json'})", file=sys.stdout if args.dry_run else sys.stderr)
             return EXIT_PROCESS
-        # An ACCEPT that still lists a HIGH or MED finding of the head never posts as a pass.
-        ok = False if process["blocking"] else ok
+    # An ACCEPT that still carries a counted HIGH or MED finding of the head never posts as a pass.
+    ok = False if process["blocking"] else ok
     if ok and re.match(r"claude-sonnet-5-5(?:$|[-@])", str(model).rsplit("/", 1)[-1],
                        re.I) and not _reported_tests(text):
         print("seat_verdict: pass refused (Sonnet review tests unavailable)", file=sys.stderr)
@@ -473,7 +471,10 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         return EXIT_REFUSED
     payload["binding"] = binding
     decision = save_verdict_payload(args.seat_dir, family, payload)
-    return dispatch_verdict(args.key, args.url, args.token_dir, decision, send, KNOWN_FAMILIES)
+    code = dispatch_verdict(args.key, args.url, args.token_dir, decision, send, KNOWN_FAMILIES)
+    if code == 0 and ok:  # a passing run after a hold is what lets the head's approval land
+        _classifier().record_pass(cwd, str(evidence.get("head_sha") or ""), str(evidence.get("run_id")))
+    return code
 
 if __name__ == "__main__":
     sys.exit(main())

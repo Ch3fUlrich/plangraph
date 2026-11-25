@@ -37,6 +37,7 @@ struct Fake {
     pushed: Vec<String>,
     push_failures: usize,
     process_only: bool,
+    prepares: usize,
     /// Turns from this call number on return the Codex usage-limit error.
     quota_from: Option<usize>,
     quota_booked: Vec<crate::native_writer::quota::Limit>,
@@ -61,6 +62,10 @@ impl Driver for Fake {
             return Err("merge conflict".into());
         }
         Ok("fresh-base".into())
+    }
+    fn prepare_review(&mut self, _: &str) -> Result<Option<ReviewBase>, String> {
+        self.prepares += 1;
+        Ok(None)
     }
     fn disk_gb(&mut self) -> Result<u64, String> {
         Ok(self.disk)

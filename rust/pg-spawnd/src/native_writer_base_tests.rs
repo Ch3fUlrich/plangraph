@@ -407,3 +407,33 @@ fn a_symbol_added_by_a_merge_resolution_is_named_not_dropped() {
         json!("(merge resolution or unattributed change): merged_symbol")
     );
 }
+
+#[test]
+fn a_missing_exact_head_log_leaves_the_test_output_field_unset_and_the_renderer_refuses_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    let base = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    let head = commit_file(&host.repo, "docs/a.md", "text\n");
+    let stamp = host.stamp(&head).unwrap();
+    fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    fs::write(&stamp, "").unwrap();
+    let context = host.brief_context(&base, &head);
+    assert!(context.get("test_output_paths").is_none(), "{context}");
+    let python = || {
+        pg_worker_core::writer_families::python_command(Some(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        ))
+    };
+    let refusal =
+        pg_worker_core::writer_families::render_review_brief(&context, "", &python).unwrap_err();
+    assert!(refusal.contains("test_output_paths"), "{refusal}");
+    // With the log in place the path is named.
+    fs::write(stamp.with_extension("log"), "== gate\n").unwrap();
+    let context = host.brief_context(&base, &head);
+    assert!(context["test_output_paths"]
+        .as_str()
+        .unwrap()
+        .contains(".log"));
+    assert!(pg_worker_core::writer_families::render_review_brief(&context, "", &python).is_ok());
+}

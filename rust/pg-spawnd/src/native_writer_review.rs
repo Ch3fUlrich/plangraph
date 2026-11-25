@@ -355,11 +355,12 @@ impl Host {
             }
         }
         let mut logs = Vec::new();
+        // An output path is evidence only when the exact-head log can be read.
         if let Ok(stamp) = self.stamp(head) {
-            logs.push(format!(
-                "fast checks (exact head): {}",
-                stamp.with_extension("log").display()
-            ));
+            let log = stamp.with_extension("log");
+            if fs::File::open(&log).is_ok_and(|file| file.metadata().is_ok_and(|m| m.is_file())) {
+                logs.push(format!("fast checks (exact head): {}", log.display()));
+            }
         }
         if let Ok(stamp) = self.stamp(head) {
             let excerpt = stamp.with_extension("session.log");
@@ -601,7 +602,6 @@ impl Host {
         let text = verdict["text"].as_str().unwrap_or_default();
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;
         verdict["path"] = json!(path);
-        verdict["prompt_path"] = json!(prompt_path);
         Ok(verdict)
     }
 }

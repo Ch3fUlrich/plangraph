@@ -186,30 +186,45 @@ fn a_lane_head_review_brief_refuses_empty_item_context_by_field_name() {
 }
 
 #[test]
-fn classify_review_uses_the_one_classifier_with_prompt_and_diff_scope() {
-    let empty = "=== ITEM CONTEXT\nItem key: k\nChanged public symbols: run\nCallers of changed public symbols: \nAffected test output (paths): l.log\n";
-    let process = "PROCESS review_brief.md field=callers - no callers rendered\n";
-    let text = format!("{process}VERDICT: REQUEST_CHANGES\n");
-    let src = vec!["src/a.rs".to_owned()];
-    let held = classify_review(&text, empty, &src, &python).unwrap();
+fn classify_review_uses_the_one_classifier_with_the_serving_attempt() {
+    use sha2::{Digest, Sha256};
+    let context = "=== ITEM CONTEXT\nItem key: k\nChanged public symbols: run\nCallers of changed public symbols: \nAffected test output (paths): l.log\n";
+    let attempt = |prompt: &str, digest: Option<&str>| {
+        let sha = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        serde_json::json!({"prompt": prompt, "prompt_sha256": digest.unwrap_or(&sha), "binding": null, "cwd": null})
+    };
+    let prompt = format!("{context}diff --git a/src/a.rs b/src/a.rs\n");
+    let text =
+        "PROCESS review_brief.md field=callers - no callers rendered\nVERDICT: REQUEST_CHANGES\n";
+    let held = classify_review(text, &attempt(&prompt, None), &python).unwrap();
     assert_eq!((held.blocking, held.process.len()), (0, 1));
-    // The diff changes the brief itself, or the prompt renders the field: a finding of the head.
-    let touched = vec!["src/plangraph/review/review_brief.md".to_owned()];
+    // The dispatched diff changes the brief itself: a finding of the head.
+    let touched = format!("{prompt}diff --git a/src/plangraph/review/review_brief.md b/src/plangraph/review/review_brief.md\n");
     assert_eq!(
-        classify_review(&text, empty, &touched, &python)
+        classify_review(text, &attempt(&touched, None), &python)
             .unwrap()
             .blocking,
         1
     );
-    let rendered = empty.replace("symbols: \n", "symbols: a:1\n");
+    // The prompt renders the field, or is not the one the attempt recorded: a finding of the head.
+    let rendered = prompt.replace(
+        "symbols: run\nCallers of changed public symbols: \n",
+        "symbols: run\nCallers of changed public symbols: a:1\n",
+    );
     assert_eq!(
-        classify_review(&text, &rendered, &src, &python)
+        classify_review(text, &attempt(&rendered, None), &python)
+            .unwrap()
+            .blocking,
+        1
+    );
+    assert_eq!(
+        classify_review(text, &attempt(&prompt, Some(&"0".repeat(64))), &python)
             .unwrap()
             .blocking,
         1
     );
     // An untyped MED about the brief is never a diagnostic.
     let med = "MED review_brief.md:26 - omits the callers\nVERDICT: REQUEST_CHANGES\n";
-    let counted = classify_review(med, empty, &src, &python).unwrap();
+    let counted = classify_review(med, &attempt(&prompt, None), &python).unwrap();
     assert_eq!((counted.blocking, counted.process.len()), (1, 0));
 }

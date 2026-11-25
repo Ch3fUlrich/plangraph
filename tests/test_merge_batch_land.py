@@ -129,18 +129,25 @@ def test_land_refuses_an_approval_for_an_older_head(env):
     assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
-def test_land_refuses_an_approval_whose_seat_run_is_held_by_process_findings(env):
+def test_land_binds_a_held_head_to_a_passing_seat_run_posted_after_the_hold(env):
+    from plangraph.review import verdict as seats
+
     approval = pushed(env, prs=(1, 2))
-    head = head_of(env)
+    head, repo = head_of(env), str(env.repo)
     approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
-    hold = approval.with_name("process.json")
-    hold.write_text(json.dumps({"head_sha": head, "run_id": "run-held", "lines": ["MED x"]}))
-    res = land(env, approval)
-    assert res.returncode == 1 and "held by process findings" in res.stderr and not env.calls("pr", "merge")
-    fresh = env.tmp / "fresh-seat"
-    fresh.mkdir()
-    (fresh / "review.txt").write_text(f"HEAD: {head}\nVERDICT: PASS\n")
-    assert land(env, fresh / "review.txt").returncode == 0 and len(env.calls("pr", "merge")) == 1
+    seats.record_hold(repo, head, "run-held")
+    copy = env.tmp / "elsewhere" / "review.txt"  # a byte-identical copy in another directory
+    copy.parent.mkdir()
+    copy.write_text(approval.read_text())
+    for refused in (approval, copy):
+        res = land(env, refused)
+        assert res.returncode == 1 and "held by process findings" in res.stderr and not env.calls("pr", "merge")
+    seats.record_pass(repo, head, "run-fresh")
+    for still_refused in (approval, copy):
+        assert land(env, still_refused).returncode == 1
+    fresh = env.tmp / "fresh.txt"
+    fresh.write_text(f"RUN: run-fresh\nHEAD: {head}\nVERDICT: PASS\n")
+    assert land(env, fresh).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
 @pytest.mark.parametrize("state, row, word", [
