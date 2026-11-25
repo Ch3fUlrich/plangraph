@@ -21,7 +21,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
                               close_merged_items, active_train, go_key_block, part_items, train_keys)
-from merge_batch_plan import cleanup_landed, writers_stopped, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
+from merge_batch_plan import cleanup_landed, hold_lane_refs, writers_stopped, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -590,6 +590,7 @@ def land_with_lease(args, lease, st, mode):
             train = prepare_train(st, lease, mode)
             if st.get("go_requested_head") == st["head"]:
                 record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
+        hold_lane_refs([st["prs"][str(part["pr"])].get("ref") for part in st["merged"]])  # held from before the merge until writer-stop
         started = landing_now()
         if mode == TESTED_FF:
             if lease:

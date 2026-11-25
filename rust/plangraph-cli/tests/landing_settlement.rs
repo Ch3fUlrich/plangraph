@@ -170,6 +170,8 @@ import merge_batch_util as util
 import merge_batch_plan as plan
 
 with TemporaryDirectory() as tmp:
+    import os
+    os.environ['PG_LANE_STATE'] = tmp + '/lane'
     path = Path(tmp) / 'keeper.db'
     db = open_db(path, create=True, backend='sqlite')
     add_principal(db, 'lander', 'router', [])
@@ -250,7 +252,7 @@ with TemporaryDirectory() as tmp:
     assert '--delete-remote' not in sweeps[0] and '--remote-target' not in sweeps[0], sweeps[0]
     assert '--delete-remote' in sweeps[1] and sweeps[1][sweeps[1].index('--remote-target') + 1] == 'lane/landed-r3:' + 'c'*40, sweeps[1]
     assert '--delete-remote' not in sweeps[2] and '--remote-target' not in sweeps[2], sweeps[2]
-    assert '--remote-target' in sweeps[3]
+    assert '--delete-remote' not in sweeps[3] and '--remote-target' not in sweeps[3], sweeps[3]  # legacy: no evidence
     assert len(lane_calls) == 1, lane_calls
     # Only a host verification with a writers report and no kept writer counts as writer-stop evidence.
     stop = plan.writers_stopped

@@ -513,3 +513,31 @@ fn lane_cleanup_reads_claims_with_the_run_state_not_the_cleanup_state() {
     );
     assert_ne!(default, state);
 }
+
+#[test]
+fn lane_cleanup_keeps_a_held_ref_until_its_hold_lapses() {
+    let f = Fixture::new();
+    let fresh = f.lane("lane/fresh", "main", "f.txt", "f\n");
+    f.main_ff("lane/fresh");
+    let lapsed = f.lane("lane/lapsed", "main", "l.txt", "l\n");
+    f.main_ff("lane/lapsed");
+    f.lane("lane/free", "main", "r.txt", "r\n");
+    f.main_ff("lane/free");
+    f.hook_on(true);
+    // Settlement published holds before the merge: one is current, one is long past its time.
+    fs::create_dir_all(&f.state).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    fs::write(
+        f.state.join("lane-holds.txt"),
+        format!("refs/heads/lane/fresh\t{now}\nrefs/heads/lane/lapsed\t1\n"),
+    )
+    .unwrap();
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(f.heads(), ["fresh"], "{text}");
+    assert!(text.contains("held-for-settlement"), "{text}");
+    assert!(text.contains(&fresh) && text.contains(&lapsed), "{text}");
+}

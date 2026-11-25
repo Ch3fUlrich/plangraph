@@ -19,6 +19,33 @@ fn hosted_path(path: &str) -> Option<String> {
         .then(|| path.to_lowercase())
 }
 
+/// Host and port of a URL authority. The port of the scheme's own default (https 443, ssh 22, http 80,
+/// git 9418) is dropped; any other port stays, so one host on two ports is two endpoints.
+fn hosted_host(authority: &str, scheme: Option<&str>) -> Option<String> {
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, Some(port))
+        }
+        Some(_) => return None,
+        None => (authority, None),
+    };
+    let default = match scheme {
+        Some("https") => "443",
+        Some("http") => "80",
+        Some("ssh") => "22",
+        Some("git") => "9418",
+        _ => "",
+    };
+    let host = host.trim_matches(['[', ']']).to_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+    Some(match port {
+        Some(port) if port != default => format!("{host}:{port}"),
+        _ => host,
+    })
+}
+
 fn local(path: &str) -> Option<RepoId> {
     let raw = std::path::Path::new(path);
     let canonical = std::fs::canonicalize(raw).unwrap_or_else(|_| raw.to_path_buf());
@@ -39,19 +66,15 @@ pub fn parse(url: &str) -> Option<RepoId> {
     }
     if let Some((_, rest)) = url.split_once("://") {
         let (authority, path) = rest.split_once('/')?;
-        let host = authority
-            .rsplit('@')
-            .next()?
-            .split(':')
-            .next()?
-            .to_lowercase();
+        let scheme = url.split_once("://")?.0.to_lowercase();
+        let host = hosted_host(authority.rsplit('@').next()?, Some(&scheme))?;
         let path = hosted_path(path)?;
-        return (!host.is_empty()).then_some(RepoId { host, path });
+        return Some(RepoId { host, path });
     }
     if let Some((authority, path)) = url.split_once(':').filter(|(a, _)| !a.contains('/')) {
-        let host = authority.rsplit('@').next()?.to_lowercase();
+        let host = hosted_host(authority.rsplit('@').next()?, None)?;
         let path = hosted_path(path)?;
-        return (!host.is_empty()).then_some(RepoId { host, path });
+        return Some(RepoId { host, path });
     }
     local(url)
 }
@@ -171,6 +194,20 @@ mod tests {
         assert_ne!(
             parse("/primary/owner/repo.git"),
             parse("/mirror/owner/repo.git")
+        );
+        // One host and path on two ports is two endpoints; a scheme's default port is not an extra one.
+        let user2 = format!("git{}", '@');
+        assert_ne!(
+            parse(&format!("ssh://{user2}github.com:2222/owner/name")),
+            parse(&format!("ssh://{user2}github.com:2223/owner/name"))
+        );
+        assert_ne!(
+            parse(&format!("ssh://{user2}github.com:2222/owner/name")),
+            id("github.com", "owner/name")
+        );
+        assert_eq!(
+            parse("https://github.com:443/owner/name"),
+            id("github.com", "owner/name")
         );
         // The same owner/name on another host is another repository.
         assert_ne!(

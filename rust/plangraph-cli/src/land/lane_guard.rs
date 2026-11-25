@@ -8,7 +8,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// A settlement hold lapses after this long: a train that never settles must not keep a ref forever.
+const HOLD_SECS: u64 = 14 * 86400;
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -55,11 +58,21 @@ pub(super) fn load_protection(
             trees.push((p.clone(), b.to_string()));
         }
     }
+    // `<ref>[<TAB><epoch seconds>]`: a stamped hold lapses after HOLD_SECS, an unstamped one never does.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let holds = match fs::read_to_string(state.join("lane-holds.txt")) {
         Ok(text) => text
             .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
+            .filter_map(|row| {
+                let (name, stamp) = row.split_once('\t').unwrap_or((row, ""));
+                let live = stamp
+                    .trim()
+                    .parse::<u64>()
+                    .map_or(true, |at| now.saturating_sub(at) <= HOLD_SECS);
+                (live && !name.trim().is_empty()).then(|| name.trim().to_string())
+            })
             .collect(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
         Err(e) => return Err(e.to_string()),

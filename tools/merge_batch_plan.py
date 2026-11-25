@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
@@ -418,6 +419,56 @@ def lane_cleanup_landed(repo, st, parts):
         raise MergeBatchError("lane cleanup deferred: a delete was refused; settle again or wait for the daily run")
 
 
+try:
+    import fcntl
+except ImportError:  # no flock on Windows: the append stays atomic, a release can race an append
+    fcntl = None
+
+
+@contextmanager
+def _locked(path):
+    """One writer at a time over the holds file (check plus rewrite is one step under the lock)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "a") as lock:
+        if fcntl:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _hold_file():
+    state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
+    return Path(state) / "lane-holds.txt"
+
+
+def hold_lane_refs(refs):
+    """Publish a hold (`refs/heads/<ref>` and the time) for each lane ref before its train can merge:
+    the daily cleanup keeps a held ref until settlement releases it after a recorded writer-stop
+    or the hold expires (lane_guard.rs, 14 days), so no ref is eligible before writer-stop can use it."""
+    rows = [f"refs/heads/{ref}\t{int(time.time())}\n" for ref in refs if ref and ref.startswith("lane/")]
+    if rows:
+        path = _hold_file()
+        with _locked(path):
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, "".join(rows).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+
+def release_lane_refs(refs):
+    """Drop the holds of `refs` after settlement recorded the writer-stop and ran the lane cleanup."""
+    path = _hold_file()
+    drop = {f"refs/heads/{ref}" for ref in refs}
+    if not drop or not path.is_file():
+        return
+    with _locked(path):
+        keep = [row for row in path.read_text().splitlines() if row.split("\t")[0] not in drop]
+        temp = path.with_suffix(".tmp")
+        temp.write_text("".join(row + "\n" for row in keep))
+        os.replace(temp, path)
+
+
 def writers_stopped(verification):
     """True when the recorded host verification names a writer-stop report for every host and none of
     its writers was kept: only then may settlement delete the landed lane refs the writers push to."""
@@ -429,9 +480,9 @@ def writers_stopped(verification):
 def cleanup_landed(st, landed, *, strict=False, writers=None):
     """Best effort cleanup with exact state SHAs; all sweep protections still apply.
 
-    `writers` is the writer-stop evidence of settlement: True (every host stopped its writers),
-    False (not established: lane refs stay for the daily run) or None (a landing without host
-    verification, which never runs the lane verb). Remote deletes go only to identity-checked refs;
+    `writers` is the writer-stop evidence of settlement: True (every host stopped its writers);
+    anything else (not established, or a landing without host verification) keeps the lane refs
+    out of both delete paths, held until the evidence is recorded or the hold expires. Remote deletes go only to identity-checked refs;
     the worktree targets are local-only (no --delete-remote without a verified remote target)."""
     try:
         repo = git("rev-parse", "--show-toplevel").stdout.strip()
@@ -444,7 +495,7 @@ def cleanup_landed(st, landed, *, strict=False, writers=None):
                     targets.append((path, name, rec["head"]))
         pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
         verified = same_repo_parts(st, landed)  # a fork's ref never reaches a remote delete
-        if writers is False:
+        if not writers:  # no positive writer-stop evidence (also a landing without host verification)
             held = [ref for ref, _ in verified if ref.startswith("lane/")]
             verified = [pair for pair in verified if pair[0] not in held]
             if held:
@@ -466,6 +517,7 @@ def cleanup_landed(st, landed, *, strict=False, writers=None):
         print(result.stdout, end="", file=sys.stderr)
         if writers:
             lane_cleanup_landed(repo, st, verified)
+            release_lane_refs([ref for ref, _ in verified])
     except MergeBatchError as exc:
         if strict:
             raise

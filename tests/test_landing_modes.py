@@ -59,7 +59,8 @@ def journal(env):
     add_principal(db, "lander", "router", [])
     db.close()
     env.env.update(PLANGRAPH_ENV_FILE=str(env.tmp / "keeper.env"), JOURNAL_DB=str(path),
-                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"), JOURNAL_LANE_LOG=str(env.tmp / "lane"))
+                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"), JOURNAL_LANE_LOG=str(env.tmp / "lane"),
+                   PG_LANE_STATE=str(env.tmp / "lanestate"))
     binary = env.stubs / "plangraph"
     binary.write_text("""#!/usr/bin/env python3
 import json, os, subprocess, sys
@@ -183,12 +184,15 @@ def test_settlement_runs_the_lane_verb_only_after_a_recorded_writer_stop_report(
     sweep = (env.tmp / "sweep").read_text().splitlines()
     lane_remote = {s for s in sweep if s.startswith("lane/")}
     frozen = {f"{part['ref']}:{part['head']}" for part in train["parts"] if part["pr"] in train["included"]}
+    holds = [row.split("\t")[0] for row in (env.tmp / "lanestate/lane-holds.txt").read_text().splitlines()]
     if reported:
+        assert not [hold for hold in holds if hold.removeprefix("refs/heads/") in {p["ref"] for p in train["parts"]}]
         (call,) = [json.loads(line) for line in (env.tmp / "lane").read_text().splitlines()]
         refs = call[call.index("--refs") + 1].split(",")
         assert set(refs) == {f"refs/heads/{pair}" for pair in frozen} and "--apply" in call
         assert lane_remote == frozen
-    else:
+    else:  # held from before the merge until a writer-stop report is recorded
+        assert {f"refs/heads/{p['ref']}" for p in train["parts"] if p["pr"] in train["included"]} <= set(holds)
         assert not (env.tmp / "lane").exists() and lane_remote == set()
         assert "--delete-remote" not in sweep
 

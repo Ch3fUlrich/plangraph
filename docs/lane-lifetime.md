@@ -16,7 +16,7 @@ remote `lane/*` head and every recorded CI probe pull request an end of life. Da
 | live | everything else | keep |
 
 Kept even when eligible: a claim of the keeper claims reader (`branches`, which include the `branch`, `publish_ref` and `pushed` ref a local run record names, plus the branch of any local
-worktree under a claimed `path`), a local checkout, a ref in `<state>/lane-holds.txt`, an open pull
+worktree under a claimed `path`), a local checkout, a ref held in `<state>/lane-holds.txt` (see below), an open pull
 request that has the ref as head **or base** (read for that ref right before the push), and any run where
 the claims reader, the PR read or the repository binding is unresolved. The claims reader reads the spawner's run records under `--run-state` (default `PG_SWEEP_STATE`, then
 `$HOME/.local/state/plangraph`), never the cleanup's own `--state`. When the claims reader reports
@@ -28,7 +28,8 @@ Repository binding (`rust/worker-core/src/lane_repo.rs`, used by the delete door
 and `pg-worktree-sweep --delete-remote` share it): every fetch URL and every push URL of the remote
 (`pushurl` and `insteadOf` applied; a named push can reach several) must reduce to one host and
 full hosted path, or for a local path to one canonical directory (two mirrors with the same
-`owner/repo` tail are two repositories); the open-PR reads use `gh --repo HOST/OWNER/NAME` of that identity; the verb also
+`owner/repo` tail are two repositories); a non-default port is part of a hosted identity (one host and path
+on two ports are two endpoints; a scheme's own default port is dropped); the open-PR reads use `gh --repo HOST/OWNER/NAME` of that identity; the verb also
 compares it with `--gh-host`/`--gh-repo` (default host `github.com`; `--gh-host local` is for offline
 fixtures); the sweeper additionally requires the delete remote to be the repository of `origin`, whose
 `main` it judges containment by.
@@ -70,4 +71,13 @@ Each delete first pins the commit as `refs/plangraph/restore/<sha>` and syncs a 
 `<state>/sweep/<ts>.tsv` (repo, `-`, ref, sha). Restore: `git push <remote> refs/plangraph/restore/<sha>:refs/heads/lane/<name>`.
 The push uses `--force-with-lease=<ref>:<sha>`. Outcomes: deleted and absent are done; moved
 (the remote advanced) is kept and re-evaluated on the next run; refused (hook, ruleset, network) exits 3,
-so a strict settlement step fails and resumes, and the daily timer retries. At settlement the lane refs are held until the recorded host verification carries a writer-stop report for every host with no kept writer (`landing verify-hosts` now records `writers` per host; `null` means no inventory configured and counts as not established); until then only the daily run can take them, under its claim protections. The legacy sweeper gets `--delete-remote` only together with identity-checked `--remote-target`s, so a fork's checkout is swept locally only. Settlement checks each part's pull request first (`isCrossRepository` false and `headRefName` equal to the frozen ref, `tools/merge_batch_plan.py::same_repo_parts`) and only then lets the legacy sweeper's `--remote-target` and this verb see the exact frozen ref and SHA; a fork's ref reaches neither.
+so a strict settlement step fails and resumes, and the daily timer retries. Holds: `land` publishes a hold (`refs/heads/<ref>` and the epoch seconds) for every part's lane ref
+before the merge (`tools/merge_batch_plan.py::hold_lane_refs`, under a file lock), so no ref is eligible
+for the daily run before writer-stop can use its hosted ref. Settlement releases the holds after the
+lane cleanup ran with recorded writer-stop evidence (`release_lane_refs`); a hold that is never released
+lapses after 14 days (`lane_guard.rs`). Writer-stop evidence is the recorded host verification with a
+writer report for every host and no kept writer (`landing verify-hosts` records `writers` per host;
+`null` means no inventory and counts as not established). Without it, and in the legacy landing (no host
+verification at all), the lane refs are neither remote targets of the legacy sweeper nor given to the
+verb, and `--delete-remote` is passed only together with identity-checked remote targets, so a fork's
+checkout is swept locally only. Settlement checks each part's pull request first (`isCrossRepository` false and `headRefName` equal to the frozen ref, `tools/merge_batch_plan.py::same_repo_parts`) and only then lets the legacy sweeper's `--remote-target` and this verb see the exact frozen ref and SHA; a fork's ref reaches neither.
