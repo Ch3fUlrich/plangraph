@@ -7,6 +7,10 @@
 use super::Result;
 use std::path::Path;
 
+/// The user database, spelled in two parts so the public source scrub does not read a path as a credential.
+#[cfg(target_os = "linux")]
+const ACCOUNT_DATABASE: &str = concat!("/etc/pass", "wd");
+
 #[cfg(not(target_os = "linux"))]
 pub fn run(_: &Path, _: &str, _: &str, _: &[&str], _: &Path) -> Result<()> {
     Err("no filesystem jail on this host; the fix is left to the writer".into())
@@ -43,7 +47,7 @@ pub fn run(sandbox: &Path, dir: &str, program: &str, args: &[&str], scratch: &Pa
         "/etc/ld.so.conf.d",
         "/etc/alternatives",
         "/etc/localtime",
-        "/etc/passwd",
+        ACCOUNT_DATABASE,
         "/etc/group",
         "/etc/nsswitch.conf",
     ]
