@@ -41,10 +41,46 @@ live shells older than two hours whose current directory has been unlinked.
 start time keeps the alert stable across ticks and distinguishes PID reuse.
 
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
-Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
-`origin_main_head`, `behind_commits`, and `age_hours`. Collectors can add
-`work_used_percent`, an array of usage percentages for configured work mounts.
-`host-disk` alerts once per host when any sampled filesystem exceeds 85% used.
+Each entry requires `host`, `checkout_head`, `origin_main_head`, `behind_commits`, and
+`age_hours`, and its disks in one of two forms.
+
+- Keyed `disks`: an array of `{device, used_percent, consumers}`. `device` names the filesystem
+  (on Unix the decimal `st_dev` of the sampled path, on Windows a volume id the collector picks),
+  `consumers` is an optional array of `{path, bytes}` measured on that filesystem. Samples with
+  the same `device` are one filesystem. When `disks` is present it is the whole disk observation
+  of the row: the legacy fields beside it are ignored, and a device that is not listed is unknown,
+  not recovered.
+- Legacy: `tmp_used_percent` and `root_used_percent` (both required) and an optional
+  `work_used_percent` array of anonymous percentages.
+
+A filesystem crossing is used strictly above 85%; exactly 85% is recovery. On the local host a
+legacy root percentage belongs to the filesystem of `/`, and a legacy temp percentage to the
+filesystem of `PLANGRAPH_HOST_TMP_PATH` when that names the path the collector samples; every other
+legacy percentage names no filesystem. Hosts are keyed by the canonical id of the host registry
+(`$XDG_CONFIG_HOME/plangraph/hosts.json`), so a row labelled with an alias is the same host. The
+local host is `PLANGRAPH_HOST_NAME`, else the registry's `self` entry.
+
+`host-disk` alerts once per crossing. The key of a crossing names the host and its filesystem
+(`host-disk: host="H" fs="D"`); samples that name no filesystem share one aggregate key
+(`host-disk: host="H"`) and a bare alert. A crossing that has consumers queues one measured alert
+(`... measured top=PATH=BYTES ...`, the five largest) once, optionally after a bare alert; the
+measured key then stays for the whole crossing, so moving sizes or a missing measurement queue
+nothing more. For the local host the watchdog fills the consumers of a hot filesystem the
+collector gave none for from `disk-watermarks.json` in the spawn state directory
+(`PLANGRAPH_DISK_WATERMARKS` overrides the path), keyed by device, and only from a row measured
+after the last recovery of that filesystem that the watchdog observed (`disk-recovered.json` in
+its state directory); a row without a time is accepted only while no recovery has been observed.
+The watermark file is Unix only: on Windows the local alert stays bare unless the collector
+supplies keyed consumers.
+
+Recovery needs a sample of the same filesystem at or below 85%. A host missing from a snapshot
+keeps all its `host-disk` and `host-code` keys, and a filesystem missing from its host's keyed
+list keeps its key. An aggregate key from before filesystems were keyed ends when the host's row
+has no hot sample; it is replaced by the keyed key (and not queued again) only when exactly one
+filesystem is hot and nothing anonymous is. Each queued disk event carries a `transition` id. The
+watchdog commits the key of a queued disk event to `active` before it evaluates a snapshot or
+drains the queue, so a crash between the two writes never queues the event twice; an observed
+recovery retires the queued events of that crossing and the next crossing gets a new id.
 `host-code` alerts when the spawner checkout
 is behind origin/main by more than 10 commits **or** 24 hours. The collector must
 provide the ancestry-based behind count and age in hours since the first missing

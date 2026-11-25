@@ -73,9 +73,12 @@ claims, run state and root paths. Inspect the dry run and record a real cleanup
 with freed bytes. Give the heartbeat collector the newest `disk-hygiene.json`
 report for that host and surface its `alarm` or failure.
 
-The timer emits an alert when a monitored filesystem reaches 85% use. The alert
-lists up to three configured directories by allocated bytes.
-`disk-watermarks.json` retains the active crossings until usage falls below 85%.
+The timer emits an alert when a monitored filesystem is used strictly above 85%. The alert
+lists up to five configured directories by allocated bytes.
+`disk-watermarks.json` keeps one row per crossed device, keyed by device, with the time it was
+measured. The timer measures a crossed filesystem again on every pass and drops the row once usage
+is at or below 85%. The flow watchdog reads these rows for the local host (see
+`docs/flow-watchdog.md`).
 
 ## Build caches
 
@@ -85,8 +88,10 @@ fleet launcher. Set `SCCACHE_DIR` on the build disk. Size the cache so that it
 and active Cargo targets leave the configured free-space floor. Check the
 effective wrapper, cache directory and cap with a small spawned Cargo build.
 
-NOTE Watchdog host session. Include the usage of configured work mounts in each
-host's `work_used_percent` array. On the single-disk worker, inspect the
+NOTE Watchdog host session. Give each host's `disks` array one `{device, used_percent,
+consumers}` sample per configured work mount, root and temp filesystem: `device` is the `st_dev`
+of the sampled path, `consumers` the five largest directories on that filesystem. The legacy
+`work_used_percent` array names no filesystem and only raises a bare alert. On the single-disk worker, inspect the
 worktree and cache reports, reclaim eligible data and measure usage below 85%.
 
 ## WSL cache guard
