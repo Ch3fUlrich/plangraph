@@ -81,7 +81,6 @@ fn the_rust_gate_reads_the_registry_through_the_shared_reader_whatever_the_pytho
     let real = "MIGRATIONS = (Migration(1, a), Migration(2, b))\n";
     for ok in [
         format!("\"\"\"Shape:\nMIGRATIONS = (Migration(1, a),)\n\"\"\"\n{real}"),
-        format!("if False: MIGRATIONS = (Migration(1, a),)\n{real}"),
         "MIGRATIONS=(Migration(1, a),\n Migration(2, b))\n".to_string(),
     ] {
         assert_eq!(parse_latest(&python, &ok), Ok(2), "{ok}");
@@ -90,4 +89,12 @@ fn the_rust_gate_reads_the_registry_through_the_shared_reader_whatever_the_pytho
     assert!(parse_latest(&python, dup).is_err());
     assert!(parse_latest(&python, "MIGRATIONS = (Migration(1, a), Migration(3, c))\n").is_err());
     assert!(parse_latest(&python, "x = 1\n").is_err());
+    // Writes the static read cannot account for are refused, so the keeper never loads another registry.
+    for bad in [
+        format!("{real}MIGRATIONS += (Migration(3, c),)\n"),
+        format!("{real}MIGRATIONS: tuple = (Migration(1, a), Migration(2, b), Migration(3, c))\n"),
+        format!("if False: MIGRATIONS = (Migration(1, a),)\n{real}"),
+    ] {
+        assert!(parse_latest(&python, &bad).is_err(), "{bad}");
+    }
 }

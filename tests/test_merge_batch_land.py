@@ -713,3 +713,14 @@ def test_push_renders_the_pr_body_key_list_at_the_new_head(env):
     env.git("commit", "-qm", "resolver slice\n\nPlan-Item: plangraph:RESOLVER-KEY", cwd=wt)
     assert env.run("push", "--name", "g1").returncode == 0
     assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]" in env.load()["prs"]["100"]["body"]
+
+
+def test_a_registry_written_by_augmented_assignment_is_refused_by_the_land_gate(env):
+    schema = "src/plangraph/keeper/schema_pg.py"
+    registry = "MIGRATIONS = (Migration(1, 'baseline', DDL),{} )\nLATEST = MIGRATIONS[-1].version\n"
+    env.seed({schema: registry.format("")})
+    env.branch_pr(1, {schema: registry.format(" Migration(2, 'a', NEW),") + "MIGRATIONS += (Migration(3, 'b', MORE),)\n"},
+                  item="ITEM-A")
+    assert env.run("build", "--name", "g1", "--prs", "1", "--plan", "plangraph:BATCH").returncode == 0
+    refused = env.run("push", "--name", "g1")
+    assert refused.returncode == 1 and "unreadable" in refused.stderr and "written other than" in refused.stderr

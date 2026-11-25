@@ -4,9 +4,11 @@
 //! keeper refuses a database behind its code. The GO must carry `MIGRATION <version>` and the deploy goes
 //! through `plangraph keeper-restart` (LE-KEEPER-SCHEMA-TRAIN-LANDS-WITHOUT-MIGRATION-FIELD).
 //!
-//! The registry is read by one reader, `plangraph.keeper.schema_pg.registry_version` (a Python AST read that
-//! never executes the file), the same function the batch land gate calls, so the two gates cannot disagree
-//! about what the registry is.
+//! The registry is read by one reader, `registry_version` of `schema_pg.py` (a Python AST read that never
+//! executes the file), the same function the batch land gate calls, so the two gates cannot disagree about
+//! what the registry is. The binary carries its own copy of that file's text (compiled in, like the workflow
+//! pin of `go_verify`) and runs only that function in an isolated interpreter, so it needs no checkout of
+//! `plangraph` on the Python path and never runs code of the revision under test.
 use super::git;
 use std::io::Write;
 use std::path::Path;
@@ -15,12 +17,18 @@ use std::process::{Command, Stdio};
 /// The file whose `MIGRATIONS` registry defines the version.
 pub const SCHEMA_PATH: &str = "src/plangraph/keeper/schema_pg.py";
 
-const READER: &str = "import sys\nfrom plangraph.keeper.schema_pg import registry_version\ntry:\n    print(registry_version(sys.stdin.read()))\nexcept ValueError as exc:\n    sys.exit(str(exc))\n";
+/// The text of that file as built into this binary; only its `registry_version` function is run.
+const READER_SOURCE: &str = include_str!("../../../../src/plangraph/keeper/schema_pg.py");
 
-/// The version of the registry in `text` (the contents of `SCHEMA_PATH`), asked of the shared Python reader.
+/// Reads `{"reader": <file text>, "text": <registry text>}` from stdin, runs `registry_version` of the first
+/// on the second and prints the version, or exits with the reason.
+const LOADER: &str = "import ast, json, sys\nrequest = json.load(sys.stdin)\nnode = next(n for n in ast.parse(request['reader']).body if isinstance(n, ast.FunctionDef) and n.name == 'registry_version')\nnamespace = {'ast': ast}\nexec(compile(ast.Module([node], []), 'registry_version', 'exec'), namespace)\ntry:\n    print(namespace['registry_version'](request['text']))\nexcept ValueError as exc:\n    sys.exit(str(exc))\n";
+
+/// The version of the registry in `text` (the contents of `SCHEMA_PATH`), asked of the shared reader.
 pub fn parse_latest(python: &dyn Fn() -> Command, text: &str) -> Result<u32, String> {
+    let request = serde_json::json!({"reader": READER_SOURCE, "text": text}).to_string();
     let mut child = python()
-        .args(["-c", READER])
+        .args(["-I", "-c", LOADER])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -30,7 +38,7 @@ pub fn parse_latest(python: &dyn Fn() -> Command, text: &str) -> Result<u32, Str
         .stdin
         .take()
         .ok_or("no stdin for the registry reader")?
-        .write_all(text.as_bytes())
+        .write_all(request.as_bytes())
         .map_err(|e| format!("the keeper registry reader: {e}"))?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {
