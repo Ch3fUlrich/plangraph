@@ -241,8 +241,7 @@ def test_import_batch_default_project_for_bare_ids(w, tmp_path):
 def test_pack_includes_write_content_and_hides_heldout(w, repo):
     (key,) = seed(w, [("A", [])])
     put(w, key, heldout_check="HELDOUT_SECRET_CHECK")
-    pack = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
-                                 max_request_tokens=200000)
+    pack = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
     assert "WRITE_MARKER" in pack.text and "READ_MARKER" in pack.text
     assert "HELDOUT_SECRET_CHECK" not in pack.text
     assert [f.role for f in pack.files] == ["write", "read"]
@@ -254,8 +253,7 @@ def test_pack_needs_a_window_class(w, repo):
     with pytest.raises(ValueError):
         service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
     pack = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
-                                 window_class="256k", max_request_tokens=200000,
-                                 check_tail="FAILED x")
+                                 window_class="256k", check_tail="FAILED x")
     assert "FAILED x" in pack.text
 
 
@@ -307,98 +305,3 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
                                     legs=DEFAULT_LEGS, role="implement")
     assert [leg.id for leg in worker.legs[:3]] == ["cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high"]
     assert worker.legs[-1].id == "deepseek"
-
-
-#: A declared small request limit on a large window class (the pack budget of the class
-#: alone would be far above it).
-GROK_LEG = Leg(id="grok-120k", tier="free", harness="opencode", model="grok-model",
-               family="grok", windows=("1m",), max_request_tokens=120000,
-               trains_on_data=False)
-LEG_LIMIT = 120000
-
-
-def _big_write_set(repo, tokens):
-    names, left, i = [], tokens, 0
-    while left > 0:
-        n = min(left, 19000)
-        name = f"src/big{i}.py"
-        (repo / name).write_text("x" * (4 * n), encoding="utf-8")
-        names.append(name)
-        left -= n
-        i += 1
-    return names
-
-
-def test_admission_and_retry_both_use_the_selected_leg_limit(w, repo):
-    """A card that fits the leg only without a tail is refused at the gate, and an admitted
-    card's retry with the largest tail stays within the same limit."""
-    key, key2 = seed(w, [("A", []), ("B", [])])
-    put(w, key, window_class="1m", estimate_tokens=1000,
-        write_set=_big_write_set(repo, LEG_LIMIT - 300))
-    refused = gate(w, repo, key, legs=(GROK_LEG,))
-    assert refused.state == "needs_input"
-    assert any(f.message.startswith("pack too big: ") for f in refused.verdict.findings)
-
-    put(w, key2, window_class="1m", estimate_tokens=1000,
-        write_set=_big_write_set(repo, LEG_LIMIT - 4000))
-    admitted = gate(w, repo, key2, legs=(GROK_LEG,))
-    assert admitted.ready and admitted.state == "ready"
-    first = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
-                                  max_request_tokens=LEG_LIMIT)
-    retry = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
-                                  max_request_tokens=LEG_LIMIT,
-                                  check_tail="\n".join("E" * 400 for _ in range(60)))
-    assert retry.text[:retry.prefix_chars] == first.text
-    assert retry.tokens <= LEG_LIMIT
-
-
-def test_retry_packing_needs_the_admission_route_and_keeps_its_leg_cap(w, repo):
-    """Admission excluded a wider leg; a re-route would pick it and pack past the cap."""
-    key, key2 = seed(w, [("A", []), ("B", [])])
-    wide = Leg(id="wide-free", tier="free", harness="opencode", model="wide-model",
-               family="wide", windows=("1m",), max_request_tokens=1000000,
-               trains_on_data=False)
-    put(w, key, window_class="1m", estimate_tokens=1000,
-        write_set=_big_write_set(repo, LEG_LIMIT - 4000))
-    admitted = gate(w, repo, key, legs=(wide, GROK_LEG), unavailable=("wide-free",))
-    assert admitted.ready and admitted.route.first_leg.id == "grok-120k"
-    tail = "\n".join("E" * 400 for _ in range(60))
-    retry = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
-                                  route=admitted.route, check_tail=tail)
-    assert retry.tokens <= LEG_LIMIT
-    # without the admission route (or an explicit limit) a retry is refused, not packed wider
-    with pytest.raises(ValueError, match="admission route"):
-        service.pack_for_card(w.store, w.p("router"), key, repo_root=repo, check_tail=tail)
-    # an over-limit card is refused on the retry path too
-    put(w, key2, window_class="1m", estimate_tokens=1000,
-        write_set=_big_write_set(repo, LEG_LIMIT - 300))
-    with pytest.raises(service.context_pack.PackTooBig) as ei:
-        service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
-                              route=admitted.route, check_tail=tail)
-    assert "limit 120000" in str(ei.value)
-
-
-SHIPPED_200K = Leg(id="shipped-200k", tier="free", harness="opencode", model="shipped-model",
-                   family="shipped", windows=("1m",), max_request_tokens=200000,
-                   trains_on_data=False)
-
-
-def test_default_first_pack_and_retry_share_the_admission_budget(w, repo):
-    """The first pack of an admitted card never exceeds the leg cap and is the retry prefix."""
-    key, = seed(w, [("A", [])])
-    (repo / "src" / "read.py").write_text("r" * 4 * 19000, encoding="utf-8")
-    put(w, key, window_class="1m", estimate_tokens=1000, read_set=["src/read.py"],
-        write_set=_big_write_set(repo, 195000))
-    admitted = gate(w, repo, key, legs=(SHIPPED_200K,))
-    assert admitted.ready and admitted.route.first_leg.max_request_tokens == 200000
-    # the first pack takes the admission route; without it no budget is guessed from the class
-    with pytest.raises(ValueError, match="admission route"):
-        service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
-    first = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
-                                  route=admitted.route)
-    retry = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
-                                  route=admitted.route, check_tail="boom\n" * 30)
-    assert first.tokens <= 200000 and retry.tokens <= 200000
-    assert retry.text[:retry.prefix_chars] == first.text
-    assert [f.path for f in first.files] == [f.path for f in retry.files]
-    assert first.skipped == retry.skipped

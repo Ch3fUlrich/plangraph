@@ -123,7 +123,11 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         try:
             pack_tokens = context_pack.build_pack(
                 card, repo_root=Path(repo_root), key=key,
-                budget_tokens=context_pack.leg_budget(route.window_class, leg_max)).tokens
+                budget_tokens=context_pack.pack_budget(route.window_class)).tokens
+            reserve = context_pack.tail_cap_tokens(leg_max) if isinstance(leg_max, int) else 0
+            if isinstance(leg_max, int) and pack_tokens <= leg_max < pack_tokens + reserve:
+                # a check_fail retry could not add its tail inside the leg cap
+                pack_error = (f"pack {pack_tokens} + tail reserve {reserve} > {leg_max}")
         except context_pack.PackTooBig as exc:
             pack_tokens = None
             pack_error = str(exc)
@@ -177,15 +181,12 @@ def pack_for_card(store: Any, principal: Any, key: str, *, repo_root: Path | str
 
     The budget comes from ``window_class`` or, failing that, the given ``route``'s class or the
     card's own (``ValueError`` when none is set), capped at ``max_request_tokens`` or, without
-    it, at the first leg of ``route``: the route the gate admitted the card under
-    (:attr:`GateResult.route`).  The first pack and every ``check_tail`` retry take the same
-    admission budget as :func:`gate_card`, so the retry prefix is the first pack; a pack with
-    neither raises ``ValueError``, because the class budget alone can exceed the admitted cap
-    and routing again can pick a wider leg than admission did.
+    it, at the first leg of ``route`` (:attr:`GateResult.route`).  A card the gate marked ready
+    has a full pack, tail reserve included, inside its leg cap, so the first pack and every
+    ``check_tail`` retry choose the same files with or without a cap: the retry prefix is the
+    first pack and the tail stays inside the cap.
     """
     card = store.get_card(principal, key)
-    if route is None and max_request_tokens is None:
-        raise ValueError("a pack needs the admission route or max_request_tokens")
     if route is not None and max_request_tokens is None:
         max_request_tokens = route.first_leg.max_request_tokens
     window = window_class or (route.window_class if route is not None else None) \
