@@ -148,6 +148,7 @@ pub fn check_lifecycle(launcher: &Launcher) {
     assert_eq!(launched["host"], LOCAL);
     assert_eq!(launched["role"], "implement");
     assert_eq!(launched["status"], "running");
+    assert!(launched.get("parent_session").is_none(), "{launched}");
     s.write_json(
         "agents.json",
         json!([{"sessionId":SID,"kind":"background","state":"done"}]),
