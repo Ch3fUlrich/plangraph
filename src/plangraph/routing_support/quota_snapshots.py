@@ -89,15 +89,56 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
     return None if not accounts or 0.0 in accounts.values() else min(accounts.values())
 
 
-def fetch_snapshot_rows(env=None, *, fetch=None):
-    """Read-only snapshot DB or management API; LookupError when unreadable."""
+_SNAPSHOT_COLUMNS = ('provider, connection_id, window_key, remaining_percentage, '
+                     'is_exhausted, next_reset_at, created_at')
+
+
+def _plain(value):
+    """A cell JSON can carry: a BLOB or a non-finite number is one bad value, not a bad reply."""
+    if isinstance(value, bytes) or (isinstance(value, float) and not math.isfinite(value)):
+        return None
+    return value
+
+
+_TIME_COLUMNS = ('next_reset_at', 'created_at')
+
+
+def _decimal(value):
+    """A numeric time as its shortest decimal text: a JSON number is rounded by readers that
+    parse it as a float, the text keeps the digits the store holds."""
+    if isinstance(value, float):
+        return repr(value)
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+
+
+def _history(db):
+    """Every stored row for the pool readout, which tolerates a malformed row: undecodable text
+    is replaced and an unsupported cell becomes None, so independent healthy rows stay readable."""
+    db.text_factory = lambda raw: raw.decode('utf-8', 'replace')
+    cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots ORDER BY id')
+    columns = [column[0] for column in cursor.description]
+    rows = [dict(zip(columns, map(_plain, row))) for row in cursor]
+    for row in rows:
+        for column in _TIME_COLUMNS:
+            row[column] = _decimal(row[column])
+    return rows
+
+
+def fetch_snapshot_rows(env=None, *, fetch=None, latest='id'):
+    """Read-only snapshot DB or management API; LookupError when unreadable.
+
+    ``latest='id'`` (routing) keeps the highest id per provider, connection and window and reads
+    a malformed row as an unreadable source; ``latest='all'`` (pool readout) returns every
+    stored row, oldest id first, for a reader that picks the newest observation itself.
+    """
     source = os.environ if env is None else env
     if source.get('QUOTA_SNAPSHOT_DB'):
         try:
             db = sqlite3.connect(Path(source['QUOTA_SNAPSHOT_DB']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
             try:
-                cursor = db.execute('SELECT provider, connection_id, window_key, remaining_percentage, '
-                                    'is_exhausted, next_reset_at, created_at FROM quota_snapshots WHERE id IN '
+                if latest == 'all':
+                    return _history(db)
+                cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots WHERE id IN '
                                     '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id')
                 columns = [column[0] for column in cursor.description]
                 return [dict(zip(columns, row)) for row in cursor]
