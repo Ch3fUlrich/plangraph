@@ -101,13 +101,18 @@ impl DeployPlan {
                 let at = b.host.as_deref().map_or(String::new(), |h| format!("@{h}"));
                 let title = format!("Train deploy target {}{at} refused: {}", b.family, b.reasons.join("; "));
                 let parts: Vec<_> = b.parts.iter().map(|p| format!("#{p}")).collect();
+                // A keeper definition (store_input `_normalise`): `project` and `id` make the key, `lane` is a
+                // valid kind and needs `done_criteria`; tests/fixtures/deploy_blocker_items.json is checked by
+                // both this crate and the keeper's own validation (tests/test_deploy_blocker_items.py).
+                let id = b.key.split_once(':').map_or(b.key.as_str(), |(_, id)| id);
                 serde_json::json!({
-                    "key": b.key, "project": "plangraph", "kind": "task",
+                    "id": id, "project": "plangraph", "kind": "lane",
                     "under": "plangraph:LESSONS-ENFORCE", "priority": 10,
                     "title": title.chars().take(200).collect::<String>(),
                     "description": format!(
                         "Why: the train deploy preflight refused {}{at} of part(s) {}: {}.\nHow: fix the host or the Deploy-Hosts/Deploy declaration, rerun the dry run.\nDone when: the dry run passes for this target.",
                         b.family, parts.join(", "), b.reasons.join("; ")),
+                    "done_criteria": format!("The host install dry run passes for {}{at}.", b.family),
                 })
             })
             .collect();

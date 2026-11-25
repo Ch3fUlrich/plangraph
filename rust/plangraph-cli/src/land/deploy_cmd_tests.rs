@@ -288,9 +288,17 @@ exit 0"#,
         std::fs::read_to_string(rows_dir.join("demo:B")).unwrap(),
         written
     );
-    // A failed first run is an error, saved in the state, and blocks the next run.
+    // A failed read before the install changes nothing: no state is saved and the rerun stays open.
     std::fs::remove_file(d.join("state.json")).unwrap();
-    flags.insert("install-cmd".into(), script(d, "bad.sh", "exit 1"));
+    flags.insert("install-cmd".into(), script(d, "broken.sh", "exit 1"));
+    let e = run_cli(&flags).unwrap_err();
+    assert!(e.contains("read before install"), "{e}");
+    assert!(!d.join("state.json").exists());
+    // A failed first run is an error, saved in the state, and blocks the next run.
+    let failing = r#"[ "$1" = read ] && echo '{"is_active":"absent"}'
+[ "$1" = install ] && exit 1
+exit 0"#;
+    flags.insert("install-cmd".into(), script(d, "bad.sh", failing));
     let e = run_cli(&flags).unwrap_err();
     assert!(e.contains("stop: a.service@alpha"), "{e}");
     let blocked = run_cli(&flags).unwrap_err();

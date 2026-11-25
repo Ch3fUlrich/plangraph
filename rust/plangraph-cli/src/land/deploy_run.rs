@@ -56,30 +56,38 @@ pub fn exit_micros(text: &str) -> Option<i64> {
 }
 
 impl RunRead {
-    /// Whether the first run counts as good: a oneshot reports `success` and an exit time after the landed
-    /// head, strictly after the exit time it showed before this install (`before`: the run is a new one, not
-    /// the previous deploy's) and not after `now` (microseconds, as the keeper compares them), and it must be the invocation the install
-    /// started (`started`), not a timer's run in between; a binary is `installed`, anything
-    /// else is `active`.
+    /// Whether the first run counts as good. A oneshot reports `success` and an exit time after the landed
+    /// head, strictly after the one it showed before this install and not after `now` (microseconds, as the
+    /// keeper compares them). A service that is not a oneshot must be `active` with `Result=success` (it
+    /// started), and both kinds must show the invocation the install started, which is not the one they showed
+    /// before it (so a timer's run, or a unit nothing restarted, is no proof). A binary is `installed`,
+    /// anything else is `active`.
     pub fn good(
         &self,
         family: &str,
         gate: &Gate,
-        before: Option<i64>,
+        base: &Baseline,
         now: i64,
         started: Option<&str>,
     ) -> bool {
+        let fresh = started.is_some()
+            && self.invocation.as_deref() == started
+            && self.invocation != base.invocation;
         if self.oneshot {
             let exited = self
                 .exec_main_exit_timestamp
                 .as_deref()
                 .and_then(exit_micros);
             return self.result.as_deref() == Some("success")
-                && started.is_some()
-                && self.invocation.as_deref() == started
+                && fresh
                 && exited.is_some_and(|e| {
-                    e > gate.fresh_after && before.is_none_or(|b| e > b) && e <= now
+                    e > gate.fresh_after && base.exit.is_none_or(|b| e > b) && e <= now
                 });
+        }
+        if family.ends_with(".service") {
+            return self.is_active == "active"
+                && self.result.as_deref() == Some("success")
+                && fresh;
         }
         let want = if family.starts_with("bin:") {
             "installed"
@@ -88,6 +96,13 @@ impl RunRead {
         };
         self.is_active == want
     }
+}
+
+/// What a unit showed before its install: the exit time (microseconds) and the invocation of its last run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Baseline {
+    pub exit: Option<i64>,
+    pub invocation: Option<String>,
 }
 
 /// The keeper `deploy` evidence of one (family, host) for one item.

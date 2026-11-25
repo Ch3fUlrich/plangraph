@@ -38,7 +38,8 @@ fn an_unparsable_stale_or_future_exit_time_is_a_failed_first_run_through_the_dis
         assert!(host
             .calls
             .borrow()
-            .contains(&"disable a.timer@alpha".to_string()));
+            .iter()
+            .all(|c| !c.starts_with("disable")));
     }
     let host = ran_at("Tue 2026-11-24 01:00:00 UTC");
     let rows = Rows::default();
@@ -131,11 +132,13 @@ fn a_result_from_before_this_install_is_not_this_installs_first_run() {
     assert!(host
         .calls
         .borrow()
-        .contains(&"disable a.timer@alpha".to_string()));
+        .iter()
+        .all(|c| !c.starts_with("disable")));
     // A later exit time is a new run, even a minute before the clock: no clock skew is needed to tell.
     let mut host = ran_at("2026-11-24T00:59:30Z");
     let mut old = host.runs["a.service"].clone();
     old.exec_main_exit_timestamp = Some("2026-11-24T00:59:00Z".into());
+    old.invocation = Some("inv-0".into());
     host.before.insert("a.service".into(), old);
     let (rows, mut state) = (Rows::default(), PostState::default());
     let r = run(

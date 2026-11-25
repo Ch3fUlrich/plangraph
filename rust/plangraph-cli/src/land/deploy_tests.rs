@@ -119,7 +119,10 @@ fn a_failed_dry_run_excludes_the_family_and_names_the_blocker_item() {
     assert_eq!(b.key, "plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-ALPHA");
     assert_eq!(b.reasons, ["missing env PG_TOKEN_FILE"]);
     let items = plan.blocker_items();
-    assert_eq!(items["items"][0]["key"], b.key.as_str());
+    assert_eq!(
+        format!("plangraph:{}", items["items"][0]["id"].as_str().unwrap()),
+        b.key
+    );
     assert_eq!(items["items"][0]["under"], "plangraph:LESSONS-ENFORCE");
 }
 
@@ -296,4 +299,25 @@ fn a_unit_added_in_an_untagged_follow_up_goes_to_the_items_of_its_part() {
     assert_eq!(plan.go_req(), "deploy: late.service@alpha");
     assert_eq!(plan.targets[0].items, ["demo:B".to_string()].into());
     assert!(plan.blockers.is_empty(), "{plan:?}");
+}
+
+/// The blocker definition is the file the keeper's own validation accepts
+/// (tests/test_deploy_blocker_items.py reads the same fixture).
+#[test]
+fn blocker_items_match_the_keeper_fixture() {
+    let plan = DeployPlan {
+        blockers: vec![Blocker {
+            key: "plangraph:LE-DEPLOY-BLOCKED-TRAIN-SERVICE-ALPHA".into(),
+            family: "train.service".into(),
+            host: Some("alpha".into()),
+            parts: vec![1],
+            reasons: vec!["missing env PG_TOKEN_FILE".into()],
+        }],
+        ..DeployPlan::default()
+    };
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/deploy_blocker_items.json"
+    ))
+    .unwrap();
+    assert_eq!(plan.blocker_items(), fixture);
 }

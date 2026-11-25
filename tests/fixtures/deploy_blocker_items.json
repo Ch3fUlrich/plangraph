@@ -1,0 +1,14 @@
+{
+ "items": [
+  {
+   "id": "LE-DEPLOY-BLOCKED-TRAIN-SERVICE-ALPHA",
+   "project": "plangraph",
+   "kind": "lane",
+   "under": "plangraph:LESSONS-ENFORCE",
+   "priority": 10,
+   "title": "Train deploy target train.service@alpha refused: missing env PG_TOKEN_FILE",
+   "description": "Why: the train deploy preflight refused train.service@alpha of part(s) #1: missing env PG_TOKEN_FILE.\nHow: fix the host or the Deploy-Hosts/Deploy declaration, rerun the dry run.\nDone when: the dry run passes for this target.",
+   "done_criteria": "The host install dry run passes for train.service@alpha."
+  }
+ ]
+}

@@ -64,7 +64,8 @@ part's items (`--declared`, item key to hosts), else the `Deploy:` trailers of i
 authorized. `CMD HOST FAMILY` is the host install dry run: exit 0 with no output passes, and it prints one
 `MISSING binary|file|env|path NAME` line per absent thing. The command prints `deploy: unit@host, ...` and `plan-digest: HEX` for
 the GO-REQ (only passing targets) and one `blocker` line per refused target; `--blockers-out` writes a
-`pg define` file with a blocker item for each.
+`pg define` file with a blocker item for each (a keeper lane definition: `project`, `id`, `kind`, `done_criteria`;
+`tests/fixtures/deploy_blocker_items.json` is checked by this crate and by the keeper's validation).
 
 `plangraph land-train deploy-apply --plan FILE --go ROW --plan-digest HEX --evidence FILE --repo DIR
 --landed-head SHA [--main-ref REF] --state FILE --install-cmd CMD --row-cmd CMD` is the post-merge step.
@@ -90,11 +91,16 @@ showed before the install (a new run, not the last deploy's) and not after the c
 (the keeper rejects later times), and its `.timer` must be active, with a row for each item of the service
 that the timer's own target does not cover. Rows go to the items that ship the family: the items of the commits
 that touch one of its paths (whatever the per-commit status), and for a commit without `Plan-Item` every item of
-its part (the keeper's rule), not every item of a shared part. A timer that failed the preflight is not in the
-GO, so a service whose timer was refused gets no row. A shipped timer is installed first but recorded (rows,
-checkpoint) only after the service it triggers has passed; if the service fails, the timer is disabled and
-leaves no evidence. A failed first run disables the unit's timer, writes no row and stops the step; later
-targets are listed as not attempted. `--state` records finished targets, so a rerun after an interruption skips
+its part (the keeper's rule), not every item of a shared part. A service whose paired timer failed the
+preflight is refused before any host is touched (the timer is not in the GO). A service that is not a oneshot
+counts only when it is `active` with `result=success` and shows the invocation the install started, not the one
+it showed before; its read JSON carries `result` and `invocation` like a oneshot's. A shipped timer is
+installed first but recorded (rows, checkpoint) only after the service it triggers has passed. A failed first
+run writes no row, saves the failure in the state and stops the step; later targets are listed as not
+attempted. Cleanup switches off only what the GO names and this attempt installed: the timers held for their
+service and a failed timer, socket or path itself, never a unit the train does not ship. A failure before the
+install (a refused timer, a failed read before the install) changes nothing on the host and saves no failure,
+so the rerun stays open. `--state` records finished targets, so a rerun after an interruption skips
 them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded failure refuses the rerun until the state
 file is cleared. Train settlement does not call this step yet, and the plan digest is not in the GO evidence
 yet (keeper item `plangraph:TRAIN-SETTLE-RUNS-DEPLOY-APPLY`).

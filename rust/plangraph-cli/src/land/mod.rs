@@ -17,6 +17,8 @@ mod deploy_derive;
 mod deploy_derive_tests;
 mod deploy_post;
 #[cfg(test)]
+mod deploy_post_cleanup_tests;
+#[cfg(test)]
 mod deploy_post_gate_tests;
 #[cfg(test)]
 mod deploy_post_tests;

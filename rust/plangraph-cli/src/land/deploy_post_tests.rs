@@ -62,6 +62,8 @@ pub(super) struct Host {
     pub(super) installed: RefCell<BTreeSet<String>>,
     /// The invocation an install reports starting, when it is not the one the run shows.
     pub(super) started: BTreeMap<String, String>,
+    /// Installs that print no invocation.
+    pub(super) silent_install: BTreeSet<String>,
 }
 
 impl Installer for Host {
@@ -71,6 +73,9 @@ impl Installer for Host {
             .push(format!("install {family}@{host}"));
         NOW.with(|n| n.set(n.get() + self.install_takes * 1_000_000));
         self.installed.borrow_mut().insert(family.to_owned());
+        if self.silent_install.contains(family) {
+            return Ok(None);
+        }
         Ok(self
             .started
             .get(family)
@@ -84,8 +89,11 @@ impl Installer for Host {
         if self.unreadable.contains(family) {
             return Err("unreadable".into());
         }
-        let oneshot = self.runs.get(family).is_some_and(|r| r.oneshot);
-        if oneshot && !self.installed.borrow().contains(family) {
+        let started_unit = self
+            .runs
+            .get(family)
+            .is_some_and(|r| r.invocation.is_some());
+        if started_unit && !self.installed.borrow().contains(family) {
             if self.before_fails.contains(family) {
                 return Err("transient".into());
             }
@@ -181,11 +189,14 @@ fn a_failed_first_run_disables_the_timer_writes_no_row_and_stops_the_rest() {
     let mut bad = oneshot_ok();
     bad.result = Some("exit-code".into());
     host.runs.insert("a.service".into(), bad);
+    host.runs.insert("a.timer".into(), active());
     host.runs.insert("b.service".into(), oneshot_ok());
     host.runs.insert("b.timer".into(), active());
     let rows = Rows::default();
     let mut state = PostState::default();
+    // The timer is in the GO and installed first: the failed service takes it down again.
     let targets = [
+        target("a.timer", "alpha", &["demo:A"]),
         target("a.service", "alpha", &["demo:A"]),
         target("b.service", "alpha", &["demo:B"]),
     ];
@@ -241,22 +252,6 @@ fn an_install_failure_is_a_failed_first_run() {
 }
 
 #[test]
-fn a_binary_needs_installed_and_has_no_timer_to_disable() {
-    assert_eq!(unit_to_disable("bin:tool"), None);
-    assert_eq!(unit_to_disable("a.service").as_deref(), Some("a.timer"));
-    assert_eq!(unit_to_disable("a.timer").as_deref(), Some("a.timer"));
-    let ok = RunRead {
-        is_active: "installed".into(),
-        result: None,
-        exec_main_exit_timestamp: None,
-        oneshot: false,
-        invocation: None,
-    };
-    assert!(ok.good("bin:tool", &gate(), None, T0, Some("inv-1")));
-    assert!(!ok.good("a.service", &gate(), None, T0, Some("inv-1")));
-}
-
-#[test]
 fn a_rerun_skips_finished_targets_and_a_recorded_failure_blocks_it() {
     let mut host = Host::default();
     host.runs.insert("a.service".into(), oneshot_ok());
@@ -304,10 +299,13 @@ fn a_good_oneshot_with_an_inactive_timer_is_a_failed_first_run() {
         rows.0.borrow().is_empty(),
         "no service row without its active timer"
     );
-    assert!(host
-        .calls
-        .borrow()
-        .contains(&"disable a.timer@alpha".to_string()));
+    assert!(
+        host.calls
+            .borrow()
+            .iter()
+            .all(|c| !c.starts_with("disable")),
+        "the timer is not in the GO: it is not this attempt's to disable"
+    );
 }
 
 #[test]
@@ -364,21 +362,4 @@ fn a_timer_shipped_for_other_items_still_gets_a_row_for_every_service_item() {
         ("demo:B", "a.timer"),
     ];
     assert_eq!(got, want.map(|(k, u)| (k.to_string(), u.to_string())));
-}
-
-/// The JSON the landing-train doc tells a read command to print.
-#[test]
-fn the_documented_read_json_is_judged_good() {
-    let oneshot: RunRead = serde_json::from_str(
-        r#"{"is_active":"inactive","oneshot":true,"result":"success","exec_main_exit_timestamp":"2026-11-24T01:00:00Z","invocation":"inv-1"}"#,
-    )
-    .unwrap();
-    assert!(oneshot.good("a.service", &gate(), None, T0, Some("inv-1")));
-    let bin: RunRead = serde_json::from_str(r#"{"is_active":"installed"}"#).unwrap();
-    assert!(bin.good("bin:tool", &gate(), None, T0, Some("inv-1")));
-    let svc: RunRead = serde_json::from_str(r#"{"is_active":"active"}"#).unwrap();
-    assert!(
-        svc.good("a.service", &gate(), None, T0, Some("inv-1"))
-            && svc.good("a.timer", &gate(), None, T0, Some("inv-1"))
-    );
 }

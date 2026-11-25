@@ -10,17 +10,6 @@ pub use super::deploy_run::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The unit whose timer or trigger a failed first run switches off; a host binary has none.
-pub fn unit_to_disable(family: &str) -> Option<String> {
-    if family.starts_with("bin:") {
-        return None;
-    }
-    Some(match family.strip_suffix(".service") {
-        Some(base) => format!("{base}.timer"),
-        None => family.to_owned(),
-    })
-}
-
 /// The timer the keeper's deploy gate wants active beside a oneshot service.
 fn paired_timer(family: &str) -> Option<String> {
     family
@@ -111,17 +100,10 @@ fn paired_timer_row(
     t: &Target,
     run: &RunRead,
     targets: &[Target],
-    gate: &Gate,
 ) -> Result<Option<(String, BTreeSet<String>)>, String> {
     let Some(timer) = run.oneshot.then(|| paired_timer(&t.family)).flatten() else {
         return Ok(None);
     };
-    if gate.excluded.contains(&(timer.clone(), t.host.clone())) {
-        return Err(format!(
-            "paired timer {timer} on {} was refused at preflight and is not in the GO",
-            t.host
-        ));
-    }
     let own: BTreeSet<&String> = targets
         .iter()
         .filter(|o| o.host == t.host && o.family == timer)
@@ -196,22 +178,37 @@ fn service_of<'a>(timer: &Target, targets: &'a [Target]) -> Option<&'a Target> {
         .find(|s| s.host == timer.host && paired_timer(&s.family).as_deref() == Some(&timer.family))
 }
 
-/// The exit time (microseconds) the unit showed before this install. A unit that reports `absent` has none;
-/// a read that fails or an exit time that cannot be read leaves no baseline to prove the run is new, so the
-/// target fails.
-fn baseline(installer: &dyn Installer, t: &Target) -> Result<Option<i64>, String> {
+/// What the unit showed before this install: the exit time (microseconds) and invocation of its last run. A
+/// unit that reports `absent` has none; a read that fails or an exit time that cannot be read leaves no
+/// baseline to prove the run is new, so the target fails (before anything is installed).
+fn baseline(installer: &dyn Installer, t: &Target) -> Result<Baseline, String> {
     let run = installer
         .read_run(&t.host, &t.family)
         .map_err(|e| format!("read before install: {e}"))?;
     if run.is_active == ABSENT {
-        return Ok(None);
+        return Ok(Baseline::default());
     }
-    match run.exec_main_exit_timestamp.as_deref() {
-        None => Ok(None),
-        Some(text) => exit_micros(text)
-            .map(Some)
-            .ok_or_else(|| format!("exit time {text:?} before install is unreadable")),
-    }
+    let exit = match run.exec_main_exit_timestamp.as_deref() {
+        None => None,
+        Some(text) => Some(
+            exit_micros(text)
+                .ok_or_else(|| format!("exit time {text:?} before install is unreadable"))?,
+        ),
+    };
+    Ok(Baseline {
+        exit,
+        invocation: run.invocation,
+    })
+}
+
+/// A service whose paired timer the preflight refused is not deployed: found before any host is touched.
+fn refused_timer<'a>(targets: &'a [Target], gate: &Gate) -> Option<(&'a Target, String)> {
+    targets.iter().find_map(|t| {
+        let timer = paired_timer(&t.family)?;
+        gate.excluded
+            .contains(&(timer.clone(), t.host.clone()))
+            .then_some((t, timer))
+    })
 }
 
 /// Installs `targets` (timers first). A timer whose service the train also ships is held: its rows and its
@@ -231,6 +228,21 @@ pub fn apply(
         ));
     }
     let mut report = PostReport::default();
+    if let Some((t, timer)) = refused_timer(targets, gate) {
+        report.failed = Some((
+            name(t),
+            format!(
+                "paired timer {timer} on {} was refused at preflight and is not in the GO",
+                t.host
+            ),
+        ));
+        report.not_attempted = targets
+            .iter()
+            .filter(|o| name(o) != name(t))
+            .map(name)
+            .collect();
+        return Ok(report);
+    }
     let mut ordered: Vec<&Target> = targets.iter().collect();
     ordered.sort_by_key(|t| !t.family.ends_with(".timer"));
     // Held timers by the id of the service that releases them.
@@ -263,20 +275,23 @@ pub fn apply(
             release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             continue;
         }
+        // `changed`: the target's install was started, so it may have changed the host.
+        let mut changed = false;
         let outcome = baseline(installer, t)
-            .and_then(|before| {
+            .and_then(|base| {
+                changed = true;
                 let started = installer
                     .install(&t.host, &t.family)
                     .map_err(|e| format!("install: {e}"))?;
                 let run = installer
                     .read_run(&t.host, &t.family)
                     .map_err(|e| format!("first run: {e}"))?;
-                Ok((before, started, run))
+                Ok((base, started, run))
             })
-            .and_then(|(before, started, run)| {
+            .and_then(|(base, started, run)| {
                 let now = (gate.clock)();
-                if run.good(&t.family, gate, before, now, started.as_deref()) {
-                    paired_timer_row(installer, t, &run, targets, gate).map(|timer| (run, timer))
+                if run.good(&t.family, gate, &base, now, started.as_deref()) {
+                    paired_timer_row(installer, t, &run, targets).map(|timer| (run, timer))
                 } else {
                     Err(format!(
                         "first run of {} on {} is not good (is_active={}, result={}, exited={}, invocation={}, started={})",
@@ -308,11 +323,16 @@ pub fn apply(
                 release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             }
             Err(why) => {
+                // Only what the GO names and this attempt installed is switched off: the timers held for
+                // their service, and the failed unit itself when it triggers itself (a timer, socket, path).
+                // A failure before the install changed nothing, so it leaves the rerun open.
                 let mut off: Vec<(String, String)> = held
                     .values()
                     .map(|(h, _)| (h.host.clone(), h.family.clone()))
                     .collect();
-                off.extend(unit_to_disable(&t.family).map(|u| (t.host.clone(), u)));
+                if changed && !t.family.ends_with(".service") && !t.family.starts_with("bin:") {
+                    off.push((t.host.clone(), t.family.clone()));
+                }
                 for (host, unit) in off {
                     if let Err(e) = installer.disable(&host, &unit) {
                         report
@@ -320,8 +340,10 @@ pub fn apply(
                             .push(format!("could not disable {unit} on {host}: {e}"));
                     }
                 }
-                state.failed = Some(id.clone());
-                checkpoint(state)?;
+                if changed {
+                    state.failed = Some(id.clone());
+                    checkpoint(state)?;
+                }
                 report.not_attempted = ordered[i + 1..]
                     .iter()
                     .map(|t| name(t))
