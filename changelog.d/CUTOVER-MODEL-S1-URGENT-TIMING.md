@@ -1,0 +1,1 @@
+Add `pg-session-cutover-model`, an executable model of the urgent-event timing of an orchestrator role (per-class budgets, takeover, operator alarm, session deadline, authorized recovery, supervisor retry) with named scenarios; it switches nothing live.
