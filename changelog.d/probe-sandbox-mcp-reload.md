@@ -1,0 +1,1 @@
+- A Codex writer probe now runs in `workspace-write` with the probe repo's git dir added, so its commit lands; a probe whose sandbox blocks the commit is reported as a probe defect and never books the leg down.

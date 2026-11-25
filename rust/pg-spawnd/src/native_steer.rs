@@ -234,7 +234,11 @@ run_id = 'run-fixture'
 host = dict(repo=state, ssh='fixture', spawner_src=state, state_dir=state)
 routes = {'hosts': {'posix': host, 'wsl': dict(host, wsl_distro='Fixture')}}
 calls = []
-def ssh(argv, *, input, **kwargs):
+local_run = remote_ps.subprocess.run
+def ssh(argv, *, input=None, **kwargs):
+    # MCP startup reads the local checkout through the same subprocess module.
+    if argv[0] == 'git' and argv[-3:] == ['rev-parse', '--verify', 'HEAD']:
+        return local_run(argv, input=input, **kwargs)
     assert argv[0] == 'ssh' and argv[-2] == 'fixture', argv
     if argv[-1].startswith('wsl.exe'):
         step, = json.loads(input)['steps']

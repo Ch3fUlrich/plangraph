@@ -25,7 +25,8 @@ from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.base_fresh import run_exit_code, run_settled, settle_runs
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
-from plangraph.spawner.mcp_limits import SourceGuard, encode_reply, ps_reply
+from plangraph.spawner.mcp_limits import (SourceGuard, checkout_head, encode_reply, ps_reply, publish_served,
+                                          reload_spawn_sources, running_mcp_pids, served_report)
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -165,6 +166,10 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['properties']['leg'] = {'type': 'string', 'description': 'Registered leg reference (explicit override)'}
 
 
+class CheckoutMoved(Exception):
+    """The checkout changed between reading a source snapshot and installing it."""
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
@@ -174,10 +179,89 @@ class MCPSpawnerServer:
         self.runner = runner or SpawnerRunner()
         self._session_run = session_run
         self._session_sleep = session_sleep
-        self.service = spawn_service(self.runner, state=state)
+        self._build_service(state)
+        # Route code of this process: the identity it was imported at, until a reload moves it.
+        self._served_identity = self._source_guard.started
+        self._served_head = checkout_head()
+        self._reload_error = None
+        self.publish_served()
+
+    def publish_served(self):
+        publish_served(self.service.state, self._served_head, self._served_identity, self._reload_error)
+
+    def _build_service(self, state, previous=None):
+        self.service = self._make_service(state, previous)
+
+    def _make_service(self, state, previous=None):
+        service = spawn_service(self.runner, state=state)
+        if previous is not None:
+            # Run tasks, records and stderr captures belong to the runs already started: share them.
+            service.tasks = previous.tasks
+            service._running_records = previous._running_records
+            service._stderr_captures = previous._stderr_captures
         # An explicitly supplied default-equivalent runner is still a live path.
         from .seat_spawn import live_runner
-        self.service.fresh_tree = live_runner(self.runner)
+        service.fresh_tree = live_runner(self.runner)
+        return service
+
+    def refresh_route_code(self):
+        """Serve the checkout's current planner/routing code when its head moved, without a restart.
+
+        Route and health never wait for a running job: the runner (job history) and the service's run
+        tasks carry over to the new service. Modules, service, runner hooks and served sha change together
+        or not at all; a failed reload keeps the previous generation and is reported by
+        ``plangraph_agent_health``. The served sha is the head captured before the sources were read and
+        is trusted only when the checkout did not move meanwhile; otherwise the reload runs again."""
+        current = self._source_guard.identity()
+        for _ in range(3):
+            if current == self._served_identity:
+                self._reload_error = None
+                self._bind_missing_head(current)
+                return
+            head = checkout_head()
+            outcome = self._reload_once(current)
+            if outcome == 'committed':
+                self._served_identity, self._served_head, self._reload_error = current, head, None
+                self.publish_served()
+                return
+            if outcome != 'moved':
+                return
+            current = self._source_guard.identity()   # the checkout moved while it was read: read it again
+        self._reload_error = 'checkout changed during reload'
+        self.publish_served()
+
+    def _bind_missing_head(self, identity):
+        """An install whose git lookup failed serves no sha yet: fill it in once the lookup works and the
+        checkout still has the identity that was installed."""
+        if self._served_head:
+            return
+        head = checkout_head()
+        if head and self._source_guard.identity() == identity:
+            self._served_head = head
+            self.publish_served()
+
+    def _reload_once(self, expected):
+        """One transactional reload of the snapshot of ``expected``: 'committed', 'moved' (the checkout
+        changed while it was read; nothing was installed) or 'failed' (rolled back)."""
+        previous, built = self.service, []
+        hooks = {name: getattr(self.runner, name) for name in ('state', 'on_sample') if hasattr(self.runner, name)}
+
+        def commit():
+            if self._source_guard.identity() != expected:
+                raise CheckoutMoved()
+            built.append(self._make_service(previous.state, previous))
+        try:
+            reload_spawn_sources(globals(), commit=commit)
+        except Exception as exc:
+            for name, value in hooks.items():   # the candidate service had re-pointed the retained runner
+                setattr(self.runner, name, value)
+            if isinstance(exc, CheckoutMoved):
+                return 'moved'
+            self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
+            self.publish_served()
+            return 'failed'
+        self.service = built[0]
+        return 'committed'
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
@@ -192,6 +276,8 @@ class MCPSpawnerServer:
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
         self._source_guard.check(name, arguments)
+        if name == 'plangraph_agent_route':
+            self.refresh_route_code()  # before the benchmark options: they come from the module being replaced
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
         if (name == 'plangraph_agent_route' and 'leg' in arguments
@@ -245,7 +331,7 @@ class MCPSpawnerServer:
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")
             res = await self.runner.status(job_id=job_id)
-            if isinstance(res, JobInfo):
+            if hasattr(res, 'to_dict'):  # duck-typed: retained jobs keep the class they were created with
                 return res.to_dict()
             if isinstance(res, list):
                 return {"jobs": [j.to_dict() for j in res]}
@@ -284,6 +370,7 @@ class MCPSpawnerServer:
             return {"count": len(matched), "models": matched}
 
         if name == "plangraph_agent_health":
+            self.refresh_route_code()
             restart = self._source_guard.restart_required()
             all_models = get_catalog_models()
             active_jobs = [j for j in self.runner.jobs.values() if j.status == "running"]
@@ -291,6 +378,10 @@ class MCPSpawnerServer:
                 "status": "stale" if restart else "healthy",
                 **({'error': restart} if restart else {}),
                 "spawner_version": "2.0.0",
+                # The checkout head the route code serves; spawn and probe still need a reconnect when stale.
+                "served_sha": self._served_head,
+                "checkout_sha": checkout_head(),
+                **({'route_reload_error': self._reload_error} if self._reload_error else {}),
                 "runner_jobs_total": len(self.runner.jobs),
                 "active_jobs_count": len(active_jobs),
                 "catalog_models_count": len(all_models),
@@ -406,20 +497,57 @@ def _read_line(stdin) -> asyncio.Future:
     return asyncio.wrap_future(done)
 
 
+async def keep_current(server, interval) -> None:
+    """Follow the checkout head while the session is idle, so an update reaches it within ``interval``."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            server.refresh_route_code()
+        except Exception as exc:  # a failed check must not end the idle follower
+            server._reload_error = f'{type(exc).__name__}: {exc}'[:300]
+
+
 async def run_stdio_server() -> None:
     """Run MCP server over standard input and output."""
     server = MCPSpawnerServer()
+    import os
+    refresher = asyncio.create_task(keep_current(server, float(os.environ.get('PLANGRAPH_MCP_RELOAD_S', '60'))))
     # connect_read_pipe cannot serve an inherited stdin on Windows: the Proactor loop fails inside
     # a transport callback and the awaiting reader hangs forever. A private reader, not
     # sys.stdin.buffer, because a daemon thread holding that lock can abort interpreter shutdown.
     stdin = open(sys.stdin.fileno(), 'rb', closefd=False)
 
-    while line := await _read_line(stdin):
-        reply = await stdio_reply(server, line)
-        if reply is not None:
-            sys.stdout.write(reply + '\n')
-            sys.stdout.flush()
+    try:
+        while line := await _read_line(stdin):
+            reply = await stdio_reply(server, line)
+            if reply is not None:
+                sys.stdout.write(reply + '\n')
+                sys.stdout.flush()
+    finally:
+        refresher.cancel()
+
+
+def served_main(state=None, report=None) -> int:
+    """``--served-sha``: print every live MCP session and the sha it serves.
+
+    Exit 1 when no session is found, the process inventory is unavailable, or any session is not on the
+    checkout head (an unregistered session predates the reload and cannot be verified)."""
+    import os
+    from pathlib import Path
+    state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE', Path(os.environ.get(
+        'XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
+    running = running_mcp_pids()
+    rows = report if report is not None else served_report(state, running=running)
+    if running is None:
+        print('inventory unavailable: cannot list running sessions')
+    for row in rows:
+        served = (row['served_sha'] or 'unregistered')[:12]
+        print(f"pid={row['pid']} served={served or 'unknown'} checkout={(row['checkout_sha'] or '')[:12]} "
+              f"{'current' if row['current'] else 'STALE'}" + (f" error={row['route_reload_error']}" if row['route_reload_error'] else ''))
+    return 0 if running is not None and rows and all(row['current'] for row in rows) else 1
 
 
 if __name__ == "__main__":
+    if '--served-sha' in sys.argv[1:]:
+        raise SystemExit(served_main())
     asyncio.run(run_stdio_server())

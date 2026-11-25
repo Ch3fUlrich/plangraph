@@ -403,7 +403,7 @@ def detect_client_for_model(model_id: str) -> str:
 
 def build_standalone_fallback_command(
     client_name: str, prompt: str, model: str | None = None,
-    role: str = "implement", tool_mode: str = "tools",
+    role: str = "implement", tool_mode: str = "tools", writable_dirs: Sequence[str] = (),
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
     check_retired(model)
@@ -423,7 +423,10 @@ def build_standalone_fallback_command(
         return cmd
     if cname == "codex":
         name, effort = codex_model(model)
-        return ["codex", "exec", *(["--model", name] if name else []),
+        # Writable dirs make a writer turn commit: workspace-write keeps .git read-only unless it is added.
+        sandbox = ["--sandbox", "workspace-write", *(a for d in writable_dirs for a in ("--add-dir", str(d)))] \
+            if writable_dirs and role != "review" else []
+        return ["codex", "exec", *sandbox, *(["--model", name] if name else []),
                 *(["-c", f"model_reasoning_effort={effort}"] if effort else []), "-"]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [""]), *(["--model", model] if model else [])]
@@ -468,6 +471,7 @@ def build_command(
     serve_port: int | None = None,
     extra_flags: Sequence[str] = (),
     tool_mode: str | None = None,
+    writable_dirs: Sequence[str] = (),
 ) -> list[str]:
     """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
@@ -479,7 +483,8 @@ def build_command(
         if client not in (*CLIENTS, "qodercli"):
             raise ValueError(f"unknown harness: {client}")
         if client != "opencode":
-            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode)
+            return build_standalone_fallback_command(client, prompt, model_or_combo, role=role, tool_mode=tool_mode,
+                                                  writable_dirs=writable_dirs)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(
@@ -493,5 +498,5 @@ def build_command(
     resolved_client = client or detect_client_for_model(model_or_combo)
     return build_standalone_fallback_command(
         client_name=resolved_client, prompt=prompt, model=model_or_combo, role=role,
-        tool_mode=tool_mode,
+        tool_mode=tool_mode, writable_dirs=writable_dirs,
     )
