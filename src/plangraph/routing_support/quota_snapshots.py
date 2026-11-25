@@ -93,39 +93,35 @@ _SNAPSHOT_COLUMNS = ('provider, connection_id, window_key, remaining_percentage,
                      'is_exhausted, next_reset_at, created_at')
 
 
-def _newest_by_observation(cursor):
-    """Per raw (provider, connection_id, window_key) the row observed last; the higher id breaks a tie.
+def _plain(value):
+    """A cell JSON can carry: a BLOB or a non-finite number is one bad value, not a bad reply."""
+    if isinstance(value, bytes) or (isinstance(value, float) and not math.isfinite(value)):
+        return None
+    return value
 
-    A row whose time cannot be read ranks below every dated row of its key.
-    """
+
+def _rows(cursor):
     columns = [column[0] for column in cursor.description]
-    best = {}
-    for row_id, *values in cursor:
-        row = dict(zip(columns[1:], values))
-        rank = (_ts(row['created_at']) is not None, _ts(row['created_at']) or 0.0, row_id)
-        key = (row['provider'], row['connection_id'], row['window_key'])
-        if key not in best or rank > best[key][0]:
-            best[key] = (rank, row)
-    return [row for _, row in sorted(best.values(), key=lambda item: item[0][2])]
+    return [dict(zip(columns, map(_plain, row))) for row in cursor]
 
 
 def fetch_snapshot_rows(env=None, *, fetch=None, latest='id'):
     """Read-only snapshot DB or management API; LookupError when unreadable.
 
     ``latest='id'`` keeps the highest id per provider, connection and window;
-    ``latest='observed'`` keeps the newest ``created_at`` (id breaks a tie) instead.
+    ``latest='all'`` returns every stored row, oldest id first, for a reader that picks the
+    newest observation itself (one timestamp reading for the choice and the report).
     """
     source = os.environ if env is None else env
     if source.get('QUOTA_SNAPSHOT_DB'):
         try:
             db = sqlite3.connect(Path(source['QUOTA_SNAPSHOT_DB']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
             try:
-                if latest == 'observed':
-                    return _newest_by_observation(db.execute('SELECT id, ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots'))
-                cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots WHERE id IN '
-                                    '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id')
-                columns = [column[0] for column in cursor.description]
-                return [dict(zip(columns, row)) for row in cursor]
+                db.text_factory = lambda raw: raw.decode('utf-8', 'replace')
+                if latest == 'all':
+                    return _rows(db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots ORDER BY id'))
+                return _rows(db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots WHERE id IN '
+                                        '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id'))
             finally:
                 db.close()
         except Exception:
