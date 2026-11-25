@@ -71,15 +71,12 @@ def load_root_providers(path=None):
     return _load_root_providers(path)[0]
 
 
-def root_providers_path():
-    """The root provider config the overlay reads: the env override, else the shipped file."""
-    return Path(os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
-        Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'))
-
-
 def _load_root_providers(path=None):
     global _parse_warned, _missing_warned
-    path = Path(path) if path is not None else root_providers_path()
+    if path is None:
+        path = os.environ.get('PLANGRAPH_PROVIDERS_FILE') or (
+            Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json')
+    path = Path(path)
     try:
         text = path.read_text(encoding='utf-8')
         text = _strip_jsonc(text)
@@ -176,6 +173,18 @@ def prepare_gateway_env(base_env, model):
     return env, render_gateway_providers(env, model)
 
 
+def _review_base_env():
+    from .clients import build_child_env, build_routing_envelope_headers
+    return build_child_env({}, headers=build_routing_envelope_headers(
+        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+
+
+def review_overlay_env():
+    """The review child env after the launch overlay, before the renderer: provider mappings
+    from the child config and the root config, with no gateway endpoint required."""
+    return overlay_env(_review_base_env())
+
+
 def review_child_env(model=None):
     """Mirror runner.spawn's review env (writer_launch returns no review extras).
 
@@ -183,9 +192,7 @@ def review_child_env(model=None):
     Use the runner's default envelope, including headers that trigger rendering.
     Witness checks and leg-state admission both read this child config.
     """
-    from .clients import build_child_env, build_routing_envelope_headers
-    env = build_child_env({}, headers=build_routing_envelope_headers(
-        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+    env = _review_base_env()
     if isinstance(model, str) and model.startswith(('mimo/', 'omniroute/')):
         env, refusal = prepare_gateway_env(env, model)
         if refusal:

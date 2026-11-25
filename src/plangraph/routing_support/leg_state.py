@@ -5,7 +5,6 @@ provided. Probe passes must be called only after an actual provider success.
 """
 from __future__ import annotations
 
-import functools
 import math
 import os
 from pathlib import Path
@@ -541,67 +540,65 @@ def tcp_gateway_probe(url, timeout=1.0):
     return True
 
 
-def _file_stamp(path):
-    try:
-        info = Path(path).stat()
-    except OSError:
-        return None
-    return info.st_mtime_ns, info.st_size
-
-
-@functools.lru_cache(maxsize=512)
-def _declared_pools(name, providers_path, stamps):
-    """Pools a gateway model name is declared on, as (launch mapping, server combo).
-
-    ``stamps`` (the files' mtime and size) keys the cache, so a config replaced in place is
-    read again. The launch mapping is the root provider config's ``modelID``; the server combo
-    is ``deploy/omniroute/live/server-combos.json``. A malformed block declares nothing.
-    """
-    import json
-    from .opencode_overlay import load_root_providers
-    launch, combo = [], []
-    try:
-        entry = load_root_providers(providers_path)['omniroute']['models'][name]
-        model_id = entry['modelID']
-        if isinstance(model_id, str) and '/' in model_id:
-            launch.append(model_id.split('/')[0])
-    except (KeyError, TypeError, AttributeError):
-        pass
-    try:
-        combos = json.loads((_COMBOS_PATH).read_text(encoding='utf-8'))['combos']
-        combo += [u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u]
-    except (OSError, ValueError, KeyError, AttributeError, TypeError):
-        pass
-    return tuple(dict.fromkeys(launch)), tuple(dict.fromkeys(combo))
-
-
 _COMBOS_PATH = Path(__file__).resolve().parents[3] / 'deploy/omniroute/live/server-combos.json'
 
 
-def _gateway_pool(states, leg):
+def declared_pools(leg):
+    """Pools a gateway leg is declared on, as (launch pool or None, server combo pools).
+
+    The launch pool is the ``modelID`` of the leg's model in the child config the runner builds
+    (child env, launch overlay), so a mapping supplied by ``OPENCODE_CONFIG_CONTENT``
+    counts. The server combo is ``deploy/omniroute/live/server-combos.json``. A malformed
+    block declares nothing. Read once per snapshot window by the adapter, never cached longer.
+    """
+    import json
+    from .opencode_overlay import review_overlay_env
+    from .quota_snapshots import ALIASES
+    prefix, _, name = leg.partition('/')
+    launch = None
+    try:
+        providers = json.loads(review_overlay_env()['OPENCODE_CONFIG_CONTENT'])['providers']
+        model_id = providers[prefix]['models'][name]['modelID']
+        if isinstance(model_id, str) and '/' in model_id:
+            head = model_id.split('/')[0]
+            launch = ALIASES.get(head, head)
+    except Exception:   # no launch mapping: a refused render, a missing key or a malformed block
+        pass
+    combo = ()
+    try:
+        combos = json.loads(_COMBOS_PATH.read_text(encoding='utf-8'))['combos']
+        combo = tuple(dict.fromkeys(u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u))
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        pass
+    return launch, combo
+
+
+def _gateway_pool(states, leg, declared):
     """State of the upstream pool serving a gateway-routed model.
 
-    The snapshot is keyed by upstream provider, not by the gateway prefix. A declared pool
-    present in the snapshot decides: the launch mapping first, then the server combo; an
-    inferred pool (one whose name starts the model name) is used only when no declared pool is
-    in the snapshot, and a model with no pool at all takes the gateway's own ``omniroute`` row.
-    No other pool stands in for a model it does not serve; among one tier's rows an available
-    one wins.
+    The snapshot is keyed by upstream provider, not by the gateway prefix. The launch mapping is
+    authoritative: its pool decides, and a missing row is no state (never another pool's). Without
+    one, a server-combo pool present in the snapshot decides, then an inferred pool (a name that
+    starts the model name), and a model with no pool at all takes the gateway's own ``omniroute``
+    row. A vendor-prefixed row (``xiaomi-mimo`` for ``mimo``) is the same pool. Among one tier's
+    rows an available one wins.
     """
-    from .opencode_overlay import root_providers_path
     from .quota_snapshots import pool_of
     if (pool := pool_of(identity_model(leg))) is not None:
         return states.get(pool)   # a known alias pool never borrows another pool's state
     name = identity_model(leg).split('/', 1)[-1]
-    path = root_providers_path()
-    launch, combo = _declared_pools(name, str(path), (_file_stamp(path), _file_stamp(_COMBOS_PATH)))
-    inferred = tuple(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))
-    for tier in (launch, combo, inferred):
-        rows = [states[key] for key in tier if key in states]
-        if rows:
-            break
+    launch, combo = declared
+    named = lambda pool: [key for key in states if key == pool or key.endswith('-' + pool)]
+    if launch is not None:
+        rows = [states[key] for key in named(launch)]
     else:
-        rows = [states['omniroute']] if 'omniroute' in states else []
+        inferred = tuple(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))
+        for tier in ([key for pool in combo for key in named(pool)], inferred):
+            rows = [states[key] for key in tier]
+            if rows:
+                break
+        else:
+            rows = [states['omniroute']] if 'omniroute' in states else []
     return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
 
 
@@ -627,7 +624,7 @@ class LegAdapter:
                  clock=time.monotonic, ttl_s=60, gateway_probe=None, gateway_url=gateway_url):
         self.store, self.provider = store, provider
         # D-6800: with a probe, a leg whose base URL has no listener is down before spawn.
-        self.gateway_probe, self.gateway_url, self._gateway, self._urls = gateway_probe, gateway_url, {}, {}
+        self.gateway_probe, self.gateway_url, self._gateway, self._urls, self._pools = gateway_probe, gateway_url, {}, {}, {}
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
@@ -681,6 +678,7 @@ class LegAdapter:
                 self._quarantined.clear()
                 self._gateway.clear()
                 self._urls.clear()
+                self._pools.clear()
                 self._error = None if states else 'unreachable'   # an empty provider list names no pool
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -709,8 +707,12 @@ class LegAdapter:
             if not self._gateway[url]:
                 return dict(state='down', reason='gateway_unreachable', evidence=None)
         # A gateway model resolves its own pool before the generic gateway row.
-        provider = (_gateway_pool(self._states, leg) if identity.startswith('omniroute/')
-                    else self._states.get(leg.split('/')[0]))
+        if identity.startswith('omniroute/'):
+            if leg not in self._pools:
+                self._pools[leg] = declared_pools(leg)
+            provider = _gateway_pool(self._states, leg, self._pools[leg])
+        else:
+            provider = self._states.get(leg.split('/')[0])
         if provider is None:
             return dict(state='down', reason='unreachable', evidence=None)
         if provider.stale:

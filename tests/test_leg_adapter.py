@@ -720,3 +720,47 @@ def test_provider_config_replaced_in_place_refreshes_the_pool_mapping(tmp_path, 
     spark_providers(tmp_path, launch_env, 'other-pool')   # same path, new content
     reader._at = None
     assert reader(spark)['reason'] == 'provider_inactive'
+
+
+def deepseek_providers(tmp_path, launch_env, pool):
+    use_providers(launch_env, tmp_path, '{"providers": {"omniroute": {"models": {"deepseek-v4.1-flash": '
+                  '{"modelID": "%s/deepseek-v4.1-flash"}}}}}' % pool)
+
+
+def test_a_direct_mapping_is_authoritative_when_its_pool_is_absent(tmp_path, launch_env):
+    model = 'omniroute/deepseek-v4.1-flash'
+    deepseek_providers(tmp_path, launch_env, 'opencode-go')   # the launch targets opencode-go
+    assert json_reader(tmp_path, (model,), 'deepseek')(model)['reason'] == 'unreachable'
+    plan = review_plan(tmp_path, json_reader(tmp_path, (model,), 'deepseek'))
+    assert {s['leg']: s['reason'] for s in plan.skipped}.get('omniroute-deepseek-flash') == 'unreachable'
+    assert json_reader(tmp_path, (model,), 'deepseek', 'opencode-go')(model)['state'] == 'ok'
+
+
+def test_a_child_config_mapping_decides_like_the_launch_config(tmp_path, launch_env):
+    import json
+    model = 'omniroute/deepseek-v4.1-flash'
+    use_providers(launch_env, tmp_path, '{"providers": {"omniroute": {}}}')   # the root config declares no mapping
+    launch_env.setenv('OPENCODE_CONFIG_CONTENT', json.dumps({'providers': {'omniroute': {'models': {
+        'deepseek-v4.1-flash': {'modelID': 'opencode-go/deepseek-v4.1-flash'}}}}}))
+    reader = json_reader(tmp_path, (model,), 'deepseek', 'opencode-go', inactive=('opencode-go',))
+    assert reader(model)['reason'] == 'provider_inactive'
+    plan = review_plan(tmp_path, json_reader(tmp_path, (model,), 'deepseek', 'opencode-go', inactive=('opencode-go',)))
+    assert {s['leg']: s['reason'] for s in plan.skipped}.get('omniroute-deepseek-flash') == 'provider_inactive'
+
+
+def test_a_replacement_that_keeps_size_and_mtime_is_read_again(tmp_path, launch_env):
+    import os
+    model = 'omniroute/deepseek-v4.1-flash'
+    deepseek_providers(tmp_path, launch_env, 'opencode-go')
+    path = tmp_path / 'providers.json'
+    reader = json_reader(tmp_path, (model,), 'opencode-go', 'pool-two', inactive=('pool-two',))
+    assert reader(model)['state'] == 'ok'
+    before = path.stat()
+    twin = tmp_path / 'twin.json'
+    twin.write_text(path.read_text().replace('opencode-go', 'pool-two'.ljust(len('opencode-go'), 'x')))
+    os.utime(twin, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert twin.stat().st_size == before.st_size
+    os.replace(twin, path)
+    reader._at = None
+    # The replacement maps the model to a pool that has no row: the old active mapping must not linger.
+    assert reader(model)['reason'] == 'unreachable'
