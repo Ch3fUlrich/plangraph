@@ -28,6 +28,8 @@ struct Arrival {
     /// Every commit the arrival made reachable, oldest first, with its parents.
     members: Vec<(String, Vec<String>)>,
     items: Vec<String>,
+    /// How many parts the lander recorded for the landing this arrival stands for; `None` for a plain arrival.
+    parts: Option<usize>,
 }
 
 fn git(args: &[&str]) -> Result<String, String> {
@@ -101,15 +103,16 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
                 commits: members.len() as u64,
                 members,
                 items,
+                parts: None,
             })
         })
         .collect()
 }
 
-/// What each landing in the window brought to main: the commits reachable from its landed SHA and not from the
-/// landing before it, at the landing's own time. The landing before it is the latest recorded landing in the
-/// ancestry of its landed SHA (the one no other ancestor landing descends from), never one chosen by clock, and
-/// both must lie on the selected main ref. Parts reach main under SHAs of their own in a tested fast-forward, and a
+/// What each landing in the window brought to main, at the landing's own time: for a merge commit what its first
+/// parent did not have, for a fast-forward what the latest recorded landing in its ancestry did not have (never a
+/// landing chosen by clock); the landed SHA must lie on the selected main ref. When more accepted heads fall in
+/// that range than the lander recorded parts, some head reached main on its own and the join stays unknown. Parts reach main under SHAs of their own in a tested fast-forward, and a
 /// train may start before the window, so the join reads the landed history, not the first-parent arrivals of the
 /// window. A landing with no earlier landing has no verified base: its parts stay unknown here (a PR-merge
 /// landing is still joined through its own arrival).
@@ -129,36 +132,48 @@ fn train_arrivals(
         &format!("{reference}^{{commit}}"),
     ])?;
     let main = main.trim();
-    let landings: Vec<(String, i64)> = db
+    let landings: Vec<database::Landing> = db
         .landings(repo)?
         .into_iter()
-        .filter(|(sha, _)| ancestor(sha, main))
+        .filter(|landing| ancestor(&landing.sha, main))
         .collect();
     let mut trains = Vec::new();
-    for (sha, at) in &landings {
+    for landing in &landings {
+        let (sha, at, parts) = (&landing.sha, &landing.at, &landing.parts);
         if !(start..end).contains(at) {
             continue;
         }
-        let earlier: Vec<&String> = landings
-            .iter()
-            .map(|(other, _)| other)
-            .filter(|other| *other != sha && ancestor(other, sha))
-            .collect();
-        let Some(base) = earlier.iter().find(|candidate| {
-            earlier
+        // A merge commit names its own base: the first parent is main as the train met it, so what the merge
+        // brought is exactly `first-parent..landed`, whatever else landed before. A fast-forward has no such
+        // record: its base is the latest recorded landing in its ancestry (the one no other ancestor landing
+        // descends from), and none means no verified base.
+        // The lander's mode says which: a tested fast-forward lands the tip of a chain that may itself end in a
+        // merge, so only the merging modes name their base in the first parent.
+        let merging = matches!(
+            landing.mode.as_deref(),
+            Some("train-pr-merge" | "single-pr")
+        );
+        let merge =
+            merging && git(&["rev-parse", "--verify", "--quiet", &format!("{sha}^2")]).is_ok();
+        let range = if merge {
+            format!("{sha}^1..{sha}")
+        } else {
+            let earlier: Vec<&String> = landings
                 .iter()
-                .all(|other| other == *candidate || !ancestor(candidate, other))
-        }) else {
-            continue;
+                .map(|other| &other.sha)
+                .filter(|other| *other != sha && ancestor(other, sha))
+                .collect();
+            let Some(base) = earlier.iter().find(|candidate| {
+                earlier
+                    .iter()
+                    .all(|other| other == *candidate || !ancestor(candidate, other))
+            }) else {
+                continue;
+            };
+            format!("{base}..{sha}")
         };
-        let Ok(listing) = git(&[
-            "rev-list",
-            "--parents",
-            "--reverse",
-            "-n",
-            "20000",
-            &format!("{base}..{sha}"),
-        ]) else {
+        let Ok(listing) = git(&["rev-list", "--parents", "--reverse", "-n", "20000", &range])
+        else {
             continue;
         };
         let members: Vec<(String, Vec<String>)> = listing
@@ -174,6 +189,7 @@ fn train_arrivals(
             commits: members.len() as u64,
             members,
             items: Vec::new(),
+            parts: *parts,
         });
     }
     Ok(trains)

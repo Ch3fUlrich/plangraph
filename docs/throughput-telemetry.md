@@ -64,9 +64,12 @@ Quota rows (`throughput_quota_window`) hold provider, account, window, the perce
 names; a missing reset or a stale snapshot is null. Rows an earlier collector wrote to `throughput_quota_hourly`
 and `throughput_accept` are carried into the new tables by the next collection (`INSERT OR IGNORE`, the old tables
 stay), and a report made before that collection reads them from the old tables. Each landing in a collected window is joined from the landed history: its train is every commit reachable from its
-landed SHA and not from the latest recorded landing in its ancestry (the one no other ancestor landing descends
-from; both must lie on the selected main ref); a landing with none has no verified base, and its parts and
-`accepted_parts` stay unknown (a PR-merge landing still joins through its own arrival), counted at the landing's own time, so a tested fast-forward, whose parts' merges reach main
+landed SHA and not from its base. In the merging modes (`train-pr-merge`, `single-pr`) the base is the first parent
+of the merge commit; in `tested-fast-forward` it is the latest recorded landing in the landed SHA's ancestry (the one
+no other ancestor landing descends from), and the landed SHA must lie on the selected main ref. When more accepted
+heads fall in that range than the lander recorded parts, one reached main on its own and the join stays unverified.
+A report row keeps every verified sample and says in `parts_complete` whether the train's parts were all joined;
+`accepted_parts` is unknown only when there is neither a sample nor a join, counted at the landing's own time, so a tested fast-forward, whose parts' merges reach main
 under SHAs and commit times of their own, and a train that began before the window both join all their parts. A
 part head has one row (`repo`, `head`); a first-parent arrival never replaces the row of the train that carried
 it. Rows migrated from the first collector are marked legacy and dropped once verified part rows exist for their

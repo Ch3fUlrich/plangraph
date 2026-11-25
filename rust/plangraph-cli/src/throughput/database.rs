@@ -5,6 +5,14 @@ use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 pub(super) struct Db(pub PathBuf);
 
+/// A row of the lander's `landing` table, as far as the join needs it.
+pub(super) struct Landing {
+    pub sha: String,
+    pub at: i64,
+    pub parts: Option<usize>,
+    pub mode: Option<String>,
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS throughput_hourly (
     repo TEXT NOT NULL, bucket INTEGER NOT NULL, through INTEGER NOT NULL,
@@ -164,17 +172,33 @@ impl Db {
             .map_err(database_error)
     }
 
-    /// The landings the lander recorded for `repo`, oldest first: landed SHA and landing time.
-    pub fn landings(&self, repo: &str) -> Result<Vec<(String, i64)>, String> {
+    /// The landings the lander recorded for `repo`, oldest first: landed SHA, landing time and the number of
+    /// parts the lander says the train held and its landing mode (`None` when the table has no `mode` column).
+    pub fn landings(&self, repo: &str) -> Result<Vec<Landing>, String> {
         let connection = self.open(OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT landed_sha, unixepoch(landed_at) AS at FROM landing
-                 WHERE repo=?1 AND unixepoch(landed_at) IS NOT NULL ORDER BY at, landed_sha",
+        let has_mode: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('landing') WHERE name='mode')",
+                [],
+                |row| row.get(0),
             )
             .map_err(database_error)?;
+        let mode = if has_mode { "mode" } else { "NULL" };
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT landed_sha, unixepoch(landed_at) AS at, json_array_length(parts), {mode} FROM landing
+                 WHERE repo=?1 AND unixepoch(landed_at) IS NOT NULL ORDER BY at, landed_sha"
+            ))
+            .map_err(database_error)?;
         let rows = statement
-            .query_map([repo], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map([repo], |row| {
+                Ok(Landing {
+                    sha: row.get(0)?,
+                    at: row.get(1)?,
+                    parts: row.get(2)?,
+                    mode: row.get(3)?,
+                })
+            })
             .map_err(database_error)?;
         rows.collect::<rusqlite::Result<_>>()
             .map_err(database_error)
@@ -334,11 +358,16 @@ impl Db {
         }
         for (set, row) in [(arrivals, &mut arrival_row), (trains, &mut train_row)] {
             for arrival in set {
+                let parts = inputs.accepted_parts(arrival);
                 if std::ptr::eq(set, trains) {
+                    // More accepted heads than parts the lander recorded: some head was not part of this train
+                    // (it reached main on its own), so the join cannot be verified and stays unknown.
+                    if arrival.parts.is_some_and(|held| parts.len() > held) {
+                        continue;
+                    }
                     // The landing's parts are known: a count of none is a true zero, not a missing base.
                     joined.execute(params![repo, arrival.sha])?;
                 }
-                let parts = inputs.accepted_parts(arrival);
                 for (head, accepted) in &parts {
                     row.execute(params![
                         repo,
@@ -369,6 +398,10 @@ impl Db {
         let accept = accept_source(&transaction).map_err(database_error)?;
         let quota_table = quota_source(&transaction).map_err(database_error)?;
         let joined = joined_source(&transaction).map_err(database_error)?;
+        // Verified samples are always reported; whether the train's parts are all there is told apart.
+        let complete = format!(
+            "EXISTS(SELECT 1 FROM {joined} j WHERE j.repo=l.repo AND j.landed_sha=l.landed_sha)"
+        );
         let days = query(&format!("WITH train AS (
             SELECT date(landed_at) AS day, COUNT(*) AS trains, SUM(json_array_length(parts)) AS train_parts,
             SUM(CASE WHEN unixepoch(landed_at)>=unixepoch(build_started_at)
@@ -436,10 +469,9 @@ impl Db {
             {build} AS build_seconds,
             1+{reruns} AS attempts, {reruns} AS ci_reruns, {left_out} AS drops, {fix_tasks} AS fix_tasks,
             1.0*({build})/60/NULLIF(json_array_length(l.parts),0) AS minutes_per_merged_batch,
-            CASE WHEN EXISTS(SELECT 1 FROM {joined} j WHERE j.repo=l.repo AND j.landed_sha=l.landed_sha)
-                THEN COUNT(a.head) END AS accepted_parts,
-            CASE WHEN EXISTS(SELECT 1 FROM {joined} j WHERE j.repo=l.repo AND j.landed_sha=l.landed_sha)
-                THEN AVG(a.seconds) END AS accept_to_main_seconds
+            CASE WHEN COUNT(a.head)>0 OR {complete} THEN COUNT(a.head) END AS accepted_parts,
+            CASE WHEN COUNT(a.head)>0 THEN AVG(a.seconds) END AS accept_to_main_seconds,
+            {complete} AS parts_complete
             FROM landing l LEFT JOIN {accept} a ON a.repo=l.repo AND a.sha=l.landed_sha
             WHERE l.repo=?1 AND {in_window}
             GROUP BY l.train,l.landed_sha ORDER BY l.landed_at,l.landed_sha"))?;

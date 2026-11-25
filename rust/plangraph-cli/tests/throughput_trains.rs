@@ -68,6 +68,11 @@ enum Mode {
 }
 
 fn train(mode: Mode) -> Train {
+    train_with(mode, false)
+}
+
+/// With `direct`, one more accepted head reached main on its own, after the base and before the train was built.
+fn train_with(mode: Mode, direct: bool) -> Train {
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().to_path_buf();
     let bin = repo.join("bin");
@@ -81,6 +86,21 @@ fn train(mode: Mode) -> Train {
     let at = "2026-11-21T10:00:00Z";
     output(dated(&repo, at).args(["commit", "-q", "--allow-empty", "-m", "base"]));
     let base = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    let mut direct_head = None;
+    if direct {
+        git(&repo, &["checkout", "-q", "-b", "direct", "main"]);
+        output(dated(&repo, at).args(["commit", "-q", "--allow-empty", "-m", "landed on its own"]));
+        direct_head = Some(git(&repo, &["rev-parse", "HEAD"]).trim().to_owned());
+        git(&repo, &["checkout", "-q", "main"]);
+        output(dated(&repo, at).args([
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge on its own",
+            "direct",
+        ]));
+    }
     git(&repo, &["checkout", "-q", "-b", "train"]);
     let mut heads = Vec::new();
     for part in 1..=6 {
@@ -131,22 +151,25 @@ fn train(mode: Mode) -> Train {
         .execute_batch(
             "CREATE TABLE landing(repo TEXT,landed_sha TEXT,train TEXT,parts TEXT,
          build_started_at TEXT,landed_at TEXT,ci_reruns INTEGER,left_out INTEGER,fix_tasks INTEGER,
-         PRIMARY KEY(repo,landed_sha));",
+         mode TEXT,PRIMARY KEY(repo,landed_sha));",
         )
         .unwrap();
     // An earlier landing (the base) bounds the train from below.
     connection.execute(
-        "INSERT INTO landing VALUES('fixture/repo',?1,'t0','[0]','2026-11-21T08:00:00Z','2026-11-21T09:30:00Z',0,0,0)",
+        "INSERT INTO landing VALUES('fixture/repo',?1,'t0','[0]','2026-11-21T08:00:00Z','2026-11-21T09:30:00Z',0,0,0,'tested-ff')",
         [&base],
     ).unwrap();
     connection.execute(
-        "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z',2,1,3)",
-        [&landed],
+        "INSERT INTO landing VALUES('fixture/repo',?1,'t','[1,2,3,4,5,6]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z',2,1,3,?2)",
+        rusqlite::params![
+            &landed,
+            if mode == Mode::PrMerge { "train-pr-merge" } else { "tested-ff" }
+        ],
     ).unwrap();
     let snapshot = repo.join("keeper.json");
     fs::write(&snapshot, json!({"items":[]}).to_string()).unwrap();
     let runs = repo.join("runs");
-    for (n, head) in heads.iter().enumerate() {
+    for (n, head) in heads.iter().chain(direct_head.iter()).enumerate() {
         let dir = runs.join(format!("run-{n}"));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("record.json"), json!({
@@ -241,6 +264,7 @@ fn six_parts_are_joined(mode: Mode) {
     let report = train.report();
     let row = train_row(&report);
     assert_eq!(row["accepted_parts"], 6, "{report}");
+    assert_eq!(row["parts_complete"], 1, "{report}");
     assert_eq!(row["attempts"], 3, "1 + ci_reruns: {report}");
     assert_eq!(row["ci_reruns"], 2, "{report}");
     assert_eq!(row["drops"], 1, "{report}");
@@ -285,7 +309,7 @@ fn a_landing_after_a_partial_hour_cutoff_is_not_counted_in_that_hour() {
     // A second landing at 12:45 and an item landed after the cutoff.
     connection
         .execute(
-            "INSERT INTO landing VALUES('fixture/repo','late','t2','[7]','2026-11-21T12:30:00Z','2026-11-21T12:45:00Z',0,0,0)",
+            "INSERT INTO landing VALUES('fixture/repo','late','t2','[7]','2026-11-21T12:30:00Z','2026-11-21T12:45:00Z',0,0,0,'tested-ff')",
             [],
         )
         .unwrap();
@@ -457,7 +481,7 @@ fn collecting_an_unrelated_window_does_not_bring_a_retired_legacy_sample_back() 
 }
 
 #[test]
-fn a_landing_with_no_earlier_landing_has_no_verified_base_and_its_ff_parts_stay_unknown() {
+fn a_landing_with_no_earlier_landing_has_no_verified_base_and_its_ff_train_is_flagged_incomplete() {
     let train = train(Mode::TestedFastForward);
     // Remove the earlier landing: nothing bounds the fast-forwarded train from below.
     Connection::open(&train.db)
@@ -466,12 +490,9 @@ fn a_landing_with_no_earlier_landing_has_no_verified_base_and_its_ff_parts_stay_
         .unwrap();
     train.collect("2026-11-22T00:00:00Z");
     let report = train.report();
-    // Not a partial count of the one part that arrived under the landed SHA: unknown.
-    assert!(train_row(&report)["accepted_parts"].is_null(), "{report}");
-    assert!(
-        train_row(&report)["accept_to_main_seconds"].is_null(),
-        "{report}"
-    );
+    // The one part that arrived under the landed SHA is reported, and the train is flagged as not verified.
+    assert_eq!(train_row(&report)["accepted_parts"], 1, "{report}");
+    assert_eq!(train_row(&report)["parts_complete"], 0, "{report}");
 }
 
 #[test]
@@ -495,7 +516,7 @@ fn a_landing_takes_only_the_parts_after_the_latest_landing_in_its_ancestry() {
     // Not an ancestor of main: it must never be taken for a base or a landing of this history.
     connection
         .execute(
-            "INSERT INTO landing VALUES('fixture/repo',?1,'t9','[9]','2026-11-21T08:00:00Z','2026-11-21T11:30:00Z',0,0,0)",
+            "INSERT INTO landing VALUES('fixture/repo',?1,'t9','[9]','2026-11-21T08:00:00Z','2026-11-21T11:30:00Z',0,0,0,'tested-ff')",
             [&unrelated],
         )
         .unwrap();
@@ -523,4 +544,62 @@ fn a_landing_takes_only_the_parts_after_the_latest_landing_in_its_ancestry() {
         on_unrelated, 0,
         "a landing off the selected main ref joins nothing"
     );
+}
+
+#[test]
+fn an_accepted_head_that_reached_main_on_its_own_is_not_a_part_of_the_next_merge_train() {
+    let train = train_with(Mode::PrMerge, true);
+    train.collect("2026-11-22T00:00:00Z");
+    let report = train.report();
+    assert_eq!(
+        train_row(&report)["accepted_parts"],
+        6,
+        "the merge's own base excludes it: {report}"
+    );
+    assert_eq!(train_row(&report)["parts_complete"], 1, "{report}");
+}
+
+#[test]
+fn a_fast_forward_range_holding_more_accepted_heads_than_parts_stays_unverified() {
+    let train = train_with(Mode::TestedFastForward, true);
+    train.collect("2026-11-22T00:00:00Z");
+    let report = train.report();
+    // Seven accepted heads lie between the earlier landing and this one, the lander recorded six parts.
+    assert_eq!(train_row(&report)["parts_complete"], 0, "{report}");
+    assert!(
+        train_row(&report)["accepted_parts"].as_u64().unwrap_or(0) < 6,
+        "{report}"
+    );
+}
+
+#[test]
+fn a_stored_wait_survives_a_collection_of_an_unrelated_window() {
+    let train = train(Mode::PrMerge);
+    let connection = Connection::open(&train.db).unwrap();
+    connection.execute_batch(LEGACY).unwrap();
+    // A landing the new collector cannot join (its commit is not in the repository) with a stored 900 s wait.
+    connection
+        .execute(
+            "INSERT INTO landing VALUES('fixture/repo','1111111111111111111111111111111111111111','old','[1]','2026-11-21T03:00:00Z','2026-11-21T04:00:00Z',0,0,0,'tested-ff')",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO throughput_accept VALUES('fixture/repo','1111111111111111111111111111111111111111',1763697600,900,'old-model',500,5)",
+            [],
+        )
+        .unwrap();
+    train.collect("2026-11-22T00:00:00Z");
+    train.collect_window("2026-11-23T00:00:00Z", "2026-11-24T00:00:00Z");
+    let report = train.report();
+    let old = report["trains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["train"] == "old")
+        .unwrap();
+    assert_eq!(old["accepted_parts"], 1, "{report}");
+    assert_eq!(old["accept_to_main_seconds"], 900.0, "{report}");
+    assert_eq!(old["parts_complete"], 0, "{report}");
 }
