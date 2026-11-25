@@ -93,7 +93,7 @@ fn run_bounded(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn()?;
+    let mut child = crate::stall::spawn_retrying(command)?;
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -129,6 +129,31 @@ fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_preserves_the_exit_and_stderr_after_an_executable_stops_being_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fixture");
+        crate::executable_test_support::write_private_executable(
+            &script,
+            "#!/bin/sh\nprintf '%s\\n' 'sandbox diagnostic' >&2\nexit 1\n",
+        );
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&script)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            drop(writer);
+        });
+
+        let result = capture(&mut Command::new(&script), Duration::from_secs(2));
+        release.join().unwrap();
+        let output = result.expect("retry a temporarily busy executable");
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stderr, b"sandbox diagnostic\n");
+    }
 
     #[test]
     fn ssh_routes_preserve_destination_after_option_terminator() {
