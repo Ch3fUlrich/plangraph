@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Instant;
 
 #[test]
 fn gitconfig_guard_only_arms_writers() {

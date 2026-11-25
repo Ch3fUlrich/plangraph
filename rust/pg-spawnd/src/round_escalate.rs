@@ -106,15 +106,14 @@ pub(crate) fn start(
     Ok(Ok((cause, checks)))
 }
 
-/// `args` with `addendum` appended to its prompt, None when there is none.
-pub(crate) fn with_addendum(args: &Args, addendum: &Option<String>) -> Option<Args> {
+/// `args` with `addendum`, when there is one, appended to its prompt.
+pub(crate) fn with_addendum(args: &Args, addendum: &Option<String>) -> Args {
     let mut copy = args.clone();
-    let prompt = args["prompt"].as_str().unwrap_or("");
-    copy.insert(
-        "prompt".into(),
-        json!(format!("{prompt}\n\n{}", addendum.as_ref()?)),
-    );
-    Some(copy)
+    if let Some(text) = addendum {
+        let prompt = args["prompt"].as_str().unwrap_or("");
+        copy.insert("prompt".into(), json!(format!("{prompt}\n\n{text}")));
+    }
+    copy
 }
 
 /// The cause of the round the card starts; a card without one is a review finding.

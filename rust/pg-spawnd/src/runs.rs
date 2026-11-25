@@ -11,10 +11,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
-
-pub(crate) use crate::runs_wait::{terminal, wait, wait_duration, wait_many};
 
 pub(crate) struct Runs {
     pub supervisor: Arc<Supervisor>,
@@ -57,8 +55,7 @@ impl Runs {
             Ok(admission) => admission,
             Err(error) => return crate::round_progress::record_refusal(state, host, args, error),
         };
-        let patched = crate::round_escalate::with_addendum(args, &admission.prompt_addendum);
-        let args = patched.as_ref().unwrap_or(args);
+        let args = &crate::round_escalate::with_addendum(args, &admission.prompt_addendum);
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
@@ -237,7 +234,7 @@ impl Runs {
         base.as_object_mut()
             .unwrap()
             .extend(admission_fields.as_object().unwrap().clone());
-        if !dry && (base["writer_round"].is_u64() || base["round_cause"] == "initial") {
+        if !dry && crate::round_progress::tracked(&base) {
             base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
         }
         let allow_shas = allow_shas(args, &launch, &pre_isolate_cwd, base["head_sha"].as_str());
@@ -475,6 +472,44 @@ pub(crate) fn create(
     )
     .map_err(|_| internal("could not save run record"))
 }
+pub(crate) fn terminal(record: &Value) -> bool {
+    record["status"]
+        .as_str()
+        .and_then(Status::parse)
+        .is_some_and(Status::is_terminal)
+}
+pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, ToolError> {
+    let began = Instant::now();
+    loop {
+        let record = crate::records::read_record(state, &json!(id))?;
+        if terminal(&record) || began.elapsed() >= timeout {
+            return Ok(record);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+pub(crate) fn wait_many(
+    state: &Path,
+    ids: &[String],
+    timeout: Duration,
+) -> Result<Vec<Value>, ToolError> {
+    let began = Instant::now();
+    loop {
+        let mut records = Vec::with_capacity(ids.len());
+        let mut all_done = true;
+        for id in ids {
+            let record = crate::records::read_record(state, &json!(id))?;
+            if !terminal(&record) {
+                all_done = false;
+            }
+            records.push(record);
+        }
+        if all_done || began.elapsed() >= timeout {
+            return Ok(records);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     if base.get("attempts").is_none() {
         base["attempts"] = json!([]);
@@ -621,3 +656,12 @@ mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
+pub(crate) fn wait_duration(value: Option<&Value>) -> Duration {
+    #[allow(clippy::manual_clamp)]
+    let seconds = value
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0)
+        .min(3600.0);
+    Duration::from_secs_f64(seconds)
+}

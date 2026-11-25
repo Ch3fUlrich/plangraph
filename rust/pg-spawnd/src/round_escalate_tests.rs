@@ -149,55 +149,62 @@ fn one_batch_key_shares_one_ledger_across_item_keys() {
     assert_eq!(jobs(dir.path())[0]["item"], "p:Batch");
 }
 
+/// A numbered round with a verdict file (no findings) naming the round's own item and PR.
+fn reviewed(dir: &Path, id: &str, round: u64, verdict: &str, extra: Value) {
+    let (item, pr) = (
+        extra["item_key"].as_str().unwrap_or("p:I"),
+        extra.get("round_pr").cloned().unwrap_or(json!(PR)),
+    );
+    let source = dir.join(format!("{id}.json"));
+    let body =
+        json!({"writer_run_id":id, "item_key":item, "pr":pr, "verdict":verdict, "findings":[]});
+    std::fs::write(&source, body.to_string()).unwrap();
+    let mut merged = json!({"round_verdict_file":source, "round_cause":"review_finding"});
+    merged
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    book(dir, id, round, merged);
+}
+fn without_checks(mut args: Args) -> Args {
+    args["card"]
+        .as_object_mut()
+        .unwrap()
+        .remove("failing_checks");
+    args
+}
+
 #[test]
 fn check_rounds_need_evidence_and_an_accepted_review_allows_a_check_fix() {
     let dir = tempfile::tempdir().unwrap();
     reds(dir.path(), &[1]);
     for cause in ["red_ci", "rebase_main", "fast_check"] {
-        let mut args = card(cause, 0);
-        args["card"]
-            .as_object_mut()
-            .unwrap()
-            .remove("failing_checks");
+        let args = without_checks(card(cause, 0));
         assert!(message(admit(dir.path(), &args)).starts_with("round_failing_checks_missing"));
     }
     let dir = tempfile::tempdir().unwrap();
-    let source = dir.path().join("v.json");
-    let verdict = json!({"writer_run_id":"run-r1", "item_key":"p:I", "pr":PR, "verdict":"ACCEPT", "findings":[]});
-    std::fs::write(&source, verdict.to_string()).unwrap();
-    book(
-        dir.path(),
-        "run-r1",
-        1,
-        json!({"round_verdict_file":source, "round_cause":"review_finding"}),
-    );
+    reviewed(dir.path(), "run-r1", 1, "ACCEPT", json!({}));
     assert!(message(admit(dir.path(), &card("review_finding", 0))).starts_with("round_accepted"));
     assert!(admit(dir.path(), &card("fast_check", 2)).is_ok());
 }
 
 #[test]
 fn unknown_check_counts_never_credit_progress() {
-    // A red round, then two review rounds with bound verdicts and no check count: the count of
-    // the last observation carries over both omissions and the stall is not reset to zero.
+    // A red round, then two review rounds with no check count: the last observed count carries
+    // over both omissions and the stall is not reset to zero.
     let dir = tempfile::tempdir().unwrap();
     reds(dir.path(), &[5]);
     for index in 2..=3 {
         let id = format!("run-r{index}");
-        let source = dir.path().join(format!("v{index}.json"));
-        let verdict = json!({"writer_run_id":id, "item_key":"p:I", "pr":PR, "verdict":"REQUEST_CHANGES", "findings":[]});
-        std::fs::write(&source, verdict.to_string()).unwrap();
-        book(
+        reviewed(
             dir.path(),
             &id,
             index,
-            json!({"round_verdict_file":source, "round_cause":"review_finding", "round_failing_checks":null}),
+            "REQUEST_CHANGES",
+            json!({"round_failing_checks":null}),
         );
     }
-    let mut args = card("review_finding", 0);
-    args["card"]
-        .as_object_mut()
-        .unwrap()
-        .remove("failing_checks");
+    let args = without_checks(card("review_finding", 0));
     assert!(message(admit(dir.path(), &args)).starts_with("round_replan_pending"));
 }
 
@@ -205,23 +212,20 @@ fn unknown_check_counts_never_credit_progress() {
 fn members_and_pre_pr_rounds_keep_their_own_verdict_identity() {
     let dir = tempfile::tempdir().unwrap();
     // Round 1 (member One) ran before the batch had a PR; round 2 (member Two) has the first PR.
-    for (i, (item, pr)) in [("p:One", Value::Null), ("p:Two", json!(PR))]
-        .into_iter()
-        .enumerate()
-    {
-        let id = format!("run-r{}", i + 1);
-        let source = dir.path().join(format!("v{i}.json"));
-        let verdict = json!({"writer_run_id":id, "item_key":item, "pr":pr,
-            "verdict":"REQUEST_CHANGES", "findings":[]});
-        std::fs::write(&source, verdict.to_string()).unwrap();
-        book(
-            dir.path(),
-            &id,
-            i as u64 + 1,
-            json!({"item_key":item, "batch_key":"p:Batch",
-            "round_pr":pr, "round_verdict_file":source, "round_cause":"review_finding"}),
-        );
-    }
+    reviewed(
+        dir.path(),
+        "run-r1",
+        1,
+        "REQUEST_CHANGES",
+        json!({"item_key":"p:One", "batch_key":"p:Batch", "round_pr":null}),
+    );
+    reviewed(
+        dir.path(),
+        "run-r2",
+        2,
+        "REQUEST_CHANGES",
+        json!({"item_key":"p:Two", "batch_key":"p:Batch"}),
+    );
     let mut args = card("red_ci", 2);
     args["card"]["item_key"] = json!("p:Three");
     args["card"]["batch_key"] = json!("p:Batch");
@@ -232,33 +236,53 @@ fn members_and_pre_pr_rounds_keep_their_own_verdict_identity() {
 }
 
 #[test]
-fn an_initial_attempt_that_did_no_work_is_retried_and_leaves_the_ledger_empty() {
-    use pg_worker_core::run::record::Status;
-    let dir = tempfile::tempdir().unwrap();
-    let mut record = crate::runs::create(
-        dir.path(),
-        "run-init",
-        "fixture",
-        json!({"role":"implement", "item_key":"p:I", "round_cause":"initial"}),
-        Status::Failed,
-    )
-    .ok()
-    .unwrap();
-    crate::round_progress::finish_round(&mut record, Status::Failed);
-    assert_eq!(record.get("round_void"), Some(&json!(true)));
-    // The runner saves the record; the test writes the voided one back.
-    std::fs::write(
-        dir.path().join("runs/run-init/record.json"),
-        record.to_value().to_string(),
-    )
-    .unwrap();
+fn a_launched_initial_attempt_is_retried_only_when_it_left_the_checkout_unchanged() {
+    let work = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let identity = [
+            ("GIT_AUTHOR_NAME", "F"),
+            ("GIT_AUTHOR_EMAIL", "f@example.test"),
+            ("GIT_COMMITTER_NAME", "F"),
+            ("GIT_COMMITTER_EMAIL", "f@example.test"),
+        ];
+        let out = pg_worker_core::git_test_support::command(work.path())
+            .args(args)
+            .envs(identity)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-qm", "base", "--allow-empty"]);
+    // The launcher fingerprints an initial run, as it does a numbered round.
+    let started = json!({"role":"implement", "round_cause":"initial"});
+    assert!(
+        crate::round_progress::tracked(&started) && !crate::round_progress::tracked(&json!({}))
+    );
     let launch = json!({"card":{"item_key":"p:I", "pr":PR}})
         .as_object()
         .unwrap()
         .clone();
-    for args in [launch, card("initial", 0)] {
-        let admitted = admit(dir.path(), &args).ok().unwrap();
-        assert_eq!(admitted.fields["round_cause"], "initial");
-        assert!(admitted.fields.get("writer_round").is_none());
+    for (changed, retried) in [(false, true), (true, false)] {
+        let state = tempfile::tempdir().unwrap();
+        let mut record = crate::runs::create(
+            state.path(), "run-init", "fixture",
+            json!({"role":"implement", "item_key":"p:I", "round_cause":"initial", "pid":42,
+                "cwd":work.path(), "round_work_before":crate::round_progress::work_fingerprint(work.path())}),
+            Status::Running,
+        ).ok().unwrap();
+        if changed {
+            std::fs::write(work.path().join("file"), "work").unwrap();
+        }
+        crate::round_progress::finish_round(&mut record, Status::Failed);
+        record.set("status", json!("failed"));
+        std::fs::write(
+            state.path().join("runs/run-init/record.json"),
+            record.to_value().to_string(),
+        )
+        .unwrap();
+        let admitted = admit(state.path(), &launch).ok().unwrap();
+        // Retried: the initial run again, an empty ledger. Worked: the first fix, round 1.
+        assert_eq!(admitted.fields.get("writer_round").is_none(), retried);
     }
 }

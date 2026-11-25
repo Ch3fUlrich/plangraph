@@ -358,6 +358,12 @@ pub(crate) fn work_fingerprint(cwd: &Path) -> Option<String> {
     Some(format!("{:x}", hash.finalize()))
 }
 
+/// Whether the run about to be recorded is tracked by the ledger (a numbered round or the
+/// initial run), so its checkout is fingerprinted at the start.
+pub(crate) fn tracked(base: &Value) -> bool {
+    base["writer_round"].is_u64() || base["round_cause"] == crate::round_escalate::INITIAL
+}
+
 pub(crate) fn finish_round(
     record: &mut pg_worker_core::run::record::RunRecord,
     status: pg_worker_core::run::record::Status,
