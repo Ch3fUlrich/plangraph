@@ -356,9 +356,10 @@ impl Driver for Host {
         let (mut log, _) = self.checks_run()?;
         // The shared exact-head fast checks (affected tests, lints, formatting): the same command
         // a human writer runs, and the only producer of the receipt a lane push needs.
+        let argv = review::fast_checks_cli()?;
         let shared = self
-            .command("plangraph")
-            .args(["fast-checks", "--owned-worktree"])
+            .command(&argv[0])
+            .args(&argv[1..])
             .current_dir(&self.cwd)
             .output()
             .map_err(|e| format!("plangraph fast-checks: {e}"))?;
