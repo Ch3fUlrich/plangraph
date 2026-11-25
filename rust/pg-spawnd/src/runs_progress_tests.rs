@@ -141,3 +141,68 @@ fn the_writer_resumed_after_a_replan_gets_its_slices_in_the_prompt() {
     assert!(seen.starts_with("original prompt\n\n") && seen.contains("p:I-S1: a/one.rs"));
     assert!(seen.contains("Open finding: HIGH a/one.rs:3 keep"));
 }
+
+#[test]
+fn an_initial_run_that_exits_without_changing_the_checkout_is_retried_through_the_launch_path() {
+    use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+    // (script, the next launch is the initial run again)
+    for (script, retried) in [("exit 3", true), ("echo work >file; exit 3", false)] {
+        let work = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let id = [
+                ("GIT_AUTHOR_NAME", "F"),
+                ("GIT_AUTHOR_EMAIL", "f@example.test"),
+                ("GIT_COMMITTER_NAME", "F"),
+                ("GIT_COMMITTER_EMAIL", "f@example.test"),
+            ];
+            let out = pg_worker_core::git_test_support::command(work.path())
+                .args(args)
+                .envs(id)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-qm", "base", "--allow-empty"]);
+        let state = tempfile::tempdir().unwrap();
+        let cfg = SupervisorCfg::new(Config {
+            state_dir: state.path().to_owned(),
+            confinement: Confinement::Plain,
+            ..Config::default()
+        });
+        let runs = Runs::new(Arc::new(Supervisor::new(cfg).unwrap()));
+        let args = json!({"card":{"item_key":"p:I", "pr":"https://forge/p/1"}, "prompt":"p",
+            "wait_seconds":10});
+        let first = runs
+            .spawn_using(
+                state.path(),
+                args.as_object().unwrap(),
+                "fixture",
+                json!("implement"),
+                json!({"first_leg":{"family":"f"}}),
+                |_, _| {
+                    Ok(crate::launch::LaunchSpec {
+                        argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+                        cwd: work.path().to_owned(),
+                        env: BTreeMap::new(),
+                        stdin: Some("p".into()),
+                        prompt: Some("p".into()),
+                        warnings: None,
+                        events: None,
+                    })
+                },
+            )
+            .ok()
+            .unwrap();
+        assert_eq!(
+            (first["round_cause"].clone(), first["status"].clone()),
+            (json!("initial"), json!("failed"))
+        );
+        // The record the launcher saved decides the next admission: no worked-on initial run
+        // is repeated, an idle one is.
+        let next = crate::round_progress::admit(state.path(), args.as_object().unwrap())
+            .ok()
+            .unwrap();
+        assert_eq!(next.fields.get("writer_round").is_none(), retried);
+    }
+}
