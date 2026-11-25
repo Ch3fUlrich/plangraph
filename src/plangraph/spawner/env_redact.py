@@ -412,7 +412,13 @@ def opencode_limit(text):
     return None
 
 
-SANDBOX_DENIAL = re.compile(r'read-only (?:file ?system|sandbox|git|\.git)|sandbox (?:denied|blocked|refused)', re.I)
+# An error-shaped line only: a tool or error prefix and the denial, or the errno text. Model prose that
+# merely mentions a read-only sandbox is not evidence.
+SANDBOX_DENIAL = re.compile(
+    r'^\s*(?:\S+\s+)?(?:fatal|error|warning|git|bash|sh|zsh|touch|cp|mv|mkdir|rm|tee|cat|sed|python3?'
+    r'|\w*Error|\w*Exception)\b[^\n]*'
+    r'(?:read-only (?:file ?system|sandbox|git|\.git)|sandbox (?:denied|blocked|refused))'
+    r'|\[Errno 30\] Read-only file system', re.I | re.M)
 
 
 def sandbox_denial(*texts):

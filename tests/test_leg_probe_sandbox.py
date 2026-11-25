@@ -192,3 +192,41 @@ def test_a_denial_that_scrolled_out_of_the_live_tail_before_the_timeout_is_still
     assert any(e.get('event') == 'sandbox_denied' for job in runner.jobs.values() for e in job.events)
     assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
     assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
+
+
+PROSE = r'''
+import sys, time
+sys.stderr.write('I did not encounter a read-only sandbox, the commit task is simply slow.\n')
+for n in range(350):
+    sys.stderr.write(f'diagnostic line {n}\n')
+sys.stderr.flush()
+time.sleep(60)
+'''
+
+
+def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
+
+    async def factory(exe, *args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', PROSE, **kwargs)
+    runner = SpawnerRunner(process_factory=factory)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=4, store=store))
+    assert not any(e.get('event') == 'sandbox_denied' for job in runner.jobs.values() for e in job.events)
+    assert result['ok'] is False and result['infra'] is False and result['reason'].startswith('timeout'), result
+
+
+@pytest.mark.parametrize('line, evidence', [
+    ("fatal: Unable to create '/r/.git/index.lock': Read-only file system", True),
+    ('error: read-only file system: .git/index.lock', True),
+    ("OSError: [Errno 30] Read-only file system: 'ok.txt'", True),
+    ("touch: cannot touch 'ok.txt': Read-only file system", True),
+    ('I did not encounter a read-only sandbox,', False),
+    ('Note: the read-only sandbox blocked nothing', False),
+    ('The sandbox was not blocked or denied', False),
+])
+def test_only_error_shaped_lines_are_sandbox_evidence(line, evidence):
+    from plangraph.spawner.env_redact import sandbox_denial
+    assert bool(sandbox_denial(line)) is evidence

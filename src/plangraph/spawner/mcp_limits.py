@@ -249,22 +249,52 @@ def publish_served(state, served_sha, identity, error=None):
         pass
 
 
-def served_report(state, checkout=None):
-    """Every live MCP process of this state root with the sha it serves and whether that is the checkout head.
+def running_mcp_pids():
+    """pids of live ``python -m plangraph.spawner.mcp`` servers, registered or not; None when unavailable."""
+    try:
+        if sys.platform == 'win32':
+            out = subprocess.run(['powershell', '-NoProfile', '-Command',
+                                  'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'],
+                                 capture_output=True, text=True, timeout=20, check=True).stdout
+        else:
+            out = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=20,
+                                 check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids = set()
+    for line in out.splitlines():
+        pid, _, args = line.strip().partition(' ')
+        if pid.isdigit() and 'plangraph.spawner.mcp' in args and '--served-sha' not in args:
+            pids.add(int(pid))
+    return pids - {os.getpid()}
 
-    Rows of dead processes are removed. ``checkout`` defaults to this checkout's HEAD."""
+
+def served_report(state, checkout=None, running=None):
+    """Every live MCP server with the sha it serves and whether that is the checkout head.
+
+    Registered rows come from the per-process files (dead processes are removed with ``pid_alive``, which
+    never signals). Servers found running but unregistered (started before the code that registers)
+    are listed with ``served_sha`` None and ``current`` False: their code cannot be verified.
+    ``running`` defaults to the process inventory; None means the inventory is unavailable."""
+    from plangraph.mcp_supervise.procutil import pid_alive
     checkout = checkout_head() if checkout is None else checkout
-    rows = []
+    running = running_mcp_pids() if running is None else running
+    rows, seen = [], set()
     for path in sorted((Path(state) / SERVED_DIR).glob('*.json')):
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
-            os.kill(row['pid'], 0)
-        except ProcessLookupError:
-            path.unlink(missing_ok=True)
-            continue
+            alive = pid_alive(row['pid'])
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        rows.append({**row, 'checkout_sha': checkout, 'current': row.get('served_sha') == checkout})
+        if not alive:
+            path.unlink(missing_ok=True)
+            continue
+        seen.add(row['pid'])
+        rows.append({**row, 'registered': True, 'checkout_sha': checkout,
+                     'current': bool(checkout) and row.get('served_sha') == checkout})
+    for pid in sorted((running or set()) - seen):
+        rows.append({'pid': pid, 'served_sha': None, 'registered': False, 'route_reload_error': None,
+                     'checkout_sha': checkout, 'current': False})
     return rows
 
 

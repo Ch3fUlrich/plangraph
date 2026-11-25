@@ -168,6 +168,7 @@ def test_an_idle_session_follows_the_head_and_the_deploy_report_prints_every_ser
     heads = {'now': 'a' * 40}
     monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: heads['now'])
     monkeypatch.setattr(mcp_limits, 'checkout_head', lambda source=None: heads['now'])
+    monkeypatch.setattr(mcp, 'running_mcp_pids', lambda: {os.getpid()})
     identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
     assert mcp.served_main(tmp_path) == 0
@@ -188,29 +189,93 @@ def test_an_idle_session_follows_the_head_and_the_deploy_report_prints_every_ser
     assert ('pid=%d' % os.getpid()) in capsys.readouterr().out
 
 
-def test_health_prints_the_served_sha_and_the_checkout_sha(tmp_path, monkeypatch):
-    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'c' * 40)
-    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=Mock(return_value=OLD))
-    health = call(server, 'health')
-    assert health['served_sha'] == 'c' * 40 and health['checkout_sha'] == 'c' * 40
+def test_the_report_never_signals_the_sessions_it_inspects(tmp_path, monkeypatch):
+    import subprocess
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        mcp_limits.publish_served(tmp_path, 'a' * 40, OLD)
+        row = tmp_path / mcp_limits.SERVED_DIR / f'{os.getpid()}.json'
+        other = tmp_path / mcp_limits.SERVED_DIR / f'{child.pid}.json'
+        other.write_text(row.read_text().replace(str(os.getpid()), str(child.pid)))
+        from plangraph.mcp_supervise import procutil
+        asked = []
+        real_alive = procutil.pid_alive
+        monkeypatch.setattr(procutil, 'pid_alive', lambda pid: asked.append(pid) or real_alive(pid))
+        assert 'os.kill' not in open(mcp_limits.__file__, encoding='utf-8').read()   # TerminateProcess on Windows
+        rows = mcp_limits.served_report(tmp_path, checkout='a' * 40, running={child.pid, os.getpid()})
+        assert {r['pid'] for r in rows} == {child.pid, os.getpid()}
+        assert child.poll() is None and sorted(asked) == sorted([child.pid, os.getpid()])
+    finally:
+        child.kill()
+        child.wait()
+    monkeypatch.undo()
+    assert [r['pid'] for r in mcp_limits.served_report(tmp_path, checkout='a' * 40, running=set())] == [os.getpid()]
+    assert not other.exists()                       # a dead session's file is removed
 
 
-def test_failed_reload_keeps_serving_the_previous_code(tmp_path, monkeypatch):
-    import importlib
+def test_unregistered_sessions_fail_the_deploy_report(tmp_path, monkeypatch, capsys):
+    mcp_limits.publish_served(tmp_path, 'a' * 40, OLD)
+    rows = mcp_limits.served_report(tmp_path, checkout='a' * 40, running={os.getpid(), 4242424})
+    old = [r for r in rows if r['pid'] == 4242424][0]
+    assert old['served_sha'] is None and old['registered'] is False and old['current'] is False
+    monkeypatch.setattr(mcp, 'running_mcp_pids', lambda: {os.getpid(), 4242424})
+    monkeypatch.setattr(mcp_limits, 'checkout_head', lambda source=None: 'a' * 40)
+    assert mcp.served_main(tmp_path) == 1
+    assert 'unregistered' in capsys.readouterr().out
+    monkeypatch.setattr(mcp, 'running_mcp_pids', lambda: None)       # inventory unavailable
+    assert mcp.served_main(tmp_path) == 1
+    monkeypatch.setattr(mcp, 'running_mcp_pids', lambda: set())      # no session at all
+    assert mcp.served_main(tmp_path, report=[]) == 1
+
+
+def test_a_failed_candidate_service_leaves_the_runner_hooks_on_the_old_generation(tmp_path, monkeypatch):
     identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
-    before, service = sys.modules[SENTINEL], server.service
-    bench = sys.modules['plangraph.spawner.bench_entry']
+    hooks = (server.runner.on_sample, server.runner.state)
     identity.return_value = NEW
-    # bench_entry imports cleanly as a candidate; a later module of the same package then fails
-    moved_sources(monkeypatch, **{'plangraph.spawner.bench_entry': '\nREJECTED_CANDIDATE = True\n',
-                                  'plangraph.spawner.service': '\nraise RuntimeError("bad merge")\n'})
+    moved_sources(monkeypatch, **{'plangraph.spawner.seat_spawn':
+                                  '\ndef live_runner(runner):\n    raise RuntimeError("live")\n'})
     server.refresh_route_code()
-    assert sys.modules[SENTINEL] is before and server.service is service
-    assert 'bad merge' in server._reload_error
-    from plangraph.spawner import bench_entry as from_form
-    assert from_form is bench and not hasattr(from_form, 'REJECTED_CANDIDATE')
-    assert importlib.import_module('plangraph.spawner.bench_entry') is bench
-    assert sys.modules['plangraph.spawner'].bench_entry is bench
-    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'd' * 40)
-    assert 'bad merge' in call(server, 'health')['route_reload_error']
+    assert 'live' in server._reload_error
+    assert (server.runner.on_sample, server.runner.state) == hooks
+
+
+def test_the_served_sha_is_the_head_whose_source_was_loaded(tmp_path, monkeypatch):
+    heads = {'now': 'a' * 40}
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: heads['now'])
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    real, reads = mcp_limits._spawn_modules, []
+
+    def read(root=None, entries=('plangraph.spawner.mcp',), sources=None):
+        names = real(root, entries, sources)
+        reads.append(heads['now'])
+        if len(reads) == 1:                          # the checkout moves right after snapshot B was read
+            heads['now'], identity.return_value = 'c' * 40, 'c' * 12
+        return names
+    heads['now'], identity.return_value = 'b' * 40, NEW
+    monkeypatch.setattr(mcp_limits, '_spawn_modules', read)
+    server.refresh_route_code()
+    assert reads == ['b' * 40, 'c' * 40]             # B was loaded, the change was noticed, C was loaded
+    assert server._served_head == 'c' * 40 and server._reload_error is None
+
+
+def test_a_checkout_that_never_settles_claims_no_sha(tmp_path, monkeypatch):
+    heads = {'n': 0}
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: f'{heads["n"]:040d}')
+    identity = Mock(side_effect=lambda: f'{heads["n"]:012d}')
+    heads['n'] = 1
+    identity.side_effect = None
+    identity.return_value = OLD
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    real = mcp_limits._spawn_modules
+
+    def read(root=None, entries=('plangraph.spawner.mcp',), sources=None):
+        names = real(root, entries, sources)
+        heads['n'] += 1
+        identity.return_value = f'{heads["n"]:012d}'
+        return names
+    identity.return_value = NEW
+    monkeypatch.setattr(mcp_limits, '_spawn_modules', read)
+    server.refresh_route_code()
+    assert server._served_head == '' and 'changed during reload' in server._reload_error

@@ -24,7 +24,7 @@ from plangraph.spawner import bench_entry, leg_probe, remote_ps
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.mcp_limits import (SourceGuard, checkout_head, encode_reply, ps_reply, publish_served,
-                                          reload_spawn_sources, served_report)
+                                          reload_spawn_sources, running_mcp_pids, served_report)
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -202,21 +202,42 @@ class MCPSpawnerServer:
         """Serve the checkout's current planner/routing code when its head moved, without a restart.
 
         Route and health never wait for a running job: the runner (job history) and the service's run
-        tasks carry over to the new service. Modules, service and served sha change together or not at
-        all; a failed reload keeps the previous generation and is reported by ``plangraph_agent_health``."""
+        tasks carry over to the new service. Modules, service, runner hooks and served sha change together
+        or not at all; a failed reload keeps the previous generation and is reported by
+        ``plangraph_agent_health``. The served sha is the head captured before the sources were read and
+        is trusted only when the checkout did not move meanwhile; otherwise the reload runs again."""
         current = self._source_guard.identity()
         if current == self._served_identity:
             return
+        for _ in range(3):
+            head = checkout_head()
+            if self._reload_once() is None:
+                return
+            after = self._source_guard.identity()
+            if after == current:
+                self._served_identity, self._served_head, self._reload_error = current, head, None
+                self.publish_served()
+                return
+            current = after
+        # The checkout kept moving: what is loaded matches no single head, so claim none and retry later.
+        self._served_identity, self._served_head = None, ''
+        self._reload_error = 'checkout changed during reload'
+        self.publish_served()
+
+    def _reload_once(self):
+        """One transactional reload; returns True when committed, None after a rollback."""
         previous, built = self.service, []
+        hooks = {name: getattr(self.runner, name) for name in ('state', 'on_sample') if hasattr(self.runner, name)}
         try:
             reload_spawn_sources(globals(), commit=lambda: built.append(self._make_service(previous.state, previous)))
         except Exception as exc:
+            for name, value in hooks.items():   # the candidate service had re-pointed the retained runner
+                setattr(self.runner, name, value)
             self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
             self.publish_served()
-            return
+            return None
         self.service = built[0]
-        self._served_identity, self._served_head, self._reload_error = current, checkout_head(), None
-        self.publish_served()
+        return True
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""
@@ -472,17 +493,24 @@ async def run_stdio_server() -> None:
         refresher.cancel()
 
 
-def served_main(state=None) -> int:
-    """``--served-sha``: print the sha each live MCP session serves; exit 1 when any is not the checkout head."""
+def served_main(state=None, report=None) -> int:
+    """``--served-sha``: print every live MCP session and the sha it serves.
+
+    Exit 1 when no session is found, the process inventory is unavailable, or any session is not on the
+    checkout head (an unregistered session predates the reload and cannot be verified)."""
     import os
     from pathlib import Path
     state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE', Path(os.environ.get(
         'XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
-    rows = served_report(state)
+    running = running_mcp_pids()
+    rows = report if report is not None else served_report(state, running=running)
+    if running is None:
+        print('inventory unavailable: cannot list running sessions')
     for row in rows:
-        print(f"pid={row['pid']} served={row['served_sha'][:12] or 'unknown'} checkout={row['checkout_sha'][:12]} "
+        served = (row['served_sha'] or 'unregistered')[:12]
+        print(f"pid={row['pid']} served={served or 'unknown'} checkout={(row['checkout_sha'] or '')[:12]} "
               f"{'current' if row['current'] else 'STALE'}" + (f" error={row['route_reload_error']}" if row['route_reload_error'] else ''))
-    return 0 if rows and all(row['current'] for row in rows) else 1
+    return 0 if running is not None and rows and all(row['current'] for row in rows) else 1
 
 
 if __name__ == "__main__":
