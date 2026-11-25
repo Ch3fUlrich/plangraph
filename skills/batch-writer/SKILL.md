@@ -117,8 +117,9 @@ Use grep for text that is not a symbol.
   branch; the full test suite runs once there. A push per round wastes a CI run.
 - Never change git config and never bypass a hook (`--no-verify`, `core.hooksPath`).
   Never work around a refusal of a tool, hook or guard: quote it verbatim in STATUS_FILE.
-- Never run `git push --dry-run` or the push gate yourself: the gate runs once, at the real
-  push of your final head; a gate hit comes back to you as its own short round.
+- Never run `git push --dry-run` or the push gate yourself: the pre-push hook runs on every
+  real push (the lane pushes of step 5 and the final head); a gate hit comes back to you as
+  its own short round.
 - Never weaken or delete a test to make it pass. Never run the full test suite. Never
   commit STATUS_FILE. Never put a hostname, key, real user path or private project name
   into the repository.
@@ -132,8 +133,9 @@ Use grep for text that is not a symbol.
   echo rc=$?`, and you wait for the harness notification. A command that hits its limit is
   ended: write `LESSON <command> hit its limit` and go on with a narrower one.
 - Never run a test selection again that already passed, unless the code under it changed.
-  The one exception is FAST_CHECKS in step 7: it runs on the committed head and writes the
-  stamp for that exact head, also when a pre-commit run chose the same tests.
+  The exceptions are the stamp command of step 5 and FAST_CHECKS in step 7: each runs on the
+  committed head and writes the stamp for that exact head, also when a pre-commit run chose
+  the same tests.
 
 ## Fix round
 
