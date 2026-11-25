@@ -53,6 +53,9 @@ pub(crate) struct ReviewBase {
     pub main: String,
     pub observed_main: String,
     pub mode: &'static str,
+    /// The unmerged paths of a `conflict` basis.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conflict_files: Vec<String>,
 }
 /// Review attempts per round before the run ends BLOCKED for want of a verdict.
 const REVIEW_TRIES: usize = 3;
