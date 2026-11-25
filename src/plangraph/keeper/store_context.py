@@ -89,7 +89,7 @@ def _premise_ids(payload):
     if isinstance(before, dict) and before.get("done_criteria") == after.get("done_criteria"):
         after.pop("done_criteria", None)
     return src.decision_ids(*premise_texts({k: v for k, v in payload.items() if k not in unchanged}),
-                            *premise_texts(after))
+                            *premise_texts(after), *(payload.get("premise_cites") or ()))
 
 
 def _changes_premise(kind, payload):

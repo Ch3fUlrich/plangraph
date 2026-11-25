@@ -67,10 +67,15 @@ def _defined_payload(fields, before=None):
             payload[name] = fields[name]
     named = [name for name in ("title", "note", "description") if name in fields]
     same = [name for name in named if before is not None and fields[name] == before.get(name)]
-    # A listed field that kept its text is no evidence for the decision clock.  An edit that
-    # changed every field it lists keeps the payload (and hash) it always had.
-    payload.update(citing_premise({k: v for k, v in fields.items() if k not in same},
-                                  ("title", "note")))     # done_criteria rides in before/after
+    # The decision clock reads what an edit adds, not what the text already held: a listed field
+    # that kept its text is no evidence, and in a changed field only the ids the old text did not
+    # cite are (the rest was counted when it was written, or is metadata an older Keeper folded in).
+    # An edit that changed every field it lists keeps the payload (and hash) it always had.
+    new = sorted({d for name in ("title", "note") if name in fields and name not in same
+                  for d in decision_ids(fields[name]) if before is None
+                  or d not in decision_ids(before.get(name))}, key=lambda d: int(d[2:]))
+    if new:
+        payload["premise_cites"] = new
     if same:
         payload["premise_unchanged"] = same
     for name in ("estimate_h", "estimate_src"):

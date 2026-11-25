@@ -22,7 +22,7 @@ ops, dependency lists and the ``Closes:``/``Waives:`` tokens of decisions.
 from __future__ import annotations
 
 from .errors import Refused
-from .item_fields import check_host
+from .item_fields import check_host, creation_metadata
 
 _CHAIN = 16
 
@@ -90,7 +90,8 @@ class RehomeMixin:
             raise Refused("conflict", f"{new_key} already exists")
         definition = dict(item, key=new_key, project=new_project, state="open",
                           host=item["host"] if host is None else host,
-                          rehomed_from=key)
+                          rehomed_from=key,
+                          metadata=creation_metadata(self.conn, key).get(key, {}))
         before = self._all_items()
         locked = {it["key"] for it in before
                   if it["state"] in ("done", "cancelled")}

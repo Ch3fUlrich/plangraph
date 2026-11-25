@@ -741,3 +741,45 @@ def test_an_imported_credential_label_in_the_note_covers_the_metadata_value(w, t
     with pytest.raises(Refused) as exc:
         load_dir(plan)
     assert "credential" in exc.value.msg and secret not in exc.value.msg
+
+
+def test_a_credential_label_in_a_sibling_metadata_field_covers_the_value(w, tmp_path):
+    from plangraph.keeper.importer import load_dir
+    plan = tmp_path / "plan"
+    plan.mkdir()
+    secret = "svc" + "acct/" + "Zq9xk2LmPw"
+    (plan / "p.yaml").write_text(
+        "items:\n"
+        f"- {{project: demo, id: A, title: a, category: 'the password is', session: '{secret}', owner: tester,"
+        " track: T0, estimate_h: 1, kind: lane}\n", encoding="utf-8")
+    with pytest.raises(Refused) as exc:
+        load_dir(plan)
+    assert "credential" in exc.value.msg and secret not in exc.value.msg
+
+
+def test_editing_the_authored_part_of_a_legacy_note_does_not_publish_its_folded_metadata(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("L", note="plain note"))
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:L'",
+                   ("plain note\nsession: D-999999",))                   # as an old Keeper left it
+    w.store.edit_definition(w.p("router"), "demo:L", {"note": "reworded note\nsession: D-999999"})
+    assert w.store._decision_clock()["marks"][-1] == 5800
+    w.store.edit_definition(w.p("router"), "demo:L", {"note": "reworded again per D-5801\nsession: D-999999"})
+    assert w.store._decision_clock()["marks"][-1] == 5801          # an id the edit adds is evidence
+    _mk(w, defn("Z"))
+    _decide(decisions, 5900, "demo:Z scope changed")
+    assert "D-5900" in _refuses(w, "demo:Z")
+
+
+def test_rehoming_an_item_keeps_its_metadata_for_the_export_and_does_not_republish_its_note(w, decisions, tmp_path):
+    from plangraph.keeper.importer import export_yaml, load_dir
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", session="sess-9", category="infra", similar=["demo:B"], supersedes="demo:OLD"))
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:A'", ("n\nsession: D-999999",))
+    w.store.rehome(w.p("router"), "demo:A", "plangraph", "workstation")
+    out = tmp_path / "export"
+    export_yaml(w.store, out)
+    moved = next(i for i in load_dir(out) if i["key"] == "plangraph:A")
+    assert [moved[n] for n in ("session", "category", "similar", "supersedes")] == [
+        "sess-9", "infra", ["demo:B"], "demo:OLD"]
+    assert w.store._decision_clock()["marks"][-1] == 5800           # the carried note is no new evidence

@@ -369,7 +369,8 @@ class CreateMixin:
         for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
-        created.update(citing_premise(row, ("title", "done_criteria", "note", "source")))
+        if not definition.get("rehomed_from"):      # a moved premise is carried, not authored
+            created.update(citing_premise(row, ("title", "done_criteria", "note", "source")))
         created.update(definition.get("metadata") or {})
         if parent := definition.get("slice_parent"):
             created["slice_parent"] = parent
