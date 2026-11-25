@@ -268,12 +268,32 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn lock_excludes_concurrent_ticks_then_reopens() {
-        let _forks = live_tests::fork_guard();
-        let d = tempfile::tempdir().unwrap();
-        let first = lock(d.path()).unwrap();
-        assert!(lock(d.path()).is_err());
-        drop(first);
-        assert!(lock(d.path()).is_ok());
+        const CHILD: &str = "PG_FEEDER_LOCK_TEST_CHILD";
+        const RAN: &str = "feeder lock checks ran";
+        if std::env::var_os(CHILD).is_some() {
+            let d = tempfile::tempdir().unwrap();
+            let first = lock(d.path()).unwrap();
+            assert!(lock(d.path()).is_err());
+            drop(first);
+            assert!(lock(d.path()).is_ok());
+            println!("{RAN}");
+            return;
+        }
+        // A child that another test forks while the lock file is open keeps its flock until it
+        // execs, so the reacquire check runs alone in a fresh single-threaded process of this
+        // test binary, where no other test can fork.
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "feeder::runtime::tests::lock_excludes_concurrent_ticks_then_reopens",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains(RAN), "{stdout}");
     }
     #[test]
     fn concurrent_events_remain_independent_json_lines() {

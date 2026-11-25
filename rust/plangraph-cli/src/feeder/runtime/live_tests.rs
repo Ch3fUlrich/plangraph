@@ -1,18 +1,6 @@
 //! Live-facts decisions: the RAM budget, PSI pacing and unknown-host refusal.
 use super::*;
 
-/// Held by every test of this module that starts a process and by the lock test: a child
-/// forked while the lock file is open keeps the `flock` until its exec, so the lock test could
-/// read a lock this module's own forks still hold.
-#[cfg(unix)]
-pub(super) static FORKS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(unix)]
-pub(super) fn fork_guard() -> std::sync::MutexGuard<'static, ()> {
-    FORKS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn live_facts(host: &str, running: usize, free_ram: u64) -> HostFacts {
     serde_json::from_value(json!({
         "host":host, "free_ram_bytes":free_ram,
@@ -125,7 +113,6 @@ mod proc_fixture {
             let row = json!([{"provider":"codex","window_key":"w","remaining_percentage":80,
                 "created_at":chrono::Utc::now().timestamp()}]);
             let stub = bin.join("python3");
-            let _forks = fork_guard();
             pg_worker_core::executable_test_support::write_executable(
                 &stub,
                 format!("#!/bin/sh\nprintf '%s' '{row}'\n"),
@@ -165,7 +152,6 @@ mod proc_fixture {
             self.dir.path().join("proc").join(name)
         }
         fn decide(&self) -> Value {
-            let _forks = fork_guard();
             let policy: Policy =
                 toml::from_str(&fs::read_to_string(&self.options.policy).unwrap()).unwrap();
             decide(
