@@ -62,6 +62,8 @@ def test_batch_writer_stamps_and_pushes_once_per_round():
                    "lane push of step 5", "lane pushes of step 5", "stamp command of step 5"):
         assert banned not in text, f"batch-writer: per-item stamp or push wording {banned!r}"
     assert "then step 7 once on the last commit of the round" in text
+    # The native driver stamps after the writer returns: the fix round must not send a native writer to step 7.
+    assert "a native run skips this: its driver runs the stamp after you return" in text
     assert "never push after a single item commit" in text
     assert "run it now, once, on this green head" in text
 
