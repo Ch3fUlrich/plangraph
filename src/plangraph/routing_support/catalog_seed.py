@@ -207,7 +207,7 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
     },
     {
         "provider_id": "mimo",
-        "omniroute_id": "mimo",
+        "omniroute_id": "xiaomi-mimo",
         "tier": "subscription",
         "transport": "gateway",
         "gateway_mode": "omniroute_acp",
@@ -276,6 +276,28 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
         "updated_at": "2026-10-19T00:00:00Z",
     },
 ]
+
+def omniroute_provider_id(provider_id):
+    """The gateway provider slug of a leg's model prefix (``mimo`` is ``xiaomi-mimo``).
+
+    ``omniroute_id`` is the slug OmniRoute puts in the ``provider`` field of its provider
+    list and call log; an unmapped prefix is its own slug.
+    """
+    return next((row["omniroute_id"] for row in SEED_PROVIDERS
+                 if row["provider_id"] == provider_id and row.get("omniroute_id")), provider_id)
+
+
+def local_provider_id(slug):
+    """The local provider prefix a gateway slug belongs to, or None when two rows claim it.
+
+    A slug no row claims is its own prefix. A slug two catalog rows claim names no single
+    provider, so a call-log row under it can attest no leg.
+    """
+    owners = {row["provider_id"] for row in SEED_PROVIDERS if row.get("omniroute_id") == slug}
+    if len(owners) > 1:
+        return None
+    return next(iter(owners), slug)
+
 
 SEED_CLIENTS: list[dict[str, Any]] = [
     {
