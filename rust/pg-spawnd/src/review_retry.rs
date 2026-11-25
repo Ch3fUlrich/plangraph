@@ -194,6 +194,8 @@ fn prepare(
         }),
         Duration::from_secs(30),
     )?;
+    // The adapter's slot is this leg's until `next` has it: any error before then removes it.
+    let mut slot_guard = crate::slot_guard::SlotGuard::new(launch.review_slot.clone());
     let review = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
     if let Some(dispatch) = &review {
         if value["head_sha"]
@@ -207,6 +209,7 @@ fn prepare(
             ));
         }
     }
+    slot_guard.release();
     Ok((job_id, launch, review))
 }
 

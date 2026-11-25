@@ -121,6 +121,23 @@ pub(crate) fn prepare_launch_group(
     dry: bool,
     group: Option<(usize, usize, &[String])>,
 ) -> Result<Option<crate::cli_review::Dispatch>, crate::errors::ToolError> {
+    let prepared = prepare_launch_group_inner(args, leg, launch, dry, group);
+    if prepared.is_err() {
+        // Nothing will run in the slot the adapter allocated for this launch.
+        if let Some(slot) = launch.review_slot.take() {
+            let _ = pg_worker_core::cargo_pool::remove_review_slot(&slot);
+        }
+    }
+    prepared
+}
+
+fn prepare_launch_group_inner(
+    args: &crate::placement::Args,
+    leg: &Value,
+    launch: &mut LaunchSpec,
+    dry: bool,
+    group: Option<(usize, usize, &[String])>,
+) -> Result<Option<crate::cli_review::Dispatch>, crate::errors::ToolError> {
     let role = args
         .get("role")
         .and_then(Value::as_str)

@@ -384,3 +384,24 @@ fn adapter_inlined_tool_mode_leg_refuses_when_exceeding_max_request_tokens() {
         data.message
     );
 }
+
+#[test]
+fn a_launch_whose_preparation_fails_hands_its_review_slot_back() {
+    let pool = tempfile::tempdir().unwrap();
+    let slot = pool.path().join("cargo-target-pool/slot-review-prep");
+    std::fs::create_dir_all(slot.join("target")).unwrap();
+    let mut carrier = launch("review");
+    carrier.review_slot = Some(slot.clone());
+    let args = json!({"role":"review", "card":{"diff_ref":{
+        "repo":"/caller-selected-checkout", "base":"HEAD", "head":"HEAD"
+    }}});
+    assert!(prepare_launch(
+        args.as_object().unwrap(),
+        &json!({"harness":"free", "review_mode":"inline_only"}),
+        &mut carrier,
+        false,
+    )
+    .is_err());
+    assert!(!slot.exists(), "the failed launch leaves no slot behind");
+    assert!(carrier.review_slot.is_none());
+}

@@ -509,3 +509,22 @@ fn only_a_review_slot_of_a_pool_is_recognized() {
         assert!(!is_review_slot(Path::new(other)), "{other}");
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_continuation_the_run_will_not_start_hands_its_slot_back() {
+    let d = tempfile::tempdir().unwrap();
+    let next_slot = review_slot(d.path(), "unused-next");
+    let s = Supervisor::new(config(d.path(), 1, 8)).unwrap();
+    let mut next = spec(d.path(), 75, "touch next-ran");
+    next.review_slot = Some(next_slot.clone());
+    let mut first = spec(d.path(), 75, &format!("touch started-75; {HOLD}"));
+    first.finish = Some(Box::new(move |_, _| Some(next)));
+    s.start(first).unwrap();
+    until(|| d.path().join("started-75").exists());
+    // Cancelled while it runs: the finish hook still builds the next leg, which is then dropped.
+    s.cancel("run-75");
+    assert!(s.wait_finished("run-75", Duration::from_secs(4)));
+    until(|| !next_slot.exists());
+    assert!(!d.path().join("next-ran").exists());
+}

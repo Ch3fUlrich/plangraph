@@ -138,7 +138,13 @@ pub fn finish(
             Err(_) => {
                 let _ = record.push_event(json!({"event":"finish_hook_failed"}));
             }
-            _ => {}
+            // A continuation the run will not start (cancelled, survivors) hands its slot back.
+            Ok(Some(unused)) => {
+                if let Some(slot) = unused.review_slot {
+                    let _ = crate::cargo_pool::remove_review_slot(&slot);
+                }
+            }
+            Ok(None) => {}
         }
     }
     if record.get("survivors").is_none() && record.path().with_file_name("cancelled").exists() {
