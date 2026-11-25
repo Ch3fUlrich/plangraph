@@ -117,6 +117,7 @@ def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
 
 
 def _snapshot_db(tmp_path, *inserts):
+    tmp_path.mkdir(exist_ok=True)
     path = tmp_path / 'snapshots.sqlite'
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id, '
@@ -136,6 +137,15 @@ def test_all_mode_returns_every_row_and_one_bad_cell_never_spoils_the_reply(tmp_
     rows = fetch_snapshot_rows(source, latest='all')
     assert [r['remaining_percentage'] for r in rows] == [90, 40, None, None]
     assert '\ufffd' in rows[3]['connection_id']
+    # A numeric time is handed over as its decimal text: JSON readers round a float.
+    timed = _snapshot_db(
+        tmp_path / 'timed',
+        "(1,'codex','a','weekly',50,0,1795581490000.0015,1795581490000.0015)",
+        "(2,'codex','b','weekly',50,0,7,8)",
+        "(3,'codex','c','weekly',50,0,NULL,'2026-11-13T10:00:00Z')")
+    got = fetch_snapshot_rows(timed, latest='all')
+    assert [(r['next_reset_at'], r['created_at']) for r in got] == [
+        ('1795581490000.0015', '1795581490000.0015'), ('7', '8'), (None, '2026-11-13T10:00:00Z')]
     json.dumps(rows, allow_nan=False)  # strict JSON: what the CLI parses
 
 

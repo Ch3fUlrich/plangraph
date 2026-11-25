@@ -69,27 +69,19 @@ pub(super) const STAMP_MAX_NS: i128 = 9_000_000_000 * 1_000_000_000;
 const STAMP_BOUND_NS: i128 = 1_000_000_000_000_000_000_000_000;
 /// Epoch nanoseconds for the pool readout: one instant ranks the same in any form, and
 /// observations inside one second still order. A number is read as the decimal the store wrote
-/// (a float cannot hold 1800000000.1, its shortest decimal can); a zone-less text is UTC, and `T`
-/// or a space may separate date and time. Every parseable instant has a rank, clamped to
-/// +-`STAMP_BOUND_NS`; whether it is a usable reading (not future, not before 1970, not after
-/// `STAMP_MAX_NS`) is the caller's decision, taken after the newest row is chosen.
+/// (a float cannot hold 1800000000.1, its shortest decimal can); the snapshot reader hands
+/// numeric times over as that decimal text, since a JSON number is rounded when decoded. A
+/// zone-less text is UTC, and `T` or a space may separate date and time. Every parseable
+/// instant has a rank, clamped to +-`STAMP_BOUND_NS`; whether it is a usable reading (not
+/// future, not before 1970, not after `STAMP_MAX_NS`) is the caller's decision, taken after the
+/// newest row is chosen.
 pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
     use chrono::{DateTime, NaiveDateTime, Utc};
-    let ns = if let Some(n) = v.as_f64() {
-        if !n.is_finite() {
-            return None;
-        }
-        if n.abs() > 1e15 {
-            return Some(if n < 0.0 {
-                -STAMP_BOUND_NS
-            } else {
-                STAMP_BOUND_NS
-            });
-        }
-        // Past 1e11 a number is milliseconds, as in the legacy reader.
-        decimal_ns(n, if n > 1e11 { 6 } else { 9 })?
+    let text = v.as_f64().map(|n| n.to_string());
+    let s = text.as_deref().or_else(|| v.as_str().map(str::trim))?;
+    let ns = if s.bytes().all(|b| b"0123456789+-.eE".contains(&b)) && s.parse::<f64>().is_ok() {
+        decimal_ns(s)?
     } else {
-        let s = v.as_str()?.trim();
         let ns = |t: DateTime<Utc>| {
             i128::from(t.timestamp()) * 1_000_000_000 + i128::from(t.timestamp_subsec_nanos())
         };
@@ -106,16 +98,32 @@ pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
     };
     Some(ns.clamp(-STAMP_BOUND_NS, STAMP_BOUND_NS))
 }
-/// `n` as its shortest round-trip decimal scaled by 10^`digits` (the unit is a second for 9
-/// digits, a millisecond for 6), the fraction cut at `digits` places.
-fn decimal_ns(n: f64, digits: usize) -> Option<i128> {
-    let text = format!("{n}");
-    let (negative, text) = text
+/// A decimal number text (checked by the caller to be a finite float) as nanoseconds: seconds,
+/// or milliseconds once the value passes 1e11 as in the legacy reader. The digits are scaled,
+/// never routed through a float, and the fraction is cut at the nanosecond.
+fn decimal_ns(text: &str) -> Option<i128> {
+    let n = text.parse::<f64>().ok().filter(|n| n.is_finite())?;
+    if n.abs() > 1e15 {
+        return Some(if n < 0.0 {
+            -STAMP_BOUND_NS
+        } else {
+            STAMP_BOUND_NS
+        });
+    }
+    let digits = if n > 1e11 { 6 } else { 9 };
+    // An exponent form (Python writes 1e-05) has no digits to keep: its float prints plain.
+    let plain = if text.contains(['e', 'E']) {
+        n.to_string()
+    } else {
+        text.to_owned()
+    };
+    let plain = plain.strip_prefix('+').unwrap_or(&plain);
+    let (negative, plain) = plain
         .strip_prefix('-')
-        .map_or((false, &text[..]), |t| (true, t));
-    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+        .map_or((false, plain), |t| (true, t));
+    let (whole, fraction) = plain.split_once('.').unwrap_or((plain, ""));
     let fraction = format!("{fraction:0<digits$}");
-    let value = whole.parse::<i128>().ok()? * 10_i128.pow(digits as u32)
+    let value = whole.parse::<i128>().unwrap_or(0) * 10_i128.pow(digits as u32)
         + fraction[..digits].parse::<i128>().ok()?;
     Some(if negative { -value } else { value })
 }
@@ -300,6 +308,19 @@ mod tests {
         assert!(stamp_ns(&json!(-1.0)).unwrap() < 0 && iso < STAMP_MAX_NS);
         assert!(low > i128::MIN / 2 && high < i128::MAX / 2);
         assert_eq!(stamp_ns(&json!("not a time")), None);
+        // The snapshot reader writes a numeric time as its decimal text; a JSON number could
+        // not keep this fraction (default decoding moves it 200 ns).
+        let ms = stamp_ns(&json!("1795581490000.0015")).unwrap();
+        assert_eq!(ms, 1_795_581_490_000_001_500);
+        assert_eq!(stamp_ns(&json!("1795581490.0000015")), Some(ms));
+        assert_eq!(stamp_ns(&json!("1.5e-07")), Some(150));
+        assert_eq!(
+            stamp_ns(&json!("+1800000000.5")),
+            stamp_ns(&json!(1_800_000_000.5))
+        );
+        for word in ["inf", "NaN", "e", "-", "."] {
+            assert_eq!(stamp_ns(&json!(word)), None, "{word}");
+        }
     }
     #[test]
     fn the_legacy_readers_keep_an_empty_connection_id_apart_from_the_suffix_account() {

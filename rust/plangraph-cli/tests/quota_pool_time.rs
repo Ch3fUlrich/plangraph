@@ -69,3 +69,27 @@ fn quota_pool_ranks_parseable_out_of_range_observations_before_eligibility() {
     near(&account(weekly, "d")["used_pct"], 30.0);
     near(&weekly["used_pct"], 55.0); // b and d only
 }
+
+#[test]
+fn quota_pool_keeps_the_decimal_of_a_millisecond_timestamp_through_decoding() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    // 0.0015 ms is 1500 ns; a default JSON number decoder moves such a value by 200 ns.
+    let numeric = format!("{}.0015", t as i64 * 1_000);
+    let text = iso(t, 1_500, 'T', 9);
+    let directory = tempfile::tempdir().unwrap();
+    let inserts = [
+        insert(1, "codex:a", "NULL", "weekly", "90", &text, reset),
+        insert(2, "codex:a", "NULL", "weekly", "40", &numeric, reset),
+        insert(3, "codex:b", "NULL", "weekly", "40", &numeric, reset),
+        insert(4, "codex:b", "NULL", "weekly", "90", &text, reset),
+    ]
+    .concat();
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&account(&weekly, "a")["used_pct"], 60.0);
+    near(&account(&weekly, "b")["used_pct"], 10.0);
+    for name in ["a", "b"] {
+        let at = account(&weekly, name)["observed_at_ns"].as_i64().unwrap();
+        assert_eq!(at, t as i64 * 1_000_000_000 + 1_500, "{name}");
+    }
+}
