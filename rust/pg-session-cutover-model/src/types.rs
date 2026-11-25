@@ -78,6 +78,9 @@ pub(crate) struct Evt {
     /// Age, in ticks, at which the operator was told. Tracked apart from the session's receipt:
     /// the alarm never stands in for it.
     pub operator_at: Option<u8>,
+    /// The bound passed while the session was working. A working session is never ended on a
+    /// receipt timeout, so no recovery is owed; the miss is reported by `Model::misses`.
+    pub excused: bool,
 }
 
 impl Evt {
@@ -104,6 +107,9 @@ pub enum Event {
     Crash,
     Escalate(u8),
     Alarm(u8),
+    /// The supervisor starts the authorized recovery of an idle or dead session that has not
+    /// read a pending event: a successor takes over and reads it (the sequence is slice 2).
+    Recover,
     Nudge,
     StartShadow,
     SignOffShadow,
@@ -139,6 +145,10 @@ pub enum Invariant {
     /// Req 1: the operator is told of a binding urgent event by its class bound, in any mode
     /// (or a session has received it); a dead role and a hung source are not exempt.
     UrgentBound,
+    /// Req 1: an idle or dead session has read every binding event by its class bound, or the
+    /// authorized recovery has replaced it; the operator alarm is a separate obligation. A
+    /// session that was working when the bound passed is a reported miss, not ended.
+    SessionBound,
     /// An event is received only by a session's receipt, never by a scan or an alarm.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.

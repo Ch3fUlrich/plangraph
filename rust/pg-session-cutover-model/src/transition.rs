@@ -73,11 +73,12 @@ impl Model {
             }
             Event::Escalate(e) => self.escalate(e)?,
             Event::Alarm(e) => self.alarm(e)?,
+            Event::Recover => self.recover()?,
             Event::Nudge => {
-                if self.mode != Mode::Active
-                    || self.has(Defect::NoSupervisor)
-                    || !self.nudge_target()
-                {
+                // The retry stays open in every mode while a binding event is unread: rollback and a
+                // lost GO queue one wake, and that wake can be lost.
+                let owed = self.mode == Mode::Active || self.unread_binding();
+                if !owed || self.has(Defect::NoSupervisor) || !self.nudge_target() {
                     return Err(Denied::Guard);
                 }
                 // Each nudge gives the wake one more supervisor pass.

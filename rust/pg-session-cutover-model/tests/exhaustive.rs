@@ -23,7 +23,7 @@ fn wake_orderings_keep_every_invariant() {
     let mut m = model(params(vec![go(0), event(UrgentClass::MainRed, 1)]));
     activate(&mut m);
     let alpha = alphabet_without(&m, |e| is_gate(e) && *e != Event::Rollback);
-    let mut seen = [false; 10];
+    let mut seen = [false; 11];
     search(m, alpha, 14, &mut |a, e, r, b| {
         let ok = r.is_ok();
         seen[0] |= ok && e == Event::WaiterFire;
@@ -39,8 +39,10 @@ fn wake_orderings_keep_every_invariant() {
         // A session that ignores a pending event misses its deadline; nothing ends it.
         seen[8] |= ok && b.misses().contains(&Miss::Unread(0)) && b.life() == Life::Active;
         seen[9] |= ok && e == Event::WakeLost;
+        // The authorized recovery replaces an idle or dead session that read nothing.
+        seen[10] |= ok && e == Event::Recover && a.life() != Life::Active;
     });
-    assert_eq!(seen, [true; 10]);
+    assert_eq!(seen, [true; 11]);
 }
 
 #[test]
@@ -108,6 +110,7 @@ fn finds(
                 | Event::Escalate(_)
                 | Event::Alarm(_)
                 | Event::Nudge
+                | Event::Recover
         )
     };
     let alpha: Vec<Event> = seed
@@ -134,6 +137,10 @@ fn each_defect_is_caught_by_its_invariant() {
     let read = |e: &Event| turn(e) || matches!(e, Event::Tick | Event::Occur(_) | Event::Hang(_));
     assert!(finds(Defect::NoAlarm, params(vec![go(0)]), true, read, 18)
         .contains(&Invariant::UrgentBound));
+    assert!(
+        finds(Defect::NoRecovery, params(vec![go(0)]), true, read, 20)
+            .contains(&Invariant::SessionBound)
+    );
     let idle = |e: &Event| matches!(e, Event::Tick) || turn(e);
     assert!(
         finds(Defect::NoSupervisor, params(vec![]), true, idle, 8).contains(&Invariant::Unattended)

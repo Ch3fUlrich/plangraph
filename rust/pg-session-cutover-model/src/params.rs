@@ -145,15 +145,18 @@ pub enum Defect {
     /// No operator alarm: an unread event can pass its bound.
     NoAlarm,
     NoSupervisor,
+    /// No authorized recovery: an idle or dead session can leave a binding event unread.
+    NoRecovery,
     ActivateWithoutGates,
     /// Activation does not look at an urgent event that is already overdue.
     ActivateOverdue,
 }
 
 impl Defect {
-    pub const ALL: [Defect; 4] = [
+    pub const ALL: [Defect; 5] = [
         Defect::NoAlarm,
         Defect::NoSupervisor,
+        Defect::NoRecovery,
         Defect::ActivateWithoutGates,
         Defect::ActivateOverdue,
     ];

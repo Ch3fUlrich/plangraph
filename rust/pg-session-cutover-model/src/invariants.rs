@@ -17,6 +17,11 @@ impl Model {
         if self.events.iter().filter(silent).count() > 0 {
             out.push(Invariant::UrgentBound);
         }
+        let unread =
+            |e: &&Evt| e.binding && e.open() && !e.excused && e.age > self.bound_ticks(e.class);
+        if self.events.iter().filter(unread).count() > 0 {
+            out.push(Invariant::SessionBound);
+        }
         if self
             .events
             .iter()

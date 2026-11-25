@@ -114,6 +114,11 @@ impl Model {
         })
     }
 
+    /// Some binding event has not been read by a session yet.
+    pub(crate) fn unread_binding(&self) -> bool {
+        self.events.iter().any(|e| e.binding && e.open())
+    }
+
     /// The session is working, or has a wait armed that can still fire. A queued wake is not
     /// enough: it can be late or lost, and then the supervisor must still act.
     fn attended(&self) -> bool {
@@ -145,7 +150,55 @@ impl Model {
             && self.unattended()
             && self.nudge_target()
             && u16::from(self.asleep_age) + 1 > self.sup_ticks();
-        takeover || alarm || scans || asleep
+        takeover || alarm || scans || asleep || self.recovery_overdue()
+    }
+
+    /// The authorized recovery has what it needs: the deployed fence and recovery of A3 req 7a.
+    fn authorized(&self) -> bool {
+        self.gates.fence && self.gates.recovery
+    }
+
+    /// Recovery never ends a working session: it takes an idle or a dead one.
+    fn recoverable(&self) -> bool {
+        self.session.life != Life::Active
+    }
+
+    /// An idle or dead session has not read a binding event by the time its bound is reached:
+    /// the supervisor owes the authorized recovery before time may pass it.
+    fn recovery_overdue(&self) -> bool {
+        !self.has(Defect::NoRecovery)
+            && self.authorized()
+            && self.recoverable()
+            && self.events.iter().any(|e| {
+                e.binding
+                    && e.open()
+                    && !e.excused
+                    && u16::from(e.age) + 1 > u16::from(self.bound_ticks(e.class))
+            })
+    }
+
+    /// The supervisor starts the authorized recovery of an idle or dead session that has not
+    /// read a binding event by its alarm age. The successor's first act is to read what is
+    /// pending; the checked handoff and the confirmed launch are slice 2.
+    pub(crate) fn recover(&mut self) -> Result<(), Denied> {
+        let pending = self.events.iter().any(|e| {
+            e.binding && e.open() && e.age >= Params::ticks(self.p.budget(e.class).alarm_secs)
+        });
+        if self.has(Defect::NoRecovery) || !self.authorized() || !self.recoverable() || !pending {
+            return Err(Denied::Guard);
+        }
+        self.session = Session {
+            life: Life::Idle,
+            waiter: Waiter::None,
+            notify: false,
+        };
+        // The successor starts its own supervisor pass.
+        self.asleep_age = 0;
+        for e in self.events.iter_mut().filter(|e| e.open()) {
+            (e.stage, e.seen, e.escalated) = (Stage::Received, true, true);
+            e.session_at.get_or_insert(e.age);
+        }
+        Ok(())
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {
@@ -161,6 +214,20 @@ impl Model {
         }
         if self.unattended() {
             self.asleep_age = self.asleep_age.saturating_add(1).min(cap);
+        }
+        // A bound that passes while the session is working is a reported miss, not a reason
+        // to end the session.
+        if self.session.life == Life::Active {
+            let bounds: Vec<u8> = self
+                .events
+                .iter()
+                .map(|e| self.bound_ticks(e.class))
+                .collect();
+            for (e, bound) in self.events.iter_mut().zip(bounds) {
+                if e.binding && e.open() && e.age > bound {
+                    e.excused = true;
+                }
+            }
         }
         Ok(())
     }

@@ -33,6 +33,7 @@ impl Model {
                 binding: false,
                 session_at: None,
                 operator_at: None,
+                excused: false,
             })
             .collect();
         Ok(Self {
@@ -150,6 +151,7 @@ impl Model {
             Event::Receive,
             Event::Crash,
             Event::Nudge,
+            Event::Recover,
             Event::StartShadow,
             Event::SignOffShadow,
             Event::DeployFence,

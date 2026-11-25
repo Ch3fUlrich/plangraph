@@ -34,7 +34,8 @@ beyond 2000 s, which the counters would not hold. At most 64 events, two sources
 | --- | --- | --- |
 | `Escalate`: today's wake path takes over, the session is woken | takeover age | takeover + 20 s |
 | `Alarm`: the operator is told, tracked apart from any session receipt; the event stays pending for the session | alarm age | alarm + 20 s, never after the bound |
-| `Nudge`: an idle session without an armed wait, or whose armed wait cannot fire because an event is unread past its takeover age, is woken again | | every 20 s while it stays unattended |
+| `Nudge`: an idle session without an armed wait, or whose armed wait cannot fire because an event is unread past its takeover age, is woken again; in every mode while a binding event is unread | | every 20 s while it stays unattended |
+| `Recover`: the authorized recovery of an idle or dead session that has not read a binding event; never of a working session | alarm age | by the bound: time stops at the bound until it is done |
 | a source is read (`Scan`) | | every 60 s, a hung read is visible at once |
 
 ## Invariants (`Model::violations`)
@@ -42,6 +43,7 @@ beyond 2000 s, which the counters would not hold. At most 64 events, two sources
 | Invariant | Requirement of plan section 4 A3 |
 | --- | --- |
 | `UrgentBound`: the operator is told of every binding urgent event by its class bound, in any mode, unless a session has read it; a hung source, an escalated event and a dead role are not exempt | 1, 4 |
+| `SessionBound`: an idle or dead session has read every binding event by its class bound, or the authorized recovery has replaced it; separate from the operator alarm. A session that was working when the bound passed is excused: never ended, its miss is reported | 1, 2 |
 | `Unattended`: an active role is never idle with nothing armed or woken for more than one supervisor pass | 4 |
 | `ReceivedUnread`: an event is received only by a session's receipt; a scan or an alarm never acknowledges | 6 |
 | `ActivationGate`: active needs shadow sign-off, a fence, deployed recovery and a live GO | 7, 7a |
@@ -51,13 +53,14 @@ switched on. Rollback and a lost GO do not release it: its takeover and alarm st
 mode. `Activate` is refused (`Overdue`) while an event is past its alarm age without an alarm.
 A role that is not switched keeps today's path: its events are escalated and the session woken.
 
-**Session deadline (`Model::misses`).** Whether a session has read a binding event by its bound is
-reported, not guarded: `Miss::Unread` while it is past the bound without a session receipt,
-`Miss::Late` once a session receipt came after it. A miss stays attached to the event across a
-mode change, an operator alarm and the end of the session, and the alarm never clears it. A
-receipt timeout does not stop a working session; ending one takes the authorized recovery
-sequence (checked handoff, confirmed successor), which is slice 2. The exhaustive search
-checks that every ordering keeps the invariants and reaches a miss with the session alive.
+**Session deadline.** An idle or dead session must have read a binding event by its bound, or
+the authorized recovery (`Recover`, needing the deployed fence and recovery) has replaced it and
+its successor read it: `SessionBound`, owed apart from the alarm. A working session is never ended
+on a receipt timeout: if the bound passes while it works, the event is excused from recovery and
+the miss is reported by `Model::misses` (`Unread` while no session has received it past the
+bound, `Late` once a receipt came after it). A miss stays attached to the event across a mode
+change, an alarm and the end of the session. `Recover` stands for the sequence of slice 2 (checked
+handoff, launch, confirm, adopt); here its effect is the successor's first act, reading the event.
 
 ## Transitions
 
@@ -76,7 +79,8 @@ checks that every ordering keeps the invariants and reaches a miss with the sess
 | `Crash` | session live | stopped, wait dead |
 | `Escalate(e)` | binding, pending, not escalated, takeover age | escalated, session woken |
 | `Alarm(e)` | binding, pending, no alarm yet, alarm age | alarmed, operator time recorded; stays pending |
-| `Nudge` | active, idle session without an armed wait or with an unread event past its takeover age | wake queued, supervisor pass restarts |
+| `Nudge` | active, or a binding event unread; an idle session without an armed wait or with an unread event past its takeover age | wake queued, supervisor pass restarts |
+| `Recover` | gates fence and recovery set; session idle or dead; a binding event pending at its alarm age | fresh session; every pending event received by it, escalated |
 | `StartShadow`, `SignOffShadow` | off; shadow | shadow; sign-off |
 | `DeployFence`, `DeployRecovery`, `GrantGo` | | gate set |
 | `Activate` | shadow, all gates, no event past its alarm age unalarmed | active; pending events binding |
@@ -84,7 +88,7 @@ checks that every ordering keeps the invariants and reaches a miss with the sess
 | `RevokeGo` | any mode | GO cleared; if active, the same as `Rollback`; in shadow or off the mode stays and only the GO is gone |
 | `Tick` | no obligation due: takeover, alarm, scan, supervisor pass | ages, scan and unattended clocks advance |
 
-## Findings as scenarios (`tests/scenarios_timing.rs`, `scenarios_switch.rs`)
+## Findings as scenarios (`tests/scenarios_timing.rs`, `scenarios_recovery.rs`, `scenarios_switch.rs`)
 
 | Finding | Scenario test |
 | --- | --- |
@@ -96,12 +100,14 @@ checks that every ordering keeps the invariants and reaches a miss with the sess
 | round 4 HIGH invariants.rs:15: rollback and a lost GO released the bound | `rollback_and_a_lost_go_keep_the_deadline_...` |
 | round 4 HIGH time.rs:126: a queued wake froze time | `a_delayed_or_lost_wake_does_not_stop_time_...` |
 | round 5 HIGH invariants.rs:15: an alarm at 60 s masked a session receipt at 100 s | `a_woken_session_that_keeps_working_...`, `rollback_and_a_lost_go_...` (`misses`: `Unread`, then `Late` after the receipt) |
+| round 7 HIGH invariants.rs:15: an alarm let a live session hold nothing at 100 s | `a_dead_role_hands_the_event_...` (recovery at 90 s), `a_hung_source_with_a_lost_fallback_wake_...`; `NoRecovery` shows `SessionBound` |
+| round 7 HIGH transition.rs:77: no retry after rollback or a lost GO | `rollback_and_a_lost_go_keep_a_retry_until_the_session_has_read_the_event` |
 | round 6 HIGH invariants.rs:21, time.rs:164: `Kill` cleared the session deadline and ended a working session | no `Kill`: the same scenarios assert the miss stays reported with the session alive or dead |
 | round 5 HIGH time.rs:106: an armed wait that cannot fire blocked the nudge | `a_hung_source_with_a_lost_fallback_wake_still_gets_a_nudge_...` |
 | state r2 C3/R1, alwayson r2: hung adapter, failed wake, five-minute supervisor | `an_unread_event_on_a_hung_source_...`, `a_failed_wake_is_recovered_...`, `a_hung_adapter_does_not_delay_...`, `a_five_minute_supervisor_...` |
 | alwayson r3: activation, rollback, per-role GO | `activation_needs_shadow_fence_...`, `rollback_and_a_lost_go_...` |
 
-Each guard a finding named is a `Defect` (`NoAlarm`, `NoSupervisor`, `ActivateWithoutGates`,
+Each guard a finding named is a `Defect` (`NoAlarm`, `NoRecovery`, `NoSupervisor`, `ActivateWithoutGates`,
 `ActivateOverdue`); `each_defect_is_caught_by_its_invariant` shows the unsafe model breaks the
 listed invariant while the same search on the safe model finds nothing.
 
