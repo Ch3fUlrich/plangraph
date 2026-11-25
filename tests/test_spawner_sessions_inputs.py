@@ -9,7 +9,7 @@ import time
 import pytest
 from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner.sessions import Sessions
-from sessions_support import UUID1, UUID2, MODEL, EFFORT, MODE, FakeRun, write_config, make, go, _stopped
+from sessions_support import UUID1, UUID2, MODEL, EFFORT, MODE, FakeRun, write_config, make, go, _stopped, _ready
 from sessions_support import site  # noqa: F401
 
 
@@ -124,6 +124,37 @@ def test_relaunch_refuses_without_ready_marker(site):
     with pytest.raises(ParameterRefused, match="newer"):
         s.relaunch("alpha")
     assert len(run.launch_calls()) == 1  # nothing was ever relaunched
+
+
+def test_relaunch_refuses_a_session_whose_round_the_wait_watchdog_blocked(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    rec_path, marker = _ready(site, run, s)
+    watch = site.state / "round-watch"
+    watch.mkdir(parents=True)
+    (watch / "alpha.json").write_text(json.dumps({"actions": {}, "blocked": {
+        "round_key": "alpha:p1", "command": "cargo test -p x",
+        "reason": "second wait over the cap in one round"}}))
+    with pytest.raises(ParameterRefused, match="BLOCKED.*cargo test -p x"):
+        s.relaunch("alpha")
+    assert not [a for a, _ in run.calls if a[:2] == ["claude", "stop"]], "nothing was stopped"
+    assert len(run.launch_calls()) == 1 and marker.exists()
+    (watch / "alpha.json").unlink()
+    assert s.relaunch("alpha")["ok"] is True
+
+
+def test_the_blocked_refusal_redacts_a_command_stored_raw_by_an_older_watchdog(site):
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    _ready(site, run, s)
+    watch = site.state / "round-watch"
+    watch.mkdir(parents=True)
+    (watch / "alpha.json").write_text(json.dumps({"actions": {}, "blocked": {
+        "round_key": "alpha:p1", "command": "deploy API_TOKEN=hunter2hunter2hunter2",
+        "reason": "second wait over the cap in one round"}}))
+    with pytest.raises(ParameterRefused) as refused:
+        s.relaunch("alpha")
+    assert "deploy" in str(refused.value) and "hunter2" not in str(refused.value)
 
 
 def test_spec_defaults_ctx_cap_and_compact_window(site):

@@ -347,6 +347,31 @@ def attempt_coverage_tick(state, *, now=None):
         atomic_write_private(cursor, next_day)
         return findings
 
+def round_watch_tick(state, *, now=None, run=subprocess.run):
+    """Round telemetry rows and the 15 minute wait cap for every launched writer session.
+
+    The Rust watchdog reads the transcripts and acts on the host that runs the command;
+    its log lines are the findings. A host without the binary books nothing.
+    """
+    argv = ['pg-spawnd', 'round-watch', '--state', str(state)]
+    if now is not None:
+        argv += ['--now-ms', str(int(now * 1000))]
+    try:
+        done = run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [dict(rule='round-watch-unavailable', reason=type(exc).__name__)]
+    if done.returncode != 0:
+        # An unsupported or broken binary must not read as a healthy pass.
+        detail = ''.join(c for c in (done.stderr or '')[:200] if c.isprintable())
+        return [dict(rule='round-watch-failed', code=done.returncode, detail=detail)]
+    findings = []
+    for line in (done.stdout or '').splitlines():
+        try:
+            findings.append(json.loads(line))
+        except ValueError:
+            continue
+    return findings
+
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
     from .private_io import atomic_write_private
@@ -468,6 +493,7 @@ def main(argv=None, *, hung_config=None):
     if not args.dry_run:
         from .notify import retry_spawn_attempts
         findings.extend(retry_spawn_attempts(state, runs))
+        findings.extend(round_watch_tick(state, now=time.time()))
         if os.environ.get('PLANGRAPH_ATTEMPT_COVERAGE') == '1':
             try:
                 findings.extend(attempt_coverage_tick(state))

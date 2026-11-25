@@ -631,6 +631,26 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert!(driver.reviews[0].is_none());
     assert!(!driver.prompts[0].contains("configured review directory"));
 }
+#[test]
+fn final_gates_are_booked_as_a_stage_after_the_writer_turn() {
+    let mut driver = fake();
+    let record = run(&mut driver, json!({"item_key": "batch-1"}), "brief");
+    let stages: Vec<&str> = record["stage_timings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["stage"].as_str())
+        .collect();
+    assert_eq!(stages.first(), Some(&"writing"), "{stages:?}");
+    assert!(stages.contains(&"final_gates"), "{stages:?}");
+    let gates = record["stage_timings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["stage"] == "final_gates")
+        .unwrap();
+    assert!(gates["ended_at_ms"].as_i64() >= gates["started_at_ms"].as_i64());
+}
 #[path = "native_writer_deferral_tests.rs"]
 mod deferral;
 
