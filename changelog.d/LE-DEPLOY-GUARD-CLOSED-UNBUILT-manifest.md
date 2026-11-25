@@ -5,4 +5,4 @@ host roles, env file names, first-run check, the installer of a template or plac
 unit file or binary target the manifest does not name, for an entry whose file is not tracked, for a program a unit
 runs from a path or on a role its binary entry does not declare, and for an `EnvironmentFile` an entry omits;
 `not_deployed = "<reason>"` is the only way to leave one out. `deploy/manifest.toml` and every unit suffix are
-`RUST_INPUTS` entries in the CI selector. No deploy needed: nothing reads systemd or installs anything yet.
+`RUST_INPUTS` entries in the CI selector. No deploy needed: nothing reads systemd or installs anything yet. The `pg-session-resume` unit and binary that landed on main are listed as `not_deployed`: its wiring needs a routing D-id (docs/SESSION-LIFECYCLE.md).

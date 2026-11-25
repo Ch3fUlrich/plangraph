@@ -247,6 +247,11 @@ env_files = ["wsl-cache-guard.env"]
 first_run = "systemctl start pg-wsl-cache-guard.service exits 0 and journals the Windows free memory sample"
 
 [[unit]]
+name = "pg-session-resume"
+files = ["pg-session-resume.service", "pg-session-resume.timer"]
+not_deployed = "docs/SESSION-LIFECYCLE.md: the tick wiring is not enabled by its change; enabling the timer and registering the Stop hook need a routing D-id"
+
+[[unit]]
 name = "claude-daemon"
 files = ["claude-daemon.service"]
 not_deployed = "no fleet host is assigned the per-user Claude daemon yet; assign a role before enabling"
@@ -464,3 +469,8 @@ not_deployed = "test helper of the keeper backup tests"
 package = "pg-worker-core"
 bin = "live_probe_child"
 not_deployed = "test helper of the live probe tests"
+
+[[binary]]
+package = "pg-session-resume"
+bin = "pg-session-resume"
+not_deployed = "docs/SESSION-LIFECYCLE.md: its timer and Stop hook are not enabled yet and need a routing D-id; the binary is installed once they are"
