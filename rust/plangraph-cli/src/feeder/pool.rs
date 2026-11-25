@@ -21,7 +21,8 @@ fn window_seconds(key: &str) -> Option<i64> {
         Some(n) => (n, 3_600),
         None => (key.strip_suffix('d')?, 86_400),
     };
-    n.parse::<i64>().ok().filter(|n| *n > 0).map(|n| n * unit)
+    // A key such as 9223372036854775807h is no window length: checked, never an overflow.
+    n.parse::<i64>().ok().filter(|n| *n > 0)?.checked_mul(unit)
 }
 fn seconds(ns: i128) -> f64 {
     ns as f64 / NANOS
@@ -248,6 +249,25 @@ mod tests {
         assert_eq!(
             w["coverage"],
             json!({"observed_accounts":1,"usable_accounts":0,"unidentified":1,"full_pool":"unknown"})
+        );
+    }
+    #[test]
+    fn an_absurd_window_key_has_no_length_and_cannot_overflow() {
+        for key in [
+            "9223372036854775807h",
+            "9223372036854775807d",
+            "99999999999999999999h",
+        ] {
+            assert_eq!(window_seconds(key), None, "{key}");
+        }
+        assert_eq!(window_seconds("5h"), Some(18_000));
+        let now = 1_800_000_000_i64;
+        let rows = json!([{"provider":"codex:a","window_key":"9223372036854775807h",
+            "created_at":now - 60,"remaining_percentage":70,"next_reset_at":now + 3_600}]);
+        let w = &pool_use_samples(&rows, "codex", secs(now as f64), 10_800)[0];
+        assert_eq!(
+            (w["used_pct"].as_f64(), w["pace_pct"].is_null()),
+            (Some(30.0), true)
         );
     }
     #[test]
