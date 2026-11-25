@@ -264,10 +264,11 @@ fn skips_while_held(name: &str) {
     };
     // The first run creates the state directory and the lock, then fails on the missing token.
     assert_eq!(run().status.code(), Some(1));
-    let held =
-        pg_worker_core::lockfile::try_lock(&plangraph_cli::merge_close_unit::lock_path(&state))
-            .unwrap()
-            .expect("lock free after the run");
+    let held = pg_worker_core::lockfile::try_lock(
+        &plangraph_cli::merge_close_unit::lock_path(&state).unwrap(),
+    )
+    .unwrap()
+    .expect("lock free after the run");
     for extra in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_plangraph"));
         command
@@ -288,4 +289,42 @@ fn skips_while_held(name: &str) {
     }
     drop(held);
     assert_eq!(run().status.code(), Some(1), "the lock is released");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_state_path_without_a_file_name_is_refused_before_any_keeper_request() {
+    use std::{fs, process::Command};
+
+    let root = tempfile::tempdir().unwrap();
+    let curl = root.path().join("curl");
+    let log = root.path().join("log");
+    fs::write(root.path().join("token"), "fixture").unwrap();
+    fs::write(&log, "").unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &curl,
+        "#!/bin/sh\n/bin/cat >/dev/null\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nprintf '{\"scan\":\"ready\"}\\n200'\n",
+    );
+    for state in ["", "/", ".."] {
+        for extra in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_plangraph"));
+            command
+                .args(["merge-close", "--scheduled", "--state", state])
+                .current_dir(root.path())
+                .env_clear()
+                .env("HOME", root.path())
+                .env("PATH", root.path())
+                .env("PG_URL", "http://127.0.0.1")
+                .env("PG_TOKEN_FILE", root.path().join("token"))
+                .env("LOG", &log);
+            if extra {
+                command.arg("--continue");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{state:?} {output:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("names no file"));
+        }
+    }
+    assert_eq!(fs::read_to_string(&log).unwrap(), "", "no keeper request");
+    assert!(!root.path().join(".lock").exists());
 }
