@@ -15,6 +15,8 @@ mod main_freeze_gh_tests;
 mod main_freeze_tests;
 mod sweep;
 #[cfg(test)]
+mod sweep_match_tests;
+#[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]
 mod tests;
