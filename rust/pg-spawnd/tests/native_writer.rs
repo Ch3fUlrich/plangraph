@@ -97,17 +97,52 @@ fn hook_git_environment_fixture_child() {
 
 #[test]
 fn native_writer_pushed_base_handshake_review_resume_and_record() {
-    native_writer_fixture(false, false);
+    native_writer_fixture(false, false, false);
+}
+#[test]
+fn native_writer_holds_the_cargo_lease_per_command_and_reclaims_before_its_push() {
+    native_writer_fixture(false, false, true);
 }
 #[test]
 fn native_writer_ignores_host_admission_policy() {
-    native_writer_fixture(true, false);
+    native_writer_fixture(true, false, false);
 }
 #[test]
 fn native_writer_spawn_finds_nvm_codex_outside_systemd_path() {
-    native_writer_fixture(false, true);
+    native_writer_fixture(false, true, false);
 }
-fn native_writer_fixture(hostile_policy: bool, systemd_path: bool) {
+/// A Cargo stand-in that reports whether the shared lease is held while it runs and, under the
+/// writer's lease, fills the shared target with old build units as a real build would.
+const LEASE_CARGO: &str = r#"#!/bin/sh
+python3 - "$PWD/../cargo-lease" <<'PY'
+import fcntl, os, pathlib, sys, time
+target = os.environ.get('CARGO_TARGET_DIR')
+if target:
+    lock = open(target + '.plangraph-lock', 'a+b')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = 'free'
+    except OSError:
+        state = 'held'
+        root = pathlib.Path(target)
+        (root / 'debug/build').mkdir(parents=True, exist_ok=True)
+        (root / 'CACHEDIR.TAG').write_bytes(b'Signature: 8a477f597d28d172789f06886806bc55')
+        (root / 'debug/.cargo-lock').write_bytes(b'')
+        old = time.time() - 7 * 3600
+        for n in range(10):
+            unit = root / 'debug/build' / f'pg-core-{n:016x}'
+            unit.mkdir(exist_ok=True)
+            marker = unit / 'build-script-build'
+            marker.write_bytes(b'x' * 100)
+            os.utime(marker, (old, old))
+            os.utime(unit, (old, old))
+    with open(sys.argv[1], 'a') as log:
+        log.write(state + '\n')
+PY
+echo 'fixture cargo'
+"#;
+
+fn native_writer_fixture(hostile_policy: bool, systemd_path: bool, lease: bool) {
     let fixture = tempfile::Builder::new()
         .prefix("native-writer-e2e-")
         .tempdir()
@@ -235,7 +270,11 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     let cargo = bin.join("cargo");
     pg_worker_core::executable_test_support::write_executable(
         &cargo,
-        "#!/bin/sh\necho 'fixture cargo'\n",
+        if lease {
+            LEASE_CARGO
+        } else {
+            "#!/bin/sh\necho 'fixture cargo'\n"
+        },
     );
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let runtime = home.join("runtime");
@@ -275,6 +314,10 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     } else {
         std::env::var("PATH").unwrap()
     };
+    if lease {
+        // Over the cap once the writer's Cargo has filled the target: about 21 kB.
+        python.env("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.00002");
+    }
     let out = python.current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config"))
         .env("XDG_STATE_HOME", home.join(".local/state")).env("XDG_DATA_HOME", home.join(".local/share"))
@@ -287,6 +330,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         .env("FIXTURE_BATCH_RUN_VALUES", include_str!("fixtures/batch-writer-run-values.txt"))
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .env("FIXTURE_LEASE", if lease { "1" } else { "0" })
         .env("NATIVE_BINARY", spawnd)
         .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture")
@@ -307,19 +351,47 @@ assert pathlib.Path.home() == pathlib.Path(os.environ['FIXTURE_HOME']), pathlib.
 for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'):
     assert os.path.realpath(os.environ[name]).startswith(os.path.realpath(root) + os.sep), (name, os.environ[name])
 # Keys the fixture sets itself (isolation paths and, in the hostile-policy variant, host policy).
-FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS', 'PLANGRAPH_NATIVE_REVIEW_CLI'}
+FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS', 'PLANGRAPH_NATIVE_REVIEW_CLI', 'PLANGRAPH_CARGO_TARGET_CAP_GB'}
 assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
+def subprocess_run(argv):
+    import subprocess
+    return subprocess.check_output(argv, text=True).strip()
 async def check():
     service = SpawnService(state=root/'state')
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
+    if os.environ['FIXTURE_LEASE'] == '1':
+        card['push_ref'] = 'refs/heads/lane/lease'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else 'brief marker'
+        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else ('brief marker lease marker' if os.environ['FIXTURE_LEASE'] == '1' else 'brief marker')
         run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
         assert run['run_id'] in service.tasks, run
         await service.tasks[run['run_id']]
     record = service.result(run['run_id'])
+    if os.environ['FIXTURE_LEASE'] == '1':
+        run_dir = pathlib.Path(record['cwd']).parent
+        # The real supervisor ran the writer's Cargo under its own lease and left it free
+        # between commands.
+        assert (run_dir/'lease-states').read_text() == 'free free', (run_dir/'lease-states').read_text()
+        assert 'held' in (run_dir/'cargo-lease').read_text().split(), (run_dir/'cargo-lease').read_text()
+        target = pathlib.Path(os.environ['FIXTURE_HOME'])/'.cache/plangraph/cargo-target'
+        cap = int(float('0.00002') * 2**30)
+        allocated = sum(f.lstat().st_blocks * 512 for f in target.rglob('*') if f.is_file() and not f.is_symlink())
+        build_names = {'cargo', 'rustc', 'rustdoc', 'cc', 'gcc', 'clang', 'ld', 'npm', 'make', 'cmake', 'ninja'}
+        busy = any((p/'comm').read_text().strip() in build_names for p in pathlib.Path('/proc').glob('[0-9]*') if (p/'comm').exists())
+        if record['status'] == 'completed':
+            # The host trimmed the over-cap target between commands and pushed the accepted head.
+            assert record['pushed'] == 'refs/heads/lane/lease' and 'push_pending' not in record, record
+            remote = pathlib.Path(os.environ['FIXTURE_DIR'])/'remote.git'
+            assert subprocess_run(['git', '-C', str(remote), 'rev-parse', 'refs/heads/lane/lease']) == record['final_head']
+            assert allocated <= cap, (allocated, cap)
+        else:
+            # Another build is running on this host: the active-build guard keeps the head for a push-only retry.
+            assert busy, record
+            assert record['push_pending']['head'] == record['final_head'], record
+            assert 'cargo_target_not_reclaimed' in record['push_pending']['receipt'], record
+        return
     assert record['status'] == 'completed', record
     assert record['base_sha'] == os.environ['FIXTURE_BASE'], record
     assert record['final_head'] != record['base_sha'], record
@@ -485,6 +557,10 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    if lease {
+        // The lease variant asserts its own run in the script and takes no ledger rows.
+        return fixture.close().unwrap();
+    }
     let mut completed = Vec::new();
     for entry in fs::read_dir(dir.join("state/runs")).unwrap() {
         let path = entry.unwrap().path().join("ledger.jsonl");

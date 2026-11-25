@@ -1,8 +1,9 @@
 //! The shared Cargo lease's lock file, its live holders and the refusal text that names them.
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::{
     fs::{File, OpenOptions},
     io,
-    path::{Path, PathBuf},
 };
 
 /// The lock file beside a cache root, `<root>.plangraph-lock`.

@@ -682,3 +682,68 @@ fn push_reclaim_recognizes_and_prunes_a_target_that_holds_only_policy_builds() {
     fs::create_dir(other.join(".git")).unwrap();
     assert!(reclaim_before_push_using(&checkout, &other, 1, || Ok((vec![], false))).is_err());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_remeasures_after_each_build_it_removes_when_blocks_stay_linked() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("target");
+    fs::create_dir(&checkout).unwrap();
+    fs::create_dir_all(target.join("policy-bin")).unwrap();
+    let shared = target.join("policy-bin/shared.bin");
+    fs::write(&shared, vec![1u8; 64 * 1024]).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+    for n in 0..6u64 {
+        let build = target.join(format!("policy-bin/{n:016x}"));
+        fs::create_dir_all(&build).unwrap();
+        fs::write(
+            build.join("CACHEDIR.TAG"),
+            b"Signature: 8a477f597d28d172789f06886806bc55",
+        )
+        .unwrap();
+        fs::write(build.join("own"), vec![n as u8; 64 * 1024]).unwrap();
+        // Every build links the same file: removing one frees only its own blocks.
+        fs::hard_link(&shared, build.join("linked")).unwrap();
+        for path in [build.join("own"), build.join("CACHEDIR.TAG"), build.clone()] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(old - std::time::Duration::from_secs(n))
+                .unwrap();
+        }
+    }
+    let cap = crate::disk_measure::allocated_bytes(&target).unwrap() / 5;
+    reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() <= cap);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_policy_build_marker_never_authorizes_removing_a_sibling_checkout() {
+    let parent = tempfile::tempdir().unwrap();
+    let checkout = parent.path().join("checkout");
+    let target = parent.path().join("scratch");
+    fs::create_dir(&checkout).unwrap();
+    let build = target.join("policy-bin/0000000000000001");
+    fs::create_dir_all(&build).unwrap();
+    fs::write(
+        build.join("CACHEDIR.TAG"),
+        b"Signature: 8a477f597d28d172789f06886806bc55",
+    )
+    .unwrap();
+    // A real checkout under a directory named like a profile, with a profile lock file.
+    let debug = target.join("debug");
+    fs::create_dir_all(debug.join("work/.git")).unwrap();
+    fs::write(debug.join("work/source.rs"), vec![2u8; 64 * 1024]).unwrap();
+    fs::write(debug.join(".cargo-lock"), []).unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 3600);
+    for path in [
+        debug.join("work/source.rs"),
+        debug.join("work"),
+        debug.clone(),
+    ] {
+        fs::File::open(path).unwrap().set_modified(old).unwrap();
+    }
+    let _ = reclaim_before_push_using(&checkout, &target, 1, || Ok((vec![], false)));
+    assert!(debug.join("work/source.rs").exists() && debug.join("work/.git").exists());
+}

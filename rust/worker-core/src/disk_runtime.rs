@@ -364,7 +364,13 @@ pub(crate) fn shared_cache_levels(
                     }
                 }
             }
-            bytes = bytes.saturating_sub(size);
+            // Hard links keep blocks allocated after a build goes: read the target again before
+            // deciding whether it is under the cap.
+            bytes = if apply {
+                measure(path)?
+            } else {
+                bytes.saturating_sub(size)
+            };
             report.actions.push(format!(
                 "{} {} bytes={size}",
                 if apply { "removed" } else { "would-remove" },
