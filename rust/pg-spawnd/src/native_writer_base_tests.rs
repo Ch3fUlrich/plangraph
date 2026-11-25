@@ -368,3 +368,42 @@ fn changed_symbols_are_attributed_to_the_plan_item_of_their_commit() {
         json!("(no Plan-Item): loose_symbol; plangraph:ITEM-A: alpha_symbol; plangraph:ITEM-B: beta_symbol")
     );
 }
+
+#[test]
+fn a_symbol_added_by_a_merge_resolution_is_named_not_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    commit_file(&host.repo, "src/m.rs", "// shared\n");
+    let base = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    git_in(&host.repo, &["checkout", "-q", "-b", "side"]);
+    commit_file(
+        &host.repo,
+        "src/m.rs",
+        "// side\n\nPlan-Item: plangraph:ITEM-A\n",
+    );
+    git_in(&host.repo, &["checkout", "-q", "lane/local"]);
+    commit_file(&host.repo, "src/m.rs", "// lane\n");
+    let merged = Command::new("git")
+        .arg("-C")
+        .arg(&host.repo)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(["merge", "--no-ff", "-m", "merge side", "side"])
+        .output()
+        .unwrap();
+    assert!(!merged.status.success(), "the fixture must conflict");
+    fs::write(host.repo.join("src/m.rs"), "pub fn merged_symbol() {}\n").unwrap();
+    git_in(&host.repo, &["add", "."]);
+    git_in(&host.repo, &["commit", "-q", "-m", "merge side"]);
+    let head = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    let context = host.brief_context(&base, &head);
+    assert_eq!(
+        context["public_symbols"],
+        json!("(merge resolution or unattributed change): merged_symbol")
+    );
+}

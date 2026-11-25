@@ -428,7 +428,7 @@ def _process_seat(tmp_path, review, prompt, digest=None):
 
 PROCESS_PROMPT = "=== ITEM CONTEXT\nItem key: demo:A\nChanged public symbols: unavailable (request before acceptance)\n"
 PROCESS_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
-BRIEF_MED = "MED src/plangraph/review/review_brief.md:26 - brief omits public symbols"
+BRIEF_MED = "PROCESS src/plangraph/review/review_brief.md:26 field=public_symbols - brief omits public symbols"
 
 
 def test_process_only_response_is_not_posted_as_fix(tmp_path, capsys):

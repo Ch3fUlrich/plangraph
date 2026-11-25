@@ -1,5 +1,5 @@
 //! Target-host execution for the placed native-Codex run kind.
-use crate::native_writer::{self, Driver};
+use crate::native_writer::{self, Driver, ReviewClass};
 use pg_worker_core::run::lifecycle;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -344,6 +344,27 @@ impl Driver for Host {
     }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
+    }
+    fn classify_review(&mut self, review: &Value) -> Result<ReviewClass, String> {
+        let text = review["text"].as_str().unwrap_or_default();
+        let prompt = review["prompt_path"]
+            .as_str()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
+        let head = review["head"].as_str().unwrap_or("HEAD");
+        let paths: Vec<String> = self
+            .git(&["diff", "--name-only", &base, head])?
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let python = || {
+            let mut python =
+                pg_worker_core::writer_families::python_command(self.python_src.as_deref());
+            python.env("PATH", &self.tool_path);
+            python
+        };
+        pg_worker_core::writer_families::classify_review(text, &prompt, &paths, &python)
     }
     fn gates(&mut self) -> Result<(), String> {
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
