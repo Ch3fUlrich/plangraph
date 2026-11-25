@@ -16,10 +16,50 @@ use std::{
 /// A target nothing touched for this long is rebuildable (a stopped session leaves it idle).
 pub const IDLE: Duration = Duration::from_secs(15 * 60);
 
+/// Remove a target, or only its contents when the directory is a mount point (the mount root
+/// cannot be removed and a failed attempt would leave the contents gone and uncounted). Returns
+/// the bytes actually removed and the first error.
+fn clear(path: &Path, keep_root: bool, bytes: u64) -> (u64, Option<io::Error>) {
+    if !keep_root {
+        return match fs::remove_dir_all(path) {
+            Ok(()) => (bytes, None),
+            Err(error) => (0, Some(error)),
+        };
+    }
+    let (mut freed, mut first) = (0u64, None);
+    for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+        let entry = entry.path();
+        let size = scan(&entry).map(|(size, _)| size).unwrap_or(0);
+        let removed = match fs::symlink_metadata(&entry) {
+            Ok(meta) if meta.is_dir() => fs::remove_dir_all(&entry),
+            Ok(_) => fs::remove_file(&entry),
+            Err(error) => Err(error),
+        };
+        match removed {
+            Ok(()) => freed = freed.saturating_add(size),
+            Err(error) => {
+                first.get_or_insert(error);
+            }
+        }
+    }
+    (freed, first)
+}
+
 /// A target and the directory whose live processes keep it busy.
 pub struct Candidate {
     pub target: PathBuf,
     pub owner: PathBuf,
+    /// The target is itself a mount point: its contents go, the directory stays.
+    pub keep_root: bool,
+}
+
+/// Whether `path` is on another device than its parent (a mount point, as far as `st_dev` tells).
+pub fn is_mount_point(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(path), path.parent().map(fs::metadata)) {
+        (Ok(here), Some(Ok(above))) => here.dev() != above.dev(),
+        _ => false,
+    }
 }
 
 /// A target kept, with its size and the reason.
@@ -37,6 +77,7 @@ pub fn worktree_targets(trees: &[PathBuf]) -> Vec<Candidate> {
             ["rust/target", "target"].map(|rel| Candidate {
                 target: tree.join(rel),
                 owner: tree.clone(),
+                keep_root: is_mount_point(&tree.join(rel)),
             })
         })
         .filter(|c| c.target.is_dir())
@@ -66,6 +107,7 @@ pub fn scratch_targets(root: &Path) -> Vec<Candidate> {
         .into_iter()
         .map(|target| Candidate {
             owner: target.clone(),
+            keep_root: is_mount_point(&target),
             target,
         })
         .collect()
@@ -81,6 +123,7 @@ pub fn fast_check_targets(cache: &Path) -> Vec<Candidate> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .map(|e| Candidate {
             owner: e.path(),
+            keep_root: is_mount_point(&e.path()),
             target: e.path(),
         })
         .collect()
@@ -223,8 +266,13 @@ pub fn reclaim(
                 continue;
             }
         };
+        let mut freed = bytes;
         if apply {
-            if let Err(error) = fs::remove_dir_all(&canonical) {
+            let (done, failure) = clear(&canonical, candidate.keep_root, bytes);
+            report.freed_bytes = report.freed_bytes.saturating_add(done);
+            if let Some(error) = failure {
+                // Whatever was removed before the failure still counts as freed.
+                gained = gained.saturating_add(done);
                 kept.push(Kept {
                     path: candidate.target.clone(),
                     bytes,
@@ -232,10 +280,10 @@ pub fn reclaim(
                 });
                 continue;
             }
-            report.freed_bytes = report.freed_bytes.saturating_add(bytes);
+            freed = done;
         }
         drop(lease);
-        gained = gained.saturating_add(bytes);
+        gained = gained.saturating_add(freed);
         report.actions.push(format!(
             "{} {} bytes={bytes} (below free-space floor)",
             if apply { "removed" } else { "would-remove" },

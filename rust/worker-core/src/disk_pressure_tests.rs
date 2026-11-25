@@ -20,6 +20,7 @@ fn target(tree: &Path, bytes: usize, old: bool) -> Candidate {
     Candidate {
         target,
         owner: tree.to_path_buf(),
+        keep_root: false,
     }
 }
 
@@ -141,6 +142,7 @@ fn a_symlinked_parent_never_redirects_removal_outside_the_worktree() {
     let candidate = Candidate {
         target: tree.join("rust/target"),
         owner: tree.clone(),
+        keep_root: false,
     };
     let mut report = report();
     let kept = reclaim(
@@ -156,4 +158,31 @@ fn a_symlinked_parent_never_redirects_removal_outside_the_worktree() {
     assert!(external.target.join("debug/deps/object").exists());
     assert_eq!(report.freed_bytes, 0);
     assert!(kept[0].reason.contains("outside"), "{}", kept[0].reason);
+}
+
+#[test]
+fn a_mount_point_target_keeps_its_root_and_counts_what_was_cleared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let mut candidate = target(&root.join("tree"), 700, true);
+    candidate.keep_root = true; // stands for a target that is a mount point
+    let mut report = report();
+    let _ = reclaim(
+        &[candidate],
+        &Guards::default(),
+        &[],
+        (0, 10_000),
+        &|| None,
+        SystemTime::now(),
+        true,
+        &mut report,
+    );
+    let dir = root.join("tree/rust/target");
+    assert!(dir.is_dir(), "the mount root survives");
+    assert_eq!(
+        fs::read_dir(&dir).unwrap().count(),
+        0,
+        "its contents are gone"
+    );
+    assert!(report.freed_bytes >= 700, "{}", report.freed_bytes);
 }
