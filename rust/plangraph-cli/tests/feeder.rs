@@ -410,7 +410,7 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     // refuses by name.
     assert_eq!(p.max_writers["workstation"], 8);
     assert_eq!(writer_limit("workstation", &p), Some(8));
-    assert_eq!(writer_limit("workstation.lan.example", &p), Some(8));
+    assert_eq!(writer_limit("workstation.example", &p), Some(8));
     assert_eq!(
         admit(
             &HostFacts {
