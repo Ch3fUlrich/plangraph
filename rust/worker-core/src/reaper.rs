@@ -338,6 +338,16 @@ fn check(
         inventory,
         original != Path::new(&tree.path) || old_enough(tree, now)?,
     ) {
+        // Ownership no longer counts an ancestor run, but moving a checkout under one would
+        // leave a quarantine the broad deletion guard refuses until that run ends.
+        Classification::Eligible { .. }
+            if protection.guards.protects(original)
+                || original
+                    .canonicalize()
+                    .is_ok_and(|path| protection.guards.protects(&path)) =>
+        {
+            Err(io::Error::other("original path is in use"))
+        }
         Classification::Eligible { .. } => Ok(()),
         Classification::Protected { reason } => Err(io::Error::other(reason)),
     }

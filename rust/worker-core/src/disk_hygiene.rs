@@ -93,18 +93,7 @@ impl Guards {
             }
             let row: serde_json::Value =
                 serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
-            let status = row["status"]
-                .as_str()
-                .ok_or_else(|| io::Error::other("run status unavailable"))?;
-            let survivors = match row.get("survivors") {
-                None => false,
-                Some(serde_json::Value::Array(pids)) => !pids.is_empty(),
-                Some(_) => return Err(io::Error::other("invalid survivor records")),
-            };
-            if !crate::sweep_runs::known(status) {
-                return Err(io::Error::other("unknown run status"));
-            }
-            if survivors || !crate::sweep_runs::terminal(status) {
+            if !crate::sweep_runs::finished(&row)? {
                 let paths = crate::sweep_runs::paths(&row)?;
                 if paths.is_empty() {
                     return Err(io::Error::other("active run checkout unavailable"));
@@ -120,6 +109,23 @@ impl Guards {
                 || c.as_os_str().to_string_lossy().starts_with("live-")
         })
     }
+    /// An unfinished run owns `path`: a recorded checkout or attempt is the path or sits inside it.
+    /// A run whose checkout is an ancestor (the repository root) owns nothing below it.
+    pub fn live_run_owns(&self, path: &Path) -> bool {
+        self.live.iter().any(|p| {
+            let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+            p.starts_with(path)
+        })
+    }
+    /// A reserved name, a pin on `path` or a pin nested in it protects it. Pins are not runs.
+    pub fn pin_protects(&self, path: &Path) -> bool {
+        Self::protected_name(path)
+            || self.pinned.iter().any(|p| {
+                let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+                path.starts_with(&p) || p.starts_with(path)
+            })
+    }
+    /// Broad protection for deletion: any pin or run overlapping `path` in either direction.
     pub fn protects(&self, path: &Path) -> bool {
         if Self::protected_name(path) {
             return true;
