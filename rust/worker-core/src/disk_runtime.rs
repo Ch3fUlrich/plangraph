@@ -304,23 +304,34 @@ fn shared_cache_levels(
     if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
         return Ok(());
     }
-    let mut bytes = crate::disk_hygiene::scan(path)?.0;
-    let mut projected = Vec::new();
-    for (candidate, size) in crate::shared_target::candidates(path, std::time::SystemTime::now())? {
+    // Sizes, candidates and removals all use the canonical path, the key of the dry-run projection.
+    let mut bytes = match crate::disk_hygiene::scan(&canonical) {
+        Ok((bytes, _)) if !apply => bytes.saturating_sub(report.projected.under(&canonical)),
+        Ok((bytes, _)) => bytes,
+        Err(e) => {
+            crate::cargo_pool_trim::note_incomplete(report, &canonical, &e);
+            return Ok(());
+        }
+    };
+    let candidates =
+        match crate::shared_target::candidates(&canonical, std::time::SystemTime::now()) {
+            Ok(candidates) => candidates,
+            Err(e) => {
+                crate::cargo_pool_trim::note_incomplete(report, &canonical, &e);
+                return Ok(());
+            }
+        };
+    for (candidate, size) in candidates {
         if !pressure && bytes <= variant_cap {
             break;
         }
-        if guards.protects(&candidate) {
-            continue;
-        }
-        #[cfg(target_os = "linux")]
-        if crate::reap_journal::check_mounts(&candidate.canonicalize()?).is_err() {
+        if guards.protects(&candidate) || (!apply && report.projected.covers(&candidate)) {
             continue;
         }
         // Recheck eligibility before the final process probe, so a potentially
         // expensive filesystem scan never separates that probe from removal.
         if apply
-            && !crate::shared_target::candidates(path, std::time::SystemTime::now())?
+            && !crate::shared_target::candidates(&canonical, std::time::SystemTime::now())?
                 .iter()
                 .any(|(p, _)| p == &candidate)
         {
@@ -330,51 +341,63 @@ fn shared_cache_levels(
         if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
             return Ok(());
         }
-        if apply {
-            fs::remove_dir_all(&candidate)?;
-            report.freed_bytes = report.freed_bytes.saturating_add(size);
+        if let Some(credit) = remove_cache_entry(&canonical, &candidate, size, apply, report) {
+            bytes = bytes.saturating_sub(credit);
         }
-        if !apply {
-            projected.push((candidate.clone(), size));
-        }
-        bytes = bytes.saturating_sub(size);
-        report.actions.push(format!(
-            "{} {} bytes={size}",
-            if apply { "removed" } else { "would-remove" },
-            candidate.display()
-        ));
     }
     if bytes > cap {
-        for (profile, mut size) in crate::shared_target::debug_profiles(path)? {
+        let profiles = match crate::shared_target::debug_profiles(&canonical) {
+            Ok(profiles) => profiles,
+            Err(e) => {
+                crate::cargo_pool_trim::note_incomplete(report, &canonical, &e);
+                return Ok(());
+            }
+        };
+        for (profile, size) in profiles {
             if bytes <= cap {
                 break;
             }
-            if guards.protects(&profile) {
+            if guards.protects(&profile) || (!apply && report.projected.covers(&profile)) {
                 continue;
             }
             let (cwds, building) = process_reader()?;
             if building || cwds.iter().any(|p| p.starts_with(&canonical)) {
                 return Ok(());
             }
-            if apply {
-                fs::remove_dir_all(&profile)?;
-                report.freed_bytes = report.freed_bytes.saturating_add(size);
-            } else {
-                for (entry, removed) in &projected {
-                    if entry.starts_with(&profile) {
-                        size = size.saturating_sub(*removed);
-                    }
-                }
+            if let Some(credit) = remove_cache_entry(&canonical, &profile, size, apply, report) {
+                bytes = bytes.saturating_sub(credit);
             }
-            bytes = bytes.saturating_sub(size);
-            report.actions.push(format!(
-                "{} {} bytes={size}",
-                if apply { "removed" } else { "would-remove" },
-                profile.display()
-            ));
         }
     }
     Ok(())
+}
+
+/// One removal of the shared cache, per unit or per whole profile, through the shared guard
+/// (the cache lease is held): a refusal is a skip in a dry run as in a real one. Returns the
+/// bytes credited.
+fn remove_cache_entry(
+    cache: &Path,
+    entry: &Path,
+    size: u64,
+    apply: bool,
+    report: &mut Report,
+) -> Option<u64> {
+    if let Err(e) = crate::cargo_pool_trim::remove_guarded(cache, entry, apply) {
+        report.skipped.push(format!("{} ({e})", entry.display()));
+        return None;
+    }
+    let credit = if apply {
+        report.freed_bytes = report.freed_bytes.saturating_add(size);
+        size
+    } else {
+        report.projected.project(entry, size)
+    };
+    report.actions.push(format!(
+        "{} {} bytes={size}",
+        if apply { "removed" } else { "would-remove" },
+        entry.display()
+    ));
+    Some(credit)
 }
 
 fn resolve_processes(

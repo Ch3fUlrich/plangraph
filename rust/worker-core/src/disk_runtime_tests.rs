@@ -36,6 +36,7 @@ fn disk_hygiene_shared_cache_apply_rechecks_builds_cwds_and_symlinks() {
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     shared_cache_using(
         &cache,
@@ -168,6 +169,7 @@ fn shared_cap_evicts_old_build_variants_and_rechecks_live_cargo() {
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     shared_cache_using(
         cache,
@@ -257,6 +259,7 @@ fn shared_cache_honors_run_and_cleanup_leases_through_reclaim() {
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     for mode in [libc::LOCK_SH, libc::LOCK_EX] {
         // SAFETY: lock owns the descriptor.
@@ -448,4 +451,51 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
                 .iter()
                 .all(|a| !a.contains("ffffffffffffffff"))
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn shared_cache_profile_trim_preserves_nested_mount() {
+    use crate::reap_journal::with_inventory;
+    for apply in [true, false] {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("cargo-target");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join(".rustc_info.json"), r#"{"rustc_fingerprint":1}"#).unwrap();
+        let (kept, other) = (
+            cache.join("debug"),
+            cache.join("x86_64-unknown-linux-gnu/debug"),
+        );
+        for profile in [&kept, &other] {
+            fs::create_dir_all(profile.join("deps/mnt")).unwrap();
+            fs::write(profile.join(".cargo-lock"), "").unwrap();
+            fs::write(profile.join("deps/mnt/data"), [0u8; 600]).unwrap();
+        }
+        // The mount inside the first profile; the second is eligible and shows the pass ran.
+        let mount = kept.canonicalize().unwrap().join("deps/mnt");
+        let mut report = Report::default();
+        with_inventory(Some(vec![mount]), || {
+            shared_cache_using(
+                &cache,
+                &Guards::default(),
+                false,
+                100,
+                false,
+                apply,
+                &mut report,
+                || Ok((vec![], false)),
+            )
+            .unwrap()
+        });
+        assert!(kept.join("deps/mnt/data").exists(), "mounted contents kept");
+        assert!(report.skipped.iter().any(|l| l.contains("mount inside")));
+        assert!(report
+            .actions
+            .iter()
+            .all(|a| !a.contains(kept.to_str().unwrap())));
+        assert!(!report.projected.covers(&kept.canonicalize().unwrap()));
+        assert_eq!(report.freed_bytes, if apply { 600 } else { 0 });
+        assert_eq!(other.exists(), !apply);
+        assert_eq!(report.actions.len(), 1, "{:?}", report.actions);
+    }
 }

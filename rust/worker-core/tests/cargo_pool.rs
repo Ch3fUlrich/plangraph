@@ -64,6 +64,7 @@ fn three_parallel_cargo_builds_show_no_file_lock_wait_and_record_telemetry() {
                 .args(["check", "--offline", "--manifest-path"])
                 .arg(crate_dir.join("Cargo.toml"))
                 .env("CARGO_TARGET_DIR", &lease.path)
+                .env("CARGO_BUILD_BUILD_DIR", &lease.path)
                 .env("CARGO_HOME", state.join(format!("cargo-home-{i}")))
                 .env("CARGO_INCREMENTAL", "0")
                 .output()
@@ -162,8 +163,9 @@ fn pool_reaps_dead_and_terminal_leases_and_bounds_total_size_under_n_times_cap()
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
-    let total_after = enforce_pool_cap(&slots, 2048, true, &mut report).unwrap();
+    let total_after = enforce_pool_cap(&primary, &slots, 2048, true, &mut report).unwrap();
     assert!(
         slots[0].join("debug/blob").exists(),
         "live slot must survive"

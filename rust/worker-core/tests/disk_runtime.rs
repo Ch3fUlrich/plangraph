@@ -37,6 +37,7 @@ fn disk_hygiene_shared_cache_busy_and_pinned_paths_survive() {
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     shared_cache(&cache, &Guards::default(), true, false, &mut report).unwrap();
     assert!(report.actions.is_empty());

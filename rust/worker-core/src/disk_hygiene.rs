@@ -25,6 +25,42 @@ pub struct Report {
     pub actions: Vec<String>,
     pub skipped: Vec<String>,
     pub error: Option<String>,
+    /// Removals a dry run has named so far: a later pass over the same bytes counts them once.
+    #[serde(skip)]
+    pub projected: Projection,
+}
+
+/// Paths a dry run would remove, with the bytes credited for each. Nothing is removed, so a
+/// second pass over the same tree must not count a subtree again.
+#[derive(Debug, Default)]
+pub struct Projection(Vec<(PathBuf, u64)>);
+
+impl Projection {
+    /// Whether `path` is, or lies under, a path already projected for removal.
+    pub fn covers(&self, path: &Path) -> bool {
+        self.0.iter().any(|(done, _)| path.starts_with(done))
+    }
+
+    /// Bytes already credited for removals at or under `path`.
+    pub fn under(&self, path: &Path) -> u64 {
+        self.0
+            .iter()
+            .filter(|(done, _)| done.starts_with(path))
+            .fold(0, |sum, (_, bytes)| sum.saturating_add(*bytes))
+    }
+
+    /// Records the removal of `path` (`bytes` including everything under it) and returns the
+    /// bytes it adds to the credit: none when it is covered, and not those of projected
+    /// descendants, which the ancestor now replaces.
+    pub fn project(&mut self, path: &Path, bytes: u64) -> u64 {
+        if self.covers(path) {
+            return 0;
+        }
+        let inside = self.under(path);
+        self.0.retain(|(done, _)| !done.starts_with(path));
+        self.0.push((path.to_path_buf(), bytes));
+        bytes.saturating_sub(inside)
+    }
 }
 /// Absolute byte thresholds; the alarm matches the spawner floor in GiB.
 #[derive(Clone, Copy)]
@@ -324,6 +360,7 @@ pub fn sweep_checked(
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     let listing = git(repo, &["worktree", "list", "--porcelain", "-z"])?;
     for (index, block) in listing.split("\0\0").filter(|s| !s.is_empty()).enumerate() {

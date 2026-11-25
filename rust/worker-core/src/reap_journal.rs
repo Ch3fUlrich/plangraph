@@ -218,10 +218,33 @@ pub(crate) fn delete(
     ))
 }
 
-/// A bind mount may share a device number, so metadata alone cannot exclude it.
-pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
+#[cfg(test)]
+thread_local! {
+    /// Test fixture for the mount inventory: `Some(None)` is an inventory that cannot be read.
+    pub(crate) static INVENTORY: std::cell::RefCell<Option<Option<Vec<PathBuf>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `run` with the mount inventory of the fixture (`None`: an inventory that cannot be read),
+/// so a test names mounts, same-device binds included, that the host does not have.
+#[cfg(test)]
+pub(crate) fn with_inventory<T>(fixture: Option<Vec<PathBuf>>, run: impl FnOnce() -> T) -> T {
+    INVENTORY.with(|inventory| *inventory.borrow_mut() = Some(fixture));
+    let result = run();
+    INVENTORY.with(|inventory| *inventory.borrow_mut() = None);
+    result
+}
+
+/// Every mount point the kernel lists for this process. A bind mount may share a device
+/// number, so metadata alone cannot tell a mount from a directory.
+pub(crate) fn mount_points() -> io::Result<Vec<PathBuf>> {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
+    #[cfg(test)]
+    if let Some(fixture) = INVENTORY.with(|inventory| inventory.borrow().clone()) {
+        return fixture.ok_or_else(|| io::Error::other("mount inventory unreadable"));
+    }
+    let mut points = Vec::new();
     for line in fs::read("/proc/self/mountinfo")?
         .split(|b| *b == b'\n')
         .filter(|l| !l.is_empty())
@@ -246,8 +269,29 @@ pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
                 remaining = tail;
             }
         }
-        if PathBuf::from(OsString::from_vec(bytes)).starts_with(path) {
+        points.push(PathBuf::from(OsString::from_vec(bytes)));
+    }
+    Ok(points)
+}
+
+/// Refuses a path that is, or holds, a mount point.
+pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
+    if mount_points()?.iter().any(|mount| mount.starts_with(path)) {
+        return Err(io::Error::other("mount inside candidate"));
+    }
+    Ok(())
+}
+
+/// Refuses `path` when a mount point is at it, beneath it, or on the way down to it from
+/// `boundary`. The boundary itself may be a mount (a cache on its own volume): everything
+/// below it is then on that volume, and only a further mount can lead elsewhere.
+pub(crate) fn check_mounts_below(boundary: &Path, path: &Path) -> io::Result<()> {
+    for mount in mount_points()? {
+        if mount.starts_with(path) {
             return Err(io::Error::other("mount inside candidate"));
+        }
+        if path.starts_with(&mount) && mount.starts_with(boundary) && mount != boundary {
+            return Err(io::Error::other("mount above candidate"));
         }
     }
     Ok(())

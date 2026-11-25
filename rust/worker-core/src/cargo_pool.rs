@@ -17,8 +17,8 @@ pub use crate::cargo_pool_telemetry::{
     LockWaitSummary, LockWaitTracker,
 };
 
-pub use crate::cargo_pool_trim::enforce_pool_cap;
-use crate::cargo_pool_trim::slot_size;
+pub use crate::cargo_pool_trim::{enforce_pool_cap, enforce_review_slots};
+use crate::cargo_pool_trim::{note_incomplete, slot_size};
 
 /// Above the measured size of one full-workspace debug test build (25.9 GB on the
 /// busiest host); a host overrides it with `cargo-target-cap-gb` in its plangraph
@@ -107,7 +107,7 @@ pub fn slot_count(free_bytes: u64, measured_slot_bytes: u64, default_slots: usiz
 pub fn configured_slot_count(primary: &Path) -> usize {
     let measured = existing_pool_slots(primary)
         .iter()
-        .map(|slot| slot_size(slot))
+        .map(|slot| slot_size(slot).unwrap_or(0))
         .max()
         .unwrap_or(0);
     let mut probe = primary;
@@ -123,39 +123,74 @@ pub fn configured_slot_count(primary: &Path) -> usize {
     }
 }
 
-/// `primary` plus every `slot-*` directory currently present in its pool root.
+/// `primary` plus every `slot-*` directory currently present in its pool root. A pool that cannot
+/// be listed counts as holding none: use `try_pool_slots` where the failure must be reported.
 pub fn existing_pool_slots(primary: &Path) -> Vec<PathBuf> {
-    let mut slots = vec![primary.to_path_buf()];
-    let Ok(root) = pool_root(primary) else {
-        return slots;
-    };
-    let mut extra: Vec<PathBuf> = fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("slot-") && !n.contains('.'))
-                && path.is_dir()
-                && !path.is_symlink()
-        })
-        .collect();
-    extra.sort();
-    slots.extend(extra);
-    slots
+    try_pool_slots(primary).unwrap_or_else(|_| vec![primary.to_path_buf()])
 }
 
-/// Trim every idle slot of the pool at `primary` to `cap_bytes` each, and the pool
-/// as a whole to N x cap. Leased slots are skipped.
+/// As `existing_pool_slots`, with a missing pool root as an empty pool and every other
+/// discovery failure as an error. The pool root and its slots must be real directories: a
+/// symlinked `-pool` or `slot-*` is not ours to trim through (ancestors of the pool may be).
+pub fn try_pool_slots(primary: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut slots = vec![primary.to_path_buf()];
+    let root = pool_root(primary)?;
+    match fs::symlink_metadata(&root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(slots),
+        Err(e) => return Err(e),
+        Ok(meta) if !meta.is_dir() => {
+            return Err(io::Error::other("pool root is not a real directory"))
+        }
+        Ok(_) => {}
+    }
+    let mut extra = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        let named = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with("slot-") && !n.contains('.'));
+        if named && entry.file_type()?.is_dir() {
+            extra.push(entry.path());
+        }
+    }
+    extra.sort();
+    slots.extend(extra);
+    Ok(slots)
+}
+
+/// Whether `slot` is a review seat's build slot, `slot-review-<id>`: one per seat run, so its
+/// budget is fixed instead of counted per slot.
+pub fn is_review_slot(slot: &Path) -> bool {
+    slot.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("slot-review-"))
+}
+
+/// The slots of the pool at `primary` as (ordinary ones with the primary first, review ones).
+/// A pool that cannot be listed leaves the primary alone and is recorded as incomplete.
+pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let slots = try_pool_slots(primary).unwrap_or_else(|e| {
+        let root = pool_root(primary).unwrap_or_else(|_| primary.to_path_buf());
+        note_incomplete(report, &root, &e);
+        vec![primary.to_path_buf()]
+    });
+    slots.into_iter().partition(|slot| !is_review_slot(slot))
+}
+
+/// Trim every idle slot of the pool at `primary` to `cap_bytes` each, ordinary slots together to
+/// N x cap and review slots together to their fixed budget. Leased slots are skipped.
 pub fn enforce_pool(
     primary: &Path,
     cap_bytes: u64,
     apply: bool,
     report: &mut Report,
 ) -> io::Result<u64> {
-    enforce_pool_cap(&existing_pool_slots(primary), cap_bytes, apply, report)
+    let (ordinary, review) = pool_slot_sets(primary, report);
+    let total = enforce_pool_cap(primary, &ordinary, cap_bytes, apply, report)?;
+    Ok(total.saturating_add(enforce_review_slots(
+        primary, &review, cap_bytes, apply, report,
+    )?))
 }
 
 pub fn pool_root(primary: &Path) -> io::Result<PathBuf> {
