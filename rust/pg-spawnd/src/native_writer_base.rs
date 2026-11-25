@@ -141,6 +141,43 @@ impl Host {
         }
     }
 
+    /// The review base of a held head that is reviewed again as it is: the package base and the
+    /// main it was admitted against stay, the head is never rebased, and the current origin main
+    /// is the observed one, so the review admits the same head while main moves on (`conflict`
+    /// mode of the admission gate) instead of retrying a rebase the head must not take.
+    pub(super) fn held_review_base(&self, head: &str) -> Result<ReviewBase, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        if self.git(&["rev-parse", "HEAD"])? != head {
+            return Err(format!("worktree is not at {head}"));
+        }
+        self.git(&[
+            "fetch",
+            "--no-write-fetch-head",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ])?;
+        let observed_main = self.git(&["rev-parse", "--verify", ORIGIN_MAIN])?;
+        let base = self.git(&["rev-parse", "--verify", &self.base_pin()])?;
+        let main = match self.git(&["rev-parse", "--verify", &self.review_main_pin()]) {
+            Ok(main) => main,
+            Err(_) => self.git(&["merge-base", &base, &observed_main])?,
+        };
+        self.git(&["merge-base", "--is-ancestor", &main, &observed_main])
+            .map_err(|e| format!("held review refused: origin/main diverged: {e}"))?;
+        let mode = if main == observed_main {
+            "current"
+        } else {
+            "conflict"
+        };
+        Ok(ReviewBase {
+            head: head.into(),
+            base,
+            mode,
+            main,
+            observed_main,
+        })
+    }
+
     fn rebase_package(&self, current: &ReviewBase) -> Result<Option<ReviewBase>, String> {
         let main = &current.observed_main;
         let base = if self.git(&["merge-base", &current.base, main])? == current.base {

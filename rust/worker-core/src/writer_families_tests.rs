@@ -185,46 +185,87 @@ fn a_lane_head_review_brief_refuses_empty_item_context_by_field_name() {
     }
 }
 
+/// The binding the CLI seat recorded for `base..head` (the one algorithm: plangraph.review.verdict).
+fn binding(repo: &Path, base: &str, head: &str) -> Value {
+    let mut child = python();
+    child.args([
+        "-c",
+        "import json, sys; from plangraph.review.verdict import diff_binding; d = diff_binding(sys.argv[2], sys.argv[3], sys.argv[1]); print(json.dumps({'base_sha': sys.argv[2], 'head_sha': sys.argv[3], 'diff_sha256': d[0]}))",
+    ]);
+    let out = child.arg(repo).args([base, head]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
 #[test]
 fn classify_review_uses_the_one_classifier_with_the_serving_attempt() {
     use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit(repo, "base.txt", "base");
+    let base = git(repo, &["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    commit(repo, "src/a.rs", "lane change");
+    let head = git(repo, &["rev-parse", "HEAD"]);
     let context = "=== ITEM CONTEXT\nItem key: k\nChanged public symbols: run\nCallers of changed public symbols: \nAffected test output (paths): l.log\n";
-    let attempt = |prompt: &str, digest: Option<&str>| {
+    let attempt = |prompt: &str, digest: Option<&str>, binding: &Value| {
         let sha = format!("{:x}", Sha256::digest(prompt.as_bytes()));
-        serde_json::json!({"prompt": prompt, "prompt_sha256": digest.unwrap_or(&sha), "binding": null, "cwd": null})
+        serde_json::json!({"prompt": prompt, "prompt_sha256": digest.unwrap_or(&sha),
+            "binding": binding, "cwd": repo})
     };
-    let prompt = format!("{context}diff --git a/src/a.rs b/src/a.rs\n");
+    let bound = binding(repo, &base, &head);
     let text =
         "PROCESS review_brief.md field=callers - no callers rendered\nVERDICT: REQUEST_CHANGES\n";
-    let held = classify_review(text, &attempt(&prompt, None), &python).unwrap();
+    let held = classify_review(text, &attempt(context, None, &bound), &python).unwrap();
     assert_eq!((held.blocking, held.process.len()), (0, 1));
-    // The dispatched diff changes the brief itself: a finding of the head.
-    let touched = format!("{prompt}diff --git a/src/plangraph/review/review_brief.md b/src/plangraph/review/review_brief.md\n");
-    assert_eq!(
-        classify_review(text, &attempt(&touched, None), &python)
-            .unwrap()
-            .blocking,
-        1
-    );
     // The prompt renders the field, or is not the one the attempt recorded: a finding of the head.
-    let rendered = prompt.replace(
+    let rendered = context.replace(
         "symbols: run\nCallers of changed public symbols: \n",
         "symbols: run\nCallers of changed public symbols: a:1\n",
     );
     assert_eq!(
-        classify_review(text, &attempt(&rendered, None), &python)
+        classify_review(text, &attempt(&rendered, None, &bound), &python)
             .unwrap()
             .blocking,
         1
     );
     assert_eq!(
-        classify_review(text, &attempt(&prompt, Some(&"0".repeat(64))), &python)
+        classify_review(
+            text,
+            &attempt(context, Some(&"0".repeat(64)), &bound),
+            &python
+        )
+        .unwrap()
+        .blocking,
+        1
+    );
+    // No binding, a binding that fails verification, or example diff headers in the prompt: the
+    // scope is unknown and the finding counts.
+    let headers = format!("{context}diff --git a/src/a.rs b/src/a.rs\n");
+    let wrong =
+        serde_json::json!({"base_sha": base, "head_sha": head, "diff_sha256": "0".repeat(64)});
+    for (prompt, binding) in [(&headers, Value::Null), (&headers, wrong)] {
+        assert_eq!(
+            classify_review(text, &attempt(prompt, None, &binding), &python)
+                .unwrap()
+                .blocking,
+            1
+        );
+    }
+    // The bound diff changes the brief itself: a finding of the head.
+    std::fs::create_dir_all(repo.join("src/plangraph/review")).unwrap();
+    commit(repo, "src/plangraph/review/review_brief.md", "changed");
+    let touched = git(repo, &["rev-parse", "HEAD"]);
+    let changed = binding(repo, &base, &touched);
+    assert_eq!(
+        classify_review(text, &attempt(context, None, &changed), &python)
             .unwrap()
             .blocking,
         1
     );
     // An untyped MED about the brief is never a diagnostic.
     let med = "MED review_brief.md:26 - omits the callers\nVERDICT: REQUEST_CHANGES\n";
-    let counted = classify_review(med, &attempt(&prompt, None), &python).unwrap();
+    let counted = classify_review(med, &attempt(context, None, &bound), &python).unwrap();
     assert_eq!((counted.blocking, counted.process.len()), (1, 0));
 }

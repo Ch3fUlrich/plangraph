@@ -431,14 +431,14 @@ PROCESS_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
 BRIEF_MED = "PROCESS src/plangraph/review/review_brief.md:26 field=public_symbols - brief omits public symbols"
 
 
-def test_process_only_response_is_not_posted_as_fix(tmp_path, capsys):
+def test_a_process_only_reply_of_a_seat_with_no_recorded_binding_is_a_counted_fix(tmp_path, capsys):
+    # The dispatched diff scope is unknown without a verified review_binding, so the prompt's own
+    # example headers or commands never turn a finding into a process hold (bound seats: record tests).
     argv, seat_dir = _process_seat(tmp_path, f"{BRIEF_MED}\nVERDICT: REQUEST_CHANGES\n",
                                    PROCESS_PROMPT + PROCESS_DIFF)
-    assert sv.main(argv + ["--dry-run"]) == sv.EXIT_PROCESS
-    assert json.loads(capsys.readouterr().out)["process"]["lines"] == [BRIEF_MED]
-    saved = json.loads((seat_dir / "process.json").read_text())
-    assert (saved["key"], saved["run_id"], saved["head_sha"]) == ("demo:A", "run-example", "a" * 40)
-    assert not (seat_dir / "verdict.payload.json").exists()
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
 
 
 def test_mixed_response_keeps_the_real_blocker_as_fix(tmp_path, capsys):
@@ -447,7 +447,6 @@ def test_mixed_response_keeps_the_real_blocker_as_fix(tmp_path, capsys):
         PROCESS_PROMPT + PROCESS_DIFF)
     assert sv.main(argv + ["--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
-    assert json.loads((seat_dir / "process.json").read_text())["blocking"] == 1
 
 
 def test_brief_finding_stays_a_fix_when_the_head_changes_the_brief(tmp_path, capsys):
@@ -467,14 +466,23 @@ def test_saved_prompt_with_another_digest_suppresses_nothing(tmp_path, capsys):
     assert not (seat_dir / "process.json").exists()
 
 
-def test_accept_with_a_process_finding_is_held_and_never_posts_a_pass(tmp_path, capsys):
-    argv, seat_dir = _process_seat(
-        tmp_path, f"{BRIEF_MED}\nTESTS: none: x\nVERDICT: ACCEPT\n", PROCESS_PROMPT + PROCESS_DIFF)
-    assert sv.main(argv + ["--dry-run"]) == sv.EXIT_PROCESS
-    assert "body" not in json.loads(capsys.readouterr().out)
-    argv, seat_dir = _process_seat(
-        tmp_path / "mixed", f"{BRIEF_MED}\nHIGH src/a.py:3 - real bug\nVERDICT: ACCEPT\n",
-        PROCESS_PROMPT + PROCESS_DIFF) if (tmp_path / "mixed").mkdir() is None else None
+def test_an_accept_that_cites_the_brief_without_a_verified_scope_is_not_a_pass(tmp_path, capsys):
+    argv, _ = _process_seat(tmp_path, f"{BRIEF_MED}\nTESTS: none: x\nVERDICT: ACCEPT\n",
+                            PROCESS_PROMPT + PROCESS_DIFF)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+
+
+@pytest.mark.parametrize("prose", ["HIGH 12:30 UTC was the window", "HIGH-level coverage is fine"])
+def test_prose_with_a_severity_word_or_timestamp_does_not_turn_an_accept_into_fix(tmp_path, capsys, prose):
+    argv, _ = _process_seat(tmp_path, f"{prose}\nTESTS: none: x\nVERDICT: ACCEPT\n", PROCESS_PROMPT)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
+
+
+def test_a_documented_finding_with_a_path_holding_a_space_still_blocks_an_accept(tmp_path, capsys):
+    review = "HIGH docs/review notes.md:12 - missing test\nTESTS: none: x\nVERDICT: ACCEPT\n"
+    argv, _ = _process_seat(tmp_path, review, PROCESS_PROMPT)
     assert sv.main(argv + ["--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
 

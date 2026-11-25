@@ -289,6 +289,12 @@ impl Driver for Host {
     fn prepare_review(&mut self, head: &str) -> Result<Option<native_writer::ReviewBase>, String> {
         self.prepare_review_base(head).map(Some)
     }
+    fn prepare_held_review(
+        &mut self,
+        head: &str,
+    ) -> Result<Option<native_writer::ReviewBase>, String> {
+        self.held_review_base(head).map(Some)
+    }
     fn execute(&mut self, session_id: Option<&str>, prompt: &str) -> Result<String, String> {
         session::execute(self, session_id, prompt)
     }

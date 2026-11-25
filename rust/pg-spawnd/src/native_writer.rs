@@ -16,6 +16,10 @@ pub(crate) trait Driver {
     fn prepare_review(&mut self, _head: &str) -> Result<Option<ReviewBase>, String> {
         Ok(None)
     }
+    /// Review base of a held head reviewed again on the same head (no rebase).
+    fn prepare_held_review(&mut self, _head: &str) -> Result<Option<ReviewBase>, String> {
+        Ok(None)
+    }
     fn disk_gb(&mut self) -> Result<u64, String>;
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String>;
     fn head(&mut self) -> Result<String, String>;
@@ -458,8 +462,8 @@ fn writer_attempt(
     let mut fixes = 0;
     let mut idle = 0;
     let mut base_retries = 0;
-    // The review-only continuation reviews the held head as it is: its first pass does not
-    // rebase it through `prepare_review`.
+    // The review-only continuation reviews the held head as it is: its passes take the
+    // same-head review base (`prepare_held_review`), never a rebase through `prepare_review`.
     let mut pinned = review_only;
     loop {
         let mut head = driver.head().map_err(|e| (6, e))?;
@@ -470,10 +474,13 @@ fn writer_attempt(
             && driver
                 .has_commits_beyond(&base, &head)
                 .map_err(|e| (7, e))?;
-        if has_commits && !pinned {
-            let preparation = driver
-                .prepare_review(&head)
-                .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
+        if has_commits {
+            let preparation = if pinned {
+                driver.prepare_held_review(&head)
+            } else {
+                driver.prepare_review(&head)
+            }
+            .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
             if let Some(basis) = preparation {
                 let range_changed = base != basis.base || head != basis.head;
                 base.clone_from(&basis.base);

@@ -25,7 +25,6 @@ __all__ = [
     "judge",
     "Findings",
     "classify_findings",
-    "diff_paths",
     "diff_binding",
     "bound_diff_paths",
     "classify_run",
@@ -292,8 +291,6 @@ _SEVERITY = {"HIGH": "high", "P1": "high", "MED": "med", "P2": "med",
 _FINDING_LINE = re.compile(
     r"^[\s#*\-\[(]*(?:\d+[.)][\s#*\-\[(]*)?(?:FINDING:[\s#*\-\[(]*)?"
     r"(HIGH|MED|LOW|P1|P2|P3|PROCESS)(?=[\s:*\])`]|$)[\s:*\])]*(.*)$")
-_DIFF_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)$", re.M)
-_DIFF_COMMAND = re.compile(r"^git diff ([0-9a-f]{7,40}) ([0-9a-f]{7,40})$", re.M)
 
 
 @dataclass(frozen=True)
@@ -309,29 +306,6 @@ class Findings:
     def blocking(self) -> int:
         """HIGH+MED count of the head; PROCESS lines are not in it."""
         return self.high + self.med
-
-
-def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
-    """Paths the dispatched diff changes, or None when the prompt does not identify it.
-
-    Inline seats carry `diff --git` headers; tool seats carry the `git diff A B` command,
-    which is run in `cwd` (the seat's checkout) read-only.
-    """
-    paths: set[str] = set()
-    for old, new in _DIFF_HEADER.findall(prompt):
-        paths.update((old, new))
-    if paths:
-        return paths  # an inline seat's diff is the one in its prompt, whatever commands it quotes
-    for base, head in _DIFF_COMMAND.findall(prompt):
-        if cwd is None:
-            return None
-        try:
-            out = subprocess.run(["git", "-C", cwd, "diff", "--name-only", base, head],
-                                 capture_output=True, text=True, timeout=60, check=True)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        paths.update(out.stdout.split())
-    return paths or None
 
 
 # The one fixed form of a process diagnostic, matched as a whole (review_brief.md rules):
@@ -393,6 +367,21 @@ def bound_diff_paths(binding: object, cwd: str | None) -> set[str] | None:
     return found[1] if found and found[0] == binding.get("diff_sha256") else None
 
 
+_SEPARATOR = re.compile(r"\s[-\u2013\u2014]\s")
+_LINE_CITE = re.compile(r"[A-Za-z_./][^:]*:\d+(?:[-:]\d+)*$")
+
+
+def _documented(rest: str) -> bool:
+    """The text after a severity word is the documented `<path>:<line> - <text>`: the citation
+    is everything before the spaced dash (a path may hold spaces), or the first token when
+    there is no dash. A bare or markup-only citation is a malformed finding and still counts;
+    prose or a timestamp ("12:30 UTC") is not a citation."""
+    text = rest.strip()
+    head = _SEPARATOR.split(text, maxsplit=1)[0] if _SEPARATOR.search(text) else (text.split(None, 1) or [""])[0]
+    citation = head.strip().strip("`*_")
+    return not any(c.isalnum() for c in citation) or bool(_LINE_CITE.search(citation))
+
+
 def classify_findings(text: str, *, prompt: str = "",
                       changed_paths: set[str] | None = None) -> Findings:
     """Count finding lines. A typed `PROCESS` line is a process diagnostic only when its field is
@@ -409,10 +398,7 @@ def classify_findings(text: str, *, prompt: str = "",
         if not found:
             continue
         kind = _SEVERITY[found.group(1)]
-        cite = found.group(2).split(None, 1)[0] if found.group(2).strip() else ""
-        # The documented finding is "<SEVERITY> <path>:<line> - <text>": a label opening
-        # prose ("HIGH level coverage ...") is not one; a bare or markup-only citation still is.
-        if kind != "process" and any(c.isalnum() for c in cite) and not re.search(r":\d+", cite):
+        if kind != "process" and not _documented(found.group(2)):
             continue
         if kind == "process":
             typed = _typed_process(found.group(2))
@@ -430,15 +416,14 @@ def classify_run(text: str, *, prompt: str, prompt_sha256: object, binding: obje
     """Findings of one seat reply against its serving attempt: the saved final `prompt` counts
     only when its digest is the attempt's `prompt_sha256`, and the scope is the attempt's
     recorded `binding` re-verified in `cwd` (a binding that fails leaves the scope unknown,
-    never the prompt's diff text); an attempt with no binding uses the diff in its prompt."""
+    never the prompt's diff text); an attempt with no binding has an unknown scope."""
     import hashlib
 
     if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(prompt_sha256 or "").lower():
         prompt = ""
-    if binding is not None:
-        scope = bound_diff_paths(binding, cwd)
-    else:
-        scope = diff_paths(prompt, cwd) if prompt else None
+    # No recorded binding, or one that fails verification, leaves the scope unknown: nothing the
+    # prompt says about its own diff (example headers, quoted commands) is trusted for it.
+    scope = bound_diff_paths(binding, cwd)
     return classify_findings(text, prompt=prompt, changed_paths=scope)
 
 

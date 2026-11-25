@@ -40,6 +40,12 @@ impl Driver for MovingMain {
     fn prepare_review(&mut self, head: &str) -> Result<Option<native_writer::ReviewBase>, String> {
         self.host.prepare_review(head)
     }
+    fn prepare_held_review(
+        &mut self,
+        head: &str,
+    ) -> Result<Option<native_writer::ReviewBase>, String> {
+        self.host.prepare_held_review(head)
+    }
     fn disk_gb(&mut self) -> Result<u64, String> {
         Ok(20)
     }
@@ -87,41 +93,28 @@ impl Driver for MovingMain {
     }
 }
 
-#[test]
-fn native_writer_reviews_and_publishes_when_main_moves() {
-    for (conflict, race, lane_base, absorbed) in [
-        (false, false, false, false),
-        (true, false, false, false),
-        (false, true, false, false),
-        (false, false, true, false),
-        (false, false, false, true),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut host = local_base_fixture(dir.path());
-        host.run_id = "run-movingmain".into();
-        if lane_base {
-            git_in(
-                &host.repo,
-                &["push", "-q", "origin", "HEAD:refs/heads/phase/local-result"],
-            );
-        } else {
-            host.base_ref = "refs/heads/main".into();
-        }
-        host.record_path = dir
-            .path()
-            .join("runs")
-            .join(&host.run_id)
-            .join("record.json");
-        host.review_override = Some(("fixture".into(), "fixture review".into()));
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        host.python_src = Some(root.clone());
-        host.review_cli = vec![
-            crate::test_python::command()
-                .get_program()
-                .to_string_lossy()
-                .into_owned(),
-            "-c".into(),
-            r#"
+fn fixture(dir: &Path, conflict: bool, race: bool, lane_base: bool, absorbed: bool) -> MovingMain {
+    let mut host = local_base_fixture(dir);
+    host.run_id = "run-movingmain".into();
+    if lane_base {
+        git_in(
+            &host.repo,
+            &["push", "-q", "origin", "HEAD:refs/heads/phase/local-result"],
+        );
+    } else {
+        host.base_ref = "refs/heads/main".into();
+    }
+    host.record_path = dir.join("runs").join(&host.run_id).join("record.json");
+    host.review_override = Some(("fixture".into(), "fixture review".into()));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    host.python_src = Some(root.clone());
+    host.review_cli = vec![
+        crate::test_python::command()
+            .get_program()
+            .to_string_lossy()
+            .into_owned(),
+        "-c".into(),
+        r#"
 import asyncio, json, pathlib, sys, tempfile
 from types import SimpleNamespace
 sys.path.insert(0, sys.argv[1])
@@ -155,22 +148,33 @@ with tempfile.TemporaryDirectory() as checkout:
                   stdout_tail=f'FILES READ: writer.txt:1\nHEAD: {head}\nVERDICT: ACCEPT\n')
 print(json.dumps(record))
 "#
-            .into(),
-            root.join("src").to_string_lossy().into_owned(),
-        ];
+        .into(),
+        root.join("src").to_string_lossy().into_owned(),
+    ];
+    let origin = dir.join("origin.git");
+    git_in(dir, &["clone", "-q", origin.to_str().unwrap(), "train"]);
+    MovingMain {
+        host,
+        upstream: dir.join("train"),
+        conflict,
+        race,
+        absorbed,
+        original_head: String::new(),
+    }
+}
+
+#[test]
+fn native_writer_reviews_and_publishes_when_main_moves() {
+    for (conflict, race, lane_base, absorbed) in [
+        (false, false, false, false),
+        (true, false, false, false),
+        (false, true, false, false),
+        (false, false, true, false),
+        (false, false, false, true),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
         let origin = dir.path().join("origin.git");
-        git_in(
-            dir.path(),
-            &["clone", "-q", origin.to_str().unwrap(), "train"],
-        );
-        let mut driver = MovingMain {
-            host,
-            upstream: dir.path().join("train"),
-            conflict,
-            race,
-            absorbed,
-            original_head: String::new(),
-        };
+        let mut driver = fixture(dir.path(), conflict, race, lane_base, absorbed);
         let record = json!({"run_id": driver.host.run_id, "run_kind": "native-codex", "role": "implement",
                             "status": "running", "repo": driver.host.repo});
         let record = native_writer::run(&mut driver, record, "fixture brief");
@@ -234,4 +238,43 @@ print(json.dumps(record))
         }
         assert_eq!(record["review_base_retry"].is_object(), race);
     }
+}
+
+#[test]
+fn a_held_continuation_is_admitted_on_its_pinned_head_while_main_keeps_advancing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut driver = fixture(dir.path(), true, false, false, false);
+    let record = json!({"run_id": driver.host.run_id, "run_kind": "native-codex", "role": "implement",
+                        "status": "running", "repo": driver.host.repo});
+    let first = native_writer::run(&mut driver, record, "fixture brief");
+    assert_eq!(first["exit_code"], 0, "{first}");
+    let head = driver.host.head().unwrap();
+    // Main advances again after the held review: the real ancestry check now sees behind=1
+    // for the held head, which must not be rebased.
+    fs::write(driver.upstream.join("later.txt"), "later\n").unwrap();
+    git_in(&driver.upstream, &["add", "later.txt"]);
+    git_in(&driver.upstream, &["commit", "-qm", "later"]);
+    git_in(&driver.upstream, &["push", "-q", "origin", "main"]);
+    let mut held = first.clone();
+    for field in [
+        "exit_code",
+        "ended",
+        "reason",
+        "result",
+        "status_line",
+        "pushed",
+    ] {
+        held.as_object_mut().unwrap().remove(field);
+    }
+    held["status"] = json!("running"); // what `pg-spawnd resume` sets when it reopens the run
+    held["process_hold"] =
+        json!({"head": head, "lines": ["PROCESS review_brief.md field=callers - x"]});
+    let after = native_writer::run_resume(&mut driver, held, "fixture", "ignored");
+    assert_eq!(after["exit_code"], 0, "{after}");
+    assert_eq!(after["review"]["head"], head);
+    assert_eq!(after["final_head"], head, "the held head was not rebased");
+    assert_eq!(after["review_base"]["mode"], "conflict");
+    assert!(after["process_hold"].is_null());
+    let seats = fs::read_to_string(dir.path().join("counted-seats")).unwrap();
+    assert_eq!(seats.lines().collect::<Vec<_>>(), vec![head.as_str(); 2]);
 }

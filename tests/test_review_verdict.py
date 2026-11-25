@@ -343,7 +343,7 @@ LANE_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
 def test_finding_about_the_review_brief_is_process_not_med():
     review = f"FILES READ: src/a.py\n{BRIEF_FINDING}\nVERDICT: REQUEST_CHANGES\n"
     found = v.classify_findings(review, prompt=EMPTY_PROMPT + LANE_DIFF,
-                                changed_paths=v.diff_paths(LANE_DIFF))
+                                changed_paths={"src/a.py"})
     assert (found.high, found.med, found.blocking) == (0, 0, 0)
     assert found.process == (BRIEF_FINDING,)
 
@@ -372,26 +372,6 @@ def test_typed_process_line_that_fails_verification_counts_as_med():
     assert (found.med, len(found.process)) == (0, 1)
     vague = "PROCESS skills/review/SKILL.md:1 - rubric missing\n"
     assert v.classify_findings(vague, prompt=EMPTY_PROMPT, changed_paths={"a.py"}).med == 1
-
-
-def test_diff_paths_reads_the_dispatched_git_diff_in_the_seat_checkout(tmp_path):
-    import subprocess
-
-    def git(*args):
-        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
-                               *args], check=True, capture_output=True, text=True).stdout.strip()
-
-    git("init", "-q")
-    (tmp_path / "a.txt").write_text("1")
-    git("add", "."); git("commit", "-qm", "one")
-    base = git("rev-parse", "HEAD")
-    (tmp_path / "b.txt").write_text("2")
-    git("add", "."); git("commit", "-qm", "two")
-    head = git("rev-parse", "HEAD")
-    prompt = f"read the review diff, run:\ngit diff {base} {head}\n"
-    assert v.diff_paths(prompt, str(tmp_path)) == {"b.txt"}
-    assert v.diff_paths(prompt) is None  # no checkout: scope unknown, fail closed
-    assert v.diff_paths("no diff here") is None
 
 
 def test_process_finding_must_name_an_empty_field_and_have_the_brief_as_its_file():
@@ -509,14 +489,21 @@ def test_hold_registry_lets_only_a_pass_posted_after_the_hold_approve(tmp_path):
 
 
 @pytest.mark.parametrize("prose", ["HIGH-level test coverage looks good", "HIGH level coverage is fine",
-                                   "MED-sized change", "P1 is the priority of the plan"])
+                                   "MED-sized change", "P1 is the priority of the plan",
+                                   "HIGH 12:30 UTC was the window", "HIGH 12:30 UTC - the window"])
 def test_prose_opening_with_a_severity_word_is_not_a_finding(prose):
     assert v.classify_findings(prose + "\nVERDICT: ACCEPT\n").blocking == 0
-    for documented in ("HIGH src/a.py:3 - wrong", "- **MED** src/a.py:3-9 - wrong", "P2 a.rs:1:7 x"):
+    for documented in ("HIGH src/a.py:3 - wrong", "- **MED** src/a.py:3-9 - wrong", "P2 a.rs:1:7 x",
+                       "HIGH docs/review notes.md:12 - missing test"):
         assert v.classify_findings(documented + "\n").blocking == 1, documented
 
 
-def test_an_inline_diff_is_the_scope_whatever_git_commands_the_prompt_quotes(tmp_path):
-    prompt = ("diff --git a/src/a.py b/src/a.py\n+x\n"
-              f"unrelated advice: run\ngit diff {'a' * 40} {'b' * 40}\n")
-    assert v.diff_paths(prompt, str(tmp_path)) == {"src/a.py"}
+def test_a_prompt_without_a_verified_binding_never_gives_a_scope(tmp_path):
+    # Example diff headers or quoted commands in a prompt are not the dispatched diff.
+    prompt = EMPTY_PROMPT + "diff --git a/src/a.py b/src/a.py\n"
+    line = "PROCESS review_brief.md field=callers - no callers rendered"
+    import hashlib
+    digest = hashlib.sha256(prompt.encode()).hexdigest()
+    for binding in (None, {"base_sha": "0" * 40, "head_sha": "1" * 40, "diff_sha256": "2" * 64}):
+        found = v.classify_run(line, prompt=prompt, prompt_sha256=digest, binding=binding, cwd=str(tmp_path))
+        assert (found.med, found.process) == (1, ()), binding
