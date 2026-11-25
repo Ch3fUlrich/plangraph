@@ -51,11 +51,23 @@ does not affect the verdict. Do not pad: **no findings is a valid result.**
 
 ## Severity
 
-- **HIGH**: wrong behavior, data loss, security or public-leak problem, a test that
-  cannot fail for the main change, or a false claim of verification. Blocks acceptance.
-- **MED**: a real defect or gap with a limited blast radius (missed edge case, missing
-  test for a secondary path, duplication of a shared fact). Blocks acceptance.
+- **HIGH**: wrong in normal use: a path production takes with a trusted caller gives a
+  wrong result, loses data or leaks something public or secret; a test that cannot fail
+  for the main change; a false claim of verification. Blocks acceptance.
+- **MED**: a real defect or gap of the item with a limited blast radius (missed edge case,
+  missing test for a secondary path, duplication of a shared fact). Blocks acceptance; the
+  orchestrator may land a head with open MED findings as follow-up items where its rule
+  allows it, so state each MED so that it stands alone.
 - **LOW**: style, naming, wording, small cleanups. Never blocks acceptance.
+- **NEW-REQ**: a requirement the item and its done criteria do not state (hardening, a rare
+  race under a trusted caller, a wish), or a defect main already has and the change does
+  not touch or worsen. Own line; never blocks; becomes a follow-up item.
+- **PROCESS**: a defect of the brief or review setup that did not stop you from judging
+  the done criteria. Own line; the orchestrator's; never counts against the head.
+- Never accept what you could not judge (an ACCEPT lets the driver push the head): report
+  `MED <where> - cannot judge <criterion>: missing <evidence>, to be supplied by
+  <writer|orchestrator>` and request changes. The drivers send that round to the writer
+  too: a writer answers an orchestrator-supplied gap with a BLOCKED line, not a commit.
 
 ## Output
 
@@ -71,6 +83,7 @@ Then one line per finding:
 ```
 SEVERITY file:line - problem - fix
 ```
+SEVERITY is HIGH, MED, LOW, NEW-REQ or PROCESS.
 
 Example: `MED src/x/y.py:42 - empty list returns None, caller indexes it - return [] and add a test`.
 
@@ -101,10 +114,17 @@ not check.
 ### Later rounds
 
 Round 1 reviews the whole range BASE..HEAD. A later round (your session is resumed, or
-the prompt lists the earlier findings with the writer's answers) reviews only what
-changed since the head you reviewed before, and whether each earlier HIGH or MED
-finding is fixed or validly refuted. Do not reopen a refuted finding without new
-evidence; raise no new finding on code unchanged since round 1.
+the prompt lists the earlier findings with the writer's answers) reviews what changed
+since the head you reviewed before, and whether each earlier HIGH or MED finding is
+fixed or validly refuted. Do not reopen a refuted finding without new evidence.
+
+New findings in a later round, one rule: on a hunk changed since the previously reviewed
+head, any severity; on code unchanged since you first reviewed it, only a HIGH with a
+reproduction you ran, and everything else there is NEW-REQ. Two exceptions the prompt
+names itself: when it says the base changed, review the whole range again as it orders;
+when it says the head is unchanged (the writer refuted instead of changing code; script
+drivers only), judge each earlier finding again against the code and the writer's
+evidence, and keep it with the reason the refutation fails or drop it.
 
 ## Inline seats
 

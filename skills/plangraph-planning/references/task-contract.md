@@ -10,7 +10,14 @@ Objective:     <one sentence, one outcome>
 Why:           <phase goal this work serves, in plain text>
 Unblocks:      <item key that can start when this lands, or none>
 Last attempt:  <none, or attempt number, result, branch and check output as data; facts only>
-Allowed files: <at most 3 source files + their tests>   (all other files are read-only)
+Allowed files: <every source file the task edits + their tests; no limit on the number>   (all other files are read-only)
+Decision sources: <for every decision: the structured field or row it reads>
+State:         <every state, lock, lease or reservation: owner, release on refused, failed and dry-run paths, what a crash leaves>
+Call paths:    <every entry point that must enforce the rule, as path::Symbol>
+Reuse:         <existing helpers the writer must call, as path::Symbol>
+Tests:         <each test by name with the entry point it drives; fails on the base>
+Non-goals:     <what the task must not add or change>
+Design review: <run id and DESIGN-OK on this exact text; or, after 3 rounds, the recorded exception: who, when, spec hash, open points>
 Forbidden:     <API changes, new dependencies, unrelated refactors, repo-wide git operations>
 Interfaces:    <signatures/contracts the task must honour; copied, not discovered>
 Acceptance:    <one command; pass = exit 0 and "N passed">
