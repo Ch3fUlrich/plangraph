@@ -417,3 +417,18 @@ def test_batch_key_limit_matches_the_feeder_policy_limit():
     source = (Path(__file__).resolve().parents[1] / 'rust/plangraph-cli/src/feeder/mod.rs').read_text()
     limit = re.search(r'pub const MAX_BATCH_ITEMS: usize = (\d+);', source)
     assert limit and int(limit.group(1)) == MAX_BATCH_KEYS
+
+
+def test_an_inherited_spawn_item_never_masks_the_members_of_a_batch_card(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_SPAWN_ITEM', OTHER_KEY)
+    members = [KEY, 'plangraph:D-5049']
+    record = {'role': 'review'}
+    annotate_item(record, {'item_keys': members})
+    assert record['item_key'] is None and record['item_keys'] == members
+    assert MISSING_EVENT not in record.get('events', [])
+    record = {'role': 'review'}
+    annotate_item(record, {'item_key': KEY, 'item_keys': members})
+    assert record['item_key'] == KEY
+    record = {'role': 'review'}
+    annotate_item(record, {'item_keys': [KEY, 'bad/item']})      # not a valid batch: the old fallback
+    assert record['item_key'] == OTHER_KEY and 'item_keys' not in record

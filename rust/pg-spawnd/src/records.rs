@@ -63,11 +63,18 @@ pub(crate) fn annotate_item_from(
     spawn_item: Option<String>,
     events: &mut Vec<Value>,
 ) {
+    let members = batch_members(card);
+    let batch = !members.is_empty();
+    // A batch card names its members itself: the inherited spawn item never stands in for them.
     let item = [&card["item_key"], &card["item"]]
         .into_iter()
         .find(|v| !v.is_null() && v.as_str() != Some(""))
         .cloned()
-        .or_else(|| spawn_item.filter(|s| !s.is_empty()).map(Value::String));
+        .or_else(|| {
+            spawn_item
+                .filter(|s| !s.is_empty() && !batch)
+                .map(Value::String)
+        });
     base["item_key"] = match item {
         Some(Value::String(s)) if valid_item(&s) => json!(s),
         Some(_) => {
@@ -82,12 +89,12 @@ pub(crate) fn annotate_item_from(
         }
         None => Value::Null,
     };
-    let members = batch_members(card);
-    if !members.is_empty() {
+    if batch {
         base["item_keys"] = Value::Array(members);
     }
     let missing = json!({"event":"seat_item_missing","level":"warning"});
     if base["item_key"].is_null()
+        && !batch
         && matches!(base["role"].as_str(), Some("review" | "judge"))
         && !events.contains(&missing)
     {

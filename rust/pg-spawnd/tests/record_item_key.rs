@@ -208,3 +208,48 @@ fn record_keeps_the_valid_item_keys_of_a_batch_card() {
         assert_eq!(stored.get("item_keys").unwrap_or(&Value::Null), &expected);
     }
 }
+
+#[test]
+fn an_inherited_spawn_item_never_masks_the_members_of_a_batch_card() {
+    for (card, expected_item, expected_keys) in [
+        (
+            json!({"item_keys":["demo:A", "demo:B"]}),
+            Value::Null,
+            json!(["demo:A", "demo:B"]),
+        ),
+        (
+            json!({"item_key":"demo:A", "item_keys":["demo:A", "demo:B"]}),
+            json!("demo:A"),
+            json!(["demo:A", "demo:B"]),
+        ),
+        // not a valid batch: the spawn item stands in as before
+        (
+            json!({"item_keys":["demo:A", "bad/item"]}),
+            json!("demo:Z"),
+            Value::Null,
+        ),
+    ] {
+        let mut f = Fixture::new(Some("demo:Z"));
+        let r = payload(f.call(
+            "spawn",
+            json!({"prompt":"p", "card":card, "role":"review", "wait_seconds":5}),
+        ));
+        assert_eq!(r["item_key"], expected_item, "{r}");
+        let stored: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                f._state
+                    .path()
+                    .join("runs")
+                    .join(r["run_id"].as_str().unwrap())
+                    .join("record.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["item_key"], expected_item);
+        assert_eq!(
+            stored.get("item_keys").unwrap_or(&Value::Null),
+            &expected_keys
+        );
+    }
+}

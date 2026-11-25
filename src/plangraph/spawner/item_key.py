@@ -34,7 +34,9 @@ def annotate_item(record, card, *, inherit=False):
     value = card.get('item_key') if isinstance(card, dict) else None
     if value is None or value == '':
         value = card.get('item') if isinstance(card, dict) else None
-    if (value is None or value == '') and not inherit:
+    members = batch_members(card)
+    # A batch card names its members itself: the inherited spawn item never stands in for them.
+    if (value is None or value == '') and not inherit and not members:
         value = os.environ.get('PLANGRAPH_SPAWN_ITEM') or None
     if value is not None and not valid_item(value):
         record.setdefault('warnings', []).append('invalid item_key; stored as null')
@@ -45,7 +47,6 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
-    members = batch_members(card)
     if members:
         record['item_keys'] = members
     if record.get('role') == 'review' and (writer_run := native_writer_review(card)):
@@ -56,7 +57,7 @@ def annotate_item(record, card, *, inherit=False):
         target = card.get('diff_ref') if isinstance(card, dict) else None
         if isinstance(target, dict) and isinstance(target.get('head'), str):
             request.setdefault('review_head', target['head'])
-    if value is None and record.get('role') in ('review', 'judge'):
+    if value is None and not members and record.get('role') in ('review', 'judge'):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):
             record['events'].append(event)
