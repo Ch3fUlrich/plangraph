@@ -55,6 +55,28 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         .join(".git/plangraph-state/fast-checks")
         .join(&head);
     std::fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    // A red receipt of this very head refuses the review like a missing one.
+    std::fs::write(
+        &stamp,
+        format!("head {head}\nresult red\ncheck affected-tests rc=1 wall=1.000\n"),
+    )
+    .unwrap();
+    assert!(prepare(
+        args.as_object().unwrap(),
+        &mut launch,
+        &json!({"harness":"agy"})
+    )
+    .is_err());
+    // A truncated receipt (empty, or a green verdict with no check line) does not pass either.
+    for truncated in [String::new(), format!("head {head}\nresult green\n")] {
+        std::fs::write(&stamp, truncated).unwrap();
+        assert!(prepare(
+            args.as_object().unwrap(),
+            &mut launch,
+            &json!({"harness":"agy"})
+        )
+        .is_err());
+    }
     std::fs::write(stamp, "green").unwrap();
     assert_eq!(
         prepare(

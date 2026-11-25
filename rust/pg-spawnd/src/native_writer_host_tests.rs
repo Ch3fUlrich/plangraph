@@ -44,6 +44,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         state: dir.path().to_path_buf(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -161,6 +162,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         state: dir.path().to_path_buf(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -505,6 +507,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n\nPlan item: plangraph:OTHER-HOST-ITEM\n"
             .into(),
         push_ref: None,
+        fast_checks_stand_in: super::review_tests::stand_in_argv(),
         reviews_started: 0,
         review_override: None,
         review_cli: vec![
@@ -536,6 +539,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
+    super::review_tests::assert_shared_receipt_and_push(&mut host, dir.path(), &head);
     host.gates().unwrap();
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
@@ -637,28 +641,6 @@ fn card_refusals_exit_five_before_codex_starts() {
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
 }
-#[cfg(unix)]
-#[test]
-fn a_failing_command_carries_its_stdout_and_stderr() {
-    let error = output(Command::new("sh").args([
-        "-c",
-        "echo 'stdout line: gate output'; echo 'stderr line' >&2; exit 3",
-    ]))
-    .unwrap_err();
-    assert!(error.contains("exit status: 3"), "{error}");
-    assert!(
-        error.contains("stdout: stdout line: gate output"),
-        "{error}"
-    );
-    assert!(error.contains("stderr: stderr line"), "{error}");
-    // A tool that prints nothing still names the exit status.
-    let error = output(&mut Command::new("false")).unwrap_err();
-    assert!(
-        error.starts_with("command failed (exit status: 1)"),
-        "{error}"
-    );
-}
-
 #[test]
 fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
     let dir = tempfile::tempdir().unwrap();
@@ -676,6 +658,7 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         state: dir.path().to_path_buf(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -760,6 +743,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         state: dir.path().to_path_buf(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: super::review_tests::stand_in_argv(),
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],

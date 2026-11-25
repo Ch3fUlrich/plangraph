@@ -62,6 +62,10 @@ _CLAUDE_BG_LAUNCHER_MSG = (
 _PGREP_WAIT_MSG = (
     "bash-guard: DENIED - pgrep -f can match the wait loop's own command line. "
     "Wait on the PID or unit, or run the original command with run_in_background=true.")
+_POLL_LOOP_MSG = (
+    "bash-guard: DENIED - a while/until/for loop that polls gh or ssh with sleep hangs on one "
+    "stuck call and is lost with the session. Wait with `plangraph wait ci --pr N` (or "
+    "`plangraph wait files --status FILE`), which has a deadline and writes its result file.")
 _DEPTH_MSG = (
     "bash-guard: DENIED - shell -c / eval strings nested more than %d levels "
     "deep; the guard cannot scan that far and fails closed. Flatten the "
@@ -249,6 +253,29 @@ def _pgrep_matches_parent(args, command):
     return bool(pattern) and pattern in command and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
 
 
+_LOOP_WORDS = ("while", "until", "for")
+_POLLED = ("gh", "ssh")
+
+
+def _polls_with_sleep(commands):
+    """A loop whose commands include `sleep` and a `gh` or `ssh` call (the hand wait of LE-HAND-CI-WAIT-HUNG)."""
+    looped, names = False, set()
+    for cmd in commands:
+        pos = [w for w in cmd if not w.redir]
+        i = lead(pos)
+        looped |= any(w.plain and w.text in _LOOP_WORDS for w in pos[:i + 1])
+        while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
+            i += 1
+        if i >= len(pos):
+            continue
+        # Only the executable counts (and what a wrapper runs): `echo gh` and `grep ssh f` poll nothing.
+        head = _basename(pos[i].text)
+        names.add(head)
+        if head in _WRAPPERS:
+            names.update(_basename(w.text) for w in pos[i + 1:])
+    return looped and "sleep" in names and bool(names & set(_POLLED))
+
+
 def _retired_model_reason(args):
     for i, word in enumerate(args):
         option = word.text
@@ -335,6 +362,8 @@ def check_command(command, depth=0, placement_required=None, *, checkout=None):
         for delim, quoted, body in heredocs:
             if not quoted and _has_unescaped_heredoc_injection(body):
                 return _HEREDOC_MSG % (delim, delim)
+        if _polls_with_sleep(commands):
+            return _POLL_LOOP_MSG
         pending_loop = False
         for cmd in commands:
             reason = _check_simple(cmd, depth, placement_required, pending_loop, command, checkout)

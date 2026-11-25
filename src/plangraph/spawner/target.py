@@ -98,6 +98,14 @@ def resolve_launch_target(target, *, chosen=None, client=None):
     """Resolve the local harness for a direct launch, respecting a pinned client."""
     if chosen is not None:
         return resolve_target(target, chosen=chosen)
+    if client is not None:
+        # A model served by two legs (claude-sonnet-5-5-high on claude and on agy): the leg of the
+        # pinned client's harness is admitted instead of the first match, which may be disabled.
+        from plangraph.planner.legs import spawnable_legs
+        named = [l for l in spawnable_legs() if target in (l.id, l.model)]
+        own = next((l for l in named if l.harness == client), None)
+        if len(named) > 1 and own is not None:
+            return resolve_target(own.model, chosen=own)
     model, leg = resolve_target(target)
     if leg is None or leg.family != 'gpt' or leg.harness != 'codex':
         return model, leg

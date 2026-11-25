@@ -113,7 +113,7 @@
     { id: "prev", label: "Previous", val: function (r) { return pick(r, "prev").length; }, num: true, group: function (r) { var n = pick(r, "prev").length; return n ? "has previous" : "no previous"; } },
     { id: "next", label: "Next", val: function (r) { return pick(r, "next").length; }, num: true, group: function (r) { var n = pick(r, "next").length; return n ? "has next" : "no next"; } },
     { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } },
-    { id: "prio", label: "Prio", val: function (r) { return Number(r.priority) || 0; }, num: true },
+    { id: "prio", label: "Prio", val: function (r) { return global.PlanUI.effectivePriority(r); }, num: true },
     { id: "kind", label: "Kind", val: function (r) { return r.kind || ""; } },
     { id: "op", label: "Op", val: function (r) { return global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? 1 : 0; }, num: true }
   ];
@@ -195,7 +195,10 @@
     var tdL = el("td", "tc-links");
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
-    tr.appendChild(el("td", null, r.priority == null ? "" : String(r.priority)));
+    var raised = r.priority_via && r.effective_priority != null && r.effective_priority !== r.priority;
+    var tdP = el("td", null, r.priority == null ? "" : String(r.priority) + (raised ? " -> " + r.effective_priority + " via " + r.priority_via : ""));
+    if (raised) tdP.title = "raised from " + r.priority + " to " + r.effective_priority + " via " + r.priority_via;
+    tr.appendChild(tdP);
     tr.appendChild(el("td", null, r.kind || "—"));
     tr.appendChild(el("td", null, global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? "●" : ""));
     /* UI-TABLE-PHONE: below 600 px each row is a card; the cell label comes from data-label. */

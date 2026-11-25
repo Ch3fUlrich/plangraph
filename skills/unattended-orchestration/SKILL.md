@@ -153,6 +153,13 @@ read `plangraph resume-digest JOB` before spawning or scheduling follow-up work.
 The detached service owns the wait and its authorized push/merge steps; result
 files are the recovery contract when the orchestrator is killed.
 
+The only waits: `plangraph wait ci --pr N` (or `--branch B`) ends on the status of the newest
+run for that head, never on the check rollup, and has a deadline; `plangraph wait files --status
+FILE --result FILE` ends on writer status files and seat result files. Both write
+`<name>.json` under `$CLAUDE_JOB_DIR/waits`, which `resume-digest JOB` lists. A hand loop that
+polls `gh` or `ssh` with `sleep` is refused by the Bash guard. Start a wait that can outlive
+the session through `plangraph watcher-launch`.
+
 ## Learn as you go
 
 - When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate

@@ -307,18 +307,30 @@ class ContextMixin:
             return {name: index for job in jobs for name, index in job.result().items()}
 
     @staticmethod
-    def _indexed_delivery(indexes, key, project, book):
-        """Keep bare IDs local and match qualified deliveries across repositories."""
-        work = src.indexed_work(indexes[project], key)
+    def _indexed_trailer_work(indexes, key, project, *, trailers_only=False):
+        """Commits naming the key: bare IDs stay local, qualified ones match across repositories.
+
+        ``trailers_only`` keeps parsed Plan-Item trailers and drops merge-body matches.
+        """
+        # The deploy door filters before the commit limit; the claim path keeps its call as it was.
+        work = (src.indexed_work(indexes[project], key, limit=None, trailers_only=True)
+                if trailers_only else src.indexed_work(indexes[project], key))
         commits = {commit["sha"]: commit for commit in work["commits"] or ()}
         for name, index in indexes.items():
             if name == project or not index or index.get("origin_stale"):
                 continue
+            trailed = index.get("trailed", {})
             for commit in index["commits"].get(key, ()):
-                commits.setdefault(commit["sha"], commit)
+                if not trailers_only or key in trailed.get(commit["sha"], ()):
+                    commits.setdefault(commit["sha"], commit)
         if commits:
             work["commits"] = list(commits.values())[:src.COMMIT_LIMIT]
-        elif proof := merged_decision_delivery(indexes, book, key, project):
+        return work
+
+    def _indexed_delivery(self, indexes, key, project, book):
+        """The trailer commits, else a decision-only delivery."""
+        work = self._indexed_trailer_work(indexes, key, project)
+        if not work["commits"] and (proof := merged_decision_delivery(indexes, book, key, project)):
             work["commits"] = [proof]
         return work
 
@@ -362,8 +374,10 @@ class ContextMixin:
                 bases[item["key"]] = train["base_sha"]
             return train is not False
 
-        rows = [dict(row) for row in views.ready(items, project=project, owner=owner, agent=agent,
-                                                dependencies_ready=dependencies_ready)]
+        eff = views.effective_priorities(items)[0]
+        rows = [views.with_effective(row, eff)
+                for row in views.ready(items, project=project, owner=owner, agent=agent,
+                                       dependencies_ready=dependencies_ready, eff=eff)]
         for row in rows:
             if row["key"] in bases:
                 row["base_sha"] = bases[row["key"]]

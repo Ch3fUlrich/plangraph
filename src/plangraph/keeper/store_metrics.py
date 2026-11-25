@@ -75,13 +75,17 @@ class MetricsMixin:
         stamp = self._iso(now)
         with self._write():
             for name, value, source in prepared:
-                self.conn.execute(
-                    "INSERT INTO metrics(day,metric,value,source,computed_at)"
-                    " VALUES(?,?,?,?,?)"
-                    " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
-                    "source=excluded.source,computed_at=excluded.computed_at",
-                    (day, name, value, source, stamp))
+                self._put_metric(day, name, value, source, stamp)
         return {"day": day, "count": len(prepared)}
+
+    def _put_metric(self, day, name, value, source, stamp):
+        """The one write of a metric row: a new value replaces value, source and time."""
+        self.conn.execute(
+            "INSERT INTO metrics(day,metric,value,source,computed_at)"
+            " VALUES(?,?,?,?,?)"
+            " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
+            "source=excluded.source,computed_at=excluded.computed_at",
+            (day, name, value, source, stamp))
 
     def get_metrics(self, principal, day=None, since=None, metric=None):
         return self._run(principal, "get_metrics", None,

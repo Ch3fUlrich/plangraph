@@ -1,0 +1,2 @@
+- Evict build-script variants and incremental dirs untouched for an hour (was six), and report and remove an idle main-checkout `rust/target` from the disk guard, only on cargo's own markers.
+- `docs/host-tools.md` states the one-hour idle rule and the 32 GiB cap.

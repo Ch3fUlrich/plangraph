@@ -27,3 +27,5 @@ src/plangraph/routing_support/opencode_overlay.py -> docs/opencode-gateway.md
 src/plangraph/planner/** -> docs/routing.md
 rust/pg-spawnd/src/round_progress* -> docs/native-writer-progress-admission.md
 rust/pg-keeper-backup/** -> docs/keeper-backup.md
+rust/plangraph-cli/src/operator_turns* -> docs/operator-turns-v1.md
+tests/fixtures/operator_turns/** -> docs/operator-turns-v1.md

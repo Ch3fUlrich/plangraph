@@ -394,8 +394,9 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
         }
         path
     };
+    // 61..110 minutes old: stale only under the one-hour cutoff, not under the old six-hour one.
     let stale: Vec<_> = (0..50)
-        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 361 + n))
+        .map(|n| unit(&format!("pg-worker-core-{n:016x}"), 61 + n))
         .collect();
     // Held by a running build: touched minutes ago, and the crate's newest variant.
     let live = unit("pg-worker-core-ffffffffffffffff", 5);
@@ -405,6 +406,15 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
     assert_eq!(crate::cargo_pool::watermark_bytes(cap), 3900);
     let size = || crate::disk_hygiene::scan(&target).unwrap().0;
     assert!(size() > cap);
+    // A held lease or a running build keeps every variant, however far over the cap the target is.
+    let lease = crate::cargo_cache::try_exclusive_lease(&target)
+        .unwrap()
+        .unwrap();
+    let held = post_run_cargo_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
+    assert!(held.actions.is_empty() && stale.iter().all(|p| p.exists()));
+    drop(lease);
+    let building = post_run_cargo_using(&checkout, &target, cap, || Ok((vec![], true))).unwrap();
+    assert!(building.actions.is_empty() && stale.iter().all(|p| p.exists()));
     let report = post_run_cargo_using(&checkout, &target, cap, || Ok((vec![], false))).unwrap();
     assert!(
         size() <= crate::cargo_pool::watermark_bytes(cap),
@@ -413,6 +423,19 @@ fn post_run_trims_fifty_stale_build_variants_under_the_watermark_keeping_live_on
     );
     // Oldest first: the freshest stale variants survive, the oldest are gone.
     assert!(!stale[49].exists() && !stale[48].exists());
+    let removed = report
+        .actions
+        .iter()
+        .filter_map(|a| a.strip_prefix("removed "))
+        .map(|a| a.split(" bytes=").next().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let expected = stale
+        .iter()
+        .rev()
+        .take(removed.len())
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(removed, expected, "oldest variants go first");
     assert!(live.exists() && other.exists());
     assert!(
         profile.join("build").exists(),

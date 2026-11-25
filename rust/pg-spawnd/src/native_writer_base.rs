@@ -4,6 +4,18 @@ use crate::native_writer::ReviewBase;
 use std::io::Write;
 use std::process::Stdio;
 
+/// A merge or rebase either finished or stopped on these unmerged paths (at least one).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Integrated {
+    Done,
+    Conflict(Vec<String>),
+}
+
+enum Rebased {
+    Done(ReviewBase),
+    Conflict(Vec<String>),
+}
+
 const ORIGIN_MAIN: &str = "refs/remotes/origin/main";
 
 /// The object name of exactly `name` among `listing` lines of `<sha>\t<ref>`; prefix and
@@ -15,26 +27,50 @@ fn exact_ref(listing: &str, name: &str) -> Option<String> {
     })
 }
 
+/// A path as text without loss: a backslash is `\\`, and each byte that is not valid UTF-8 is
+/// `\xNN`, so two different paths never give the same text.
+pub(super) fn lossless_path(bytes: &[u8]) -> String {
+    let mut text = String::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let (valid, bad) = match std::str::from_utf8(rest) {
+            Ok(valid) => (valid, 0),
+            Err(e) => (
+                std::str::from_utf8(&rest[..e.valid_up_to()]).unwrap_or_default(),
+                e.error_len().unwrap_or(rest.len() - e.valid_up_to()),
+            ),
+        };
+        text.push_str(&valid.replace('\\', "\\\\"));
+        let end = valid.len() + bad;
+        for byte in &rest[valid.len()..end] {
+            text.push_str(&format!("\\x{byte:02x}"));
+        }
+        rest = &rest[end..];
+    }
+    text
+}
+
 impl Host {
     fn repo_git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.repo).args(args))
     }
     /// Git's own output with no trimming: a ref name may end in whitespace.
     fn repo_listing(&self, args: &[&str]) -> Result<String, String> {
-        let result = self
-            .command("git")
-            .arg("-C")
-            .arg(&self.repo)
-            .args(args)
-            .output()
-            .map_err(|e| e.to_string())?;
+        Self::listing_in(self.command("git").arg("-C").arg(&self.repo).args(args))
+    }
+    pub(super) fn listing_in(command: &mut std::process::Command) -> Result<String, String> {
+        Self::bytes_in(command).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    }
+    /// Git's stdout as the raw bytes, for output that carries file names.
+    fn bytes_in(command: &mut std::process::Command) -> Result<Vec<u8>, String> {
+        let result = command.output().map_err(|e| e.to_string())?;
         if !result.status.success() {
             return Err(format!(
                 "command failed: {}",
                 String::from_utf8_lossy(&result.stderr)
             ));
         }
-        Ok(String::from_utf8_lossy(&result.stdout).into_owned())
+        Ok(result.stdout)
     }
     /// Pin `base_ref` at `pin`: the pushed ref when `origin` has exactly that ref, else the
     /// host repository's own exact ref (a lane head never pushed). A ref found in neither
@@ -109,6 +145,7 @@ impl Host {
             mode: "current",
             main,
             observed_main,
+            conflict_files: Vec::new(),
         };
         if current.main == current.observed_main {
             return Ok(current);
@@ -128,20 +165,24 @@ impl Host {
             })?;
         let rebased = self.rebase_package(&current);
         match rebased {
-            Ok(Some(basis)) => Ok(basis),
+            Ok(Rebased::Done(basis)) => Ok(basis),
             result => {
                 if self.git(&["rev-parse", "HEAD"])? != head {
                     self.git(&["switch", "--detach", head])?;
                 }
-                result.map(|_| ReviewBase {
+                result.map(|r| ReviewBase {
                     mode: "conflict",
+                    conflict_files: match r {
+                        Rebased::Conflict(files) => files,
+                        Rebased::Done(_) => Vec::new(),
+                    },
                     ..current
                 })
             }
         }
     }
 
-    fn rebase_package(&self, current: &ReviewBase) -> Result<Option<ReviewBase>, String> {
+    fn rebase_package(&self, current: &ReviewBase) -> Result<Rebased, String> {
         let main = &current.observed_main;
         let base = if self.git(&["merge-base", &current.base, main])? == current.base {
             main.clone()
@@ -149,23 +190,25 @@ impl Host {
             // Keep an existing lane base in the ancestry of a same-lane push.
             self.git(&["switch", "--detach", &current.base])?;
             let merged = self.git(&["-c", "rerere.enabled=false", "merge", "--no-edit", main]);
-            if !self.finish_integration(merged, "MERGE_HEAD", &["merge", "--abort"])? {
-                return Ok(None);
+            if let Integrated::Conflict(files) =
+                self.finish_integration(merged, "MERGE_HEAD", &["merge", "--abort"])?
+            {
+                return Ok(Rebased::Conflict(files));
             }
             self.git(&["rev-parse", "HEAD"])?
         };
         if self.git(&["rev-parse", "HEAD"])? != current.head {
             self.git(&["switch", "--detach", &current.head])?;
         }
-        if self.git(&["merge-base", &base, &current.head])? != base
-            && !self.rebase(&base, &current.base)?
-        {
-            return Ok(None);
+        if self.git(&["merge-base", &base, &current.head])? != base {
+            if let Integrated::Conflict(files) = self.rebase(&base)? {
+                return Ok(Rebased::Conflict(files));
+            }
         }
         let head = self.git(&["rev-parse", "HEAD"])?;
         self.git(&["merge-base", "--is-ancestor", &base, &head])?;
         self.update_review_pins(&base, main)?;
-        Ok(Some(ReviewBase {
+        Ok(Rebased::Done(ReviewBase {
             mode: if head == current.head {
                 "current"
             } else {
@@ -175,10 +218,18 @@ impl Host {
             base,
             main: main.clone(),
             observed_main: main.clone(),
+            conflict_files: Vec::new(),
         }))
     }
 
-    fn rebase(&self, onto: &str, upstream: &str) -> Result<bool, String> {
+    /// Replay the commits of HEAD that `onto` does not hold on `onto`. `onto` is also the upstream,
+    /// so a patch `onto` already holds is found by its patch id and dropped before any replay
+    /// (a replay of it next to a later edit on `onto` would otherwise conflict). A patch id
+    /// ignores whitespace and the place of the change, so a drop is allowed only where a commit
+    /// of `onto` makes the same change at the same place; any other skip is refused before the
+    /// rebase starts.
+    pub(super) fn rebase(&self, onto: &str) -> Result<Integrated, String> {
+        self.refuse_unproven_drops(onto)?;
         let result = self.git(&[
             "-c",
             "rerere.enabled=false",
@@ -187,32 +238,43 @@ impl Host {
             "--no-update-refs",
             "--no-fork-point",
             "--rebase-merges",
-            "--reapply-cherry-picks",
-            "--empty=keep",
-            "--onto",
+            "--empty=drop",
             onto,
-            upstream,
         ]);
         self.finish_integration(result, "rebase-merge", &["rebase", "--abort"])
     }
 
-    fn finish_integration(
+    pub(super) fn finish_integration(
         &self,
         result: Result<String, String>,
         state: &str,
         abort: &[&str],
-    ) -> Result<bool, String> {
-        let Err(error) = result else { return Ok(true) };
+    ) -> Result<Integrated, String> {
+        let Err(error) = result else {
+            return Ok(Integrated::Done);
+        };
         let path = self.git(&["rev-parse", "--path-format=absolute", "--git-path", state])?;
         if !std::path::Path::new(&path).exists() {
             return Err(error);
         }
-        let unmerged = self.git(&["ls-files", "--unmerged"]);
+        // The unmerged paths are read before the abort clears them; a failure without one is no conflict.
+        // NUL-delimited and untrimmed, so a path git would quote or end in whitespace is exact.
+        let unmerged = Self::bytes_in(self.command("git").arg("-C").arg(&self.cwd).args([
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=U",
+        ]));
         self.git(abort)?;
-        if unmerged?.is_empty() {
+        let files: Vec<String> = unmerged?
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(lossless_path)
+            .collect();
+        if files.is_empty() {
             return Err(error);
         }
-        Ok(false)
+        Ok(Integrated::Conflict(files))
     }
 
     fn update_review_pins(&self, base: &str, main: &str) -> Result<(), String> {
