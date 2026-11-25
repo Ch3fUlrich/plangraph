@@ -261,11 +261,33 @@ pub(super) fn evaluate(
                 ("%i", None) => continue,
                 (role, _) => role,
             };
+            // The service starts in its WorkingDirectory (the instance's, for a template), else in the home
+            // directory: relative paths are read from there, never from the caller's directory.
+            let start = match needs.workdir.as_deref() {
+                None => Some(home.to_path_buf()),
+                Some(dir) => {
+                    let dir = run
+                        .map_or_else(|| dir.to_owned(), |i| dir.replace("%i", i).replace("%I", i));
+                    expand(&dir, home).map(PathBuf::from)
+                }
+            };
+            let from_start = |p: &Path| -> Option<PathBuf> {
+                if p.is_absolute() {
+                    Some(p.to_path_buf())
+                } else {
+                    start.as_ref().map(|s| s.join(p))
+                }
+            };
             let configured = load
                 .vars
                 .get(crate::state_shadow::CONFIG_ENV)
                 .and_then(|v| expand(v, home));
-            let path = crate::state_shadow::config_path(home, role, configured.as_deref());
+            let named = crate::state_shadow::config_path(home, role, configured.as_deref());
+            let Some(path) = from_start(&named) else {
+                // The directory the service starts in cannot be told: neither can its configuration.
+                add("file", shown(&named, home));
+                continue;
+            };
             // The runtime's own validation: a configuration `state wait` refuses is a missing file here.
             let reads = std::fs::read(&path)
                 .map_err(|e| e.to_string())
@@ -273,15 +295,11 @@ pub(super) fn evaluate(
             match reads {
                 Err(_) => add("file", shown(&path, home)),
                 Ok(paths) => {
-                    // A relative path is read from the working directory of the service.
-                    let start = needs
-                        .workdir
-                        .as_deref()
-                        .and_then(|w| expand(w, home))
-                        .map_or_else(|| home.to_path_buf(), PathBuf::from);
-                    for read in paths.iter().map(|p| start.join(p)) {
-                        if !read.exists() {
-                            add("path", shown(&read, home));
+                    for read in paths {
+                        match from_start(&read) {
+                            Some(read) if !read.exists() => add("path", shown(&read, home)),
+                            Some(_) => {}
+                            None => add("file", shown(&path, home)),
                         }
                     }
                 }

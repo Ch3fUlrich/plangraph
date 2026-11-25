@@ -401,3 +401,50 @@ fn relative_paths_of_the_state_shadow_configuration_start_at_the_working_directo
     fs::create_dir_all(home.path().join("work/rel/data")).unwrap();
     assert!(missing(&needs, home.path()).is_empty());
 }
+
+#[test]
+fn the_service_directory_decides_a_relative_config_and_is_per_instance_for_a_template() {
+    // A relative PLANGRAPH_STATE_CONFIG and the paths in it start at the instance's WorkingDirectory.
+    let unit = "[Service]\nWorkingDirectory=%h/work/%i\nEnvironmentFile=%h/.config/p/%i.env\nExecStart=%h/.local/bin/plangraph state wait --role %i\n";
+    let dir = units(&[("sh@.service", unit)]);
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path().display();
+    put(home.path(), ".local/bin/plangraph", "", 0o755);
+    put(home.path(), "token", "x", 0o600);
+    put(
+        home.path(),
+        ".config/p/routing.env",
+        &format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\nPLANGRAPH_STATE_CONFIG=conf/c.json\n"),
+        0o600,
+    );
+    let config = format!(
+        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
+         \"transcript\":\"t/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"data\",\
+         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
+         \"quota\":\"{h}/quota.json\"}}",
+        "a".repeat(40)
+    );
+    let needs = plan("sh@.service", dir.path(), None).unwrap();
+    // The configuration exists at the caller-relative place (the home directory), not in the service's one.
+    put(home.path(), "conf/c.json", &config, 0o600);
+    assert_eq!(
+        missing(&needs, home.path()),
+        ["file ~/work/routing/conf/c.json"]
+    );
+    put(home.path(), "work/routing/conf/c.json", &config, 0o600);
+    assert_eq!(
+        missing(&needs, home.path()),
+        [
+            "path ~/work/routing/data",
+            "path ~/work/routing/t/session.jsonl"
+        ]
+    );
+    put(home.path(), "work/routing/t/session.jsonl", "", 0o600);
+    fs::create_dir_all(home.path().join("work/routing/data")).unwrap();
+    assert!(missing(&needs, home.path()).is_empty());
+    // A directory the dry run cannot expand (here a specifier it does not know) leaves the config unverified.
+    let odd = unit.replace("%h/work/%i", "%t/work");
+    let dir = units(&[("sh@.service", &odd)]);
+    let needs = plan("sh@.service", dir.path(), None).unwrap();
+    assert_eq!(missing(&needs, home.path()), ["file conf/c.json"]);
+}
