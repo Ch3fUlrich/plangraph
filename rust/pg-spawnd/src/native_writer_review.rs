@@ -6,7 +6,7 @@ use pg_worker_core::review_split::REVIEW_OUTPUT_SECTION;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -58,11 +58,92 @@ fn skipped_items(brief: &str, log: &str) -> Vec<String> {
     skipped.into_values().collect()
 }
 
-/// `git grep` found no line: exit status 1 with both streams empty, unlike a real failure.
-pub(super) fn no_match(error: &str) -> bool {
-    error == "command failed (exit status: 1):\nstdout: \nstderr: "
-}
 impl Host {
+    /// A search whose "no match" is exit code 1 with both streams empty: that is an empty
+    /// result (`Ok("")`); any other failure is an error, on every platform.
+    pub(super) fn git_search(&self, args: &[&str]) -> Result<String, String> {
+        let result = self
+            .command("git")
+            .arg("-C")
+            .arg(&self.cwd)
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if result.status.success() {
+            return Ok(String::from_utf8_lossy(&result.stdout).into_owned());
+        }
+        if result.status.code() == Some(1) && result.stdout.is_empty() && result.stderr.is_empty() {
+            return Ok(String::new());
+        }
+        Err(format!(
+            "git {}: {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&result.stderr).trim()
+        ))
+    }
+    /// Changed public symbols of `base..head` per item: every non-merge commit's own diff
+    /// (read at that commit) is attributed to the `Plan-Item` trailers of that commit, or to
+    /// `(no Plan-Item)`. Also the distinct symbols for the caller search. A failed git read
+    /// is an error, never an empty result.
+    #[allow(clippy::type_complexity)]
+    fn attributed_symbols(
+        &self,
+        base: &str,
+        head: &str,
+    ) -> Result<(BTreeMap<String, Vec<String>>, Vec<context::Symbol>), String> {
+        let log = self.git(&[
+            "log",
+            "--no-merges",
+            "--reverse",
+            "--topo-order",
+            "-z",
+            "--format=%H%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+            &format!("{base}..{head}"),
+        ])?;
+        let mut by_item: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut distinct: BTreeMap<String, bool> = BTreeMap::new();
+        let mut records = log.split_terminator('\0');
+        while let (Some(commit), Some(trailers)) = (records.next(), records.next()) {
+            let commit = commit.trim();
+            let diff = self.git(&["diff", "-U0", &format!("{commit}^"), commit])?;
+            let read_failed = std::cell::Cell::new(false);
+            let symbols = context::changed_symbols(&diff, &|path| {
+                let shown = self.git(&["show", &format!("{commit}:{path}")]);
+                read_failed.set(read_failed.get() || shown.is_err());
+                shown.ok()
+            });
+            if read_failed.get() {
+                return Err(format!("cannot read a changed file of {commit}"));
+            }
+            let mut items: Vec<&str> = trailers
+                .lines()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            if items.is_empty() {
+                items.push("(no Plan-Item)");
+            }
+            for symbol in symbols {
+                for item in &items {
+                    by_item
+                        .entry((*item).to_owned())
+                        .or_default()
+                        .insert(symbol.name.clone());
+                }
+                *distinct.entry(symbol.name).or_insert(false) |= symbol.type_like;
+            }
+        }
+        Ok((
+            by_item
+                .into_iter()
+                .map(|(item, names)| (item, names.into_iter().collect()))
+                .collect(),
+            distinct
+                .into_iter()
+                .map(|(name, type_like)| context::Symbol { name, type_like })
+                .collect(),
+        ))
+    }
     fn review_delta_base<'a>(
         &self,
         base: &'a str,
@@ -203,29 +284,24 @@ impl Host {
         }
         // A failed git read leaves the fields unset, which the strict renderer refuses by
         // name; a search that ran and found nothing is an explicit verified-empty value.
-        if let Ok(diff) = self.git(&["diff", "-U0", base, head]) {
-            let read_failed = std::cell::Cell::new(false);
-            let symbols = context::changed_symbols(&diff, &|path| {
-                let shown = self.git(&["show", &format!("{head}:{path}")]);
-                read_failed.set(read_failed.get() || shown.is_err());
-                shown.ok()
-            });
-            if read_failed.get() {
-                // A changed file that cannot be read says nothing about its symbols.
-            } else if symbols.is_empty() {
+        if let Ok((by_item, symbols)) = self.attributed_symbols(base, head) {
+            if symbols.is_empty() {
                 context["public_symbols"] =
                     json!("none (verified empty: no public symbol added or changed in base..head)");
                 context["callers"] =
                     json!("none (verified empty: no changed public symbol to search)");
             } else {
-                let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
-                context["public_symbols"] = json!(names.join(", "));
+                let groups: Vec<String> = by_item
+                    .iter()
+                    .map(|(item, names)| format!("{item}: {}", names.join(", ")))
+                    .collect();
+                context["public_symbols"] = json!(groups.join("; "));
                 let prefix = format!("{head}:");
                 let mut callers = Vec::new();
                 let mut search_failed = false;
                 for symbol in &symbols {
                     // Searched at the pinned head, not the working tree.
-                    match self.git(&[
+                    match self.git_search(&[
                         "grep",
                         "-n",
                         "-w",
@@ -243,7 +319,6 @@ impl Host {
                                 .collect();
                             callers.extend(context::callers_line(symbol, &grep.join("\n")));
                         }
-                        Err(e) if no_match(&e) => {}
                         Err(_) => search_failed = true,
                     }
                 }

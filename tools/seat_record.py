@@ -227,6 +227,9 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         evidence["review_binding"] = binding
     if "item_key" in record:
         evidence["item_key"] = record["item_key"]
+    # The serving attempt's prompt digest: seat_verdict trusts prompt.txt only when it matches.
+    if re.fullmatch(r"[0-9a-f]{64}", str(record.get("prompt_sha256"))):
+        evidence["prompt_sha256"] = record["prompt_sha256"]
     # F3: finish_reason is only ever recorded; never hard-coded.  The last
     # finish event is final even if unusable, so an earlier stop cannot win.
     finish = record.get("finish_reason")

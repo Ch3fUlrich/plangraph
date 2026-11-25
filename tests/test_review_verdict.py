@@ -366,7 +366,7 @@ def test_process_class_needs_the_defect_in_the_prompt_and_an_untouched_file():
 
 
 def test_typed_process_line_that_fails_verification_counts_as_med():
-    review = "PROCESS skills/review/SKILL.md:1 - the callers field is empty\n> MED quoted a.py:1 - x\n"
+    review = "PROCESS skills/review/SKILL.md:1 - the supplied brief omits the callers\n> MED quoted a.py:1 - x\n"
     assert v.classify_findings(review).med == 1
     found = v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths={"a.py"})
     assert (found.med, len(found.process)) == (0, 1)
@@ -412,3 +412,41 @@ def test_item_context_check_stops_at_the_end_of_the_rendered_block():
     prose = "\n=== NOTES\nthe heading === ITEM CONTEXT is described here\nChanged public symbols: \n"
     assert item_context_defects(brief + prose) == []
     assert item_context_defects(brief + "\nsee === ITEM CONTEXT above") == []
+
+
+def test_advice_to_add_callers_does_not_make_a_rubric_finding_process():
+    prompt, scope = EMPTY_PROMPT + LANE_DIFF, {"src/a.py"}
+    advice = "HIGH src/plangraph/review/review_brief.md:12 - rubric wording is vague; fix by adding callers"
+    found = v.classify_findings(advice, prompt=prompt, changed_paths=scope)
+    assert (found.high, found.process) == (1, ())
+    statement = "HIGH src/plangraph/review/review_brief.md:26 - the brief omits the callers of changed symbols"
+    assert v.classify_findings(statement, prompt=prompt, changed_paths=scope).process == (statement,)
+
+
+@pytest.mark.parametrize("line", ["HIGH ```", "MED `", "- MED ``` ", "HIGH ", "P2 \"\""])
+def test_a_finding_with_an_empty_citation_keeps_its_severity(line):
+    found = v.classify_findings(line + "\n", prompt=EMPTY_PROMPT, changed_paths={"a.py"})
+    assert (found.blocking, found.process) == (1, ())
+
+
+def test_bound_diff_paths_needs_the_recorded_digest(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "a.txt").write_text("1")
+    git("add", "."); git("commit", "-qm", "one")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "b.txt").write_text("2")
+    (tmp_path / "a.txt").write_text("3")
+    git("add", "."); git("commit", "-qm", "two")
+    head = git("rev-parse", "HEAD")
+    digest, paths = v.diff_binding(base, head, str(tmp_path))
+    assert paths == {"a.txt", "b.txt"}
+    binding = {"base_sha": base, "head_sha": head, "diff_sha256": digest}
+    assert v.bound_diff_paths(binding, str(tmp_path)) == paths
+    assert v.bound_diff_paths(dict(binding, diff_sha256="0" * 64), str(tmp_path)) is None
+    assert v.bound_diff_paths(binding, None) is None and v.bound_diff_paths(None, str(tmp_path)) is None

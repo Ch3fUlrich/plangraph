@@ -474,7 +474,7 @@ assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, p
 assert 'Invariants named by the item: never push\n' in prompt, prompt
 assert 'Exact base SHA: ' + card['diff_ref']['base'] + '\n' in prompt, prompt
 assert 'Exact head SHA: ' + head + '\n' in prompt, prompt
-assert 'Changed public symbols: fixture_symbol\n' in prompt, prompt
+assert 'Changed public symbols: plangraph:HOST-TEST-ITEM: fixture_symbol\n' in prompt, prompt
 assert 'fixture_symbol: src/lib.rs:3\n' in prompt, prompt  # the code use, not the comment or the definition
 import re
 log = re.search(r'fast checks \(exact head\): ([^;\s]+)', prompt).group(1)

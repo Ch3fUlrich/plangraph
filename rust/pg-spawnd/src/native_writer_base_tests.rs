@@ -300,7 +300,10 @@ fn brief_context_marks_a_searched_empty_result_and_leaves_failed_reads_unset() {
     // A public symbol nobody calls: symbols named, callers verified empty.
     let lone = commit_file(&host.repo, "src/lib.rs", "pub fn lone_symbol() {}\n");
     let context = host.brief_context(&docs, &lone);
-    assert_eq!(context["public_symbols"], json!("lone_symbol"));
+    assert_eq!(
+        context["public_symbols"],
+        json!("(no Plan-Item): lone_symbol")
+    );
     assert!(context["callers"]
         .as_str()
         .unwrap()
@@ -320,27 +323,48 @@ fn brief_context_marks_a_searched_empty_result_and_leaves_failed_reads_unset() {
 }
 
 #[test]
-fn only_a_git_grep_with_no_line_is_no_match() {
+fn only_a_git_grep_with_no_line_is_an_empty_search() {
     let dir = tempfile::tempdir().unwrap();
-    commit_file(
-        &{
-            git_in(dir.path(), &["init", "-q", "-b", "main", "r"]);
-            dir.path().join("r")
-        },
-        "a.rs",
-        "fn a() {}\n",
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    commit_file(&host.repo, "a.rs", "fn a() {}\n");
+    let found = host.git_search(&["grep", "-n", "-w", "-e", "a", "HEAD", "--", "*.rs"]);
+    assert!(found.unwrap().contains("a.rs:1"));
+    let none = host.git_search(&["grep", "-n", "-w", "-e", "absent", "HEAD", "--", "*.rs"]);
+    assert_eq!(none.unwrap(), "");
+    // An unknown revision exits 128 with a message: a failed search, not an empty one.
+    assert!(host
+        .git_search(&["grep", "-n", "-e", "a", "nosuchrev", "--", "*.rs"])
+        .is_err());
+}
+
+#[test]
+fn changed_symbols_are_attributed_to_the_plan_item_of_their_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.cwd = host.repo.clone();
+    let base = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    for (file, symbol, trailer) in [
+        (
+            "src/a.rs",
+            "alpha_symbol",
+            "\n\nPlan-Item: plangraph:ITEM-A",
+        ),
+        ("src/b.rs", "beta_symbol", "\n\nPlan-Item: plangraph:ITEM-B"),
+        ("src/c.rs", "loose_symbol", ""),
+    ] {
+        fs::create_dir_all(host.repo.join("src")).unwrap();
+        fs::write(host.repo.join(file), format!("pub fn {symbol}() {{}}\n")).unwrap();
+        git_in(&host.repo, &["add", "."]);
+        git_in(
+            &host.repo,
+            &["commit", "-q", "-m", &format!("{symbol}{trailer}")],
+        );
+    }
+    let head = git_in(&host.repo, &["rev-parse", "HEAD"]);
+    let context = host.brief_context(&base, &head);
+    assert_eq!(
+        context["public_symbols"],
+        json!("(no Plan-Item): loose_symbol; plangraph:ITEM-A: alpha_symbol; plangraph:ITEM-B: beta_symbol")
     );
-    let grep = |args: &[&str]| {
-        output(
-            Command::new("git")
-                .arg("-C")
-                .arg(dir.path().join("r"))
-                .arg("grep")
-                .args(args),
-        )
-    };
-    assert!(grep(&["-n", "-w", "-e", "absent", "HEAD", "--", "*.rs"])
-        .is_err_and(|e| super::review::no_match(&e)));
-    assert!(grep(&["-n", "-w", "-e", "a", "nosuchrev", "--", "*.rs"])
-        .is_err_and(|e| !super::review::no_match(&e)));
 }
