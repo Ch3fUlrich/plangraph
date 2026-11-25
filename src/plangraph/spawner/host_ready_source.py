@@ -468,6 +468,12 @@ def probe_host(name, config, state, runner, timeout, *, persist):
     except Exception:
         # Ordinary host/probe errors must not hide any host's lines.
         fail('config', 'invalid_response_or_config')
+    if config.get('local') and not reachability_failed:
+        try:   # served_legs lets placement skip this host for a leg it cannot serve
+            from plangraph.routing_support.leg_state import local_served_legs
+            record['served_legs'] = local_served_legs()
+        except Exception:
+            pass   # an unreadable listing never fails readiness; the field is simply absent
     record['checked_at'] = datetime.now(timezone.utc).isoformat()
     if reachability_failed:
         fail('unreachable', 'other_checks_unknown')

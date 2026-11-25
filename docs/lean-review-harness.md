@@ -108,3 +108,5 @@ then the PATH prepared by the shared harness resolver, which can include NVM dir
 A missing executable returns exit 10 and a `client_missing` diagnostic before review starts.
 
 If the wait ends while a seat is live, `plangraph review` prints its run ID, expected end, and late review file path. It exits 3 while the review is pending, or exits 1 if a seat has already failed. Late files use `MISSING` for successful runs without a verdict and `ERROR` for failed runs or unusable verdicts. The foreground command issues approvals after all seats pass.
+
+Every harness (opencode, agy, qodercli, claude, codex) resolves through `resolve_harness_binary`: the `PLANGRAPH_<NAME>_BIN` override, the host's `harness_bins` table in the hosts registry, then the search path (warning logged). A miss is refused before the run as `harness_not_found <name> <searched paths>`, and a seat that ends without a verdict keeps that reason in its seat coverage.

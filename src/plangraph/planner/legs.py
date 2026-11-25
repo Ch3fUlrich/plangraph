@@ -70,11 +70,45 @@ REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
 CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
-def _codex_context(model):
+def _registry_limit(provider, model):
     from plangraph.routing_support.opencode_overlay import load_root_providers
     shipped = Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
-    models = (load_root_providers(shipped) or {}).get('omniroute', {}).get('models', {})
-    return models.get(model, {}).get('limit', {}).get('context', 1_000_000)
+    models = (load_root_providers(shipped) or {}).get(provider, {}).get('models', {})
+    return models.get(model, {}).get('limit', {})
+
+
+def _codex_context(model):
+    return _registry_limit('omniroute', model).get('context', 1_000_000)
+
+
+#: Bound while the registry file is absent or has no entry for the model (a copied tree
+#: without ``configuration/``); the registry logs the missing file and routing stays safe.
+_NO_REGISTRY_REQUEST_TOKENS = 100_000
+
+
+#: Routing policy: a request bound below the registry window, one reason each.
+#: ``deepseek``: the paid pay-as-you-go leg, used only if really needed.
+POLICY_REQUEST_CAPS = {"deepseek": 100_000}
+#: Research requests keep headroom under a 1M window on every research leg.
+RESEARCH_REQUEST_CAP = 900_000
+
+
+def _policy_request_tokens(leg_id, provider, model):
+    """The registry bound of a leg, lowered only by its named routing-policy cap."""
+    bound = _registry_request_tokens(provider, model)
+    return min(bound, POLICY_REQUEST_CAPS.get(leg_id, bound))
+
+
+def _registry_request_tokens(provider, model):
+    """Largest request an opencode leg takes: the registry context minus its output reserve.
+
+    The provider registry (``configuration/opencode/providers.json``) is the one truth for
+    a model's window; ``legs.py`` types no limit for a model the registry lists.
+    """
+    limit = _registry_limit(provider, model)
+    if not isinstance(limit.get('context'), int):
+        return _NO_REGISTRY_REQUEST_TOKENS
+    return limit['context'] - limit.get('output', 0)
 
 
 _SOL_CONTEXT = _codex_context('cx-gpt-6.2-sol')
@@ -122,7 +156,8 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          ("128k", "256k"), 100000, False,
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
-         "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
+         "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"),
+         _registry_request_tokens("mimo", "mimo-v2.6-flash"), False),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
          ("128k", "256k", "1m"), 180000, False, claude=True,
          note="Antigravity quota, not Claude Max"),
@@ -177,7 +212,7 @@ DEFAULT_LEGS = (
         "openai", ("128k",), 100000, False, roles=("review",), benchmark_optional=True),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
-        "mimo", ("128k", "256k", "1m"), 200000, False,
+        "mimo", ("128k", "256k", "1m"), _registry_request_tokens("mimo", "mimo-v2.6-pro"), False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
@@ -195,7 +230,8 @@ DEFAULT_LEGS = (
     Leg("opencode-go-beam-free", "free", "opencode", "opencode-go/beam-free",
         "beam", ("128k",), 100000, False, roles=("implement", "review")),
     Leg("opencode-go-glm-5.3-flash", "subscription", "opencode",
-        "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"), 900000, False,
+        "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"),
+        _registry_request_tokens("omniroute", "opencode-go/glm-5.3-flash"), False,
         roles=("review", "implement", "research"), web_access=True),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
@@ -213,7 +249,8 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k", "256k", "1m"), 900000,
         False, roles=("review", "implement", "research"), web_access=True),
-    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
+    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",),
+             max_request_tokens=_policy_request_tokens("deepseek", "omniroute", "deepseek-direct-flash")),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
@@ -362,11 +399,10 @@ def review_route_pool(base=None) -> tuple[Leg, ...]:
 
 
 def research_route_pool(legs) -> tuple[Leg, ...]:
-    """Research uses declared legs and reserves headroom on the default Sol leg."""
+    """Research uses declared legs and reserves headroom (RESEARCH_REQUEST_CAP) on every research leg."""
     if legs is not DEFAULT_LEGS:
         return tuple(leg for leg in legs if "research" in leg.roles)
-    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, 900_000))
-                 if leg.id == LEAD_WRITER else leg
+    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, RESEARCH_REQUEST_CAP))
                  for leg in review_route_pool(legs) if "research" in leg.roles)
 
 
@@ -530,7 +566,8 @@ def client_installed(name: str) -> bool:
     if name == "codex":
         from plangraph.routing_support.clients import resolve_codex_client
         return resolve_codex_client()[0] is not None
-    return shutil.which(name) is not None
+    from plangraph.routing_support.clients import resolve_harness_binary
+    return resolve_harness_binary(name).path is not None
 
 
 def service_probe(service) -> Callable[[str], bool] | None:
@@ -550,8 +587,15 @@ def opencode_counterpart(leg: Leg) -> Leg | None:
     if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
         return None
     tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
+    # The OpenCode leg is bound by the OmniRoute registry window, not by the native client's.
+    key = model.removeprefix("omniroute/")
+    base = next((key[:-len(e) - 1] for e in CX_EFFORTS if key.endswith("-" + e)), key)
+    limit = _registry_limit("omniroute", key) or _registry_limit("omniroute", base)   # effort variants share the base window
+    cap = limit["context"] - limit.get("output", 0) if isinstance(limit.get("context"), int) else leg.max_request_tokens
+    if leg.max_request_tokens is not None:
+        cap = min(cap, leg.max_request_tokens)
     return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
-                               harness_fallback=None, web_access=False)
+                               harness_fallback=None, web_access=False, max_request_tokens=cap)
 
 
 def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:

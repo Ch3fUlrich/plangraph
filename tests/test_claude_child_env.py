@@ -197,7 +197,7 @@ def test_missing_claude_binary_is_a_harness_missing_skip_not_an_exec_failure(mon
     env, job = drive_spawn(monkeypatch, tmp_path, path_dirs=[empty], system_path=False)   # no claude: the factory must never run
     launched = env is not None   # a bool: a failing assert must not print the env
     assert not launched, 'the claude binary was launched on a host without it'
-    assert job.status == 'failed' and job.stderr == 'harness_missing: claude'
+    assert job.status == 'failed' and job.stderr.startswith('harness_not_found claude ')
 
 
 def test_host_skip_reason_names_a_missing_claude_binary(monkeypatch, tmp_path):
@@ -205,13 +205,13 @@ def test_host_skip_reason_names_a_missing_claude_binary(monkeypatch, tmp_path):
     empty = tmp_path / 'empty'
     empty.mkdir()
     monkeypatch.setenv('PATH', str(empty))
-    assert resolver.host_skip_reason(row) == 'harness_missing: claude'
+    assert resolver.host_skip_reason(row).startswith('harness_not_found claude ')
     monkeypatch.setenv('PATH', str(fake_binary(tmp_path / 'bin', 'claude')))
     assert resolver.host_skip_reason(row) is None
-    assert resolver.host_skip_reason(row, env={'PATH': str(empty)}) == 'harness_missing: claude'   # the child's PATH decides
-    assert resolver.host_skip_reason(row, env={'PATH': ''}) == 'harness_missing: claude'   # empty is the child's PATH, not the host's
+    assert resolver.host_skip_reason(row, env={'PATH': str(empty)}).startswith('harness_not_found claude ')   # the child's PATH decides
+    assert resolver.host_skip_reason(row, env={'PATH': ''}).startswith('harness_not_found claude ')   # empty is the child's PATH, not the host's
     monkeypatch.setattr(os, 'defpath', str(empty))   # hermetic: a host claude in /usr/bin must not decide
-    assert resolver.host_skip_reason(row, env={'PATH': None}) == 'harness_missing: claude'   # removed: exec searches os.defpath
+    assert resolver.host_skip_reason(row, env={'PATH': None}).startswith('harness_not_found claude ')   # removed: exec searches os.defpath
     assert resolver.host_skip_reason(row, env={'OTHER': '1'}) is None   # no PATH key: the host PATH is inherited
 
 
@@ -224,7 +224,8 @@ def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, t
     monkeypatch.setenv('PATH', str(tmp_path))
     launch = resolver.plan_for_launch(only)
     assert launch.legs == ()
-    assert [s['reason'] for s in launch.skipped if s['leg'] == 'claude-sonnet-5-5-high'] == ['harness_missing: claude']
+    reasons = [s['reason'] for s in launch.skipped if s['leg'] == 'claude-sonnet-5-5-high']
+    assert len(reasons) == 1 and reasons[0].startswith('harness_not_found claude ')
     monkeypatch.setenv('PATH', str(fake_binary(tmp_path / 'bin', 'claude')))
     assert [l.id for l in resolver.plan_for_launch(only).legs] == ['claude-sonnet-5-5-high']
     from plangraph.planner.legs import spawnable_legs

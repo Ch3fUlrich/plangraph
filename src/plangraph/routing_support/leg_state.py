@@ -462,6 +462,57 @@ def model_admitted(model, *, enabled=False):
                      and not mid.lower().startswith('cxa/gpt-6-luna')))
 
 
+#: opencode refuses every CLI call while another ``opencode serve --service`` holds its managed port.
+PORT_CONFLICT = re.compile(r'Managed service port \d+ on \S+ is already in use', re.I)
+PORT_CONFLICT_REASON = 'managed_service_port_conflict'
+
+
+def harness_error_reason(text):
+    """A harness failure with its own cause (port conflict), else None; the text stays as evidence."""
+    return PORT_CONFLICT_REASON if PORT_CONFLICT.search(str(text or '')) else None
+
+
+def host_served_legs(legs, listing, probe_failures=None):
+    """Per-host leg truth: ``{leg id: {served, reason}}`` for the opencode legs of ``legs``.
+
+    ``listing`` is this host's ``opencode models --standalone`` result (a list of ids or a
+    :class:`DiscoveryFailed`); ``probe_failures`` maps a leg id to the reason its tiny call
+    failed.  A leg is served only when the host lists its model and its tiny call did not fail.
+    """
+    out = {}
+    for leg in legs:
+        if leg.harness != 'opencode':
+            continue
+        if isinstance(listing, DiscoveryFailed):
+            reason = ('harness_missing' if listing.reason.startswith('harness_not_found')
+                      else listing.reason if listing.reason == PORT_CONFLICT_REASON
+                      else harness_error_reason(listing.reason) or 'discovery_failed: ' + listing.reason)
+            out[leg.id] = dict(served=False, reason=reason)
+        elif LegAdapter.identity(leg.model) not in {LegAdapter.identity(mid) for mid in listing}:
+            out[leg.id] = dict(served=False, reason='not_listed: ' + leg.model)
+        elif (probe_failures or {}).get(leg.id):
+            out[leg.id] = dict(served=False, reason=probe_failures[leg.id])
+        else:
+            out[leg.id] = dict(served=True, reason='listed')
+    return out
+
+
+def local_served_legs(legs=None):
+    """This host's own per-leg truth: its model listing and the harness it resolves (no remote call)."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    return host_served_legs(DEFAULT_LEGS if legs is None else legs, LegAdapter.standalone_models())
+
+
+def served_digest(hosts):
+    """One digest line: ``legs served per host: host-b 3/5 (not served: id reason; ...); host-a 5/5``."""
+    parts = []
+    for host in sorted(hosts):
+        rows = hosts[host]
+        bad = [f'{leg} {row["reason"]}' for leg, row in sorted(rows.items()) if not row['served']]
+        parts.append(f'{host} {len(rows) - len(bad)}/{len(rows)}' + (f' (not served: {"; ".join(bad)})' if bad else ''))
+    return 'legs served per host: ' + ('; '.join(parts) or 'no host reported')
+
+
 class DiscoveryFailed(list):
     """The empty result of a model discovery that failed (timeout, missing binary, error)."""
 
@@ -502,19 +553,25 @@ class LegAdapter:
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
         self._quarantined = set()
+        self._harness_missing = False
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
     def standalone_models():
         """Standalone model ids; a failed discovery is an empty :class:`DiscoveryFailed`."""
         import subprocess
+        from .clients import resolve_harness_binary
         from .opencode_render import drop_parent_only_env
+        env = drop_parent_only_env(dict(os.environ))
+        binary = resolve_harness_binary('opencode', env)
+        if binary.path is None:   # a unit PATH without the harness dir is a host fault, not a failed listing
+            return DiscoveryFailed(binary.refusal)
         try:
-            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                    text=True, timeout=8, shell=False, check=True,
-                                    env=drop_parent_only_env(dict(os.environ)))
+            result = subprocess.run([binary.path, 'models', '--standalone'], capture_output=True,
+                                    text=True, timeout=8, shell=False, check=True, env=env)
         except (OSError, subprocess.SubprocessError) as exc:
-            return DiscoveryFailed(type(exc).__name__)
+            stderr = getattr(exc, 'stderr', None)
+            return DiscoveryFailed(harness_error_reason(stderr) or type(exc).__name__)
         return result.stdout.splitlines()
     @staticmethod
     def identity(model):
@@ -538,10 +595,13 @@ class LegAdapter:
         if self._at is None or now - self._at >= self.ttl_s:
             from .quota_snapshots import OmniRouteAuthRefused
             self._auth_error = None
+            self._harness_missing = False
             try:
                 states = self.provider.snapshot()
                 listed = self.models() if callable(self.models) else self.models
                 if isinstance(listed, DiscoveryFailed):
+                    if listed.reason.startswith('harness_not_found'):
+                        self._harness_missing = True
                     # Not "every model is unlisted": keep the snapshot-error retry and probe.
                     raise RuntimeError(f'model discovery failed: {listed.reason}')
                 served = {self.identity(mid) for mid in listed}
@@ -554,6 +614,9 @@ class LegAdapter:
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
+        if self._error and self._harness_missing:
+            return dict(state='down', reason='harness_missing: ' + self._error.rpartition('harness_not_found ')[2],
+                        evidence=None)
         if self._error:
             return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
                         evidence=dict(self._auth_error) if self._auth_error else None)
@@ -564,9 +627,11 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
-        provider = self._states.get(leg.split('/')[0])
-        if provider is None:
-            return dict(state='down', reason='unreachable', evidence=None)
+        from .catalog_seed import omniroute_provider_id
+        wanted = omniroute_provider_id(leg.split('/')[0])
+        provider = self._states.get(wanted)
+        if provider is None:   # name the id looked up: the snapshot may list the provider under another one
+            return dict(state='down', reason='unreachable', evidence=dict(looked_up_provider=wanted))
         if provider.stale:
             return dict(state='unknown', reason='stale', evidence=None)
         if not provider.available:

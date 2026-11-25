@@ -29,7 +29,7 @@ from typing import Any, Mapping, Sequence
 from plangraph.routing_support.leg_state import leg_status, model_admitted
 from plangraph.routing_support.catalog_seed import TIER_RUNG
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS, mimo_path_allowed
-from plangraph.routing_support.clients import build_routing_envelope_headers
+from plangraph.routing_support.clients import build_routing_envelope_headers, resolve_harness_binary
 from plangraph.routing_support.risk import (
     RISK_BETA_EXCESS,
     RISK_GAMMA_COST,
@@ -447,7 +447,7 @@ def _probe_served_models(config, *, env=None):
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
-        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        executable = resolve_harness_binary('opencode', env).path or 'opencode'
         result = subprocess.run([executable, 'models', '--standalone'], env=env, stdin=subprocess.DEVNULL, capture_output=True,
                                 text=True, encoding='utf-8', errors='replace', timeout=10, **background_process_options())
         if result.returncode == 0:
@@ -522,9 +522,13 @@ def admitted_by_render(model):
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli', 'claude'):   # D-3649 r2: the child's exec PATH (env overlay; None -> os.defpath, '' finds nothing)
-        return None if shutil.which(harness, path=os.pathsep.join(os.get_exec_path({**os.environ, **(env or {})}))) else 'harness_missing: ' + harness
+        # The child's exec PATH decides, with no extra install dirs: the runner already built it.
+        exec_path = os.pathsep.join(os.get_exec_path({**os.environ, **(env or {})}))
+        return resolve_harness_binary(harness, {**os.environ, **(env or {})}, search=exec_path).refusal
     if harness != 'opencode':
         return None
+    if missing := resolve_harness_binary('opencode', {**os.environ, **(env or {})}).refusal:
+        return missing   # before every admission shortcut: an absent binary refuses, never a bare-command launch
     model = row.get('model') or row.get('id') or row.get('model_id')
     if not model or '/' not in model:
         return None

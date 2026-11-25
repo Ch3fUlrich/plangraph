@@ -191,6 +191,16 @@ def hermetic_writer_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 @pytest.fixture(autouse=True)
+def hermetic_opencode_binary(monkeypatch, tmp_path_factory):
+    """A fixture opencode sits last on PATH: no test depends on the host's install, and a test
+    that sets its own PATH or places its own binary first still decides."""
+    directory = tmp_path_factory.mktemp('opencode-bin')
+    binary = directory / 'opencode'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('PATH', os.pathsep.join(filter(None, (os.environ.get('PATH'), str(directory)))))
+
+@pytest.fixture(autouse=True)
 def hermetic_cargo_caches(monkeypatch, tmp_path_factory):
     """Cache cleanup deletes whole directories: never let a test reach the host's real caches."""
     from plangraph.spawner import host_ready

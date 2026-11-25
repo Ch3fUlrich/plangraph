@@ -216,7 +216,8 @@ def build(request: dict) -> dict:
                 raise LaunchRefused('unavailable', reason)
             if admitted_by_render(leg.model):
                 events.append(dict(event='admitted_by_render', model=leg.model))
-            exe = codex or shutil.which(cmd[0], path=env.get('PATH')) or cmd[0]
+            from plangraph.routing_support.clients import resolve_harness_binary
+            exe = codex or resolve_harness_binary(cmd[0], env).path or cmd[0]
             exe, reason = runner._resolve_launch(exe, cmd[1:], is_nt=runner._is_nt())
             if reason:
                 raise LaunchRefused('launch', reason)

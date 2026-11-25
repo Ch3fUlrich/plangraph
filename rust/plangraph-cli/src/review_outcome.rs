@@ -102,6 +102,15 @@ pub(super) fn evaluate_seat_record(
         format!("{}..+{}files", paths[0], paths.len() - 1)
     };
 
+    // A run that finished cleanly but gave no verdict has no recorded cause: name it.
+    let reason = if passed {
+        None
+    } else {
+        refusal_reason(record).or_else(|| {
+            (status == "completed" && verdict.is_none()).then(|| "no_verdict_line".to_owned())
+        })
+    };
+    let ended = record["ended"].as_f64().map(|t| t as i64);
     SeatOutcome {
         index,
         total,
@@ -116,5 +125,60 @@ pub(super) fn evaluate_seat_record(
         test_gaming,
         paths_summary,
         passed,
+        reason,
+        ended,
     }
+}
+
+/// The cause the spawner recorded for a run that did not finish as a verdict, on one line.
+fn refusal_reason(record: &Value) -> Option<String> {
+    let text = ["reason", "error"]
+        .iter()
+        .find_map(|key| record[*key].as_str())
+        .or_else(|| {
+            record["attempts"].as_array().and_then(|attempts| {
+                attempts
+                    .iter()
+                    .find_map(|attempt| attempt["skip_reason"].as_str())
+            })
+        })
+        .or_else(|| {
+            record
+                .pointer("/plan/seat_coverage/0/reason")
+                .and_then(Value::as_str)
+        })
+        .filter(|text| !text.trim().is_empty())?;
+    Some(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect(),
+    )
+}
+
+/// Reasons the spawner names when it refuses before creating a run, as a line's first word.
+const NAMED_REFUSALS: [&str; 7] = [
+    "harness_not_found",
+    "harness_missing",
+    "prompt_too_large",
+    "stdin_prompt_flag_missing",
+    "client_missing",
+    "not_served_on_host",
+    "missing_material",
+];
+
+/// The cause of a spawn that printed no run record: the first line that begins with a named
+/// refusal, else the last non-empty line of stderr, else of stdout.
+pub(super) fn refusal_cause<'a>(stderr: &'a str, stdout: &'a str) -> Option<&'a str> {
+    let lines = || stderr.lines().chain(stdout.lines()).map(str::trim);
+    lines()
+        .find(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|word| NAMED_REFUSALS.contains(&word.trim_end_matches(':')))
+        })
+        .or_else(|| stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()))
+        .or_else(|| stdout.lines().rev().map(str::trim).find(|l| !l.is_empty()))
 }
