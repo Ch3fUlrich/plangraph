@@ -258,11 +258,31 @@ pub fn deploy_plan(
 /// `land-train deploy-plan --repo DIR (--manifest FILE | --spans FILE) (--authorized-hosts A,B | --registry FILE)
 /// --probe-cmd "CMD ARGS" [--declared FILE] [--blockers-out FILE]`: the deploy table of a built train.
 /// `--spans` is a JSON array of `{pr, from, head}` (a build the batch tool journaled without a manifest);
-/// `--registry` authorizes every host id and alias of the hosts registry; `--declared` is a JSON object of
+/// `--derive-only 1` prints the derived parts as one JSON line and asks no host. `--registry` authorizes every host id and alias of the hosts registry; `--declared` is a JSON object of
 /// item key -> hosts from the items' `Deploy-Hosts:` lines. The lines are `DeployPlan::report`.
 pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
     let read = |p: &str| std::fs::read(p).map_err(|e| format!("{p}: {e}"));
+    let repo = Path::new(need("repo")?);
+    let parts = match (flags.get("manifest"), flags.get("spans")) {
+        (Some(path), None) => {
+            let manifest: Manifest =
+                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+            derive(repo, &manifest)?
+        }
+        (None, Some(path)) => {
+            let spans: Vec<Span> =
+                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
+            derive_spans(repo, &spans)?
+        }
+        _ => return Err("need exactly one of --manifest and --spans".into()),
+    };
+    if flags.contains_key("derive-only") {
+        // What each part ships and which items it carries, before any host is asked about.
+        return Ok(vec![
+            serde_json::to_string(&parts).map_err(|e| e.to_string())?
+        ]);
+    }
     let declared: BTreeMap<String, Vec<String>> = match flags.get("declared") {
         Some(p) => serde_json::from_slice(&read(p)?).map_err(|e| format!("{p}: {e}"))?,
         None => BTreeMap::new(),
@@ -292,20 +312,6 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
             .split_whitespace()
             .map(str::to_owned)
             .collect(),
-    };
-    let repo = Path::new(need("repo")?);
-    let parts = match (flags.get("manifest"), flags.get("spans")) {
-        (Some(path), None) => {
-            let manifest: Manifest =
-                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
-            derive(repo, &manifest)?
-        }
-        (None, Some(path)) => {
-            let spans: Vec<Span> =
-                serde_json::from_slice(&read(path)?).map_err(|e| format!("{path}: {e}"))?;
-            derive_spans(repo, &spans)?
-        }
-        _ => return Err("need exactly one of --manifest and --spans".into()),
     };
     let plan = deploy_plan(&parts, &declared, &authorized, &probe);
     if let Some(out) = flags.get("blockers-out") {

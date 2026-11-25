@@ -356,3 +356,36 @@ fn two_parts_of_one_target_are_probed_once_and_never_both_ready_and_not_ready() 
     assert_eq!(plan.targets[0].parts, [1, 2]);
     assert!(plan.blockers.is_empty(), "{plan:?}");
 }
+
+#[test]
+fn derive_only_prints_what_each_part_ships_and_carries_without_asking_a_host() {
+    let fx = Fx::new();
+    let unit = commit(
+        &fx,
+        &[("deploy/systemd/s.service", "[Service]\n")],
+        "unit\n\nPlan-Item: demo:B",
+    );
+    let docs = commit(&fx, &[("docs/a.md", "a\n")], "docs\n\nPlan-Item: demo:A");
+    let dir = tempfile::tempdir().unwrap();
+    let spans = dir.path().join("spans.json");
+    let rows: Vec<Span> = [(1, &unit), (2, &docs)]
+        .into_iter()
+        .map(|(pr, head)| Span {
+            pr,
+            from: fx.base(),
+            head: head.clone(),
+        })
+        .collect();
+    std::fs::write(&spans, serde_json::to_vec(&rows).unwrap()).unwrap();
+    let flags = BTreeMap::from([
+        ("repo".to_owned(), fx.path().to_str().unwrap().to_owned()),
+        ("spans".to_owned(), spans.to_str().unwrap().to_owned()),
+        ("derive-only".to_owned(), "1".to_owned()),
+    ]);
+    // No hosts, no registry and no probe command are given: none is needed.
+    let lines = run_cli(&flags).unwrap();
+    let parts: Vec<PartDeploy> = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(parts[0].families, ["s.service".to_string()].into());
+    assert_eq!(parts[0].items, ["demo:B".to_string()].into());
+    assert!(parts[1].families.is_empty());
+}

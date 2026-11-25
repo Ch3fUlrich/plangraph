@@ -424,6 +424,10 @@ args = sys.argv[1:]
 if args[:2] != ["land-train", "deploy-plan"]:
     sys.exit(subprocess.call([os.environ["MAIN_STATE_STUB"], *args]))
 flags = dict(zip(args[slice(2, None, 2)], args[slice(3, None, 2)]))
+if "--derive-only" in flags:
+    parts = os.environ.get("DEPLOY_PLAN_PARTS")
+    print(open(parts).read() if parts and os.path.exists(parts) else "[]")
+    sys.exit(0)
 units_dir = flags["--probe-cmd"].split()[-1]
 record = dict(argv=args, spans=json.load(open(flags["--spans"])), declared=json.load(open(flags["--declared"])),
               units={n: open(os.path.join(units_dir, n)).read() for n in os.listdir(units_dir)})
@@ -443,7 +447,7 @@ def deploy_fixture(env, report, config_root=None):
     stub.chmod(0o755)
     env.env.update(PLANGRAPH_BIN=str(stub), MAIN_STATE_STUB=str(env.stubs / "main-state"),
                    DEPLOY_PLAN_CALL=str(env.tmp / "call.json"), DEPLOY_PLAN_OUT=str(env.tmp / "report.txt"),
-                   DEPLOY_PLAN_FAIL=str(env.tmp / "fail"))
+                   DEPLOY_PLAN_FAIL=str(env.tmp / "fail"), DEPLOY_PLAN_PARTS=str(env.tmp / "parts.json"))
     (env.tmp / "report.txt").write_text(report)
     registry = (config_root or env.home / ".config") / "plangraph" / "hosts.json"
     registry.parent.mkdir(parents=True, exist_ok=True)
@@ -565,6 +569,8 @@ def test_go_req_passes_the_item_declared_hosts_and_the_unit_sources_of_the_head(
     from merge_batch_util import active_train
 
     deploy_fixture(env, "deploy: none\n")
+    (env.tmp / "parts.json").write_text(json.dumps([{"pr": 1, "families": ["train.service"],
+                                                     "items": ["plangraph:ITEM-A"], "trailer_hosts": []}]))
     unit = "[Service]\nExecStart=%h/.local/bin/train\n"
     st = go_ready(env, first_files={"deploy/systemd/train.service": unit}, prs="1")
     # An uncommitted edit and an untracked unit are not part of the reported head.
@@ -584,3 +590,33 @@ def test_go_req_passes_the_item_declared_hosts_and_the_unit_sources_of_the_head(
     call = json.loads((env.tmp / "call.json").read_text())
     assert call["declared"] == {"plangraph:ITEM-A": ["alpha", "beta"]}
     assert call["units"] == {"train.service": unit}
+
+
+def test_a_unitless_part_needs_no_keeper_lookup_but_a_unit_part_does(env, monkeypatch):
+    from test_merge_batch_land import go_ready
+
+    sys.path.insert(0, str(ROOT / "tools"))
+    import merge_batch_plan
+    from merge_batch_util import active_train
+
+    deploy_fixture(env, "deploy: none\n")
+    st = go_ready(env)
+    for key, value in env.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
+    monkeypatch.setattr(merge_batch_plan, "file_deploy_blockers", lambda path: None)
+    monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a: types.SimpleNamespace(
+        returncode=1, stdout="", stderr="keeper unreachable"))
+    monkeypatch.setattr(merge_batch_plan, "git", lambda *a, cwd=None, **k: types.SimpleNamespace(
+        stdout=env.git(*a, cwd=cwd) + "\n"))
+    active = active_train(st, st["head"])
+    parts = env.tmp / "parts.json"
+    # No part ships a family: no host is asked about, so a down keeper does not matter.
+    parts.write_text(json.dumps([{"pr": 1, "families": [], "items": ["plangraph:ITEM-A"], "trailer_hosts": []}]))
+    assert merge_batch_plan.deploy_report(st, active).startswith("deploy: none")
+    # One part ships a unit: its items need their declarations, and the lookup that fails refuses.
+    parts.write_text(json.dumps([{"pr": 1, "families": ["a.service"], "items": ["plangraph:ITEM-A"],
+                                  "trailer_hosts": []}]))
+    with pytest.raises(merge_batch_plan.MergeBatchError, match="Deploy-Hosts of plangraph:ITEM-A"):
+        merge_batch_plan.deploy_report(st, active)

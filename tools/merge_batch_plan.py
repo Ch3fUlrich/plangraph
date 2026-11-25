@@ -396,8 +396,9 @@ def keeper_cli(*args):
                           timeout=120, check=False, env=env)
 
 
-def declared_hosts(active):
-    """``{item key: [hosts]}`` from the ``Deploy-Hosts:`` lines of the keeper items the active parts carry.
+def declared_hosts(keys):
+    """``{item key: [hosts]}`` from the ``Deploy-Hosts:`` lines of the keeper items ``keys`` (those of the parts
+    that ship a unit or a binary: a part that ships none needs no declaration).
 
     Without a keeper nothing is declared and the commits' ``Deploy:`` trailers name the hosts; an item the keeper
     cannot show refuses, because its declaration may name other hosts."""
@@ -406,7 +407,7 @@ def declared_hosts(active):
     from plangraph.keeper.evidence import deploy_hosts
 
     declared = {}
-    for key in sorted({key for rec in active["merged"] for key in rec.get("items", [])}):
+    for key in sorted(set(keys)):
         proc = keeper_cli("show", key, "--json")
         try:
             if proc.returncode:
@@ -468,7 +469,18 @@ def deploy_report(st, active):
             raise MergeBatchError("deploy-plan failed: the binary, registry, worktree and temp paths must not hold spaces")
         spans_file, blockers, declared = Path(tmp) / "spans.json", Path(tmp) / "blockers.json", Path(tmp) / "declared.json"
         spans_file.write_text(json.dumps(spans))
-        declared.write_text(json.dumps(declared_hosts(active)))
+        # Which parts ship a family comes first: only their items need a declaration looked up.
+        derived = subprocess.run([binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file),
+                                  "--derive-only", "1"], capture_output=True, text=True, timeout=600, check=False)
+        try:
+            parts = json.loads(derived.stdout.splitlines()[0]) if derived.returncode == 0 else None
+        except (ValueError, IndexError):
+            parts = None
+        if not isinstance(parts, list):
+            raise MergeBatchError("deploy-plan failed: " +
+                                  (derived.stderr.strip().splitlines() or ["no list of parts"])[-1])
+        keys = [key for part in parts if part.get("families") for key in part.get("items", [])]
+        declared.write_text(json.dumps(declared_hosts(keys)))
         probe = f"{binary} host-sync --install-dry-run --registry {registry} --repo {wt} --units {units}"
         argv = [binary, "land-train", "deploy-plan", "--repo", wt, "--spans", str(spans_file), "--registry",
                 str(registry), "--probe-cmd", probe, "--declared", str(declared), "--blockers-out", str(blockers)]

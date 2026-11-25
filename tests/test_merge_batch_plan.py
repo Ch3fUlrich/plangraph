@@ -178,7 +178,7 @@ def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(mon
             return types.SimpleNamespace(returncode=0, stdout="not json", stderr="")
         return types.SimpleNamespace(returncode=0, stdout=json.dumps(shown[key]), stderr="")
 
-    active = {"merged": [{"items": ["p:A", "p:B"]}, {"items": ["p:A"]}]}
+    active = ["p:A", "p:B", "p:A"]
     monkeypatch.setattr(merge_batch_plan, "keeper_cli", fake_cli)
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
     # An item without a declaration declares nothing; the commit trailers decide for it.
@@ -189,11 +189,11 @@ def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(mon
         monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a, reply=reply: types.SimpleNamespace(
             returncode=0, stdout=json.dumps(reply), stderr=""))
         with pytest.raises(MergeBatchError, match="Deploy-Hosts of p:A"):
-            merge_batch_plan.declared_hosts({"merged": [{"items": ["p:A"]}]})
+            merge_batch_plan.declared_hosts(["p:A"])
     monkeypatch.setattr(merge_batch_plan, "keeper_cli", fake_cli)
     # A lookup that fails is not an absent declaration: a trailer must not name the host in its place.
     for key in ("p:GONE", "p:JUNK"):
         with pytest.raises(MergeBatchError, match=f"Deploy-Hosts of {key}"):
-            merge_batch_plan.declared_hosts({"merged": [{"items": [key]}]})
+            merge_batch_plan.declared_hosts([key])
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: False)
     assert merge_batch_plan.declared_hosts(active) == {}
