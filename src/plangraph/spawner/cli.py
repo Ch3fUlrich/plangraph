@@ -28,6 +28,11 @@ def _wait_runs(service, result, wait):
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
         for run in runs:
             if not run_settled(run): run.update(_read_result(service, run['run_id']))
+    if wait > 0:
+        for run in runs:
+            if (run.get('run_kind') == 'native-codex' and run.get('status') != 'running'
+                    and not run_settled(run)):
+                raise TimeoutError(f"{run['run_id']}: wait timed out before the run settled")
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""

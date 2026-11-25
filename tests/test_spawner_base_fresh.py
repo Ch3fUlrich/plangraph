@@ -1062,3 +1062,19 @@ def test_mcp_native_spawn_with_a_positive_wait_returns_the_settled_refusal(tmp_p
     assert settled['run_id'] == run_id and settled['status'] == 'refused' and settled['ended'] is not None
     ack_only = asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card=card, prompt='p')))
     assert ack_only['status'] == 'running'   # no wait requested: the admission acknowledgement
+
+
+def test_spawn_wait_timeout_does_not_report_a_provisional_native_refusal(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    service = cli.SpawnService(state=tmp_path, completion_sink=Mock(), keeper_sink=Mock())
+    run_id = 'run-' + 'd' * 32
+    pending = dict(run_id=run_id, run_kind='native-codex', role='implement',
+                   status='refused', reason=REASON, exit_code=8)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kwargs: service)
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **kw: _Supervisor(service, pending, []))
+    card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path), estimate_tokens=1))
+
+    assert cli.main(['--state', str(tmp_path), 'spawn', '--card', card, '--wait', '.04', 'prompt']) == 1
+    result = capsys.readouterr()
+    assert result.out == '' and run_id in result.err
+    assert service.result(run_id)['ended'] is None
