@@ -102,7 +102,7 @@ exports, forbid, smoke; never `heldout_check`), then `# FILE <path> (write)` blo
 `(read)` blocks, each in a fenced block, then the optional `# CHECK OUTPUT` tail (last 40-60
 lines) last. Stable material comes first so a retry keeps a byte-identical prefix
 (`Pack.prefix_chars`) for prompt-cache reuse. Budget = 0.55 x window - 8000 tokens; `gate_card` refuses a card (`leg_request_too_big`) whose
-full pack, plus the tail reserve (up to 2000 tokens, one eighth of a small budget), exceeds the
+full pack, plus the tail reserve of a default retry (the class budget's allowance, up to 2000 tokens), exceeds the
 first leg's `max_request_tokens`. An admitted card therefore has the same files in the first
 pack and every `check_tail` retry, with or without a cap (`pack_for_card(route=...)` or
 `max_request_tokens` apply `leg_budget`), and the retry prefix is the first pack. The reserve

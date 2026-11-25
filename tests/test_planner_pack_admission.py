@@ -6,16 +6,19 @@ import pytest
 
 from keeper_util import seed
 from plangraph.planner import service
-from plangraph.planner.legs import Leg
+from plangraph.planner.legs import DEFAULT_LEGS, Leg
 from test_planner_service import gate, put, repo, w  # noqa: F401  (fixtures and helpers)
 
 #: Declared request limits on a 1m window class (the class pack budget alone is far above).
 GROK_LEG = Leg(id="grok-120k", tier="free", harness="opencode", model="grok-model",
                family="grok", windows=("1m",), max_request_tokens=120000,
                trains_on_data=False)
-SHIPPED_200K = Leg(id="shipped-200k", tier="free", harness="opencode", model="shipped-model",
-                   family="shipped", windows=("1m",), max_request_tokens=200000,
-                   trains_on_data=False)
+#: The shipped 200,000-token leg, picked by normal routing: every other shipped leg is
+#: unavailable, so the route is the table's own entry.
+SHIPPED_ID = "mimo-v2.6-flash"
+OTHERS = tuple(leg.id for leg in DEFAULT_LEGS if leg.id != SHIPPED_ID)
+TINY_LEG = Leg(id="tiny-free", tier="free", harness="opencode", model="tiny-model",
+               family="tiny", windows=("128k",), max_request_tokens=3000, trains_on_data=False)
 WIDE_LEG = Leg(id="wide-free", tier="free", harness="opencode", model="wide-model",
                family="wide", windows=("1m",), max_request_tokens=1000000,
                trains_on_data=False)
@@ -62,8 +65,9 @@ def test_shipped_leg_default_first_pack_equals_the_retry_prefix(w, repo):
     (repo / "src" / "read.py").write_text("r" * 4 * 5000, encoding="utf-8")
     put(w, key, window_class="1m", estimate_tokens=1000, read_set=["src/read.py"],
         write_set=_big_write_set(repo, 185000))
-    admitted = gate(w, repo, key, legs=(SHIPPED_200K,))
-    assert admitted.ready and admitted.route.first_leg.max_request_tokens == 200000
+    admitted = gate(w, repo, key, unavailable=OTHERS)
+    assert admitted.ready and admitted.route.first_leg.id == SHIPPED_ID
+    assert admitted.route.first_leg.max_request_tokens == 200000
     default_first = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
     routed_first = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
                                          route=admitted.route)
@@ -82,10 +86,10 @@ def test_shipped_leg_default_first_pack_equals_the_retry_prefix(w, repo):
     (repo / "src" / "read2.py").write_text("r" * 4 * 19000, encoding="utf-8")
     put(w, key2, window_class="1m", estimate_tokens=1000, read_set=["src/read.py", "src/read2.py"],
         write_set=_big_write_set(repo, 185000))
-    assert not gate(w, repo, key2, legs=(SHIPPED_200K,)).ready
+    assert not gate(w, repo, key2, unavailable=OTHERS).ready
     put(w, key3, window_class="1m", estimate_tokens=1000, read_set=["src/read.py"],
         write_set=_big_write_set(repo, 194000))
-    tight = gate(w, repo, key3, legs=(SHIPPED_200K,))
+    tight = gate(w, repo, key3, unavailable=OTHERS)
     assert not tight.ready
     assert any("tail reserve" in f.message for f in tight.verdict.findings)
 
@@ -101,3 +105,24 @@ def test_retry_without_the_route_stays_in_the_cap_of_an_admitted_card(w, repo):
         retry = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
                                       check_tail=BIG_TAIL, **kw)
         assert retry.tokens <= LEG_LIMIT
+
+
+def test_small_leg_admission_uses_the_tail_allowance_of_the_default_retry(w, repo):
+    """A leg below 16,000 tokens: the default retry appends the class allowance, so admission
+    reserves the same amount and the retry stays inside the leg."""
+    key, key2 = seed(w, [("A", []), ("B", [])])
+    (repo / "src" / "a.py").write_text("x" * 4 * 2400, encoding="utf-8")
+    put(w, key, estimate_tokens=500)            # first pack about 2,500 tokens
+    refused = gate(w, repo, key, legs=(TINY_LEG,))
+    assert not refused.ready and refused.state == "needs_input"
+    assert any("tail reserve" in f.message for f in refused.verdict.findings)
+    (repo / "src" / "b.py").write_text("y\n", encoding="utf-8")
+    (repo / "src" / "a.py").write_text("x" * 4 * 700, encoding="utf-8")
+    put(w, key2, estimate_tokens=500)           # first pack about 800 tokens
+    admitted = gate(w, repo, key2, legs=(TINY_LEG,))
+    assert admitted.ready
+    first = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo)
+    retry = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
+                                  check_tail=BIG_TAIL)
+    assert retry.text[:retry.prefix_chars] == first.text
+    assert retry.tokens <= 3000

@@ -124,7 +124,8 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
             pack_tokens = context_pack.build_pack(
                 card, repo_root=Path(repo_root), key=key,
                 budget_tokens=context_pack.pack_budget(route.window_class)).tokens
-            reserve = context_pack.tail_cap_tokens(leg_max) if isinstance(leg_max, int) else 0
+            # the tail a default retry (class budget, no cap) appends, whatever the leg
+            reserve = context_pack.tail_cap_tokens(context_pack.pack_budget(route.window_class))
             if isinstance(leg_max, int) and pack_tokens <= leg_max < pack_tokens + reserve:
                 # a check_fail retry could not add its tail inside the leg cap
                 pack_error = (f"pack {pack_tokens} + tail reserve {reserve} > {leg_max}")
