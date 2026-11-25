@@ -131,16 +131,17 @@ def _work_record(record):
     sha, parents, date, subject, message = record.split("\x1f", 4)
     parents = parents.split()
     revert = delivery_revert(message)
-    full, partial = [], []
+    full, partial, trailed = [], [], []
     if revert is None:
         for label, value in trailer_entries(message):
             if label.lower() == "plan-item":
                 full.append(value)
             elif label.lower() == "plan-item-part":
                 partial.append(value)
+        trailed = list(full)
         if len(parents) > 1:
             full = list(dict.fromkeys([*full, *_MERGE_BODY_ITEM.findall(message.partition("\n")[2])]))
-    return sha, parents, date, subject, full, partial, revert
+    return sha, parents, date, subject, full, partial, revert, trailed
 
 
 def _work_log(git, repo, refs, target, previous):
@@ -244,10 +245,12 @@ def work_index(git, project, *, fresh=False, incremental=False):
             return None
         origin_stale = True
         problems.append("repository index unavailable")
-    records, reverts, partial = {}, {}, {}
-    for sha, parents, date, subject, trailers, parts, revert in (log[1].values() if log else ()):
+    records, reverts, partial, trailed = {}, {}, {}, {}
+    for sha, parents, date, subject, trailers, parts, revert, parsed in (log[1].values() if log else ()):
         if revert is not None:
             reverts[sha] = revert
+        if parsed:
+            trailed[sha] = frozenset(name.strip() for name in parsed)
         if parts:
             partial[sha] = parts
         records[sha] = (parents, {"sha": sha, "date": date, "subject": subject}, trailers)
@@ -316,6 +319,8 @@ def work_index(git, project, *, fresh=False, incremental=False):
     previous_prs = hit[1].get("last_verified_prs") if hit and prs_expected else None
     verified_prs = pulls if prs is not None and not prs_unverified else None
     result = {"commits": commits, "parts": parts, "prs": verified_prs,
+              # Names a commit carries as a parsed Plan-Item trailer (a merge body match is not one).
+              "trailed": trailed,
               "last_verified_prs": verified_prs if verified_prs is not None else previous_prs,
               "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
@@ -408,8 +413,12 @@ def indexed_parts(index, key):
     return list({part["sha"]: part for name in (key, bare) for part in parts.get(name, ())}.values())
 
 
-def indexed_work(index, key, *, limit=COMMIT_LIMIT):
-    """Resolve full/bare trailers and lane names without I/O."""
+def indexed_work(index, key, *, limit=COMMIT_LIMIT, trailers_only=False):
+    """Resolve full/bare trailers and lane names without I/O.
+
+    ``trailers_only`` drops commits that name the key only in a merge-message body,
+    before the limit applies.
+    """
     if index is None or index.get("origin_stale"):
         return {"commits": None, "lanes": None, "prs": None}
     _, bare = _split(key)
@@ -417,6 +426,9 @@ def indexed_work(index, key, *, limit=COMMIT_LIMIT):
     commits = {c["sha"]: c for name in names
                for c in index["commits"].get(name, [])}
     prs = index["prs"]
+    if trailers_only:
+        trailed = index.get("trailed", {})
+        commits = {sha: c for sha, c in commits.items() if trailed.get(sha, frozenset()) & {*names}}
     ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
     return {"commits": ordered[:limit],
             "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
