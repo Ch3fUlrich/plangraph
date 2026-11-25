@@ -78,6 +78,19 @@ else:
             '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
         assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
+    if 'lease marker' in prompt:
+        import fcntl
+        def lease_state():
+            lock = open(os.environ['CARGO_TARGET_DIR'] + '.plangraph-lock', 'a+b')
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return 'held'
+            return 'free'
+        states = [lease_state()]
+        subprocess.run(['cargo'], check=True, stdout=subprocess.DEVNULL)
+        states.append(lease_state())
+        pathlib.Path('..').resolve().joinpath('lease-states').write_text(' '.join(states))
     marker = next((name for name in ('reject marker', 'client marker', 'late marker') if name in prompt), '')
     pathlib.Path('writer.txt').write_text('written on selected host\n' + marker)
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)

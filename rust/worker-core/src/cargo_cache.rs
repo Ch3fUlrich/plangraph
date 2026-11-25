@@ -1,9 +1,11 @@
 //! Shared cache paths and the host_ready.py cargo_lease contract.
 //! Lock-file naming, holder lookup and refusal text live in `cargo_lease_diag`.
+#[cfg(unix)]
+use std::fs::OpenOptions;
 use std::{
     env,
     ffi::OsStr,
-    fs::{File, OpenOptions},
+    fs::File,
     io,
     path::{Path, PathBuf},
 };

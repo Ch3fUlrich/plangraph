@@ -47,6 +47,33 @@ pub(crate) fn identified(root: &Path) -> bool {
     cargo_output(root) || crate::shared_build_roots::recognized(root)
 }
 
+/// True when the only Cargo evidence is the spawner's build roots: no marker at the target
+/// itself. Such a target authorizes pruning those builds and nothing beside them.
+#[cfg(target_os = "linux")]
+fn build_roots_only(root: &Path) -> bool {
+    !cargo_output(root) && crate::shared_build_roots::recognized(root)
+}
+
+/// True when a Git entry sits anywhere inside `path`; a profile that holds a checkout is not Cargo output.
+#[cfg(target_os = "linux")]
+fn holds_git(path: &Path) -> bool {
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name() == ".git" {
+                return true;
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(entry.path());
+            }
+        }
+    }
+    false
+}
+
 /// Recognize debug output by Cargo's target and profile markers before whole-profile eviction.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
@@ -59,9 +86,15 @@ pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.split('-').count() >= 3)
     });
-    for parent in std::iter::once(root.to_path_buf()).chain(triples) {
+    let profiles = if build_roots_only(root) {
+        vec![]
+    } else {
+        std::iter::once(root.to_path_buf()).chain(triples).collect()
+    };
+    for parent in profiles {
         let profile = parent.join("debug");
         if !fs::symlink_metadata(&profile).is_ok_and(|meta| meta.is_dir())
+            || holds_git(&profile)
             || ![".cargo-lock", ".cargo-build-lock"].iter().any(|name| {
                 fs::symlink_metadata(profile.join(name)).is_ok_and(|meta| meta.is_file())
             })
@@ -129,7 +162,15 @@ fn build_units(parent: &Path) -> io::Result<Vec<(String, PathBuf, bool)>> {
 
 /// Includes target-triple/profile layouts; never follows directory symlinks.
 pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBuf, u64)>> {
-    let mut profiles = directories(root)?;
+    #[cfg(target_os = "linux")]
+    let only_builds = build_roots_only(root);
+    #[cfg(not(target_os = "linux"))]
+    let only_builds = false;
+    let mut profiles = if only_builds {
+        vec![]
+    } else {
+        directories(root)?
+    };
     for child in profiles.clone() {
         profiles.extend(directories(&child)?.into_iter().filter(|p| {
             matches!(
