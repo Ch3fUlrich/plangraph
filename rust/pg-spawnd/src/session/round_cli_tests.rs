@@ -1,6 +1,6 @@
 use super::{
     round_cli::{run, transcript_path},
-    round_host::LocalHost,
+    round_host::{signal_member, LocalHost, Member},
     round_store,
     round_time_tests::{Transcript, MIN, T0},
     round_watch::{blocked_outcome, state_file, Host},
@@ -491,10 +491,10 @@ fn claude_stop_exit_zero_is_not_a_stopped_session_while_agents_still_lists_it_li
 static RACING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The member exits just before the signal arrives: the kernel refuses the signal.
-fn racing_signal(pid: u32, _signal: i32) -> bool {
-    RACING.store(pid, std::sync::atomic::Ordering::SeqCst);
+fn racing_signal(member: &Member, _signal: i32) -> bool {
+    RACING.store(member.pid, std::sync::atomic::Ordering::SeqCst);
     // SAFETY: kill takes numeric identifiers and dereferences nothing.
-    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    unsafe { libc::kill(member.pid as i32, libc::SIGKILL) };
     std::thread::sleep(std::time::Duration::from_millis(300));
     false
 }
@@ -560,4 +560,115 @@ fn a_telemetry_only_pass_books_rows_and_touches_nothing_else() {
     assert_eq!(world.rows().len(), 1);
     assert!(!world.state.join("round-watch").exists());
     assert!(!world.state.join("watchdog").exists());
+}
+
+fn spawn_leader(task_dir: &Path) -> std::process::Child {
+    let mut shell = command_shell(task_dir, "sess-id-0001", "bgI", "sleep 309");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = &mut shell;
+    shell
+}
+
+fn member_of(pid: u32) -> Member {
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let (_, group, start_time) = pg_worker_core::run::group_unix::parse_stat(&text).unwrap();
+    Member {
+        pid,
+        start_time,
+        group,
+    }
+}
+
+#[test]
+fn a_signal_goes_only_to_the_member_that_was_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut shell = spawn_leader(dir.path());
+    let seen = member_of(shell.id());
+    // Another start time, or another group: a reused pid or a process that left the group.
+    assert!(!signal_member(
+        &Member {
+            start_time: seen.start_time + 1,
+            ..seen.clone()
+        },
+        libc::SIGTERM
+    ));
+    assert!(!signal_member(
+        &Member {
+            group: seen.group + 1,
+            ..seen.clone()
+        },
+        libc::SIGTERM
+    ));
+    assert!(!signal_member(
+        &Member {
+            pid: 0,
+            ..seen.clone()
+        },
+        libc::SIGTERM
+    ));
+    assert!(
+        shell.try_wait().unwrap().is_none(),
+        "none of those signals reached the process"
+    );
+    assert!(
+        signal_member(&seen, libc::SIGTERM),
+        "the member that was seen is signalled"
+    );
+    assert!(shell.wait().is_ok());
+}
+
+fn refusing_signal(_member: &Member, _signal: i32) -> bool {
+    false
+}
+
+#[test]
+fn when_no_signal_is_accepted_the_stop_is_unsignalled_and_nothing_died() {
+    let world = World::live();
+    let root = world.state.parent().unwrap().to_path_buf();
+    let mut shell = command_shell(&root, "sess-uns-0001", "bgU", "sleep 310");
+    let task = super::round_wait::TaskRef {
+        id: "bgU".into(),
+        output_path: Some(root.join("tasks/bgU.output").display().to_string()),
+        launched_from_ms: world.origin,
+        launched_to_ms: world.origin + 5_000,
+    };
+    let mut host = LocalHost::new(world.state.clone(), "sess-uns-0001".into());
+    host.send_signal = refusing_signal;
+    let owner = host.resolve_owner("writer-9", &task).expect("owner");
+    assert_eq!(
+        host.stop(&owner, &task, false),
+        super::round_watch::Stop::Unsignalled
+    );
+    assert_eq!(
+        host.stop(&owner, &task, true),
+        super::round_watch::Stop::Unsignalled
+    );
+    assert!(shell.try_wait().unwrap().is_none());
+    shell.kill().unwrap();
+    let _ = shell.wait();
+}
+
+#[test]
+fn the_owners_output_carries_the_stop_mark_for_its_action_only() {
+    let world = World::live();
+    let root = world.state.parent().unwrap().to_path_buf();
+    let mut shell = command_shell(&root, "sess-mark-0001", "bgM", "sleep 311");
+    let task = super::round_wait::TaskRef {
+        id: "bgM".into(),
+        output_path: Some(root.join("tasks/bgM.output").display().to_string()),
+        launched_from_ms: world.origin,
+        launched_to_ms: world.origin + 5_000,
+    };
+    let host = LocalHost::new(world.state.clone(), "sess-mark-0001".into());
+    assert!(!host.has_mark(&task, "r|bgM|w1"));
+    assert!(host.mark_stop(&task, "r|bgM|w1"));
+    assert!(host.has_mark(&task, "r|bgM|w1"));
+    assert!(
+        !host.has_mark(&task, "r|bgM|w2"),
+        "another action has no mark"
+    );
+    let text = fs::read_to_string(root.join("tasks/bgM.output")).unwrap();
+    assert!(text.contains("[round-watch] ending this command"), "{text}");
+    shell.kill().unwrap();
+    let _ = shell.wait();
 }
