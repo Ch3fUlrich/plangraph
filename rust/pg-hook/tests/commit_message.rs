@@ -330,7 +330,7 @@ fn a_merge_commit_and_a_stripped_message_keep_the_class_search_check() {
     );
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("line 5: malformed Class-Search"),
+        String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"),
         "{output:?}"
     );
     assert!(git(root, &["config", "commit.cleanup", "strip"])
@@ -420,4 +420,89 @@ fn a_copied_scissors_pair_in_a_message_without_an_editor_is_kept_and_checked() {
     let message = "x\n\nClass-Search: fixture -> 1 hit, 1 changed  \n\nWriter: codex";
     let output = git(root, &["commit", "--allow-empty", "-m", message]);
     assert!(!output.status.success(), "{output:?}");
+}
+
+fn editor_writes(text: &str) -> String {
+    format!("sh -c 'printf \"{text}\" > \"$1\"' --")
+}
+
+#[test]
+fn the_check_uses_gits_effective_cutoff_and_cleanup_for_an_editor_message() {
+    let dir = repo();
+    let root = dir.path();
+    // A copied marker and hint in an ordinary editor message are comments Git strips, and the line
+    // below them stays in the saved message: refused.
+    let copied = editor_writes(&format!(
+        "x\\n\\n# ------------------------ >8 ------------------------\\n# Do not modify or remove the line above.\\n{BAD}\\n\\nWriter: codex\\n"
+    ));
+    let output = commit_with_editor(root, &["--allow-empty", "--edit", "-m", "m"], &copied);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("malformed Class-Search"));
+    // Under --cleanup=scissors the first marker cuts, hint or not: the tail is discarded.
+    let cut = editor_writes(&format!(
+        "x\\n\\nWriter: codex\\n# ------------------------ >8 ------------------------\\n{BAD}\\n"
+    ));
+    let output = commit_with_editor(
+        root,
+        &["--allow-empty", "--edit", "--cleanup=scissors", "-m", "m"],
+        &cut,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !saved_body(root).contains("Class-Search"),
+        "{}",
+        saved_body(root)
+    );
+}
+
+#[test]
+fn the_check_matches_gits_whitespace_and_comment_cleanup() {
+    let dir = repo();
+    let root = dir.path();
+    // --cleanup=verbatim keeps trailing spaces, which the range check refuses.
+    let message = "x\n\nClass-Search: fixture -> 1 hit, 1 changed  \n\nWriter: codex";
+    let output = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "--cleanup=verbatim",
+            "-m",
+            message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    // A trailing no-break space survives the default editor cleanup: refused.
+    let nbsp = editor_writes(
+        "x\\n\\nClass-Search: fixture -> 1 hit, 1 changed\\302\\240\\n\\nWriter: codex\\n",
+    );
+    let output = commit_with_editor(root, &["--allow-empty", "--edit", "-m", "m"], &nbsp);
+    assert!(!output.status.success(), "{output:?}");
+    // With core.commentChar=C Git strips the line as an editor comment: the commit goes through.
+    let removed = editor_writes(&format!("x\\n\\n{BAD}\\n\\nWriter: codex\\n"));
+    let output = pg_worker_core::git_test_support::command(root)
+        .args([
+            "-c",
+            "core.commentChar=C",
+            "commit",
+            "--allow-empty",
+            "--edit",
+            "-m",
+            "m",
+        ])
+        .env("GIT_EDITOR", removed)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !saved_body(root).contains("Class-Search"),
+        "{}",
+        saved_body(root)
+    );
 }

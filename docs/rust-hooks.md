@@ -200,7 +200,7 @@ as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
 its line in the cleaned message. Value validation still runs, so misplaced keys
 cannot hide malformed attribution or skip reasons.
 
-The hook also refuses a `Class-Search:` line of the cleaned message that the `pg-policy --class-search` range check would refuse (`hit` or `hits`, nothing after `changed`, changed <= hits), through the same `pg_policy::parse`, and prints the expected form. How it follows Git's scissors cutoff for `--verbose`/editor messages is tracked as `COMMIT-MSG-HOOK-GIT-PARITY`.
+The hook also refuses a `Class-Search:` line that the `pg-policy --class-search` range check would refuse (`hit` or `hits`, nothing after `changed`, changed <= hits), through the same `pg_policy::parse`, and prints the expected form. The line is judged as Git saves it: the options of the parent `git commit` (`--cleanup`, `--verbose`, `--edit`, read by `commit_args.rs` as Git's option parser reads them) and `commit.cleanup` decide the cleanup mode, comment lines and the scissors cut, and the check runs on the cleaned message (the raw one under verbatim cleanup), for merges too. An unreadable parent command line (not Linux, a wrapper) cuts where comments are stripped.
 
 Rust hook tests construct Git commands through `pg_worker_core::git_test_support` so pre-push repository redirects cannot affect fixture init, config or commits. Fixture commands refuse the source repository and its linked worktrees.
 
