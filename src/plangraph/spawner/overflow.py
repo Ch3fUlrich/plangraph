@@ -590,6 +590,13 @@ def native_queue_card(service, card, options):
     return lane_admit(service, card, options.get('prompt', ''))
 
 
+def keep_lane(held, name, refusal):
+    """Note a host's refusal in `held`; a lane refusal is not replaced by a later generic failure of that host."""
+    if refusal.startswith(LANE_REFUSALS) or name not in held:
+        held[name] = refusal
+    return refusal
+
+
 def lane_text(refusals, text):
     """`text` after the lane refusals that hosts reported (`refusals`: host -> refusal), which keep their holders."""
     lanes = [why for why in refusals.values() if str(why).startswith(LANE_REFUSALS)]

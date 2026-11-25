@@ -431,7 +431,7 @@ def admit(service, options, *, card=None, preview=False):
                 record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
                 record.setdefault('status', 'unknown')
                 break
-            rows[name]['refusal'] = held[name] = refusal
+            rows[name]['refusal'] = overflow.keep_lane(held, name, refusal)
     except Exception as exc:
         if queued is not None:
             _close_queue(service, queued, status='failed', exit_code=1, reason='admission_failed',
