@@ -131,7 +131,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
     let dir = home.join(".local/state/plangraph/ci-watch");
     let keeper_define = |task: &mut Task| {
         if use_keeper {
-            keeper::define(env, task)
+            keeper::define(env, task, &dir.join("tasks.jsonl"))
         } else {
             Ok(false)
         }
@@ -205,6 +205,46 @@ fn cancel_item(
     }
 }
 
+/// An open pull request's head commit, and what a run needs to be matched to it.
+struct Head {
+    pr: u64,
+    owner_only: bool,
+    branch: String,
+}
+
+/// The pull requests (or main) a run belongs to. A push to main is main's alone, whatever pull requests
+/// share its commit. Any other run belongs to the pull requests it names (`pull_requests`), else to the
+/// only pull request on its commit, else to those whose branch it ran on.
+fn targets_of(
+    run: &Value,
+    sha: &str,
+    event: &str,
+    heads: &BTreeMap<String, Vec<Head>>,
+) -> Vec<(Option<u64>, bool)> {
+    if run["head_branch"] == "main" && event != "pull_request" && event != "pull_request_target" {
+        return vec![(None, false)];
+    }
+    let on_commit: &[Head] = heads.get(sha).map_or(&[], Vec::as_slice);
+    let named: Vec<u64> = run["pull_requests"]
+        .as_array()
+        .map(|prs| prs.iter().filter_map(|pr| pr["number"].as_u64()).collect())
+        .unwrap_or_default();
+    let matched = |head: &&Head| {
+        if !named.is_empty() {
+            named.contains(&head.pr)
+        } else if on_commit.len() == 1 {
+            true
+        } else {
+            run["head_branch"].as_str() == Some(head.branch.as_str())
+        }
+    };
+    on_commit
+        .iter()
+        .filter(matched)
+        .map(|head| (Some(head.pr), head.owner_only))
+        .collect()
+}
+
 /// One pass: the sweep first, so an item of an old head is cancelled before the scan files the same
 /// failing test on the moved head, then the scan.
 #[allow(clippy::too_many_arguments)]
@@ -268,10 +308,12 @@ fn scan_with_owner(
         }
         let sha = text(&pr["head"], "sha")?.to_owned();
         // One commit can head several pull requests (a train and an ordinary one): each keeps its entry.
-        heads
-            .entry(sha)
-            .or_insert_with(Vec::new)
-            .push((number(&pr, "number")?, lane == sweep::Lane::Owner));
+        let branch = pr["head"]["ref"].as_str().unwrap_or_default().to_owned();
+        heads.entry(sha).or_insert_with(Vec::new).push(Head {
+            pr: number(&pr, "number")?,
+            owner_only: lane == sweep::Lane::Owner,
+            branch,
+        });
     }
     let workflow = "actions/workflows/tests.yml/runs?status=completed&per_page=100";
     // Only the newest completed run per head/event is used and GitHub lists
@@ -287,17 +329,7 @@ fn scan_with_owner(
     for run in runs {
         let sha = text(&run, "head_sha")?;
         let event = text(&run, "event")?;
-        let mut targets: Vec<(Option<u64>, bool)> = heads
-            .get(sha)
-            .map(|prs| prs.iter().map(|(pr, owner)| (Some(*pr), *owner)).collect())
-            .unwrap_or_default();
-        if targets.is_empty()
-            && run["head_branch"] == "main"
-            && event != "pull_request"
-            && event != "pull_request_target"
-        {
-            targets.push((None, false));
-        }
+        let targets = targets_of(&run, sha, event, &heads);
         for (pr, owner_only) in targets {
             let head = match pr {
                 Some(pr) => format!("pr-{pr}"),

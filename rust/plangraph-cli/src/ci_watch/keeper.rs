@@ -88,7 +88,12 @@ fn http(env: &BTreeMap<String, String>) -> Result<Http> {
     })
 }
 
-pub fn define(env: &BTreeMap<String, String>, task: &mut Task) -> Result<bool> {
+/// Defines the fix item of `task`; the key it is about to create is written to the row in `tasks` first.
+pub fn define(
+    env: &BTreeMap<String, String>,
+    task: &mut Task,
+    tasks: &std::path::Path,
+) -> Result<bool> {
     let base = env.get("PG_URL").ok_or("PG_URL required")?;
     let token_path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE required")?;
     let token = std::fs::read_to_string(token_path).map_err(|_| "cannot read keeper token file")?;
@@ -98,13 +103,14 @@ pub fn define(env: &BTreeMap<String, String>, task: &mut Task) -> Result<bool> {
         .timeout_global(Some(Duration::from_secs(30)))
         .build()
         .into();
-    deliver(
+    deliver_with(
         &mut Http {
             agent,
             base: base.trim_end_matches('/').into(),
             token: token.trim().into(),
         },
         task,
+        &mut |task| persist_row(tasks, task),
     )
 }
 fn terminal(item: &Value) -> Result<bool> {
@@ -114,7 +120,22 @@ fn terminal(item: &Value) -> Result<bool> {
         None => Err("keeper response missing state".into()),
     }
 }
+/// Writes `task` over its row on disk, so the key of an item about to be created is never only in memory.
+fn persist_row(path: &std::path::Path, task: &Task) -> Result<()> {
+    let mut rows = super::load_tasks(path)?;
+    rows.insert(task.key.clone(), task.clone());
+    super::save_tasks(path, &rows)
+}
+#[cfg(test)]
 fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {
+    deliver_with(keeper, task, &mut |_| Ok(()))
+}
+/// `before_create` runs with the row's selected key set, right before the keeper is asked to create it.
+fn deliver_with(
+    keeper: &mut impl Keeper,
+    task: &mut Task,
+    before_create: &mut dyn FnMut(&Task) -> Result<()>,
+) -> Result<bool> {
     let mut key = task.keeper_key.clone().unwrap_or_else(|| task.key.clone());
     let marker = format!("[ci-watch-run:{}]", task.run_id);
     if let Some(item) = keeper.show(&key)? {
@@ -150,6 +171,7 @@ fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {
     // The key is kept on the row before the create: a reply lost after the item exists must not lose
     // the key the sweep has to close.
     task.keeper_key = Some(key.clone());
+    before_create(task)?;
     keeper.create(definition(task, &key))?;
     Ok(true)
 }
