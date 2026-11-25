@@ -105,11 +105,41 @@ tested one. A reading that demands a valid fast-forward of the tested commit, or
 current-main result, is the plain per-group bound with a third rebuild; it is the revert, not this ruling.
 
 What the experiment records, per retry train and per day, from the live landing journal (the model counts
-runs and rebuilds, not minutes): CI runs of the retry train (`run`; model: 3 at most in tested fast-forward,
-4 and more under the plain bound), minutes an ordinary part waited from ready to its train's start (model:
-behind two rebuilds, not behind the main-move rate), and red main after a stale-k landing (a landing that
+runs and rebuilds, not minutes): CI runs of the retry train (`run`; model: 3 once a green result is there to land and the moves of main
+miss its paths, 4 and more under the plain bound and whenever main moves again before a green result
+exists), minutes an ordinary part waited from ready to its train's start (model: behind two rebuilds once
+a result exists, not behind the main-move rate), and red main after a stale-k landing (a landing that
 went stale; model: `stale_landings`). At the first red main after a stale-k landing, set `stale_k` to 0 and
 return to the plain per-group bound.
+
+## Plan-row cases and their tests
+
+TRAIN-PARTS-DISJOINT-WITH-BOUNDED-DEFERRAL: nine parts on one path as 1, 1, 7 under policy (a), and 1 each under
+(b): `tests/selection.rs`; 101 due parts give 100 and one Cap: `tests/selection.rs`; a part without a reason
+fails verification: `tests/selection.rs`, `tests/dispositions.rs`; a restart keeps the deferral age:
+`tests/selection.rs`; the child of a reverted part refused at registration and at build: `tests/selection.rs`;
+every disposition with an accepting and a refusing case: `tests/dispositions.rs`.
+TRAIN-RED-ESCALATION-AFTER-TWO-ROUNDS: after two red rounds no fix in place, drop or split; blocked descendants
+leave with the part; a restart keeps the round count; a fresh CI run on the exact tree; a landing whose tree
+differs from the tested tree is refused: `tests/builder.rs`.
+TRAIN-SPECULATIVE-NEXT: a candidate built and tested on the unlanded train; promoted only in tested
+fast-forward on its exact predecessor; discarded when the predecessor or main changes; refused in pull request
+merge mode; a replay over trains 9 to 16 keeps main advancing one train at a time: `tests/speculative.rs`,
+`tests/replay.rs`.
+The two further cases of TRAIN-SELECTION-MODEL: a red train of 14 parts whose retry group of seven runs with
+no ordinary part due (`tests/red_trains.rs`); a settled legacy train with no included list whose dependent
+child waits for the parent's verified outcome (`tests/dispositions.rs`, `tests/red_trains.rs`). The invariants
+hold over every ordering to depth 7 (`tests/exhaustive.rs`).
+
+## What is still unbounded
+
+With the experiment on, the retry train is not rebuilt a third time only while a green result exists. Main
+moving before the bind, or while the CI still runs, makes a rebuild necessary and it is allowed (a train that
+cannot bind or finish on a stale base would stall for good), so three moves of main before the first green
+result gave four retry CI starts while the ordinary part stayed queued (`tests/stale_bound.rs`, the move
+before the bind). A rule that would bound it, such as holding main while a retry train is bound and testing
+(no move of main until it lands or goes red), changes the retry precedence of D-6102 and goes to the
+operator; the model does not pick one.
 
 ## Limits
 

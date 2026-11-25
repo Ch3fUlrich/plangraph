@@ -165,3 +165,14 @@ fn a_candidate_whose_verification_was_lost_cannot_be_promoted() {
     );
     assert!(m.invariants_hold());
 }
+
+#[test]
+fn a_candidate_cannot_start_on_a_predecessor_built_on_a_main_that_has_moved() {
+    let mut m = pipeline(tested_ff());
+    ok(&mut m, Event::MainMove { paths: 0 });
+    assert_eq!(denied(&mut m, Event::Speculate { pred: 0 }), Denied::Stale);
+    // Rebuilt and tested again, the predecessor is a base.
+    ok(&mut m, Event::Rebuild { train: 0 });
+    start(&mut m, 0);
+    assert_eq!(ok(&mut m, Event::Speculate { pred: 0 }), Outcome::Train(1));
+}

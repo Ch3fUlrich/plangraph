@@ -67,6 +67,7 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         &old,
         need(flags, "main")?,
         need(flags, "head")?,
+        flags.get("parent").map(String::as_str),
         trains,
     )?;
     if let Some(out) = flags.get("records-out") {
@@ -79,13 +80,14 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         append(out, &records)?;
     }
     if let Some(path) = flags.get("carry-out") {
-        // Both the ACCEPT and the part CI carry: persist the carry for the builder; otherwise the entry
-        // an earlier assessment left for this head is cleared.
-        let carry = match (&d.accept, &d.ci) {
-            (Accept::Carried { old_head, new_head }, Ci::Carried { .. }) => Some(Carry {
+        // The ACCEPT carries: persist the carry for the builder, with whether the part CI carried too (they
+        // are tracked apart); otherwise the entry an earlier assessment left for this head is cleared.
+        let carry = match &d.accept {
+            Accept::Carried { old_head, new_head } => Some(Carry {
                 old_head: old_head.clone(),
                 new_head: new_head.clone(),
                 evidence: old.clone(),
+                ci_carried: matches!(d.ci, Ci::Carried { .. }),
             }),
             _ => None,
         };
@@ -147,6 +149,20 @@ pub(super) fn red_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
         (RedKind::Flake, false) => "RED flake: a carried ACCEPT stays".to_owned(),
         _ => "RED genuine: a carried ACCEPT is void".to_owned(),
     };
+    if voids_accept(kind) {
+        // A voided ACCEPT stays voided: the stored evidence says so and the carry of the head is dropped,
+        // so a later green CI run cannot bring it back at the next admission.
+        if let Some(path) = flags.get("evidence") {
+            let mut e: Evidence =
+                serde_json::from_slice(&read("evidence")?).map_err(|e| format!("{path}: {e}"))?;
+            e.accept = false;
+            std::fs::write(path, serde_json::to_vec(&e).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("{path}: {e}"))?;
+        }
+        if let (Some(carries), Some(head)) = (flags.get("carries"), flags.get("head")) {
+            store_carry(carries, head, None)?;
+        }
+    }
     let merge = match may_merge(ci_green, &main) {
         Ok(()) => "MERGE ok".to_owned(),
         Err(word) => format!("MERGE refused {word}"),
@@ -216,12 +232,14 @@ pub(super) fn admit_carries(
             .iter()
             .find(|c| c.new_head == p.head && c.old_head == p.receipt.head);
         if let Some(c) = found {
-            let d = evidence_git::assess(repo, &c.evidence, base, &p.head, trains)?;
-            if matches!(
-                (&d.accept, &d.ci),
-                (Accept::Carried { .. }, Ci::Carried { .. })
-            ) {
-                p.receipt.carried = Some(c.clone());
+            let parent = p.parent.as_ref().map(|q| q.head.as_str());
+            let d = evidence_git::assess(repo, &c.evidence, base, &p.head, parent, trains)?;
+            // The receipt is the ACCEPT; whether the part CI carried is a fact of its own that the carry
+            // reports, so a fresh CI run can stand next to the carried ACCEPT.
+            if matches!(d.accept, Accept::Carried { .. }) {
+                let mut carry = c.clone();
+                carry.ci_carried = matches!(d.ci, Ci::Carried { .. });
+                p.receipt.carried = Some(carry);
             }
         }
     }

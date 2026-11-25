@@ -39,6 +39,10 @@ pub struct Carry {
     pub old_head: String,
     pub new_head: String,
     pub evidence: super::evidence::Evidence,
+    /// The part CI carried too. The ACCEPT and the CI are tracked apart: past the train bound the ACCEPT
+    /// still carries and the part CI must be a fresh run.
+    #[serde(default)]
+    pub ci_carried: bool,
 }
 
 impl PartIn {

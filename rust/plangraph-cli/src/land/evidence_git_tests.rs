@@ -6,12 +6,12 @@ use super::evidence_tests::{evidence, facts, key, paths};
 // Git-backed: the facts come from the repository.
 
 fn assess(fx: &Fx, old: &Evidence, main: &str, head: &str, now: u64) -> Decision {
-    evidence_git::assess(fx.path(), old, main, head, now).unwrap()
+    evidence_git::assess(fx.path(), old, main, head, None, now).unwrap()
 }
 
 fn recorded(fx: &Fx, main: &str, head: &str) -> Evidence {
     Evidence {
-        key: evidence_git::key_of(fx.path(), main, head).unwrap(),
+        key: evidence_git::key_on(fx.path(), main, head, None).unwrap(),
         base: main.into(),
         head: head.into(),
         trains_at_base: 0,
@@ -110,7 +110,7 @@ fn the_patch_id_is_stable_across_a_clean_rebase_and_differs_for_another_patch() 
     let head = fx.commit(&base, "a.txt", "a\n");
     let main1 = advance_main(&fx, "log.txt", "entry 1\n");
     let new_head = rebased(&fx, &head, &main1);
-    let k = |m: &str, h: &str| evidence_git::key_of(fx.path(), m, h).unwrap();
+    let k = |m: &str, h: &str| evidence_git::key_on(fx.path(), m, h, None).unwrap();
     assert_eq!(k(&base, &head), k(&main1, &new_head));
     let other = fx.commit(&base, "a.txt", "different\n");
     assert_ne!(k(&base, &head).patch_id, k(&base, &other).patch_id);
@@ -314,13 +314,13 @@ fn a_whitespace_only_change_to_a_string_is_a_different_patch() {
     let base = fx.base();
     let a = fx.commit(&base, "a.rs", "let s = \"ab\";\n");
     let b = fx.commit(&base, "a.rs", "let s = \"a b\";\n");
-    let k = |h: &str| evidence_git::key_of(fx.path(), &base, h).unwrap();
+    let k = |h: &str| evidence_git::key_on(fx.path(), &base, h, None).unwrap();
     assert_ne!(k(&a).patch_id, k(&b).patch_id);
     // The same patch rebased over an unrelated main change keeps its identity.
     let main1 = advance_main(&fx, "log.txt", "entry 1\n");
     let moved = rebased(&fx, &a, &main1);
     assert_eq!(
-        evidence_git::key_of(fx.path(), &main1, &moved).unwrap(),
+        evidence_git::key_on(fx.path(), &main1, &moved, None).unwrap(),
         k(&a)
     );
 }
@@ -368,24 +368,32 @@ fn a_carry_is_reassessed_at_admission_and_a_superseded_one_is_cleared() {
             ("trains-landed", trains),
         ]);
         super::evidence_cli::admit_carries(fx.path(), build_base, &f, &mut parts).unwrap();
-        parts[0].check_receipt().is_ok()
+        // The receipt is the ACCEPT; whether the part CI carried is reported next to it.
+        (
+            parts[0].check_receipt().is_ok(),
+            parts[0].receipt.carried.as_ref().map(|c| c.ci_carried),
+        )
     };
     // One format for both entry points: assess writes the file that build reads.
     super::evidence_cli::assess_cli(&assess(&main1, &new_head, "1")).unwrap();
     assert!(!part(&head).check_receipt().is_ok());
-    assert!(admit(&main1, "1", &head));
+    assert_eq!(admit(&main1, "1", &head), (true, Some(true)));
     // Only for exactly the heads the carry names.
-    assert!(!admit(&main1, "1", &base));
-    // Four trains landed since the evidence base: the CI must run again, so the old carry is refused
-    // although its heads still match.
-    assert!(!admit(&main1, "4", &head));
+    assert_eq!(admit(&main1, "1", &base), (false, None));
+    // Four trains landed since the evidence base: the ACCEPT still carries and the part CI must run
+    // again; the carry says so, and the receipt is admitted for a fresh CI run to stand beside it.
+    assert_eq!(admit(&main1, "4", &head), (true, Some(false)));
+    super::evidence_cli::assess_cli(&assess(&main1, &new_head, "4")).unwrap();
+    assert!(std::fs::read_to_string(&carries)
+        .unwrap()
+        .contains("\"ci_carried\":false"));
     // Main moved onto a path of the batch since the assessment: refused at the base being built.
     let main2 = advance_main(&fx, "a.txt", "other\n");
-    assert!(!admit(&main2, "1", &head));
+    assert_eq!(admit(&main2, "1", &head), (false, None));
     // Reassessing without a carry clears the entry the earlier assessment left.
-    super::evidence_cli::assess_cli(&assess(&main1, &new_head, "4")).unwrap();
+    super::evidence_cli::assess_cli(&assess(&main2, &new_head, "1")).unwrap();
     assert_eq!(std::fs::read_to_string(&carries).unwrap(), "[]");
-    assert!(!admit(&main1, "1", &head));
+    assert_eq!(admit(&main1, "1", &head), (false, None));
 }
 
 #[test]
@@ -530,4 +538,120 @@ fn a_mainline_merge_that_takes_a_side_parents_version_of_a_file_still_counts() {
         matches!(&d.accept, Accept::Void { reason: Void::MainTouched(t), .. } if t.contains("shared.txt")),
         "{d:?}"
     );
+}
+
+#[test]
+fn a_genuine_red_voids_the_stored_accept_and_a_later_green_ci_cannot_bring_it_back() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let head = fx.commit(&base, "a.txt", "a\n");
+    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
+    let new_head = rebased(&fx, &head, &main1);
+    let dir = tempfile::tempdir().unwrap();
+    let ev = dir.path().join("ev.json");
+    std::fs::write(
+        &ev,
+        serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
+    )
+    .unwrap();
+    let carries = dir.path().join("carries.json");
+    let assess = flags(&[
+        ("repo", fx.path().to_str().unwrap()),
+        ("evidence", ev.to_str().unwrap()),
+        ("main", &main1),
+        ("head", &new_head),
+        ("trains-now", "1"),
+        ("carry-out", carries.to_str().unwrap()),
+    ]);
+    super::evidence_cli::assess_cli(&assess).unwrap();
+    assert!(std::fs::read_to_string(&carries)
+        .unwrap()
+        .contains(&new_head));
+    // A genuine red: the ACCEPT is void in the stored evidence and the carry of the head is dropped.
+    let red = dir.path().join("red.json");
+    let state = dir.path().join("main.json");
+    std::fs::write(
+        &red,
+        r#"{"failing":["t1"],"failing_without_patch":[],"hung":[]}"#,
+    )
+    .unwrap();
+    std::fs::write(&state, r#"{"state":"green"}"#).unwrap();
+    let out = super::evidence_cli::red_cli(&flags(&[
+        ("red", red.to_str().unwrap()),
+        ("ci-green", "false"),
+        ("main-state", state.to_str().unwrap()),
+        ("evidence", ev.to_str().unwrap()),
+        ("carries", carries.to_str().unwrap()),
+        ("head", &new_head),
+    ]))
+    .unwrap();
+    assert_eq!(out[0], "RED genuine: a carried ACCEPT is void");
+    assert_eq!(std::fs::read_to_string(&carries).unwrap(), "[]");
+    // A later green CI run of the same head: the evidence says accept false, so nothing carries.
+    let mut green: Evidence = serde_json::from_slice(&std::fs::read(&ev).unwrap()).unwrap();
+    assert!(!green.accept);
+    green.ci_green = true;
+    std::fs::write(&ev, serde_json::to_vec(&green).unwrap()).unwrap();
+    let out = super::evidence_cli::assess_cli(&assess).unwrap();
+    assert_eq!(out[0], "ACCEPT none");
+    assert_eq!(std::fs::read_to_string(&carries).unwrap(), "[]");
+    // A flake leaves everything as it was.
+    std::fs::write(
+        &red,
+        r#"{"failing":["t1"],"failing_without_patch":["t1"],"hung":[]}"#,
+    )
+    .unwrap();
+    green.accept = true;
+    std::fs::write(&ev, serde_json::to_vec(&green).unwrap()).unwrap();
+    super::evidence_cli::red_cli(&flags(&[
+        ("red", red.to_str().unwrap()),
+        ("ci-green", "false"),
+        ("main-state", state.to_str().unwrap()),
+        ("evidence", ev.to_str().unwrap()),
+    ]))
+    .unwrap();
+    let kept: Evidence = serde_json::from_slice(&std::fs::read(&ev).unwrap()).unwrap();
+    assert!(kept.accept);
+}
+
+#[test]
+fn a_stacked_child_is_keyed_on_its_own_diff_so_a_parent_only_change_leaves_its_evidence() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let p = fx.path();
+    // Parent P changes a.txt; child C, stacked on P, changes b.txt.
+    let parent = fx.commit(&base, "a.txt", "parent\n");
+    let child = fx.commit(&parent, "b.txt", "child\n");
+    let old = Evidence {
+        key: evidence_git::key_on(p, &base, &child, Some(&parent)).unwrap(),
+        base: base.clone(),
+        head: child.clone(),
+        trains_at_base: 0,
+        accept: true,
+        ci_green: true,
+    };
+    // The parent is amended (its own content changes) and the child is rebased onto it.
+    let parent2 = fx.commit(&base, "a.txt", "parent, amended\n");
+    g(p, &["checkout", "-q", "--detach", &parent2]);
+    g(p, &["cherry-pick", &child]);
+    let child2 = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "main"]);
+    let assess =
+        |parent: Option<&str>| evidence_git::assess(p, &old, &base, &child2, parent, 1).unwrap();
+    // Keyed on the diff against the parent: the child's patch and paths are unchanged.
+    assert!(matches!(
+        assess(Some(&parent2)).accept,
+        Accept::Carried { .. }
+    ));
+    // Keyed against main, the unlanded parent's diff is part of the child's and the key moved.
+    assert!(matches!(
+        assess(None).accept,
+        Accept::Void {
+            reason: Void::PatchIdChanged,
+            ..
+        } | Accept::Void {
+            reason: Void::PathsChanged,
+            ..
+        }
+    ));
 }

@@ -41,7 +41,7 @@ fn case() -> Case {
     let base = fx.base();
     let old = fx.commit(&base, "a.txt", "a\n");
     let evidence = Evidence {
-        key: evidence_git::key_of(fx.path(), &base, &old).unwrap(),
+        key: evidence_git::key_on(fx.path(), &base, &old, None).unwrap(),
         base: base.clone(),
         head: old.clone(),
         trains_at_base: 0,
@@ -177,18 +177,40 @@ fn build_and_verify_refuse_the_receipt_of_the_old_head_without_a_carry_it_can_ad
     let c = case();
     let good: Out = tempfile::tempdir().unwrap();
     c.build(c.parts(), true, "1", good.path()).unwrap();
-    // Without --carries, and past the train bound: the build refuses at admission, by the receipt.
-    for (carries, trains) in [(false, "1"), (true, "4")] {
-        let out: Out = tempfile::tempdir().unwrap();
-        let err = c.build(c.parts(), carries, trains, out.path()).unwrap_err();
-        assert!(err.contains("receipt:"), "{err}");
-    }
+    // Without --carries the build refuses at admission, by the receipt.
+    let out: Out = tempfile::tempdir().unwrap();
+    let err = c.build(c.parts(), false, "1", out.path()).unwrap_err();
+    assert!(err.contains("receipt:"), "{err}");
     // The verifier refuses the same artifacts the same way, after the freeze matched: not a freeze failure.
-    for (carries, trains) in [(false, "1"), (true, "4")] {
-        let err = c.verify(good.path(), carries, trains).unwrap_err();
-        assert!(err.contains("receipt:"), "{err}");
-        assert!(!err.contains("freeze refused"), "{err}");
-    }
+    let err = c.verify(good.path(), false, "1").unwrap_err();
+    assert!(err.contains("receipt:"), "{err}");
+    assert!(!err.contains("freeze refused"), "{err}");
+}
+
+#[test]
+fn past_the_train_bound_the_accept_is_still_admitted_and_the_carry_says_the_ci_is_not() {
+    let c = case();
+    let out: Out = tempfile::tempdir().unwrap();
+    // Four trains landed: the part CI must run again, the carried ACCEPT stands next to a fresh run.
+    c.build(c.parts(), true, "4", out.path()).unwrap();
+    c.verify(out.path(), true, "4").unwrap();
+    let result: BuildResult =
+        serde_json::from_slice(&std::fs::read(out.path().join("t1.result.json")).unwrap()).unwrap();
+    let carried = result.snapshot[0].receipt.carried.as_ref().unwrap();
+    assert!(!carried.ci_carried);
+    let within: Out = tempfile::tempdir().unwrap();
+    c.build(c.parts(), true, "1", within.path()).unwrap();
+    let result: BuildResult =
+        serde_json::from_slice(&std::fs::read(within.path().join("t1.result.json")).unwrap())
+            .unwrap();
+    assert!(
+        result.snapshot[0]
+            .receipt
+            .carried
+            .as_ref()
+            .unwrap()
+            .ci_carried
+    );
 }
 
 #[test]

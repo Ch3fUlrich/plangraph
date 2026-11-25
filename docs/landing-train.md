@@ -92,7 +92,11 @@ assessment logs what it decided, not how the head came about.
 voids an ACCEPT; it never lets a red required CI merge. `evidence-red --red FILE --ci-green BOOL --main-state FILE` prints whether a red is a flake and, separately,
 whether the merge gate lets the batch in. `evidence-assess --records-out FILE --day D --batch B` and `evidence-record` append the log lines (one
 event counts once however often it is logged; `--kind landed` logs the denominator); `evidence-report --records FILE` prints per day the rebases (assessments where the head changed), carried ACCEPTs and CI
-runs, re-reviews and fix rounds caused by a rebase.
+runs, re-reviews and fix rounds caused by a rebase. A genuine red given `--evidence FILE --carries FILE --head H` also voids the stored ACCEPT and drops the
+carry of the head, so a later green CI run does not revive it. The ACCEPT and the part CI are tracked apart:
+past the train bound the carry still admits the receipt and says `ci_carried` false, so a fresh CI run stands
+beside it. A part stacked on an unlanded parent is keyed on its diff against that parent (`--parent SHA`;
+the builder takes it from the part's parent), so a change of the parent alone leaves the child's evidence.
 
 ## Push a built train
 

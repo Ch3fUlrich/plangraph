@@ -105,9 +105,13 @@ fn patch_identity(dir: &Path, from: &str, to: &str) -> Result<String, String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-/// The evidence key of `head` on `main`: patch-id and paths of `merge-base(main, head)..head`.
-pub fn key_of(dir: &Path, main: &str, head: &str) -> Result<Key, String> {
-    let fork = git::out(dir, &["merge-base", main, head])?;
+/// The evidence key of a part's own diff: patch-id and paths of `merge-base(main, head)..head`. A part stacked on an unlanded parent is diffed against that parent's head,
+/// the registrar's part diff base, so a change of the parent alone does not change the child's key.
+pub fn key_on(dir: &Path, main: &str, head: &str, parent: Option<&str>) -> Result<Key, String> {
+    let fork = match parent {
+        Some(p) => p.to_owned(),
+        None => git::out(dir, &["merge-base", main, head])?,
+    };
     Ok(Key {
         patch_id: patch_identity(dir, &fork, head)?,
         paths: paths_between(dir, &fork, head)?,
@@ -137,10 +141,11 @@ pub fn assess(
     old: &Evidence,
     main: &str,
     head: &str,
+    parent: Option<&str>,
     trains_now: u64,
 ) -> Result<Decision, String> {
     let facts = Facts {
-        key_now: key_of(dir, main, head)?,
+        key_now: key_on(dir, main, head, parent)?,
         new_base: main.to_owned(),
         new_head: head.to_owned(),
         main_paths: paths_touched_since(dir, &old.base, main)?,

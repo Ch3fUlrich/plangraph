@@ -30,6 +30,11 @@ impl Model {
         if p.closed || p.kind != Kind::Ordinary || !p.sealed || p.ci == Ci::Red {
             return Err(Denied::Phase);
         }
+        // The candidate sits on the exact commit under test: a predecessor built on a main that has moved
+        // since, or whose tree is not the one tested, is not a base for it.
+        if p.base != self.main || p.tested != Some(p.tree) {
+            return Err(Denied::Stale);
+        }
         if self.live_spec() {
             return Err(Denied::OrdinaryOpen);
         }

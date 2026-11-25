@@ -285,3 +285,33 @@ fn an_overlap_reason_for_a_part_that_was_not_ready_at_the_cut_is_refused() {
     record(&mut m, 1, Disposition::Overlap { with: 0, waited: 1 });
     assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
 }
+
+#[test]
+fn a_part_that_becomes_due_after_the_verification_unverifies_the_train_before_its_ci_starts() {
+    let specs = vec![spec(1, None), spec(1, None)];
+    let mut m = Model::new(policy(9, 2, 0, Order::Oldest), specs);
+    register_all(&mut m, [0, 1]);
+    ok(&mut m, Event::Select);
+    ok(&mut m, Event::VerifyComplete { train: 0 });
+    let base = m.main();
+    ok(
+        &mut m,
+        Event::Bind {
+            train: 0,
+            build: 0,
+            base,
+            policy: POLICY,
+        },
+    );
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Tick);
+    // The deferred part has waited its bound: the cached verification must not let the CI seal the train.
+    assert_eq!(
+        denied(&mut m, Event::StartCi { train: 0 }),
+        Denied::Unverified
+    );
+    // It joins, the train is verified again, and the CI starts.
+    ok(&mut m, Event::Join { part: 1, train: 0 });
+    start(&mut m, 0);
+    assert_eq!(m.train_parts(0), [0, 1]);
+}

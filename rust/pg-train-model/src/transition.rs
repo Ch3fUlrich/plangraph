@@ -127,6 +127,18 @@ impl Model {
                 for p in self.parts.iter_mut().filter(|p| p.status == Status::Ready) {
                     p.waited = (p.waited + 1).min(cap);
                 }
+                // A part that became due makes a recorded reason untrue: the verification of that train
+                // no longer holds, whatever was cached when it was made.
+                for i in 0..self.trains.len() {
+                    let t = &self.trains[i];
+                    if !t.closed
+                        && !t.sealed
+                        && t.checked
+                        && self.verify_train(i as TrainId).is_err()
+                    {
+                        self.trains[i].checked = false;
+                    }
+                }
                 Ok(Outcome::Applied)
             }
             Event::Select => self.select_ordinary(),
