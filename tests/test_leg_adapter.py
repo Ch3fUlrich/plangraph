@@ -116,13 +116,24 @@ def test_catalog_policy_is_not_mutated(tmp_path):
     assert not calls
 
 
-def test_bounded_discovery(monkeypatch):
+def test_bounded_discovery(monkeypatch, opencode_bin):
+    binary = opencode_bin
     def run(argv, **kwargs):
-        assert argv == ['opencode', 'models', '--standalone']
+        assert argv == [binary, 'models', '--standalone']
         assert kwargs['timeout'] == 8 and kwargs['shell'] is False
         return SimpleNamespace(stdout='opencode-go/sample\n')
     monkeypatch.setattr(subprocess, 'run', run)
     assert leg_state.LegAdapter.standalone_models() == ['opencode-go/sample']
+
+
+@pytest.fixture(autouse=True)
+def opencode_bin(monkeypatch, tmp_path_factory):
+    """An absolute harness binary the one resolver finds by its env override, whatever the host PATH."""
+    binary = tmp_path_factory.mktemp('harness') / 'opencode'
+    binary.write_text('#!/bin/sh\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('PLANGRAPH_OPENCODE_BIN', str(binary))
+    return str(binary)
 
 
 def test_discovery_child_never_inherits_parent_only_management_token(monkeypatch):

@@ -16,7 +16,7 @@ import uuid
 from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
-from plangraph.fleet_sync.genconfig import config_dir, generate
+from plangraph.fleet_sync.genconfig import config_dir, generate, host_config  # noqa: F401  (host_config is re-exported)
 from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
@@ -74,19 +74,6 @@ def placement_config(registry, role=None):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         logging.warning('invalid hosts registry routes; overflow disabled')
         return {'hosts': {}, 'public_repos': []}
-
-
-def host_config(registry, name):
-    for host in registry.get('hosts', []):
-        if not isinstance(host, dict):
-            continue
-        aliases = host.get('aliases')
-        names = [host.get('id'), *(aliases if isinstance(aliases, list) else [])]
-        if not isinstance(name, str) or not any(
-                isinstance(alias, str) and alias.lower() == name.lower() for alias in names):
-            continue
-        return host
-    return {}
 
 
 def placement_policy(registry, config):
@@ -165,7 +152,7 @@ def _disk_refusal(row):
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=(),
-            compare_local=False, local_fallback=False):
+            compare_local=False, local_fallback=False, leg=None):
     """Select from config-enriched readiness records; age is computed on read."""
     local_reason = local_refusal or memory_refusal(local_mem_mb, role_mb, floor_mb)
     if not local_reason and not remote_first and not compare_local:
@@ -178,6 +165,9 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
     records = ready_records.items() if remote_first else sorted(ready_records.items())
     for index, (name, row) in enumerate(records):
         reason = row.get('refusal')
+        served = (row.get('served_legs') or {}).get(leg) if leg else None
+        if not reason and isinstance(served, dict) and served.get('served') is False:
+            reason = f"leg_not_served: {leg} ({served.get('reason')})"   # the host's own probe says so
         if not reason:
             if not row.get('ssh'):
                 reason = 'no_route'

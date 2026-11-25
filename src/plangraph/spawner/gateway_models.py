@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import types
 
-# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
-PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
+from plangraph.routing_support.catalog_seed import SEED_PROVIDERS
+
+# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg;
+# the pairs are the catalog's one leg-to-OmniRoute provider mapping, reversed.
+PROVIDER_ALIASES = types.MappingProxyType({row['omniroute_id']: row['provider_id'] for row in SEED_PROVIDERS
+                                           if row.get('omniroute_id') not in (None, row['provider_id'])})
 
 
 def model_segment(model):

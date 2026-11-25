@@ -16,6 +16,8 @@ use std::process::Command;
 
 #[path = "review_seat_completion.rs"]
 mod completion;
+#[path = "review_no_verdict.rs"]
+mod no_verdict;
 #[path = "review_outcome.rs"]
 mod outcome;
 use outcome::evaluate_seat_record;
@@ -50,6 +52,10 @@ pub struct SeatOutcome {
     pub test_gaming: TestGaming,
     pub paths_summary: String,
     pub passed: bool,
+    /// Why a seat ended without a pass, from the spawner record (refusal, error, skip or seat coverage).
+    pub reason: Option<String>,
+    /// Terminal time of the run (unix seconds) when its record has one.
+    pub ended: Option<i64>,
 }
 
 pub fn usage() -> &'static str {
@@ -339,11 +345,30 @@ fn spawn_one_seat(
     let out = cmd
         .output()
         .map_err(|e| format!("failed to run spawner spawn: {e}"))?;
-    let raw: Value = serde_json::from_slice(&out.stdout).map_err(|e| {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-        format!("spawner spawn returned non-JSON ({e}): stderr={stderr} stdout={stdout}")
-    })?;
+    let raw: Value = match serde_json::from_slice(&out.stdout) {
+        Ok(raw) => raw,
+        Err(e) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            // A refusal before any run exists (a missing harness, a prompt too large) prints no
+            // record. Its named diagnostic is the cause, wherever a warning or a supervisor
+            // message put it in the output; otherwise the last line, where an error text is printed.
+            let cause = outcome::refusal_cause(&stderr, &stdout);
+            match cause {
+                Some(cause) if !out.status.success() => json!({
+                    "run_id": format!("spawn-refused-{slot}-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+                    "status": "failed",
+                    "exit_code": out.status.code().unwrap_or(1),
+                    "reason": cause,
+                }),
+                _ => {
+                    return Err(format!(
+                        "spawner spawn returned non-JSON ({e}): stderr={stderr} stdout={stdout}"
+                    ))
+                }
+            }
+        }
+    };
     let records = extract_records(&raw)?;
     records
         .into_iter()
@@ -598,6 +623,9 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
             s.files_read.as_deref().unwrap_or("none"),
             s.paths_summary
         );
+        if let Some(reason) = &s.reason {
+            println!("SEAT {}/{} reason={reason:?}", s.index, s.total);
+        }
     }
 
     if args.dry_run {
@@ -607,6 +635,14 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
             outcomes.len()
         );
         return Ok(0);
+    }
+
+    // Seats that ended without a verdict feed the repeat-cause alert (2 seats, one cause, 30 min).
+    if let Some(state) = state_dir.as_deref() {
+        for seat in &outcomes {
+            let ended = seat.ended.unwrap_or_else(|| chrono::Utc::now().timestamp());
+            no_verdict::book(state, seat, ended);
+        }
     }
 
     let has_pending = outcomes
@@ -654,8 +690,15 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         );
         Ok(0)
     } else {
+        // A seat that ended without a verdict names its cause here, so the caller need not read run files.
+        let cause = outcomes
+            .iter()
+            .find(|s| s.reason.is_some())
+            .and_then(|s| s.reason.as_deref())
+            .map(|reason| format!(" reason={reason:?}"))
+            .unwrap_or_default();
         println!(
-            "REVIEW head={} seats={} verdict=REQUEST_CHANGES approval=none",
+            "REVIEW head={} seats={} verdict=REQUEST_CHANGES approval=none{cause}",
             resolved.head_sha,
             outcomes.len()
         );

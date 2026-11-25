@@ -40,7 +40,7 @@ def test_fallback_run_carries_the_reason():
 def test_unreadable_version_is_unknown_never_guessed(monkeypatch):
     monkeypatch.undo()
     hr.client_version.cache_clear()
-    monkeypatch.setattr(hr.shutil, "which", lambda name: None)
+    monkeypatch.setattr(hr.shutil, "which", lambda name, path=None: None)
     assert hr.client_version("codex") == "unknown"
     record = {}
     hr.stamp_harness(record, CATALOG["gpt-6.2-sol-medium"], host="dell")

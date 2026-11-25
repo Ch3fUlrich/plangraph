@@ -99,6 +99,10 @@ def test_broken_providers_file_is_loud(tmp_path, monkeypatch, caplog, broken):
     elif broken == 'unreadable':
         path.mkdir()
     monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(path))
+    harness = tmp_path / 'opencode'   # the resolver finds this host-independent binary, with no PATH-fallback warning
+    harness.write_text('#!/bin/sh\n')
+    harness.chmod(0o755)
+    monkeypatch.setenv('PLANGRAPH_OPENCODE_BIN', str(harness))
     monkeypatch.setattr(o, '_missing_warned', False)
     monkeypatch.setattr(o, '_parse_warned', False)
     monkeypatch.setattr(r, 'admitted_by_render', lambda model: False)
