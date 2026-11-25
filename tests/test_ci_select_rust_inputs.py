@@ -115,6 +115,18 @@ def test_deployment_inputs_read_by_rust_are_explicitly_selected(name):
     assert ci_select.select([path])["rust"]
 
 
+def test_secret_policy_selects_rust_and_native_windows(tmp_path, monkeypatch, capsys):
+    """The deny-list JSON is a policy-only change: both Rust jobs run, with the usual pytest jobs."""
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert ci_select.main(["select", "--files", "src/plangraph/config/secret_paths.json"]) == 0
+    selected = dict(line.split("=") for line in output.read_text().splitlines())
+    assert {job for job, value in selected.items() if value == "true"} == {
+        "rust", "rust-worker", "pytest", "pytest-postgres"}
+    assert selected["full"] == "false"
+    assert capsys.readouterr().out == output.read_text()
+
+
 def test_schema_change_cli_outputs(tmp_path, monkeypatch, capsys):
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
