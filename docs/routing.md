@@ -382,3 +382,8 @@ fell through to a different leg. Missing benchmark evidence stays null.
 A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.
 
 Review seats per leg are bounded by `route_policy.json` `review_seat_admission`; the review route carries it as `seat_admission` and the native spawner queues seats beyond the bound: [seat admission](checkpoints/LE-SEAT-BURST-DRAINS-SMART-REVIEW-LEG.md).
+
+## Planner pack order
+
+`planner.context_pack` puts the card and files first and the check-output tail last, so a
+`check_fail` retry shares a byte-identical prefix; layout in `docs/PLANNER-KIT.md`.
