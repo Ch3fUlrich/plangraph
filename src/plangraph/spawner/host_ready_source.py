@@ -164,6 +164,10 @@ def configured_work_drives(policy):
     return parsed
 
 
+def same_device(a, b):
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
 def configured_build_target(policy, free_gb, *, floors=True):
     """The Cargo target on the `build_drives` entry with the most free space above its floor.
 
@@ -179,10 +183,12 @@ def configured_build_target(policy, free_gb, *, floors=True):
     for entry in drives:
         floor = float(entry.get('disk_floor_gb', 5))
         mount = entry.get('mount')
-        # Compare resolved paths: `/proc/../tmp` is not under the `/proc` mount.
+        # Compare resolved paths and devices: `/proc/../tmp` is not under `/proc`, and a
+        # nested filesystem such as `/proc` is not the declared `/` mount.
         resolved = Path(entry['path']).resolve()
-        if not resolved.is_dir() or (
-                mount and not (os.path.ismount(mount) and resolved.is_relative_to(Path(mount).resolve()))):
+        if not resolved.is_dir() or (mount and not (
+                os.path.ismount(mount) and resolved.is_relative_to(Path(mount).resolve())
+                and same_device(resolved, mount))):
             # An unmounted path would be measured through its parent's filesystem.
             shortfalls.append(f"{entry['path']}: not mounted")
             continue

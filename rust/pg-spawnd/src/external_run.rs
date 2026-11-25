@@ -202,14 +202,19 @@ pub fn roster() -> io::Result<Vec<Value>> {
     crate::session::agent_roster()
 }
 
-/// A fleet session outlives its launcher process, so its state comes from the roster.
+/// A fleet session outlives its launcher process, so its state comes from the roster. Only
+/// roster evidence counts: a session the roster does not list, or lists with no state, is
+/// uncertain (the daemon's own "start unobserved" failure is not evidence of an exit).
 pub fn fleet_state(record: &Value, agents: &[Value], observed: f64) -> FleetState {
+    let Some(row) = fleet_row(record, agents) else {
+        return FleetState::Unknown;
+    };
     if let Some(finished) = fleet_outcome(record, agents, observed) {
-        FleetState::Ended(finished)
-    } else if fleet_row(record, agents).is_some() {
-        FleetState::Running
-    } else {
-        FleetState::Unknown
+        return FleetState::Ended(finished);
+    }
+    match row["state"].as_str() {
+        Some(state) if !state.is_empty() => FleetState::Running,
+        _ => FleetState::Unknown,
     }
 }
 
@@ -257,6 +262,30 @@ mod tests {
         child.wait().unwrap();
         assert!(identity["start"].is_number());
         identity
+    }
+
+    #[test]
+    fn rejoin_reads_only_roster_evidence_for_a_fleet_session() {
+        let record = json!({"fleet_session_name": "w-1", "started": 100.0, "run_kind": "fleet-session",
+                            "external_owner": {"pid": 1, "start": 1}});
+        let listed = |state: Value| {
+            vec![
+                json!({"kind": "background", "name": "w-1", "startedAt": 100_000.0, "state": state}),
+            ]
+        };
+        let state = |agents: &[Value]| fleet_state(&record, agents, 1_000.0);
+        // Absent after the daemon's grace period is uncertain here, not failed.
+        assert!(matches!(state(&[]), FleetState::Unknown));
+        assert!(matches!(state(&listed(json!(null))), FleetState::Unknown));
+        assert!(matches!(state(&listed(json!(""))), FleetState::Unknown));
+        assert!(matches!(
+            state(&listed(json!("working"))),
+            FleetState::Running
+        ));
+        assert!(matches!(
+            state(&listed(json!("done"))),
+            FleetState::Ended(_)
+        ));
     }
 
     #[test]

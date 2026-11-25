@@ -77,3 +77,18 @@ pub fn check_alias(launcher: &Launcher) {
     assert_ne!(s.json("ssh.json")["payload"]["host"], REMOTE);
     refused_named(&s, REMOTE);
 }
+
+/// A forwarded launch carries the claim epoch in the receiver's environment.
+pub fn check_forwarded_epoch(launcher: &Launcher) {
+    let s = setup(launcher);
+    let out = s
+        .launch("writer")
+        .args(["--host", REMOTE, "--dry-run"])
+        .env("PG_EPOCH", "11")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    let argv = s.json("ssh.json")["argv"].clone();
+    let command = argv.as_array().unwrap().last().unwrap().as_str().unwrap();
+    assert!(command.contains("PG_EPOCH=11 python3 -c "), "{command}");
+}

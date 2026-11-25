@@ -48,8 +48,9 @@ checkout drives D: and F: as `work_drives` (checkout path and `disk_floor_gb`: 2
 listed as `build_drives`, reserved for rebuildable caches and build data, never
 for a writer checkout; spawned builds take their Cargo target from the one with the
 most free space above its floor unless `PLANGRAPH_CARGO_TARGET_DIR` is set; an entry
-with a `mount` needs that mount present (paths are resolved first), and a running
-build is held to the runtime stop floor on the target it was launched with. Set `PLANGRAPH_SETTINGS` to that path after the write speed
+with a `mount` needs that mount present (paths are resolved first and must be on that mount's own device), and a running
+build is held to the runtime stop floor on the target it was launched with, and stops the build if that target's
+filesystem changes (a mount that went away). Set `PLANGRAPH_SETTINGS` to that path after the write speed
 of each mount is measured and the checkouts exist; `PLANGRAPH_WORK_DRIVES`
 overrides it. The file changes no mount.
 

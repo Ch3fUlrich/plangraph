@@ -9,6 +9,12 @@ use std::{io, process::Command, time::Duration};
 
 use super::now;
 
+/// Only a Keeper refusal (exit 2) can say the original claim is gone; a transport
+/// failure (exit 3) with a similar diagnostic proves nothing.
+fn settled_by_refusal(code: Option<i32>, stderr: &str, epoch: u64) -> bool {
+    code == Some(2) && (stderr.contains("not claimed") || superseded(stderr, epoch))
+}
+
 /// The Keeper refuses a mismatched epoch in either direction ("epoch A != current B"). Only a
 /// newer current epoch shows the original claim was replaced; an older one means the
 /// original claim is not what the Keeper holds, which settles nothing.
@@ -113,7 +119,7 @@ impl Ssh<'_> {
                 )))
             };
         }
-        if stderr.contains("not claimed") || superseded(&stderr, epoch) {
+        if settled_by_refusal(out.status.code(), &stderr, epoch) {
             return Ok(());
         }
         Err(io::Error::other(format!(
@@ -219,7 +225,29 @@ impl Ssh<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::superseded;
+    use super::{settled_by_refusal, superseded};
+
+    #[test]
+    fn a_transport_failure_never_settles_a_claim() {
+        let text = "keeper unreachable: epoch 11 != current 12";
+        assert!(!settled_by_refusal(Some(3), text, 11));
+        assert!(!settled_by_refusal(None, text, 11));
+        assert!(settled_by_refusal(
+            Some(2),
+            "epoch_stale: epoch 11 != current 12",
+            11
+        ));
+        assert!(settled_by_refusal(
+            Some(2),
+            "bad_state: item is open, not claimed",
+            11
+        ));
+        assert!(!settled_by_refusal(
+            Some(2),
+            "forbidden: only the claimant may release",
+            11
+        ));
+    }
 
     #[test]
     fn only_a_newer_current_epoch_shows_the_claim_was_superseded() {

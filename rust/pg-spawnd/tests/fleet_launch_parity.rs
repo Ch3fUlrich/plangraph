@@ -91,6 +91,7 @@ fn check(launcher: &sandbox::Launcher) {
         restart::check(launcher);
         rejoin::check(launcher);
         rejoin::check_alias(launcher);
+        rejoin::check_forwarded_epoch(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
     }

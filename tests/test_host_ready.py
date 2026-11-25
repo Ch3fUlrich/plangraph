@@ -726,6 +726,24 @@ def test_an_existing_directory_on_an_unmounted_drive_does_not_qualify(monkeypatc
     assert h.shared_cargo_target({'build_drives': [entry]}) == tmp_path / 'g' / 'cargo-target'
 
 
+@pytest.mark.skipif(not os.path.isdir('/proc/self'), reason='needs a nested /proc filesystem')
+def test_a_nested_filesystem_is_not_the_declared_mount(monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 500.0)
+    entry = {'path': '/proc', 'mount': '/', 'disk_floor_gb': 20}
+    with pytest.raises(OSError, match='not mounted'):
+        h.shared_cargo_target({'build_drives': [entry]})
+
+
+def test_the_running_guard_stops_a_build_whose_launch_mount_went_away(monkeypatch, tmp_path):
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 400.0)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    here = h.filesystem_id(tmp_path)
+    assert h.running_disk_refusal(tmp_path, 'implement', tmp_path, here) is None
+    reason = h.running_disk_refusal(tmp_path, 'implement', tmp_path, here + 1)
+    assert reason == f'disk_low: the filesystem of {tmp_path} changed since launch'
+
+
 def test_a_dotdot_path_is_not_inside_the_mount_it_names(monkeypatch, tmp_path):
     monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
     (tmp_path / 'm').mkdir()
@@ -786,5 +804,6 @@ def test_the_workstation_config_puts_the_cargo_target_on_g(monkeypatch):
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100.0)
     monkeypatch.setattr(Path, 'is_dir', lambda self: str(self).startswith('/mnt/work-g'))
     monkeypatch.setattr(os.path, 'ismount', lambda path: path == '/mnt/work-g')
+    monkeypatch.setattr(source, 'same_device', lambda a, b: True)
     policy = _policy_data(Path(__file__).resolve().parents[1])
     assert str(h.shared_cargo_target(policy)) == '/mnt/work-g/plangraph/build/cargo-target'

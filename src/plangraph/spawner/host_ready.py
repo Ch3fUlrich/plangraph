@@ -557,13 +557,21 @@ async def collect_with_disk_guard(runner, job_id, proc):
     from .run_watchdog import collect
     job = runner.jobs[job_id]
     owner, interrupted, reaping, collecting = asyncio.current_task(), False, False, True
+    launch_dev = None  # the launched target's filesystem, kept to notice a mount that went away
+
     async def watch():
-        nonlocal interrupted, reaping
+        nonlocal interrupted, reaping, launch_dev
         try:
             while True:
                 await asyncio.sleep(1)
                 launched = (getattr(runner, '_child_envs', {}).get(job_id) or {}).get('CARGO_TARGET_DIR')
-                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd, job.role, launched)
+                if launched and launch_dev is None:
+                    try:
+                        launch_dev = await asyncio.to_thread(filesystem_id, launched)
+                    except OSError:
+                        pass
+                reason = await asyncio.to_thread(
+                    running_disk_refusal, job.cwd or runner.default_cwd, job.role, launched, launch_dev)
                 if reason and job.status not in ('cancelled', 'timeout', 'stalled'):
                     job.refusal = reason
                     job.status, job.exit_code = 'failed', 7
@@ -599,13 +607,23 @@ async def collect_with_disk_guard(runner, job_id, proc):
             raise result
 
 
-def running_disk_refusal(worktree, role='implement', target=None):
+def filesystem_id(path):
+    """The device of `path`, or of its nearest existing ancestor: it changes when a mount goes."""
+    path = Path(path).absolute()
+    while not path.exists():
+        path = path.parent
+    return os.stat(path).st_dev
+
+
+def running_disk_refusal(worktree, role='implement', target=None, expect_dev=None):
     """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run of a building role."""
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
         # The target the run was launched with, not a new ranking; the 2 GiB stop floor is the limit.
         target = Path(target) if target else _target_for(policy, floors=False)
+        if expect_dev is not None and filesystem_id(target) != expect_dev:
+            return f'disk_low: the filesystem of {target} changed since launch'
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])

@@ -99,8 +99,15 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
     let router = paths.remote_router()?;
     let router = serde_json::to_string(&router).expect("serialize path string");
     let receiver = format!("{RECEIVER_HEADER}root=pathlib.Path.home()/{router}\n{RECEIVER_BODY}");
+    // The claim epoch rides in the receiver's environment, which its launcher inherits;
+    // the payload stays the pinned legacy protocol.
+    let epoch = std::env::var("PG_EPOCH")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|epoch| format!("PG_EPOCH={epoch} "))
+        .unwrap_or_default();
     let suffix = format!(
-        "python3 -c {} {}",
+        "{epoch}python3 -c {} {}",
         shell_quote(LOADER),
         STANDARD.encode(receiver)
     );
