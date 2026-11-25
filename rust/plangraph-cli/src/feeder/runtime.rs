@@ -391,6 +391,7 @@ mod tests {
     const SATURATED: &str = "1000000.0 1000000.0 1000000.0 1/2 3\n";
 
     #[test]
+    #[cfg(unix)]
     fn live_decision_reports_ram_budget_and_psi_pacing() {
         use std::os::unix::fs::PermissionsExt;
         let live = Live::new("dell", "[max_writers]\ndell = 5\n");
