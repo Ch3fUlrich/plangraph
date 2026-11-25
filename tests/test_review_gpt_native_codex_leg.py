@@ -13,8 +13,8 @@ def route(*writers):
 
 
 def test_review_order_names_gpt_first_then_mimo_deepseek_and_argon_late():
-    assert REVIEW_ORDER[:6] == ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",   # D-6652 required seats
-                                "agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free")
+    assert REVIEW_ORDER[:7] == ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",   # D-6652 required seats
+                                "agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro", "omniroute-deepseek-flash", "opencode-deepseek-v4.1-flash-free")   # D-6803
     assert REVIEW_ORDER[-2:] == ("agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")
 
 
@@ -26,7 +26,7 @@ def test_claude_written_diff_routes_gpt_first_in_codex():
     assert plan.legs[3].harness == "codex" and plan.legs[3].family == "gpt"
     assert "codex" in HARNESSES
     assert ids == ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-hydrogen-high",
-                   "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free", "agy-gemini-4-neon-medium",
+                   "gpt-6.2-sol-medium", "mimo-v2.6-pro", "omniroute-deepseek-flash", "opencode-deepseek-v4.1-flash-free", "agy-gemini-4-neon-medium",
                    "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b",
                    "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]   # argon last
 

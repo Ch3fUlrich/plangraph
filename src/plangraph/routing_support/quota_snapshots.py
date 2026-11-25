@@ -222,8 +222,8 @@ def _default_fetch(url, headers, timeout):
 def _build(body, now):
     data = json.loads(body)
     rows = data.get("connections") if isinstance(data, dict) else data
-    if not isinstance(rows, list) or not rows:
-        raise ValueError
+    if not isinstance(rows, list) or (not rows and not (isinstance(data, dict) and "connections" in data)):
+        raise ValueError   # only an explicit empty "connections" list is a valid empty snapshot
     states = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -311,7 +311,8 @@ class OmniRouteState:
                 self._good = None
                 raise
             except OmniRouteUnreachable:
-                if self._good is not None and self._clock() - self._good_at <= 2 * self._ttl_s:
+                # A cached empty list is no answer to stand in for a failed refresh.
+                if self._good and self._clock() - self._good_at <= 2 * self._ttl_s:
                     return {name: replace(state, stale=True)
                             for name, state in self._good.items()}
                 self._good = None

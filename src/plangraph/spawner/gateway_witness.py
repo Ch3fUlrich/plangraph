@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 from plangraph.routing_errors import SpawnRefused
-from plangraph.routing_support.opencode_overlay import _strip_jsonc, prepare_gateway_env
+from plangraph.routing_support.opencode_overlay import _strip_jsonc, prepare_gateway_env, review_child_env  # noqa: F401 (re-export)
 from plangraph.routing_support.opencode_render import (  # management token loader: one implementation
     TOKEN_ENV, TOKEN_FILE_ENV, _owner_only, load_token,
     _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
@@ -362,22 +362,6 @@ def witness_gate(card, role, model, env=None, *, secrets=None):
     """Refuse before launch a review whose card requires a witness this leg cannot give."""
     if role == 'review' and card and card.get('witness_required'):
         require_witness(model, env, secrets=secrets)
-
-
-def review_child_env(model=None):
-    """Mirror runner.spawn's review env (writer_launch returns no review extras).
-
-    The fresh run nonce and later session tag do not affect routing evidence.
-    Use the runner's default envelope, including headers that trigger rendering.
-    """
-    from plangraph.routing_support.clients import build_child_env, build_routing_envelope_headers
-    env = build_child_env({}, headers=build_routing_envelope_headers(
-        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
-    if isinstance(model, str) and model.startswith(('mimo/', 'omniroute/')):
-        env, refusal = prepare_gateway_env(env, model)
-        if refusal:
-            raise SpawnRefused('witness required: ' + refusal)
-    return env
 
 
 def witness_order(card, role, legs, down):

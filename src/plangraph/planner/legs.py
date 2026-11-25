@@ -225,13 +225,14 @@ REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
+REVIEW_OMNIROUTE_DEEPSEEK = "omniroute-deepseek-flash"  # D-6803: gateway second family beside hydrogen
 REVIEW_SONNET = "claude-sonnet-5-5-high"
 REVIEW_GPT = "gpt-6.2-sol-medium"
 # D-6652 (rule 3.66 (f)): every head needs these two OpenCode seats with file access, each
 # outside every writer family of the diff; both must ACCEPT with FILES READ.  They lead the route.
 REVIEW_REQUIRED = ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
-REVIEW_ORDER = (*REVIEW_REQUIRED, REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
-                REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
+REVIEW_ORDER = (*REVIEW_REQUIRED, REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO,
+                REVIEW_OMNIROUTE_DEEPSEEK, REVIEW_DEEPSEEK, REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",

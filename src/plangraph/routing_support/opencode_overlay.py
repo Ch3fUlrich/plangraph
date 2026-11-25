@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import logging
 
+from plangraph.routing_errors import SpawnRefused
+
 _parse_warned = False
 _content_warned = False
 UNKNOWN_PROVIDERS = object()
@@ -169,6 +171,53 @@ def prepare_gateway_env(base_env, model):
     from .opencode_render import render_gateway_providers
     env = overlay_env(base_env)
     return env, render_gateway_providers(env, model)
+
+
+def _review_base_env():
+    from .clients import build_child_env, build_routing_envelope_headers
+    return build_child_env({}, headers=build_routing_envelope_headers(
+        role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+
+
+def review_overlay_env():
+    """The review child env after the launch overlay, before the renderer: provider mappings
+    from the child config and the root config, with no gateway endpoint required."""
+    return overlay_env(_review_base_env())
+
+
+def effective_model_id(leg):
+    """The ``modelID`` the launch gives a gateway leg, or None when its config declares none.
+
+    Read from the review child config after the launch overlay and the renderer's model
+    defaults (the fallback ``mimo`` provider, a cx effort variant), but without the gateway
+    endpoint the renderer also needs: an admission read must not depend on it.
+    """
+    from .opencode_render import _declare_cx_effort_model, apply_mimo_default
+    prefix, _, name = leg.partition('/')
+    try:
+        config = json.loads(review_overlay_env()['OPENCODE_CONFIG_CONTENT'])
+        providers = config['providers']
+        apply_mimo_default(providers, leg)
+        _declare_cx_effort_model(providers, leg)
+        model_id = providers[prefix]['models'][name]['modelID']
+    except Exception:   # no mapping: a missing key or a malformed block
+        return None
+    return model_id if isinstance(model_id, str) and model_id else None
+
+
+def review_child_env(model=None):
+    """Mirror runner.spawn's review env (writer_launch returns no review extras).
+
+    The fresh run nonce and later session tag do not affect routing evidence.
+    Use the runner's default envelope, including headers that trigger rendering.
+    Witness checks and leg-state admission both read this child config.
+    """
+    env = _review_base_env()
+    if isinstance(model, str) and model.startswith(('mimo/', 'omniroute/')):
+        env, refusal = prepare_gateway_env(env, model)
+        if refusal:
+            raise SpawnRefused('witness required: ' + refusal)
+    return env
 
 
 #: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,

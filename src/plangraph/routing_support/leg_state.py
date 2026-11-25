@@ -488,6 +488,120 @@ def routing_status(status):
     return status
 
 
+def gateway_url(leg):
+    """Endpoint a direct provider prefix is launched against, or None when none is known.
+
+    The mimo gateway provider is launched against the child config the runner builds
+    (child env, launch overlay, renderer), so admission reads the endpoint from that same
+    pipeline, never from the raw root config. Any other direct provider names its own
+    ``settings.baseURL``. The shared ``omniroute`` prefix has no entry: its snapshot already
+    proves the gateway answers. A missing or malformed provider config, a refused render or
+    an invalid URL names no endpoint.
+    """
+    import json
+    from .opencode_overlay import load_root_providers
+    from .opencode_render import _is_valid_url, _normalize_gateway_url
+    prefix = leg.split('/')[0] if '/' in leg else ''
+    if prefix in ('', 'omniroute'):
+        return None
+    if prefix == 'mimo':
+        from .opencode_overlay import review_child_env
+        try:
+            block = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])['providers'][prefix]
+        except Exception:   # no endpoint: a refused render, a missing key or unreadable config
+            return None
+        if not isinstance(block, dict):   # a non-object provider survives rendering under an override
+            return None
+        # The renderer writes the endpoint to settings and to an existing options section.
+        url = next((section['baseURL'] for name in ('settings', 'options')
+                    if isinstance(section := block.get(name), dict)
+                    and isinstance(section.get('baseURL'), str)), None)
+        return url if isinstance(url, str) and _is_valid_url(url) else None
+    providers = load_root_providers()
+    if not isinstance(providers, dict) or not isinstance(providers.get(prefix), dict):
+        return None
+    settings = providers[prefix].get('settings')
+    url = settings.get('baseURL') if isinstance(settings, dict) else None
+    return _normalize_gateway_url(url) if isinstance(url, str) and _is_valid_url(url) else None
+
+
+def tcp_gateway_probe(url, timeout=1.0):
+    """True when something accepts a TCP connection at the URL's host and port."""
+    import socket
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == 'https' else 80)
+        if not parts.hostname:
+            return False
+        socket.create_connection((parts.hostname, port), timeout=timeout).close()
+    except (OSError, ValueError):   # UnicodeError (a malformed hostname) is a ValueError
+        return False
+    return True
+
+
+_COMBOS_PATH = Path(__file__).resolve().parents[3] / 'deploy/omniroute/live/server-combos.json'
+
+
+#: Provider ids one pool answers to (the snapshot names the MiMo pool by vendor).
+POOL_ALIASES = (('mimo', 'xiaomi-mimo'),)
+
+
+def declared_pools(leg):
+    """The upstream pools a gateway leg runs on, as (direct pool or None, combo pools).
+
+    The effective ``modelID`` of the leg (``effective_model_id``: the child config after the
+    launch overlay and the renderer's defaults) decides. ``provider/model`` names its provider
+    directly; a bare id names the server combo, whose pools come from
+    ``deploy/omniroute/live/server-combos.json``. With no mapping the leg's own name is the
+    combo. Read once per snapshot window by the adapter, never cached longer.
+    """
+    import json
+    from .opencode_overlay import effective_model_id
+    from .quota_snapshots import ALIASES
+    target = effective_model_id(leg) or leg.partition('/')[2]
+    if '/' in target:
+        head = target.split('/')[0]
+        return ALIASES.get(head, head), ()
+    try:
+        combos = json.loads(_COMBOS_PATH.read_text(encoding='utf-8'))['combos']
+        return None, tuple(dict.fromkeys(u.split('/')[0] for u in combos.get(target, ()) if isinstance(u, str) and '/' in u))
+    except (OSError, ValueError, KeyError, AttributeError, TypeError):
+        return None, ()
+
+
+def _gateway_pool(states, leg, declared):
+    """State of the upstream pool serving a gateway-routed model.
+
+    The snapshot is keyed by upstream provider, not by the gateway prefix. The declared pool
+    (direct provider, else the combo's pools) decides by exact provider id, with the explicit
+    ``POOL_ALIASES``; a declared pool with no row is no state, never another pool's. Only a
+    model that declares no pool takes the gateway's own ``omniroute`` row. Among a combo's
+    rows an available one wins.
+    """
+    from .quota_snapshots import pool_of
+    if (pool := pool_of(identity_model(leg))) is not None:
+        return states.get(pool)   # a known alias pool never borrows another pool's state
+    direct, combo = declared
+    wanted = [direct] if direct is not None else list(combo)
+    if not wanted:
+        return states.get('omniroute')
+    group = lambda pool: next((names for names in POOL_ALIASES if pool in names), (pool,))
+    rows = [states[key] for pool in wanted for key in group(pool) if key in states]
+    return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
+
+
+GATEWAY_ALIASES = (('mimo/', 'omniroute/'),)
+
+
+def identity_model(model):
+    """Standalone identity of a model id: effort suffix dropped, gateway aliases folded."""
+    for alias, target in GATEWAY_ALIASES:
+        if model.startswith(alias):
+            model = target + model[len(alias):]
+    return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -496,8 +610,10 @@ class LegAdapter:
     """
 
     def __init__(self, store, provider, models=None, *, enabled=False,
-                 clock=time.monotonic, ttl_s=60):
+                 clock=time.monotonic, ttl_s=60, gateway_probe=None, gateway_url=gateway_url):
         self.store, self.provider = store, provider
+        # D-6800: with a probe, a leg whose base URL has no listener is down before spawn.
+        self.gateway_probe, self.gateway_url, self._gateway, self._urls, self._pools = gateway_probe, gateway_url, {}, {}, {}
         self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
@@ -518,7 +634,7 @@ class LegAdapter:
         return result.stdout.splitlines()
     @staticmethod
     def identity(model):
-        return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
+        return identity_model(model)
 
     def __call__(self, leg, **kwargs):
         return self.leg_status(leg, **kwargs)
@@ -540,14 +656,19 @@ class LegAdapter:
             self._auth_error = None
             try:
                 states = self.provider.snapshot()
-                listed = self.models() if callable(self.models) else self.models
-                if isinstance(listed, DiscoveryFailed):
-                    # Not "every model is unlisted": keep the snapshot-error retry and probe.
-                    raise RuntimeError(f'model discovery failed: {listed.reason}')
-                served = {self.identity(mid) for mid in listed}
+                served = set()
+                if states:   # an empty provider list excludes every leg, whatever discovery says
+                    listed = self.models() if callable(self.models) else self.models
+                    if isinstance(listed, DiscoveryFailed):
+                        # Not "every model is unlisted": keep the snapshot-error retry and probe.
+                        raise RuntimeError(f'model discovery failed: {listed.reason}')
+                    served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._quarantined.clear()
-                self._error = None if states else 'unreachable'
+                self._gateway.clear()
+                self._urls.clear()
+                self._pools.clear()
+                self._error = None if states else 'unreachable'   # an empty provider list names no pool
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
                 self._auth_error = exc.evidence
@@ -555,7 +676,9 @@ class LegAdapter:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
         if self._error:
-            return dict(state='down' if self._auth_error else 'unknown', reason=self._error,
+            # A valid empty snapshot excludes the leg explicitly; only a failed read stays unknown.
+            return dict(state='down' if self._auth_error or self._error == 'unreachable' else 'unknown',
+                        reason=self._error,
                         evidence=dict(self._auth_error) if self._auth_error else None)
         identity = self.identity(leg)
         if identity in self._quarantined and self.store is not None:
@@ -564,7 +687,21 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
-        provider = self._states.get(leg.split('/')[0])
+        url = None
+        if self.gateway_probe:   # the endpoint is resolved once per leg per snapshot window
+            url = self._urls[leg] if leg in self._urls else self._urls.setdefault(leg, self.gateway_url(leg))
+        if url is not None:
+            if url not in self._gateway:
+                self._gateway[url] = bool(self.gateway_probe(url))
+            if not self._gateway[url]:
+                return dict(state='down', reason='gateway_unreachable', evidence=None)
+        # A gateway model resolves its own pool before the generic gateway row.
+        if identity.startswith('omniroute/'):
+            if leg not in self._pools:
+                self._pools[leg] = declared_pools(leg)
+            provider = _gateway_pool(self._states, leg, self._pools[leg])
+        else:
+            provider = self._states.get(leg.split('/')[0])
         if provider is None:
             return dict(state='down', reason='unreachable', evidence=None)
         if provider.stale:

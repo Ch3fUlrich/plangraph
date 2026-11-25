@@ -173,6 +173,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
         REVIEW_HYDROGEN,
         "gpt-6.2-sol-medium",
         "mimo-v2.6-pro",
+        "omniroute-deepseek-flash",   # D-6803
         "opencode-deepseek-v4.1-flash-free",
         "agy-gemini-4-neon-medium",
         "claude-sonnet-5-5-high",
@@ -195,6 +196,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
         "opencode-go-glm-5.3-flash",
         "gpt-6.2-sol-medium",
         "mimo-v2.6-pro",
+        "omniroute-deepseek-flash",
         "opencode-deepseek-v4.1-flash-free",
         "mimo-v2.6-flash",
         "cx-gpt-6-luna",
@@ -450,7 +452,7 @@ def test_codex_writer_aliases_and_cross_family_review_routes():
              for name in ('codex', 'cx-gpt-6.2-sol', 'gpt')]
     assert all(p.legs == plans[0].legs and p.review_seats == plans[0].review_seats for p in plans)
     ids = {l.id for l in plans[0].legs}
-    assert 'omniroute-deepseek-flash' not in ids
+    assert 'omniroute-deepseek-flash' in ids   # D-6803
     assert [l.id for l in plans[0].legs] == [id for id in REVIEW_ORDER if id not in ('gpt-6.2-sol-medium', 'claude-sonnet-5-5-high')]
     assert any(l.family == 'gemini' for l in plans[0].legs)
     assert any(l.family == 'deepseek' for l in plans[0].legs)
@@ -498,6 +500,7 @@ def test_d6310_route_orders_low_risk_and_families():
         ('opencode-go-glm-5.3-flash', None),
         (REVIEW_HYDROGEN, 'high'),
         ('mimo-v2.6-pro', None),
+        ('omniroute-deepseek-flash', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('mimo-v2.6-flash', None),
@@ -510,6 +513,7 @@ def test_d6310_route_orders_low_risk_and_families():
         ('opencode-go-glm-5.3-flash', None),
         ('gpt-6.2-sol-medium', 'medium'),
         ('mimo-v2.6-pro', None),
+        ('omniroute-deepseek-flash', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('mimo-v2.6-flash', None),
         ('cx-gpt-6-luna', 'medium'),
