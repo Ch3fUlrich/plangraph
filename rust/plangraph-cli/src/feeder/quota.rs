@@ -62,21 +62,32 @@ fn stamp(v: &Value) -> Option<i64> {
                 .map(|t| t.and_utc().timestamp())
         })
 }
-/// Latest instant `stamp_ns` accepts: nanoseconds fit an i64 (year 2255).
-const STAMP_MAX_NS: i128 = 9_000_000_000 * 1_000_000_000;
-/// Epoch nanoseconds for the pool readout, exact for numbers and text alike, so one instant
-/// ranks the same in any form and observations inside one second still order. A zone-less text
-/// is UTC, as the snapshot store writes it; `T` or a space may separate date and time. An
-/// instant outside 1970..2255 is not a reading and gives `None`, never an arithmetic input.
+/// Latest instant the pool readout reports: nanoseconds fit an i64 (year 2255).
+pub(super) const STAMP_MAX_NS: i128 = 9_000_000_000 * 1_000_000_000;
+/// `stamp_ns` clamps to this, far inside i128, so arithmetic on any stored value cannot overflow
+/// while an absurd instant still ranks before or after every real one.
+const STAMP_BOUND_NS: i128 = 1_000_000_000_000_000_000_000_000;
+/// Epoch nanoseconds for the pool readout: one instant ranks the same in any form, and
+/// observations inside one second still order. A number is read as the decimal the store wrote
+/// (a float cannot hold 1800000000.1, its shortest decimal can); a zone-less text is UTC, and `T`
+/// or a space may separate date and time. Every parseable instant has a rank, clamped to
+/// +-`STAMP_BOUND_NS`; whether it is a usable reading (not future, not before 1970, not after
+/// `STAMP_MAX_NS`) is the caller's decision, taken after the newest row is chosen.
 pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
     use chrono::{DateTime, NaiveDateTime, Utc};
     let ns = if let Some(n) = v.as_f64() {
-        let (unit, whole) = (if n > 1e11 { 1e6 } else { 1e9 }, n.floor());
-        if !n.is_finite() || whole.abs() > 1e16 {
+        if !n.is_finite() {
             return None;
         }
-        // Whole and fraction apart: epoch seconds times 1e9 is not exact in a float.
-        whole as i128 * unit as i128 + ((n - whole) * unit).round() as i128
+        if n.abs() > 1e15 {
+            return Some(if n < 0.0 {
+                -STAMP_BOUND_NS
+            } else {
+                STAMP_BOUND_NS
+            });
+        }
+        // Past 1e11 a number is milliseconds, as in the legacy reader.
+        decimal_ns(n, if n > 1e11 { 6 } else { 9 })?
     } else {
         let s = v.as_str()?.trim();
         let ns = |t: DateTime<Utc>| {
@@ -93,7 +104,20 @@ pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
                     .map(|t| ns(t.and_utc()))
             })?
     };
-    (0..=STAMP_MAX_NS).contains(&ns).then_some(ns)
+    Some(ns.clamp(-STAMP_BOUND_NS, STAMP_BOUND_NS))
+}
+/// `n` as its shortest round-trip decimal scaled by 10^`digits` (the unit is a second for 9
+/// digits, a millisecond for 6), the fraction cut at `digits` places.
+fn decimal_ns(n: f64, digits: usize) -> Option<i128> {
+    let text = format!("{n}");
+    let (negative, text) = text
+        .strip_prefix('-')
+        .map_or((false, &text[..]), |t| (true, t));
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let fraction = format!("{fraction:0<digits$}");
+    let value = whole.parse::<i128>().ok()? * 10_i128.pow(digits as u32)
+        + fraction[..digits].parse::<i128>().ok()?;
+    Some(if negative { -value } else { value })
 }
 /// Latest snapshot per account/window; stale or malformed windows disable that
 /// account, never an independent healthy account. Hourly store default: 3 hours.
@@ -255,20 +279,27 @@ mod tests {
         assert_eq!(remaining(&rows, 1767225602, 10800), Some(40.0));
     }
     #[test]
-    fn stamp_ns_reads_one_instant_alike_and_refuses_out_of_range_values() {
+    fn stamp_ns_reads_one_instant_alike_and_ranks_every_parseable_instant() {
         let iso = stamp_ns(&json!("2027-01-15T08:00:00.250000000")).unwrap();
         assert_eq!(stamp_ns(&json!(1_799_999_999.25 + 1.0)), Some(iso)); // seconds, a float fraction
         assert_eq!(stamp_ns(&json!(1_799_999_999_250.0 + 1_000.0)), Some(iso)); // milliseconds
         assert_eq!(stamp_ns(&json!("2027-01-15 08:00:00.25+00:00")), Some(iso));
         assert_eq!(stamp_ns(&json!("2027-01-15 09:00:00.25 +01:00")), Some(iso));
-        for bad in [
-            json!(-1e100),
-            json!(1e300),
-            json!(-1.0),
-            json!("9999-12-31T00:00:00Z"),
-        ] {
-            assert_eq!(stamp_ns(&bad), None, "{bad}");
-        }
+        // A fraction a float cannot hold keeps its decimal reading.
+        assert_eq!(
+            stamp_ns(&json!(1_800_000_000.1)),
+            stamp_ns(&json!("2027-01-15T08:00:00.1"))
+        );
+        // Absurd instants rank at the ends, bounded, never lost.
+        let (low, high) = (
+            stamp_ns(&json!(-1e100)).unwrap(),
+            stamp_ns(&json!(1e300)).unwrap(),
+        );
+        let future = stamp_ns(&json!("9999-12-31T00:00:00Z")).unwrap();
+        assert!(low < stamp_ns(&json!(-1.0)).unwrap() && high > future && future > STAMP_MAX_NS);
+        assert!(stamp_ns(&json!(-1.0)).unwrap() < 0 && iso < STAMP_MAX_NS);
+        assert!(low > i128::MIN / 2 && high < i128::MAX / 2);
+        assert_eq!(stamp_ns(&json!("not a time")), None);
     }
     #[test]
     fn the_legacy_readers_keep_an_empty_connection_id_apart_from_the_suffix_account() {
