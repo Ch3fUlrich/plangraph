@@ -475,8 +475,11 @@ fn refresh_index(control: &dyn Transport, timeout: Duration) -> Result<Refresh, 
             result => result.map(Some),
         }
     };
-    if request("start")?.is_none() {
-        return Ok(Refresh::Pending);
+    // The start reply carries the same scan status as a poll, and is checked the same way.
+    match request("start")? {
+        None => return Ok(Refresh::Pending),
+        Some(reply) if matches!(reply["scan"].as_str(), Some("ready" | "running")) => {}
+        Some(_) => return Err("keeper reply has no valid merge index status".into()),
     }
     loop {
         let Some(reply) = request("status")? else {

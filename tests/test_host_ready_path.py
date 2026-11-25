@@ -244,20 +244,16 @@ esac
     env.pop('PLANGRAPH_HOST_NAME', None)
     command = [sys.executable, *unit_command()[1:]]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
-    # delta has no session unit, so it is published as not ready, but its source must resolve.
-    expected = int(unit_command()[unit_command().index('--not-ready-exit') + 1])
-    assert result.returncode == expected, result.stdout + result.stderr
+    # delta has no roles and no session unit: still a registry host, ready, with its source resolved.
+    assert result.returncode == 0, result.stdout + result.stderr
     check = subprocess.run([sys.executable, '-m', 'plangraph.spawner.host_ready', '--check-records'],
                            env=env, capture_output=True, text=True, timeout=60)
     assert check.returncode == 0, check
-    assert check.stdout.splitlines() == [
-        'alpha ready', 'beta ready', 'delta not-ready session: not_configured'], check
+    assert check.stdout.splitlines() == ['alpha ready', 'beta ready', 'delta ready'], check
     monkeypatch.setenv('HOME', str(tmp_path))
     records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta', 'delta')}
-    assert all(record['fresh'] for record in records.values()), records
-    assert records['alpha']['ok'] and records['beta']['ok']
-    assert records['delta']['src_ok'] is True and records['delta']['failures'] == [
-        'session: not_configured']
+    assert all(record['fresh'] and record['ok'] for record in records.values()), records
+    assert records['delta']['src_ok'] is True and records['delta']['failures'] == []
     with pytest.raises(FileNotFoundError):
         overflow.read_readiness('gamma')
     assert sorted(path.name for path in overflow.readiness_dir().iterdir()) == [

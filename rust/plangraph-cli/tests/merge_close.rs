@@ -285,6 +285,8 @@ fn other_refresh_errors_still_fail_the_pass() {
     let refused = "keeper request refused or unreachable";
     for steps in [
         vec![(json!({"refresh":"start"}), json!(refused))],
+        vec![(json!({"refresh":"start"}), json!({"scan":"broken"}))],
+        vec![(json!({"refresh":"start"}), json!({}))],
         vec![
             (json!({"refresh":"start"}), json!({"scan":"running"})),
             (json!({"refresh":"status"}), json!(refused)),
