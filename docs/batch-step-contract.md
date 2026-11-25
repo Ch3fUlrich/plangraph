@@ -93,3 +93,10 @@ into the same keeper receipt. `ci_class` keeps the latest run per workflow and e
 run of another event is not hidden by a newer pass of one), and asks the pull request itself
 whether it is a draft `lane/*` part before it accepts a skipped `pull_request` run as
 evidence. `push` takes the verdict from the kept review run, not from the row alone.
+
+A release whose answer was lost after the keeper committed it is refused on replay; the
+cleanup then reads the item (`show`) and counts the grant as given back when the item is no
+longer claimed at that epoch, so the claim key is dropped. The draft-part lookup is bound to
+the head being classified: a pull request whose head moved on gets no exception for a run of
+the old head. The `.inputs` binding is linked into place without overwriting, so two calls on
+one steps path cannot both establish it.

@@ -3,3 +3,5 @@ The batch step runner has real claim, ci_class and train_join actions (`step_ser
 The claim keeps its keeper idempotency key in a file beside the steps file, so a process killed after the keeper granted the claim retries with the same key. `ci_class` judges the latest run of each workflow, so an older failure no longer makes a head red after a newer pass, and a draft `lane/*` part (whose jobs are skipped by design) passes on its skipped required workflow while a failure is still red.
 
 `ci_class` keeps the latest run per workflow and event, so a failed run of another event is not hidden by a newer pass, and it asks the pull request itself (`gh api pulls/N`) whether it is a draft `lane/*` part before it accepts a skipped `pull_request` run. A claim refused in part keeps its keeper key until every granted epoch is released.
+
+A failed release of a partial claim is confirmed against the item (`show`): a grant the keeper no longer holds at that epoch counts as given back, so a lost release answer no longer keeps the claim key forever. The draft-part lookup is bound to the head being classified.

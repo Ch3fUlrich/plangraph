@@ -276,22 +276,89 @@ fn train_command_without_a_command_fails_with_a_reason() {
 }
 
 #[test]
-fn gh_ci_reads_whether_the_pull_request_is_a_draft_lane_part() {
+fn gh_ci_reads_whether_the_pull_request_is_a_draft_lane_part_at_this_head() {
+    let at = |draft: bool, branch: &str, sha: &str| {
+        format!(r#"{{"draft":{draft},"head":{{"ref":"{branch}","sha":"{sha}"}}}}"#)
+    };
+    let newer = "2".repeat(40);
     let cases = [
-        (r#"{"draft":true,"head":{"ref":"lane/batch-1"}}"#, true),
-        (r#"{"draft":false,"head":{"ref":"lane/batch-1"}}"#, false),
-        (r#"{"draft":true,"head":{"ref":"batch/x"}}"#, false),
+        (at(true, "lane/batch-1", HEAD), true),
+        (at(false, "lane/batch-1", HEAD), false),
+        (at(true, "batch/x", HEAD), false),
+        // The pull request moved on: its draft state is not evidence for a run of the old head.
+        (at(true, "lane/batch-1", &newer), false),
     ];
     for (pull, expected) in cases {
-        let mut script = Script::new(vec![Ok(pull)]);
+        let mut script = Script::new(vec![Ok(&pull)]);
         let mut ci = GhCi {
             runner: &mut script,
             dir: ".".into(),
             repo: "demo/repo".into(),
         };
-        assert_eq!(ci.draft_lane_part(12).unwrap(), expected, "{pull}");
+        assert_eq!(ci.draft_lane_part(12, HEAD).unwrap(), expected, "{pull}");
         assert_eq!(script.seen[0], ["gh", "api", "repos/demo/repo/pulls/12"]);
     }
+}
+
+const MIXED: &str =
+    r#"{"results":[{"key":"demo:A","epoch":3},{"key":"demo:B","error":"claimed"}]}"#;
+
+fn keeper<'a>(script: &'a mut Script, key_file: &std::path::Path) -> KeeperCli<&'a mut Script> {
+    KeeperCli {
+        runner: script,
+        dir: ".".into(),
+        prefix: vec!["pg".into()],
+        key_file: key_file.to_owned(),
+    }
+}
+
+#[test]
+fn a_release_whose_answer_was_lost_after_the_keeper_committed_it_is_confirmed() {
+    let key_file = key_file();
+    // The release is refused on replay and the item is open again: the grant is gone.
+    let mut script = Script::new(vec![
+        Ok(MIXED),
+        Err("pg exit 2: demo:A is open, not claimed"),
+        Ok(r#"{"key":"demo:A","state":"open","epoch":3}"#),
+    ]);
+    let error = keeper(&mut script, &key_file)
+        .claim_batch(&keys())
+        .unwrap_err();
+    assert!(!error.contains("release failed"), "{error}");
+    assert_eq!(script.seen[2], ["pg", "show", "demo:A"]);
+    assert!(
+        !key_file.exists(),
+        "the cleanup is confirmed, so the key goes"
+    );
+}
+
+#[test]
+fn a_grant_that_the_keeper_still_holds_keeps_the_key() {
+    let key_file = key_file();
+    let mut script = Script::new(vec![
+        Ok(MIXED),
+        Err("pg: unreachable"),
+        Ok(r#"{"key":"demo:A","state":"claimed","epoch":3}"#),
+    ]);
+    let error = keeper(&mut script, &key_file)
+        .claim_batch(&keys())
+        .unwrap_err();
+    assert!(error.contains("release failed: demo:A@3"), "{error}");
+    assert!(key_file.exists());
+}
+
+#[test]
+fn a_release_is_confirmed_when_another_claim_holds_the_item_at_a_later_epoch() {
+    let key_file = key_file();
+    let mut script = Script::new(vec![
+        Ok(MIXED),
+        Err("pg exit 2: epoch mismatch"),
+        Ok(r#"{"key":"demo:A","state":"claimed","epoch":4}"#),
+    ]);
+    let error = keeper(&mut script, &key_file)
+        .claim_batch(&keys())
+        .unwrap_err();
+    assert!(!error.contains("release failed"), "{error}");
 }
 
 #[test]

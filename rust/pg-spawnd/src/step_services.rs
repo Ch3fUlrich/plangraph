@@ -37,9 +37,10 @@ pub trait CiRuns {
     /// Every workflow run of exactly `head` that belongs to pull request `pr`, latest attempt
     /// of each.
     fn runs(&mut self, head: &str, pr: u64) -> Result<Vec<CiRun>, String>;
-    /// Whether `pr` is, right now, a draft pull request from a `lane/*` branch: the part whose
-    /// workflow jobs are skipped by design.
-    fn draft_lane_part(&mut self, pr: u64) -> Result<bool, String>;
+    /// Whether `pr`, with `head` as its current head, is a draft pull request from a `lane/*`
+    /// branch: the part whose workflow jobs are skipped by design. A pull request whose head
+    /// moved on is not asked about the old head.
+    fn draft_lane_part(&mut self, pr: u64, head: &str) -> Result<bool, String>;
 }
 
 /// The landing train desk: registers the green part and returns the train it joined.
@@ -189,7 +190,7 @@ impl<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> StepActions for Service
             let runs = self.ci.runs(head, pr)?;
             // Asked of the pull request itself each look: a reused or re-marked PR may not be
             // the draft part the branch name suggests.
-            let draft_part = self.ci.draft_lane_part(pr)?;
+            let draft_part = self.ci.draft_lane_part(pr, head)?;
             match classify(&runs, &self.required, draft_part) {
                 Reading::Done(class) => return Ok(class),
                 Reading::Unproven(why) => return Err(format!("CI of {head}: {why}")),
