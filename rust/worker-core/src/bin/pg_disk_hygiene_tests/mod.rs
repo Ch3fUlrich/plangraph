@@ -222,6 +222,11 @@ fn below_the_floor_with_freed_zero_the_run_fails_naming_kept_paths_and_reasons()
     assert!(report.alarm);
 }
 
+/// Protection that reads the same on every reload: nothing pinned, running or mounted.
+fn calm() -> io::Result<disk_pressure::Protection> {
+    Ok(Default::default())
+}
+
 fn floor_3000() -> Thresholds {
     Thresholds {
         alarm_free_bytes: 1,
@@ -250,8 +255,8 @@ fn a_measurement_that_disagrees_with_the_estimate_wins_both_ways() {
         &roots,
         floor_3000(),
         &[],
-        None,
-        (&Guards::default(), &[]),
+        &[],
+        (&Default::default(), &calm),
         (&low, &super::device),
         true,
         &mut report,
@@ -285,8 +290,8 @@ fn a_recovered_filesystem_stops_the_pass_even_when_the_estimate_is_short() {
         &roots,
         thresholds,
         &[],
-        None,
-        (&Guards::default(), &[]),
+        &[],
+        (&Default::default(), &calm),
         (&recovering, &super::device),
         true,
         &mut report,
@@ -313,8 +318,8 @@ fn a_full_disk_with_no_candidate_still_fails_naming_that() {
         &[canonical, fixture.path().canonicalize().unwrap()],
         floor_3000(),
         &[],
-        None,
-        (&Guards::default(), &[]),
+        &[],
+        (&Default::default(), &calm),
         (&full, &super::device),
         true,
         &mut report,
@@ -356,8 +361,8 @@ fn a_target_that_is_a_mount_point_is_measured_on_its_own_device() {
         &[canonical.clone(), fixture.path().canonicalize().unwrap()],
         floor_3000(),
         &[],
-        None,
-        (&Guards::default(), &[]),
+        &[],
+        (&Default::default(), &calm),
         (&space, &device),
         true,
         &mut report,
@@ -389,8 +394,8 @@ fn candidates_are_grouped_by_the_device_they_are_on() {
         &[canonical],
         Thresholds::default(),
         &[],
-        None,
-        (&Guards::default(), &[]),
+        &[],
+        (&Default::default(), &calm),
         (&space, &super::device),
         true,
         &mut report,
@@ -402,4 +407,19 @@ fn candidates_are_grouped_by_the_device_they_are_on() {
         "one device, one measurement: {report:?}"
     );
     drop(fixture);
+}
+
+#[test]
+fn the_default_cache_is_swept_even_when_the_primary_target_moved() {
+    let home = Path::new("/fixture/homedir");
+    let default = home.join(".cache/plangraph");
+    assert_eq!(
+        fast_check_caches(Some(Path::new("/data/ct/cargo-target")), home),
+        [PathBuf::from("/data/ct"), default.clone()]
+    );
+    assert_eq!(
+        fast_check_caches(Some(&default.join("cargo-target")), home),
+        std::slice::from_ref(&default)
+    );
+    assert_eq!(fast_check_caches(None, home), [default]);
 }

@@ -17,8 +17,8 @@ pub use crate::cargo_pool_telemetry::{
     LockWaitSummary, LockWaitTracker,
 };
 
-pub use crate::cargo_pool_trim::enforce_pool_cap;
 use crate::cargo_pool_trim::slot_size;
+pub use crate::cargo_pool_trim::{enforce_pool_cap, enforce_review_slots};
 
 /// Above the measured size of one full-workspace debug test build (25.9 GB on the
 /// busiest host); a host overrides it with `cargo-target-cap-gb` in its plangraph

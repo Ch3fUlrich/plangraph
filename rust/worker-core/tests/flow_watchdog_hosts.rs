@@ -1,5 +1,17 @@
 use std::{fs, process::Command};
 
+/// The key hygiene writes for the root filesystem: its device number.
+#[cfg(unix)]
+fn root_key() -> String {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata("/").unwrap().dev().to_string()
+}
+
+#[cfg(not(unix))]
+fn root_key() -> String {
+    "0".into()
+}
+
 fn active(host: serde_json::Value) -> String {
     run(host).0
 }
@@ -156,7 +168,7 @@ fn the_local_hosts_alert_names_the_consumers_the_hygiene_watermark_measured() {
         .collect();
     fs::write(
         &marks,
-        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+        serde_json::json!({root_key(): {"free": 1, "total": 10, "directories": rows}}).to_string(),
     )
     .unwrap();
     let host = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":87,
@@ -191,7 +203,7 @@ fn an_alert_queued_before_hygiene_sampled_is_followed_by_one_naming_the_consumer
     let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}, {"path": "/data/small", "bytes": 1}]);
     fs::write(
         &marks,
-        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+        serde_json::json!({root_key(): {"free": 1, "total": 10, "directories": rows}}).to_string(),
     )
     .unwrap();
     let (active, queued) = pass_in(watch.path(), host.clone(), &env);
@@ -205,7 +217,7 @@ fn an_alert_queued_before_hygiene_sampled_is_followed_by_one_naming_the_consumer
     let rows = serde_json::json!([{"path": "/data/big", "bytes": 950}]);
     fs::write(
         &marks,
-        serde_json::json!({"64769": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+        serde_json::json!({root_key(): {"free": 1, "total": 10, "directories": rows}}).to_string(),
     )
     .unwrap();
     let (again, queued) = pass_in(watch.path(), host, &env);
@@ -225,7 +237,8 @@ fn a_crossing_queues_at_most_one_bare_and_one_measured_alert_however_the_measure
             let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}]);
             fs::write(
                 &marks,
-                serde_json::json!({"1": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+                serde_json::json!({root_key(): {"free": 1, "total": 10, "directories": rows}})
+                    .to_string(),
             )
             .unwrap();
         } else {
@@ -267,7 +280,7 @@ fn a_missing_host_sample_keeps_the_crossing_active_and_only_a_sample_ends_it() {
     let rows = serde_json::json!([{"path": "/data/big", "bytes": 900}]);
     fs::write(
         &marks,
-        serde_json::json!({"1": {"free": 1, "total": 10, "directories": rows}}).to_string(),
+        serde_json::json!({root_key(): {"free": 1, "total": 10, "directories": rows}}).to_string(),
     )
     .unwrap();
     let hot = serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":87,
@@ -294,4 +307,45 @@ fn a_missing_host_sample_keeps_the_crossing_active_and_only_a_sample_ends_it() {
     assert!(!active.contains("host-disk"), "{active}");
     let (_, queued) = pass_hosts_in(watch.path(), vec![hot], &env);
     assert_eq!(queued.len(), 2, "{queued:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_root_disk_alert_names_only_the_directories_measured_on_the_root_filesystem() {
+    use std::os::unix::fs::MetadataExt;
+    let root_dev = fs::metadata("/").unwrap().dev();
+    let work_dev = root_dev + 1; // a separate work mount
+    let state = tempfile::tempdir().unwrap();
+    let marks = state.path().join("disk-watermarks.json");
+    let env = [("PLANGRAPH_DISK_WATERMARKS", marks.as_path())];
+    let both = serde_json::json!({
+        root_dev.to_string(): {"free": 1, "total": 10, "directories": [{"path": "/rootfs/big", "bytes": 500}]},
+        work_dev.to_string(): {"free": 1, "total": 10, "directories": [{"path": "/work/huge", "bytes": 9000}]},
+    });
+    fs::write(&marks, both.to_string()).unwrap();
+    let host = |root: u32, work: Vec<u32>| {
+        serde_json::json!({"host":"fixture","tmp_used_percent":0,"root_used_percent":root,
+        "work_used_percent":work,"checkout_head":"a","origin_main_head":"a","behind_commits":0,"age_hours":100})
+    };
+    // Only the root crossed: its row, not the larger work mount's.
+    let (_, queued) = run_with(host(87, vec![]), &env);
+    assert!(queued[0].contains("/rootfs/big=500"), "{queued:?}");
+    assert!(!queued[0].contains("/work/huge"), "{queued:?}");
+    // Only a work mount crossed: its row, not the root's.
+    let (_, queued) = run_with(host(10, vec![90]), &env);
+    assert!(
+        queued[0].contains("/work/huge=9000") && !queued[0].contains("/rootfs/big"),
+        "{queued:?}"
+    );
+    // The root crossed but only the work mount has been measured: a bare alert, not "measured".
+    fs::write(
+        &marks,
+        serde_json::json!({work_dev.to_string(): both[work_dev.to_string()]}).to_string(),
+    )
+    .unwrap();
+    let (active, queued) = run_with(host(87, vec![]), &env);
+    assert!(
+        !queued[0].contains("top=") && !active.contains("measured"),
+        "{queued:?} {active}"
+    );
 }

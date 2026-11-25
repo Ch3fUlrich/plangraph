@@ -243,6 +243,11 @@ fn reclaim(
     {
         return Ok(());
     }
+    // A mount (a bind mount included) inside the target: the removal would delete into another
+    // filesystem before it failed at the mount point.
+    if crate::reap_journal::check_mounts(&canonical).is_err() {
+        return Ok(());
+    }
     if apply {
         fs::remove_dir_all(target)?;
         report.freed_bytes = report.freed_bytes.saturating_add(bytes);

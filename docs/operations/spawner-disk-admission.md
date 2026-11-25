@@ -60,6 +60,7 @@ where `<target>` is the expanded, absolute shared target path. Both
 flock: runs hold shared leases; reclaim holds a nonblocking exclusive lease
 through scanning and deletion. Hygiene reports and skips a root when its lease
 is held. The lock file stays in place after release.
+Review slots are one per seat run, so hygiene gives all of them together a fixed budget of three slots' cap (each idle slot also stays under the cap, and a slot trimmed to nothing is removed), however many abandoned ones exist.
 
 Hygiene resolves `PLANGRAPH_CARGO_TARGET_DIR` with the same home expansion and
 absolute-path rules as `host_ready.shared_cargo_target`, defaulting to

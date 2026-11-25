@@ -47,16 +47,46 @@ pub fn attach_local_consumers(hosts: &mut [Host], local: &str, watermarks: &Path
     let Ok(alerts) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return;
     };
-    for alert in alerts.as_object().into_iter().flat_map(|a| a.values()) {
-        for row in alert["directories"].as_array().into_iter().flatten() {
-            if let (Some(path), Some(bytes)) = (row["path"].as_str(), row["bytes"].as_u64()) {
-                host.top_consumers.push(Consumer {
-                    path: path.to_owned(),
-                    bytes,
-                });
-            }
-        }
-    }
+    // The watermark file is keyed by device number; only the filesystems that crossed 85% in this
+    // snapshot lend their rows, so a root-disk alert never names a separate work mount.
+    let (root_dev, tmp_dev) = (device_of(Path::new("/")), device_of(&std::env::temp_dir()));
+    let work_hot = host
+        .work_used_percent
+        .iter()
+        .any(|p| *p > DISK_USED_PERCENT);
+    let wanted = |key: &str| -> bool {
+        let Ok(dev) = key.parse::<u64>() else {
+            return false;
+        };
+        (host.root_used_percent > DISK_USED_PERCENT && Some(dev) == root_dev)
+            || (host.tmp_used_percent > DISK_USED_PERCENT && Some(dev) == tmp_dev)
+            || (work_hot && Some(dev) != root_dev && Some(dev) != tmp_dev)
+    };
+    let rows: Vec<Consumer> = alerts
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| wanted(key))
+        .flat_map(|(_, alert)| alert["directories"].as_array().into_iter().flatten())
+        .filter_map(|row| {
+            Some(Consumer {
+                path: row["path"].as_str()?.to_owned(),
+                bytes: row["bytes"].as_u64()?,
+            })
+        })
+        .collect();
+    host.top_consumers = rows;
+}
+
+#[cfg(unix)]
+fn device_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|meta| meta.dev())
+}
+
+#[cfg(not(unix))]
+fn device_of(_: &Path) -> Option<u64> {
+    None
 }
 
 /// The name this host goes by in the snapshot, then the hygiene state it reads.

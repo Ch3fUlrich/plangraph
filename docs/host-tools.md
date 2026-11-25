@@ -78,7 +78,7 @@ proc entry. Inode ownership is not used to waive process protection. Inspect a d
 is decided per path, never by a host-wide build flag. Below the cleanup floor the run
 removes idle Cargo targets (worktree `rust/target`, scratch, `fc-*`) largest first until free space
 is back above it (free space is measured again after each removal and targets are grouped by the device they are on); a target untouched for 15 minutes with no process, lease, pin or unfinished run
-counts as idle. Each kept path is reported as `<path>: kept: <reason>`. An `--apply` run that ends
+counts as idle. Each kept path is reported as `<path>: kept: <reason>`. Mount points come from the kernel's mount inventory (bind mounts included): a target holding a mount is kept, a target that is itself a mount point is emptied and keeps its root, and processes, runs and mounts are read again under the target's lease right before it is removed. `fc-*` targets are swept beside the configured primary target and in the default `~/.cache/plangraph`. An `--apply` run that ends
 below the floor with `freed_bytes` 0 exits non-zero with an `ALERT` naming the five largest kept paths.
 
 Every invocation with a usable state destination replaces

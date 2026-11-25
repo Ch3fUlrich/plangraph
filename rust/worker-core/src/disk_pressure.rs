@@ -16,9 +16,10 @@ use std::{
 /// A target nothing touched for this long is rebuildable (a stopped session leaves it idle).
 pub const IDLE: Duration = Duration::from_secs(15 * 60);
 
-/// Remove a target, or only its contents when the directory is a mount point (the mount root
-/// cannot be removed and a failed attempt would leave the contents gone and uncounted). Returns
-/// the bytes actually removed and the first error.
+/// Remove a target, or only its contents when the directory is itself a mount point (the mount
+/// root cannot be removed, and a failed attempt would leave the contents gone and uncounted). A
+/// target that holds a mount inside never gets here (`blocked`). Returns the bytes actually
+/// removed and the first error.
 fn clear(path: &Path, keep_root: bool, bytes: u64) -> (u64, Option<io::Error>) {
     if !keep_root {
         return match fs::remove_dir_all(path) {
@@ -49,17 +50,25 @@ fn clear(path: &Path, keep_root: bool, bytes: u64) -> (u64, Option<io::Error>) {
 pub struct Candidate {
     pub target: PathBuf,
     pub owner: PathBuf,
-    /// The target is itself a mount point: its contents go, the directory stays.
-    pub keep_root: bool,
 }
 
-/// Whether `path` is on another device than its parent (a mount point, as far as `st_dev` tells).
-pub fn is_mount_point(path: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (fs::metadata(path), path.parent().map(fs::metadata)) {
-        (Ok(here), Some(Ok(above))) => here.dev() != above.dev(),
-        _ => false,
-    }
+/// What protects a target: pins and unfinished runs, process references, and the host's mount
+/// points (a mount inside a target is never entered; a target that is itself a mount point is
+/// emptied, not removed).
+#[derive(Default)]
+pub struct Protection {
+    pub guards: Guards,
+    pub refs: Vec<PathBuf>,
+    pub mounts: Vec<PathBuf>,
+}
+
+/// Reads the protection again; called under the target's lease, right before a removal, because
+/// the first reading is as old as the other sweeps of the run.
+pub type Reload<'a> = dyn Fn() -> io::Result<Protection> + 'a;
+
+/// The mount points of this host, from the kernel's inventory (bind mounts included).
+pub fn host_mounts() -> io::Result<Vec<PathBuf>> {
+    crate::reap_journal::mount_points()
 }
 
 /// A target kept, with its size and the reason.
@@ -77,7 +86,6 @@ pub fn worktree_targets(trees: &[PathBuf]) -> Vec<Candidate> {
             ["rust/target", "target"].map(|rel| Candidate {
                 target: tree.join(rel),
                 owner: tree.clone(),
-                keep_root: is_mount_point(&tree.join(rel)),
             })
         })
         .filter(|c| c.target.is_dir())
@@ -107,7 +115,6 @@ pub fn scratch_targets(root: &Path) -> Vec<Candidate> {
         .into_iter()
         .map(|target| Candidate {
             owner: target.clone(),
-            keep_root: is_mount_point(&target),
             target,
         })
         .collect()
@@ -123,7 +130,6 @@ pub fn fast_check_targets(cache: &Path) -> Vec<Candidate> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .map(|e| Candidate {
             owner: e.path(),
-            keep_root: is_mount_point(&e.path()),
             target: e.path(),
         })
         .collect()
@@ -142,11 +148,29 @@ fn tracked(target: &Path, owner: &Path) -> io::Result<bool> {
         .is_empty())
 }
 
+/// Why a target is protected right now, if it is.
+fn blocked(canonical: &Path, owner: &Path, protection: &Protection) -> Option<String> {
+    if let Some(process) = protection
+        .refs
+        .iter()
+        .find(|p| p.starts_with(canonical) || p.starts_with(owner))
+    {
+        return Some(format!("busy: process in {}", process.display()));
+    }
+    if protection.guards.protects(canonical) || protection.guards.protects(owner) {
+        return Some("pinned or unfinished run".into());
+    }
+    protection
+        .mounts
+        .iter()
+        .find(|mount| mount.as_path() != canonical && mount.starts_with(canonical))
+        .map(|mount| format!("holds a mount point: {}", mount.display()))
+}
+
 /// Why `candidate` must stay, or its size when it may go.
 fn keep_reason(
     candidate: &Candidate,
-    guards: &Guards,
-    refs: &[PathBuf],
+    protection: &Protection,
     now: SystemTime,
 ) -> io::Result<Result<(u64, PathBuf), (u64, String)>> {
     let target = &candidate.target;
@@ -170,17 +194,8 @@ fn keep_reason(
         return Ok(Err((0, "resolves outside its worktree".into())));
     }
     let (bytes, newest) = scan(target)?;
-    if let Some(process) = refs
-        .iter()
-        .find(|p| p.starts_with(&canonical) || p.starts_with(&owner))
-    {
-        return Ok(Err((
-            bytes,
-            format!("busy: process in {}", process.display()),
-        )));
-    }
-    if guards.protects(&canonical) || guards.protects(&owner) {
-        return Ok(Err((bytes, "pinned or unfinished run".into())));
+    if let Some(reason) = blocked(&canonical, &owner, protection) {
+        return Ok(Err((bytes, reason)));
     }
     if tracked(target, &candidate.owner)? {
         return Ok(Err((bytes, "tracked files".into())));
@@ -196,13 +211,12 @@ fn keep_reason(
 }
 
 /// Remove idle targets, largest first, until the filesystem's free space reaches `floor`
-/// (measured again through `fresh_free` after each removal).
-/// Returns every kept target with its reason.
+/// (measured again through `fresh_free` after each removal). A target is checked again against
+/// `reload()` under its lease right before it goes. Returns every kept target with its reason.
 #[allow(clippy::too_many_arguments)]
 pub fn reclaim(
     candidates: &[Candidate],
-    guards: &Guards,
-    refs: &[PathBuf],
+    (protection, reload): (&Protection, &Reload<'_>),
     (free, floor): (u64, u64),
     fresh_free: &dyn Fn() -> Option<u64>,
     now: SystemTime,
@@ -212,7 +226,7 @@ pub fn reclaim(
     let mut kept = vec![];
     let mut idle = vec![];
     for candidate in candidates {
-        match keep_reason(candidate, guards, refs, now) {
+        match keep_reason(candidate, protection, now) {
             Ok(Ok((bytes, canonical))) => idle.push((bytes, canonical, candidate)),
             Ok(Err((bytes, reason))) => kept.push(Kept {
                 path: candidate.target.clone(),
@@ -230,6 +244,13 @@ pub fn reclaim(
     idle.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     let mut gained = 0u64;
     for (bytes, canonical, candidate) in idle {
+        let mut keep = |reason: String| {
+            kept.push(Kept {
+                path: candidate.target.clone(),
+                bytes,
+                reason,
+            })
+        };
         // After a removal the filesystem is measured again; the estimate stands in for a dry
         // run and for a failed measurement.
         let estimate = free.saturating_add(gained);
@@ -239,45 +260,47 @@ pub fn reclaim(
             estimate
         };
         if current >= floor {
-            kept.push(Kept {
-                path: candidate.target.clone(),
-                bytes,
-                reason: "free space is above the floor".into(),
-            });
+            keep("free space is above the floor".into());
             continue;
         }
         // The lease is held through the removal; a build starting meanwhile keeps its target.
         let lease = match crate::cargo_cache::try_exclusive_lease(&canonical) {
             Ok(Some(lease)) => lease,
             Ok(None) => {
-                kept.push(Kept {
-                    path: candidate.target.clone(),
-                    bytes,
-                    reason: "cargo lease held".into(),
-                });
+                keep("cargo lease held".into());
                 continue;
             }
             Err(error) => {
-                kept.push(Kept {
-                    path: candidate.target.clone(),
-                    bytes,
-                    reason: format!("lease unavailable: {error}"),
-                });
+                keep(format!("lease unavailable: {error}"));
                 continue;
             }
         };
         let mut freed = bytes;
         if apply {
-            let (done, failure) = clear(&canonical, candidate.keep_root, bytes);
+            // Under the lease, with processes, runs and mounts read again: a build that started
+            // after the first reading and takes no lease is seen here, not after the removal.
+            let fresh = match reload() {
+                Ok(fresh) => fresh,
+                Err(error) => {
+                    keep(format!("protection unreadable: {error}"));
+                    continue;
+                }
+            };
+            let owner = candidate
+                .owner
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.owner.clone());
+            if let Some(reason) = blocked(&canonical, &owner, &fresh) {
+                keep(reason);
+                continue;
+            }
+            let keep_root = fresh.mounts.contains(&canonical);
+            let (done, failure) = clear(&canonical, keep_root, bytes);
             report.freed_bytes = report.freed_bytes.saturating_add(done);
             if let Some(error) = failure {
                 // Whatever was removed before the failure still counts as freed.
                 gained = gained.saturating_add(done);
-                kept.push(Kept {
-                    path: candidate.target.clone(),
-                    bytes,
-                    reason: format!("removal failed: {error}"),
-                });
+                keep(format!("removal failed: {error}"));
                 continue;
             }
             freed = done;

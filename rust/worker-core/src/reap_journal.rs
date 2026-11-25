@@ -218,10 +218,12 @@ pub(crate) fn delete(
     ))
 }
 
-/// A bind mount may share a device number, so metadata alone cannot exclude it.
-pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
+/// Every mount point the kernel lists for this process. A bind mount may share a device number,
+/// so metadata alone cannot tell a mount from a directory.
+pub(crate) fn mount_points() -> io::Result<Vec<PathBuf>> {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
+    let mut points = Vec::new();
     for line in fs::read("/proc/self/mountinfo")?
         .split(|b| *b == b'\n')
         .filter(|l| !l.is_empty())
@@ -246,9 +248,15 @@ pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
                 remaining = tail;
             }
         }
-        if PathBuf::from(OsString::from_vec(bytes)).starts_with(path) {
-            return Err(io::Error::other("mount inside candidate"));
-        }
+        points.push(PathBuf::from(OsString::from_vec(bytes)));
+    }
+    Ok(points)
+}
+
+/// Refuses a path that is, or holds, a mount point.
+pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
+    if mount_points()?.iter().any(|mount| mount.starts_with(path)) {
+        return Err(io::Error::other("mount inside candidate"));
     }
     Ok(())
 }

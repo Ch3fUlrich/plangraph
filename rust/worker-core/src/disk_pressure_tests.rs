@@ -1,5 +1,37 @@
 use super::*;
 
+fn protection(pinned: &[PathBuf], refs: &[PathBuf], mounts: &[PathBuf]) -> Protection {
+    Protection {
+        guards: Guards {
+            pinned: pinned.to_vec(),
+            live: vec![],
+        },
+        refs: refs.to_vec(),
+        mounts: mounts.to_vec(),
+    }
+}
+
+/// `reclaim` with protection that reads the same on every reload.
+fn run(
+    candidates: &[Candidate],
+    pinned: &[PathBuf],
+    refs: &[PathBuf],
+    mounts: &[PathBuf],
+    (free, floor): (u64, u64),
+    report: &mut Report,
+) -> Vec<Kept> {
+    let reload = || Ok(protection(pinned, refs, mounts));
+    reclaim(
+        candidates,
+        (&protection(pinned, refs, mounts), &reload),
+        (free, floor),
+        &|| None,
+        SystemTime::now(),
+        true,
+        report,
+    )
+}
+
 fn target(tree: &Path, bytes: usize, old: bool) -> Candidate {
     let target = tree.join("rust/target");
     fs::create_dir_all(target.join("debug/deps")).unwrap();
@@ -20,7 +52,6 @@ fn target(tree: &Path, bytes: usize, old: bool) -> Candidate {
     Candidate {
         target,
         owner: tree.to_path_buf(),
-        keep_root: false,
     }
 }
 
@@ -46,16 +77,7 @@ fn a_build_in_tree_a_keeps_a_and_the_idle_target_of_tree_b_goes() {
     // The build process works in tree A, and the host-wide "a build is running" fact is true.
     let refs = vec![a.join("rust")];
     let mut report = report();
-    let kept = reclaim(
-        &[ca, cb],
-        &Guards::default(),
-        &refs,
-        (10, 500),
-        &|| None,
-        SystemTime::now(),
-        true,
-        &mut report,
-    );
+    let kept = run(&[ca, cb], &[], &refs, &[], (10, 500), &mut report);
     assert!(!b.join("rust/target").exists(), "{:?}", report.actions);
     assert!(a.join("rust/target").exists());
     assert_eq!(report.freed_bytes, 1000 + 2);
@@ -75,16 +97,7 @@ fn removal_stops_once_free_space_is_back_above_the_floor_largest_first() {
         .map(|(t, n)| target(t, n, true))
         .collect();
     let mut report = report();
-    let kept = reclaim(
-        &candidates,
-        &Guards::default(),
-        &[],
-        (0, 8000),
-        &|| None,
-        SystemTime::now(),
-        true,
-        &mut report,
-    );
+    let kept = run(&candidates, &[], &[], &[], (0, 8000), &mut report);
     assert!(!trees[0].join("rust/target").exists());
     assert!(trees[1].join("rust/target").exists() && trees[2].join("rust/target").exists());
     assert!(report.freed_bytes >= 9000);
@@ -103,19 +116,13 @@ fn nothing_removable_names_every_kept_path_with_its_reason() {
         target(&fresh, 200, false),
         target(&busy, 100, true),
     ];
-    let guards = Guards {
-        pinned: vec![pinned.clone()],
-        live: vec![],
-    };
     let mut report = report();
-    let kept = reclaim(
+    let kept = run(
         &candidates,
-        &guards,
+        std::slice::from_ref(&pinned),
         std::slice::from_ref(&busy),
+        &[],
         (0, 10_000),
-        &|| None,
-        SystemTime::now(),
-        true,
         &mut report,
     );
     assert_eq!(report.freed_bytes, 0);
@@ -142,19 +149,9 @@ fn a_symlinked_parent_never_redirects_removal_outside_the_worktree() {
     let candidate = Candidate {
         target: tree.join("rust/target"),
         owner: tree.clone(),
-        keep_root: false,
     };
     let mut report = report();
-    let kept = reclaim(
-        &[candidate],
-        &Guards::default(),
-        &[],
-        (0, 10_000),
-        &|| None,
-        SystemTime::now(),
-        true,
-        &mut report,
-    );
+    let kept = run(&[candidate], &[], &[], &[], (0, 10_000), &mut report);
     assert!(external.target.join("debug/deps/object").exists());
     assert_eq!(report.freed_bytes, 0);
     assert!(kept[0].reason.contains("outside"), "{}", kept[0].reason);
@@ -164,20 +161,19 @@ fn a_symlinked_parent_never_redirects_removal_outside_the_worktree() {
 fn a_mount_point_target_keeps_its_root_and_counts_what_was_cleared() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let mut candidate = target(&root.join("tree"), 700, true);
-    candidate.keep_root = true; // stands for a target that is a mount point
+    let candidate = target(&root.join("tree"), 700, true);
+    let dir = root.join("tree/rust/target");
+    // The kernel's inventory lists the target itself as a mount point (a bind mount shares
+    // its parent's device number, so only the inventory can say).
     let mut report = report();
-    let _ = reclaim(
+    let _ = run(
         &[candidate],
-        &Guards::default(),
         &[],
+        &[],
+        std::slice::from_ref(&dir),
         (0, 10_000),
-        &|| None,
-        SystemTime::now(),
-        true,
         &mut report,
     );
-    let dir = root.join("tree/rust/target");
     assert!(dir.is_dir(), "the mount root survives");
     assert_eq!(
         fs::read_dir(&dir).unwrap().count(),
@@ -185,4 +181,58 @@ fn a_mount_point_target_keeps_its_root_and_counts_what_was_cleared() {
         "its contents are gone"
     );
     assert!(report.freed_bytes >= 700, "{}", report.freed_bytes);
+}
+
+#[test]
+fn a_target_that_holds_a_nested_mount_is_never_entered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let candidate = target(&root.join("tree"), 700, true);
+    let dir = root.join("tree/rust/target");
+    // A mount (bind mounts included) under the target: its files are on another filesystem
+    // that the removal would delete into before it failed at the mount point.
+    fs::create_dir_all(dir.join("debug/nested")).unwrap();
+    fs::write(dir.join("debug/nested/precious"), "other filesystem").unwrap();
+    let nested = dir.join("debug/nested");
+    let mut report = report();
+    let kept = run(
+        &[candidate],
+        &[],
+        &[],
+        std::slice::from_ref(&nested),
+        (0, 10_000),
+        &mut report,
+    );
+    assert!(nested.join("precious").exists());
+    assert_eq!(report.freed_bytes, 0);
+    assert!(
+        kept[0].reason.starts_with("holds a mount point"),
+        "{}",
+        kept[0].reason
+    );
+}
+
+#[test]
+fn a_build_that_starts_after_the_first_reading_keeps_its_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let candidate = target(&root.join("tree"), 700, true);
+    let dir = root.join("tree/rust/target");
+    // The first reading sees nothing; the reload under the lease sees a build using the target
+    // without any plangraph lease.
+    let late = vec![dir.join("debug")];
+    let reload = || Ok(protection(&[], &late, &[]));
+    let mut report = report();
+    let kept = reclaim(
+        &[candidate],
+        (&protection(&[], &[], &[]), &reload),
+        (0, 10_000),
+        &|| None,
+        SystemTime::now(),
+        true,
+        &mut report,
+    );
+    assert!(dir.join("debug/deps/object").exists());
+    assert_eq!(report.freed_bytes, 0);
+    assert!(kept[0].reason.starts_with("busy"), "{}", kept[0].reason);
 }

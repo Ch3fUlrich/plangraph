@@ -86,6 +86,16 @@ fn trim_slot_to(
             break;
         }
         if apply {
+            if !path.is_symlink()
+                && path
+                    .canonicalize()
+                    .map_or(true, |p| crate::reap_journal::check_mounts(&p).is_err())
+            {
+                report
+                    .skipped
+                    .push(format!("{} (holds a mount point)", path.display()));
+                continue;
+            }
             match remove_path(&path) {
                 Ok(()) => {
                     report.freed_bytes += bytes;
@@ -113,6 +123,41 @@ pub fn enforce_pool_cap(
     apply: bool,
     report: &mut Report,
 ) -> io::Result<u64> {
+    let total_cap = slot_cap_bytes.saturating_mul(slots.len() as u64);
+    enforce_total(slots, slot_cap_bytes, total_cap, apply, report)
+}
+
+/// Review slots are one per seat run, so their count says nothing about how much disk the pool
+/// may use: each idle slot stays under `slot_cap_bytes`, and the slots together under a fixed
+/// `DEFAULT_POOL_SLOTS * slot_cap_bytes`, however many abandoned ones are lying around. An idle
+/// slot trimmed to nothing is removed.
+pub fn enforce_review_slots(
+    slots: &[PathBuf],
+    slot_cap_bytes: u64,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<u64> {
+    let total_cap = slot_cap_bytes.saturating_mul(crate::cargo_pool::DEFAULT_POOL_SLOTS as u64);
+    let total = enforce_total(slots, slot_cap_bytes, total_cap, apply, report)?;
+    if apply {
+        for slot in slots {
+            if slot_size(slot) == 0 && crate::cargo_pool::remove_review_slot(slot) {
+                report
+                    .actions
+                    .push(format!("pool_remove_empty {}", slot.display()));
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn enforce_total(
+    slots: &[PathBuf],
+    slot_cap_bytes: u64,
+    total_cap: u64,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<u64> {
     let mut sizes = vec![0u64; slots.len()];
     let mut idle_flags = vec![false; slots.len()];
     for (idx, slot) in slots.iter().enumerate() {
@@ -128,7 +173,6 @@ pub fn enforce_pool_cap(
         sizes[idx] = trim_slot_to(slot, slot_cap_bytes, apply, report)?;
     }
 
-    let total_cap = slot_cap_bytes.saturating_mul(slots.len() as u64);
     let mut total: u64 = sizes.iter().sum();
     if total > total_cap {
         let mut idle_order: Vec<usize> = (0..slots.len())

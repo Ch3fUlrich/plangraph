@@ -145,11 +145,12 @@ fn execute_with(
     );
     // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
-    guards.pinned.extend(
+    let unit_pins: Vec<PathBuf> =
         sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
             .into_iter()
-            .map(|r| r.path),
-    );
+            .map(|r| r.path)
+            .collect();
+    guards.pinned.extend(unit_pins.iter().cloned());
     // Busy is decided per path from these references (working directory, open files,
     // executable, CARGO_TARGET_DIR); a build elsewhere on the host defers nothing.
     let (refs, _) = processes()?;
@@ -213,18 +214,18 @@ fn execute_with(
             report.error = Some(error.to_string());
         }
         // Regenerable fast-check targets and finished job worktrees outside the roots.
-        let mut stray_error = shared
-            .first()
-            .and_then(|primary| primary.parent())
-            .map(|cache| {
-                pg_worker_core::private_targets::sweep_fast_check_targets(
-                    cache,
-                    &private_guards,
-                    apply,
-                    &mut report,
-                )
-            })
-            .and_then(Result::err);
+        let mut stray_error =
+            fast_check_caches(shared.first().map(PathBuf::as_path), Path::new(&home))
+                .iter()
+                .find_map(|cache| {
+                    pg_worker_core::private_targets::sweep_fast_check_targets(
+                        cache,
+                        &private_guards,
+                        apply,
+                        &mut report,
+                    )
+                    .err()
+                });
         if stray_error.is_none() {
             let covered: Vec<_> = available
                 .keys()
@@ -288,7 +289,9 @@ fn execute_with(
         // Pool slots are guarded by their own leases, so idle ones are trimmed even while
         // another build runs; the primary target also waits for the process scan.
         if let Some(primary) = shared.first() {
+            // Review slots are one per seat run: they have their own, fixed budget below.
             let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
+            slots.retain(|slot| !pg_worker_core::cargo_pool::is_review_slot(slot));
             let primary_busy = refs.iter().any(|p| p.starts_with(primary));
             if primary_busy {
                 slots.remove(0);
@@ -299,6 +302,13 @@ fn execute_with(
             }
             if let Err(error) =
                 pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
+            {
+                report.alarm = true;
+                report.error = Some(error.to_string());
+            }
+            let review = pg_worker_core::cargo_pool::existing_review_slots(primary);
+            if let Err(error) =
+                pg_worker_core::cargo_pool::enforce_review_slots(&review, cap, apply, &mut report)
             {
                 report.alarm = true;
                 report.error = Some(error.to_string());
@@ -329,7 +339,7 @@ fn execute_with(
         {
             let slots = pg_worker_core::cargo_pool::existing_review_slots(&fallback);
             if let Err(error) =
-                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
+                pg_worker_core::cargo_pool::enforce_review_slots(&slots, cap, apply, &mut report)
             {
                 report.alarm = true;
                 report.error = Some(error.to_string());
@@ -341,14 +351,31 @@ fn execute_with(
     #[cfg(target_os = "linux")]
     {
         let roots: Vec<PathBuf> = available.keys().cloned().collect();
-        let cache = shared.first().and_then(|primary| primary.parent());
+        let caches = fast_check_caches(shared.first().map(PathBuf::as_path), Path::new(&home));
+        // The protection is read now and again under each target's lease, right before removal.
+        let reload = || -> io::Result<disk_pressure::Protection> {
+            let (refs, _) = processes()?;
+            let mut guards = Guards::load(&pins, state)?;
+            guards.pinned.extend(unit_pins.iter().cloned());
+            guards.live.extend(
+                refs.iter()
+                    .filter(|path| roots.iter().any(|root| path.starts_with(root)))
+                    .cloned(),
+            );
+            Ok(disk_pressure::Protection {
+                guards,
+                refs,
+                mounts: disk_pressure::host_mounts()?,
+            })
+        };
+        let protection = reload()?;
         reclaim_below_floor(
             &repo,
             &roots,
             thresholds,
             &scratch,
-            cache,
-            (&guards, &refs),
+            &caches,
+            (&protection, &reload),
             (
                 &|path| disk_runtime::disk_space(path).map(|space| (space.free, space.total)),
                 &device,
@@ -363,6 +390,21 @@ fn execute_with(
 fn device(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|meta| meta.dev())
+}
+
+/// The cache directories that hold `fc-*` fast-check targets: beside the configured primary
+/// target and the default `~/.cache/plangraph`, so moving the primary leaves none unswept.
+fn fast_check_caches(primary: Option<&Path>, home: &Path) -> Vec<PathBuf> {
+    let mut caches: Vec<PathBuf> = primary
+        .and_then(Path::parent)
+        .into_iter()
+        .map(Path::to_path_buf)
+        .collect();
+    let default = home.join(".cache/plangraph");
+    if !caches.contains(&default) {
+        caches.push(default);
+    }
+    caches
 }
 
 /// Measures (free, total) bytes of the filesystem that holds a path.
@@ -383,8 +425,8 @@ fn reclaim_below_floor(
     roots: &[PathBuf],
     thresholds: Thresholds,
     scratch: &[PathBuf],
-    cache: Option<&Path>,
-    (guards, refs): (&Guards, &[PathBuf]),
+    caches: &[PathBuf],
+    (protection, reload): (&disk_pressure::Protection, &disk_pressure::Reload<'_>),
     (space, device): (&SpaceFn<'_>, &DeviceFn<'_>),
     apply: bool,
     report: &mut Report,
@@ -400,7 +442,7 @@ fn reclaim_below_floor(
     for path in scratch {
         candidates.extend(disk_pressure::scratch_targets(path));
     }
-    if let Some(cache) = cache {
+    for cache in caches {
         candidates.extend(disk_pressure::fast_check_targets(cache));
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -455,8 +497,7 @@ fn reclaim_below_floor(
         below_floor = true;
         kept.extend(disk_pressure::reclaim(
             &group.candidates,
-            guards,
-            refs,
+            (protection, reload),
             (free, floor),
             &|| space(&group.probe).ok().map(|(free, _)| free),
             SystemTime::now(),

@@ -375,3 +375,30 @@ fn the_pool_path_is_what_is_classified_as_temp_on_both_sides() {
         None
     );
 }
+
+#[test]
+fn abandoned_review_slots_below_their_own_cap_stay_under_a_fixed_pool_budget() {
+    use pg_worker_core::cargo_pool::{enforce_review_slots, existing_review_slots};
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("cargo-target");
+    let pool = tmp.path().join("cargo-target-pool");
+    // Eight slots of 90 bytes each: every one is under the 100-byte cap, but together they are
+    // 720 bytes, more than the fixed budget of three slots (300). A budget of N * cap would let
+    // all of them stay.
+    for n in 0..8 {
+        let objects = pool.join(format!("slot-review-gone-{n}/target/debug"));
+        fs::create_dir_all(&objects).unwrap();
+        for part in 0..9 {
+            fs::write(objects.join(format!("object-{part}")), [0u8; 10]).unwrap();
+        }
+    }
+    let slots = existing_review_slots(&primary);
+    assert_eq!(slots.len(), 8);
+    let mut report = Report::default();
+    let total = enforce_review_slots(&slots, 100, true, &mut report).unwrap();
+    let left: u64 = slots
+        .iter()
+        .map(|s| scan(s).map(|x| x.0).unwrap_or(0))
+        .sum();
+    assert!(left <= 300 && total <= 300, "{left} {total} {report:?}");
+}
