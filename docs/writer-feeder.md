@@ -110,7 +110,7 @@ the HTTP API authenticates the principal from that token. The feeder never mints
 tokens and never prints their contents. HTTP headers travel to curl on stdin.
 
 `--policy PATH` defaults to `deploy/feeder/policy.toml`. Defaults are 3 writers on
-the `coding` host alias, 5 on `dell`, 4 GB available RAM per additional run, a 10 GB disk floor,
+the `coding` host alias, 5 on `dell`, 8 on `workstation`, 4 GB available RAM per additional run, a 10 GB disk floor,
 and provider quota strictly above 10%. Byte units are decimal. Existing writers
 started before the sample are already reflected in free RAM. Reserve one run's
 estimate for the next launch, plus a full estimate for each local writer whose
@@ -128,10 +128,26 @@ active writers with no host refuse instead of silently counting zero.
 `--live-facts` is the feeder service's Linux and WSL mode. It samples available
 memory, one-minute load, effective CPU count, and disk space on the run-state
 and existing Cargo target filesystems. It uses the spawner host identity from
-`PLANGRAPH_HOST_NAME` or the host registry. A launch needs one CPU of headroom
-and enough available memory for the per-run estimate above the configured
-`ram_floor_bytes`. Every decision with an available sample, including an idle
-tick, records its capacity and current writer count in the event log.
+`PLANGRAPH_HOST_NAME` or the host registry.
+
+Live hosts admit by free RAM (D-5122). Free RAM above `ram_floor_bytes`, divided by
+`ram_per_run_bytes`, is `slots_by_ram`; the host's writer limit is its running writers
+plus `new_writers_allowed`. Load1 only paces: where the kernel has no
+`/proc/pressure/cpu` file (only a missing file counts; an unreadable or malformed one
+still belongs to a PSI kernel) and load1 is at or above the cpu count, the host gets
+one new writer per tick (`load_paced`). An unreadable load average means no pacing,
+not a refusal. The cpu pressure thresholds and the Windows RAM of a WSL host come in
+later slices; until the Windows side is sampled the WSL workstation's RAM is
+overstated, so keep its timer disabled (or `feeder.off` set) until then.
+Every decision with an available sample, including an idle tick, records its capacity
+line: host, cpus, `load1` (null when unavailable), running writers, free RAM, floor,
+RAM per writer, `slots_by_ram`, `new_writers_allowed`, `load_paced`, `writer_limit`
+(null for a host the policy does not list), disk and quota.
+
+The policy lists the hosts that run writers under `[max_writers]` (`coding`, `dell`,
+`workstation`). A host it does not list refuses as `unknown_host:<name>` under both
+`--live-facts` and `--facts`; the live budget never writes a limit for it. Under
+`--facts` the configured cap is the limit.
 
 `--facts PATH` defaults to `~/.config/plangraph/feeder-facts.json` when live facts
 are disabled. Supply current
