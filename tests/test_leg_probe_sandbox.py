@@ -77,7 +77,13 @@ def _run(tmp_path, runner):
     return result, store
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+requires_unprivileged_posix = pytest.mark.skipif(
+    os.name != 'posix' or os.geteuid() == 0,
+    reason='real file-mode enforcement requires an unprivileged POSIX user',
+)
+
+
+@requires_unprivileged_posix
 def test_production_probe_command_lets_the_sandboxed_writer_commit(tmp_path, monkeypatch):
     runner, seen = _runner(tmp_path, monkeypatch)
     result, store = _run(tmp_path, runner)
@@ -86,7 +92,7 @@ def test_production_probe_command_lets_the_sandboxed_writer_commit(tmp_path, mon
     assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+@requires_unprivileged_posix
 def test_without_the_grant_the_commit_fails_and_books_nothing(tmp_path, monkeypatch):
     runner, seen = _runner(tmp_path, monkeypatch, drop_grant=True)
     result, store = _run(tmp_path, runner)
