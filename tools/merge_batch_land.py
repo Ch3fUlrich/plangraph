@@ -20,7 +20,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
-                              close_merged_items, active_train, go_key_block, part_items, train_keys)
+                              close_merged_items, active_train, go_key_block, part_items, train_keys, metadata_tests_run)
 from merge_batch_plan import cleanup_landed, hold_lane_refs, writers_stopped, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
@@ -163,9 +163,13 @@ def cmd_push(args):
             prepare_train(dict(st, merged=active["merged"]), lease)
     if run_id:
         ci = gh_json("run", "view", str(run_id), "--repo", st["repo"], "--json",
-                     "databaseId,headSha,status,conclusion")
+                     "databaseId,headSha,status,conclusion,displayTitle,event,attempt,workflowName")
         if ci.get("headSha") != head or ci.get("databaseId") != run_id:
             raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
+        if ci.get("workflowName") == "tests" and metadata_tests_run(st["repo"], {
+                "id": run_id, "display_title": ci.get("displayTitle"), "event": ci.get("event"),
+                "run_attempt": ci.get("attempt", 1)}, gh_json):
+            raise MergeBatchError(f"CI run {run_id} is a pull request metadata check")
         st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
         save_state(st)
         record_part_cost(st, run_id, head)
@@ -260,6 +264,7 @@ def require_full_run(repo, head, branch, batch_key=None):
     """Use Actions evidence at the batch SHA, independent of branch protection/--checks."""
     endpoint = f"repos/{repo}/actions"
     runs = gh_json("api", f"{endpoint}/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
+    runs = [row for row in runs if not metadata_tests_run(repo, row, gh_json)]
     if not runs:
         raise MergeBatchError("full_ci: no tests run on exact batch head " + head)
     run = max(runs, key=lambda r: r["id"])

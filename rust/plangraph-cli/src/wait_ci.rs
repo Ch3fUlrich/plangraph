@@ -132,20 +132,111 @@ fn run_limited(
     Ok((status, text))
 }
 
-pub(crate) fn runs_from_json(text: &str) -> Result<Vec<Run>, String> {
-    let rows: Vec<Value> = serde_json::from_str(text).map_err(|_| "invalid gh JSON".to_string())?;
-    Ok(rows
+const TESTS_METADATA_JOB: &str = "ci-pr-description";
+
+/// A title alone is insufficient: old workflow configurations used the editable PR title.
+pub(crate) fn verified_metadata_run(
+    id: u64,
+    attempt: u64,
+    event: &Value,
+    display_title: &Value,
+    fetch_jobs: impl FnOnce(&str) -> Result<Value, String>,
+) -> Result<bool, String> {
+    if event != "pull_request" || display_title != format!("PR metadata check {id}").as_str() {
+        return Ok(false);
+    }
+    let endpoint = format!("actions/runs/{id}/attempts/{attempt}/jobs?per_page=100");
+    let response = fetch_jobs(&endpoint)?;
+    let jobs = response["jobs"].as_array().ok_or("missing job list")?;
+    if response["total_count"].as_u64() != Some(jobs.len() as u64) {
+        return Err("incomplete job list for metadata run".into());
+    }
+    let alternate_count = jobs
         .iter()
-        .filter_map(|row| {
-            Some(Run {
-                id: row["databaseId"].as_u64()?,
-                status: row["status"].as_str()?.to_owned(),
-                conclusion: row["conclusion"].as_str().unwrap_or("").to_owned(),
-                head_sha: row["headSha"].as_str().unwrap_or("").to_owned(),
-                updated_at: row["updatedAt"].as_str().unwrap_or("").to_owned(),
-            })
-        })
-        .collect())
+        .filter(|job| job["name"] == TESTS_METADATA_JOB)
+        .count();
+    let metadata = alternate_count == 1
+        && jobs.iter().all(|job| match job["name"].as_str() {
+            Some(TESTS_METADATA_JOB) => true,
+            Some(name) if !name.is_empty() && name != "ci-gate" => job["conclusion"] == "skipped",
+            _ => false,
+        });
+    if metadata {
+        return Ok(true);
+    }
+    if jobs
+        .iter()
+        .any(|job| job["name"] == "ci-gate" && job["conclusion"] != "skipped")
+    {
+        return Ok(false);
+    }
+    Err(format!(
+        "run {id} attempt {attempt}: metadata marker's job is unconfirmed"
+    ))
+}
+
+fn newest_workflow_run(
+    text: &str,
+    sha: &str,
+    mut fetch_jobs: impl FnMut(&str) -> Result<Value, String>,
+) -> Result<Option<Run>, String> {
+    let mut rows: Vec<Value> = serde_json::from_str(text).map_err(|_| "invalid gh JSON")?;
+    rows.retain(|row| row["headSha"] == sha);
+    rows.sort_by_key(|row| std::cmp::Reverse(row["databaseId"].as_u64()));
+    for row in rows {
+        let (Some(id), Some(status)) = (row["databaseId"].as_u64(), row["status"].as_str()) else {
+            continue;
+        };
+        if row["workflowName"] == "tests"
+            && verified_metadata_run(
+                id,
+                row["attempt"].as_u64().unwrap_or(1),
+                &row["event"],
+                &row["displayTitle"],
+                &mut fetch_jobs,
+            )?
+        {
+            continue;
+        }
+        return Ok(Some(Run {
+            id,
+            status: status.to_owned(),
+            conclusion: row["conclusion"].as_str().unwrap_or("").to_owned(),
+            head_sha: sha.to_owned(),
+            updated_at: row["updatedAt"].as_str().unwrap_or("").to_owned(),
+        }));
+    }
+    Ok(None)
+}
+
+pub(crate) fn latest_run(
+    options: &Options,
+    branch: &str,
+    sha: &str,
+    budget: Duration,
+) -> Result<Option<Run>, String> {
+    let start = Instant::now();
+    let mut list = vec![
+        "run".into(),
+        "list".into(),
+        "--branch".into(),
+        branch.to_owned(),
+        "--workflow".into(),
+        options.workflow.clone(),
+        "--limit".into(),
+        "30".into(),
+        "--json".into(),
+        "databaseId,status,conclusion,headSha,updatedAt,event,workflowName,displayTitle,attempt"
+            .into(),
+    ];
+    list.extend(repo_args(options));
+    let text = gh(&list, budget)?;
+    let repo = options.repo.as_deref().unwrap_or("{owner}/{repo}");
+    newest_workflow_run(&text, sha, |endpoint| {
+        let args = ["api".into(), format!("repos/{repo}/{endpoint}")];
+        let raw = gh(&args, budget.saturating_sub(start.elapsed()))?;
+        serde_json::from_str(&raw).map_err(|_| "invalid gh jobs JSON".into())
+    })
 }
 
 pub(crate) fn repo_args(options: &Options) -> Vec<String> {
@@ -231,21 +322,10 @@ pub(crate) fn run_ci(options: &Options) -> Result<(Outcome, String, Duration), S
         }
         Err(error) => return Err(error),
     };
-    let mut list = vec![
-        "run".into(),
-        "list".into(),
-        "--branch".into(),
-        branch.clone(),
-        "--workflow".into(),
-        options.workflow.clone(),
-        "--limit".into(),
-        "30".into(),
-        "--json".into(),
-        "databaseId,status,conclusion,headSha,updatedAt".into(),
-    ];
-    list.extend(repo_args(options));
     let outcome = wait_ci(
-        &mut |budget| runs_from_json(&gh(&list, budget)?),
+        &mut |budget| {
+            latest_run(options, &branch, &sha, budget).map(|run| run.into_iter().collect())
+        },
         &mut std::thread::sleep,
         &mut || start.elapsed(),
         deadline,
