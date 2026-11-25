@@ -18,6 +18,17 @@ impl Model {
             .map_or(0, |moves| moves.iter().fold(0, |m, &p| m | p))
     }
 
+    /// A recorded reason can stop being true without any event on its train (a part became due, a parent's
+    /// outcome was verified): the verification of every open train is taken back then.
+    fn revalidate_open(&mut self) {
+        for i in 0..self.trains.len() {
+            let t = &self.trains[i];
+            if !t.closed && !t.sealed && t.checked && self.verify_train(i as TrainId).is_err() {
+                self.trains[i].checked = false;
+            }
+        }
+    }
+
     fn train_mut(&mut self, train: TrainId) -> Result<&mut Train, Denied> {
         match self.trains.get_mut(train as usize) {
             Some(t) if !t.closed => Ok(t),
@@ -127,18 +138,7 @@ impl Model {
                 for p in self.parts.iter_mut().filter(|p| p.status == Status::Ready) {
                     p.waited = (p.waited + 1).min(cap);
                 }
-                // A part that became due makes a recorded reason untrue: the verification of that train
-                // no longer holds, whatever was cached when it was made.
-                for i in 0..self.trains.len() {
-                    let t = &self.trains[i];
-                    if !t.closed
-                        && !t.sealed
-                        && t.checked
-                        && self.verify_train(i as TrainId).is_err()
-                    {
-                        self.trains[i].checked = false;
-                    }
-                }
+                self.revalidate_open();
                 Ok(Outcome::Applied)
             }
             Event::Select => self.select_ordinary(),
@@ -273,6 +273,7 @@ impl Model {
                 parts
                     .iter()
                     .for_each(|&p| self.parts[p as usize].verified = true);
+                self.revalidate_open();
                 Ok(Outcome::Applied)
             }
             Event::Rebuild { train } => {

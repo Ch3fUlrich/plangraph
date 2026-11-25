@@ -4,6 +4,10 @@ mod support;
 use pg_train_model::*;
 use support::*;
 
+fn experiment() -> Policy {
+    Policy::every_ready_rides(Order::Oldest).with_stale_bound(2)
+}
+
 /// Part 0 went red and dropped, part 1 retries alone; part 3 is an ordinary part waiting.
 fn retrying(policy: Policy) -> Model {
     let mut m = Model::new(policy, disjoint(4));
@@ -25,7 +29,7 @@ fn stale_once(m: &mut Model) {
 
 #[test]
 fn in_tested_ff_a_retry_train_stale_twice_lands_on_the_current_main_with_no_third_rebuild() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    let mut m = retrying(experiment());
     stale_once(&mut m);
     stale_once(&mut m);
     assert_eq!((m.run(1), m.rebuilds(1)), (3, 2));
@@ -47,7 +51,7 @@ fn in_tested_ff_a_retry_train_stale_twice_lands_on_the_current_main_with_no_thir
 
 #[test]
 fn before_the_second_rebuild_a_stale_retry_train_still_cannot_land() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    let mut m = retrying(experiment());
     stale_once(&mut m);
     ok(&mut m, Event::MainMove { paths: 0 });
     ci(&mut m, 1, true);
@@ -56,7 +60,7 @@ fn before_the_second_rebuild_a_stale_retry_train_still_cannot_land() {
 
 #[test]
 fn in_pr_merge_mode_an_ordinary_selection_runs_beside_the_retry_train_after_two_rebuilds() {
-    let mut p = Policy::every_ready_rides(Order::Oldest);
+    let mut p = experiment();
     p.landing = Landing::PrMerge;
     let mut m = retrying(p);
     stale_once(&mut m);
@@ -73,8 +77,8 @@ fn in_pr_merge_mode_an_ordinary_selection_runs_beside_the_retry_train_after_two_
 }
 
 #[test]
-fn the_plain_per_group_bound_is_one_switch_away() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest).without_stale_bound());
+fn by_default_the_exact_rule_holds_and_a_stale_train_is_rebuilt_every_time() {
+    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
     for _ in 0..3 {
         stale_once(&mut m);
     }
@@ -83,7 +87,7 @@ fn the_plain_per_group_bound_is_one_switch_away() {
 
 #[test]
 fn a_stale_landing_is_refused_when_main_gained_a_change_to_the_trains_own_paths() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    let mut m = retrying(experiment());
     stale_once(&mut m);
     stale_once(&mut m);
     // Part 1 owns path bit 1. A move of main that changes it makes the tested tree not what a
@@ -100,7 +104,7 @@ fn a_stale_landing_is_refused_when_main_gained_a_change_to_the_trains_own_paths(
 
 #[test]
 fn only_rebuilds_caused_by_a_stale_base_count_toward_the_bound() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    let mut m = retrying(experiment());
     // Three rebuilds on the same base: nothing moved, nothing counts.
     for _ in 0..3 {
         ok(&mut m, Event::Rebuild { train: 1 });
@@ -117,7 +121,7 @@ fn only_rebuilds_caused_by_a_stale_base_count_toward_the_bound() {
 
 #[test]
 fn in_pr_merge_mode_the_ordinary_train_and_the_queued_groups_go_on_after_the_retry_closes() {
-    let mut p = Policy::every_ready_rides(Order::Oldest);
+    let mut p = experiment();
     p.landing = Landing::PrMerge;
     let mut m = Model::new(p, disjoint(5));
     register_all(&mut m, 0..3);
@@ -148,7 +152,7 @@ fn in_pr_merge_mode_the_ordinary_train_and_the_queued_groups_go_on_after_the_ret
 
 #[test]
 fn main_moving_before_the_bind_or_before_a_green_result_does_not_strand_the_retry_train() {
-    let mut m = retrying(Policy::every_ready_rides(Order::Oldest));
+    let mut m = retrying(experiment());
     stale_once(&mut m);
     // The second rebuild is made but not bound yet when main moves again.
     ok(&mut m, Event::MainMove { paths: 0 });

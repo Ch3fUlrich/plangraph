@@ -204,6 +204,8 @@ fn every_interleaving_keeps_the_invariants_under_each_policy() {
     pr_merge.landing = Landing::PrMerge;
     let policies = [
         pr_merge,
+        pr_merge.with_stale_bound(2),
+        policy(2, 1, 1, Order::Oldest).with_stale_bound(2),
         policy(2, 1, 1, Order::Oldest),
         policy(2, 1, 1, Order::Count),
         Policy::every_ready_rides(Order::Oldest),

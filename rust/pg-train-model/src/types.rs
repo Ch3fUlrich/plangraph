@@ -149,9 +149,9 @@ pub struct Policy {
     pub due_after: u8,
     pub order: Order,
     pub landing: Landing,
-    /// D-6840 experiment: a retry train stale this many times stops being rebuilt (tested fast-forward:
-    /// it lands on the current main; pull request merge: an ordinary selection runs beside it).
-    /// 0 is the plain per-group bound.
+    /// D-6840 experiment, off by default: a retry train stale this many times stops being rebuilt (tested
+    /// fast-forward: it lands on the current main; pull request merge: an ordinary selection runs beside
+    /// it). 0 is the plain per-group bound and exact-base, exact-tree settlement.
     pub stale_k: u8,
 }
 
@@ -165,12 +165,14 @@ impl Policy {
             due_after: 2,
             order,
             landing: Landing::TestedFf,
-            stale_k: 2,
+            stale_k: 0,
         }
     }
-    /// The plain per-group bound: the first stale-k landing that turns main red reverts to this.
-    pub fn without_stale_bound(mut self) -> Policy {
-        self.stale_k = 0;
+    /// The D-6840 experiment, opt in: a retry train stale `k` times is not rebuilt again (see `stale_k`).
+    /// The default is the exact rule, a train lands only on the base and tree CI ran on; the first red
+    /// main after a stale landing returns to it.
+    pub fn with_stale_bound(mut self, k: u8) -> Policy {
+        self.stale_k = k;
         self
     }
     /// Rule 3.74 (1): every ready part rides; only a missing verified parent holds a part back.

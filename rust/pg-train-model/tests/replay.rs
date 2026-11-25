@@ -18,6 +18,7 @@ fn batch(id: &str, ready: i64, paths: &[u32]) -> Batch {
         ready,
         commits: 1,
         paths: paths.to_vec(),
+        head: String::new(),
     }
 }
 
@@ -27,6 +28,7 @@ fn tiny(batches: Vec<Batch>) -> History {
         source: String::new(),
         landed: Default::default(),
         path_count: 0,
+        conflicts: vec![],
         batches,
     }
 }
@@ -192,9 +194,10 @@ fn print_the_comparison_over_trains_nine_to_sixteen() {
             let r = replay(&h, &c);
             let s = replay(&h, &speculative(c));
             println!(
-                "{name:34} trains {:2} conflicts {:2} longest wait {:5.1} h mean {:5.1} h parts/h {:.2} speculative {:.2}",
+                "{name:34} trains {:2} conflicts {:2} observed {:2} longest wait {:5.1} h mean {:5.1} h parts/h {:.2} speculative {:.2}",
                 r.trains.len(),
                 r.conflicts,
+                r.observed_conflicts,
                 r.longest_wait_secs as f64 / 3600.0,
                 r.mean_wait_secs as f64 / 3600.0,
                 r.parts_per_hour,
@@ -202,4 +205,27 @@ fn print_the_comparison_over_trains_nine_to_sixteen() {
             );
         }
     }
+}
+
+#[test]
+fn the_conflicts_git_observed_between_the_recorded_heads_are_reported_beside_the_modelled_ones() {
+    let h = history();
+    assert!(h.batches.iter().all(|b| b.head.len() == 40));
+    assert!(!h.conflicts.is_empty());
+    assert!(h
+        .conflicts
+        .iter()
+        .all(|&(a, b)| a < b && b < h.batches.len()));
+    // A deferral that spreads overlapping parts over trains also spreads the observed conflicts.
+    let every = replay(&h, &Config::every_ready_rides(COSTS));
+    let oldest = replay(&h, &rule(4, 7200, Order::Oldest));
+    assert!(every.observed_conflicts > 0);
+    assert!(oldest.observed_conflicts <= every.observed_conflicts);
+    // Without recorded conflicts nothing is observed.
+    let mut none = history();
+    none.conflicts.clear();
+    assert_eq!(
+        replay(&none, &Config::every_ready_rides(COSTS)).observed_conflicts,
+        0
+    );
 }

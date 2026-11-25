@@ -60,9 +60,13 @@ does not wait.
 
 Which deferral policy, (a) by count (a part left out twice is due and goes first) or (b) oldest first:
 (b) gave fewer or equal conflicts than (a) in all nine comparisons (C = 0, 15, 60 min; targets 2, 4, 8
-with bounds 1, 2, 4 h) and a longest wait that was equal or shorter in seven of nine; in the other two (C = 0,
-targets 4 and 8) (a) was 0.1 h shorter. At C = 60 min, target 4, bound 2 h: (a) 20 conflicts, longest wait
-12.3 h; (b) 0 conflicts, 2.8 h. On this sample the replay picks (b).
+with bounds 1, 2, 4 h), by the path-overlap count and by the conflicts git observed between the batch heads
+(`Batch.head`, `History.conflicts`: the 326 of 1326 pairs of the 52 heads that conflict in `git merge-tree`,
+read once; a part counts when it conflicts with an earlier part of its train): observed (a) against (b) were
+2 and 2, 3 and 1, 6 and 2 at C = 0 and 15; 3 and 3, 12 and 1, 18 and 2 at C = 60 min. Its longest wait was
+equal or shorter in seven of nine; in the other two (C = 0, targets 4 and 8) (a) was 0.1 h shorter. At
+C = 60 min, target 4, bound 2 h: (a) 20 modelled and 12 observed conflicts, longest wait 12.3 h; (b) 0 and 1,
+2.8 h. On this sample the replay picks (b); the durations stay assumptions, and the red rate is unknown.
 
 Every ready part rides, against deferral: at C = 0 it gives the highest parts per hour (1.24 against 1.21)
 and a longest wait of 2.6 h; at C = 15 min 1.24 and 6.7 h against 2.8 to 5.5 h; at C = 60 min it falls to
@@ -95,8 +99,9 @@ that touches them makes a rebuild necessary and it is not refused. Rebuilds on a
 count, and the third rebuild is refused only while there is a green result to land (a train not yet
 bound, or still running, is rebuilt as any stale train). In pull request merge mode, once the live retry train was rebuilt twice an ordinary selection runs
 beside it; that ordinary train goes on after the retry train closes, and the queued retry groups start when
-it has landed or gone red. `stale_k` 0 (`without_stale_bound`)
-is the plain per-group bound; the test `with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_*`
+it has landed or gone red. `stale_k` is 0 by default (`with_stale_bound(2)` turns the experiment on): the required model settles a
+retry train only on the base and tree CI ran on, as the production GO verifier does (`go_verify.rs`), and
+the experiment is a separate policy that needs a GO verifier that accepts the stale base; the test `with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_*`
 keeps the three moves of main giving four runs under it.
 
 A stale landing is the experiment's accepted risk: the landed tree was tested on the older base, and the

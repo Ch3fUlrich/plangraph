@@ -23,7 +23,7 @@ fn void_word(v: &Void) -> String {
 }
 
 /// The one-line-per-verdict text of a decision; every carry names the old and the new head.
-pub fn lines(d: &Decision) -> Vec<String> {
+pub fn lines(d: &Decision, ranges: &(String, String)) -> Vec<String> {
     let accept = match &d.accept {
         Accept::Carried { old_head, new_head } => {
             format!("ACCEPT carried {old_head} -> {new_head}")
@@ -33,8 +33,8 @@ pub fn lines(d: &Decision) -> Vec<String> {
             void_word(reason),
             match re_review {
                 ReReview::Full => "full".to_owned(),
-                ReReview::RangeDiff { old_head, new_head } =>
-                    format!("range-diff {old_head}..{new_head}"),
+                // `git range-diff` takes the two part ranges: each head over the base it sits on.
+                ReReview::RangeDiff { .. } => format!("range-diff {} {}", ranges.0, ranges.1),
             }
         ),
         Accept::None => "ACCEPT none".to_owned(),
@@ -93,7 +93,28 @@ pub(super) fn assess_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>
         };
         store_carry(path, need(flags, "head")?, carry)?;
     }
-    Ok(lines(&d))
+    let ranges = evidence_git::range_diff_ranges(
+        Path::new(need(flags, "repo")?),
+        &old,
+        need(flags, "main")?,
+        need(flags, "head")?,
+    )?;
+    if let (
+        Some(path),
+        Accept::Void {
+            re_review: ReReview::RangeDiff { .. },
+            ..
+        },
+    ) = (flags.get("range-diff-out"), &d.accept)
+    {
+        // The resolution delta the re-review is asked to judge.
+        let delta = super::git::out(
+            Path::new(need(flags, "repo")?),
+            &["range-diff", &ranges.0, &ranges.1],
+        )?;
+        std::fs::write(path, delta).map_err(|e| format!("{path}: {e}"))?;
+    }
+    Ok(lines(&d, &ranges))
 }
 
 fn append(path: &str, records: &[Record]) -> Result<(), String> {

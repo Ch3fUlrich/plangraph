@@ -215,7 +215,7 @@ fn with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_w
 ) {
     // The 2n - 2 bound counts retry groups, not CI restarts: every move of main makes the running
     // retry train stale, and a stale train is rebuilt and tested again.
-    let plain = Policy::every_ready_rides(Order::Oldest).without_stale_bound();
+    let plain = Policy::every_ready_rides(Order::Oldest);
     let mut m = Model::new(plain, disjoint(4));
     register_all(&mut m, 0..2);
     ok(&mut m, Event::Select);

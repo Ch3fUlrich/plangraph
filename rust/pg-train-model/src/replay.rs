@@ -1,6 +1,7 @@
 //! Replay of recorded batches through a selection rule on one timeline, one train at a time.
 //! The objective is parts merged per hour (rule 3.74 (1)); conflicts are parts that overlap an earlier part of
-//! their train (a path-level stand-in for merge conflicts); the red rate is unknown where no CI result is recorded.
+//! their train (a path-level stand-in for merge conflicts, with the conflicts git observed between the batch
+//! heads reported beside it); the red rate is unknown where no CI result is recorded.
 use super::rules::{choose, Left, Pool, Rule};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -13,6 +14,9 @@ pub struct Batch {
     pub ready: i64,
     pub commits: u32,
     pub paths: Vec<u32>,
+    /// The head of the batch as it was merged (recorded for the observed conflicts).
+    #[serde(default)]
+    pub head: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -23,6 +27,10 @@ pub struct History {
     pub landed: BTreeMap<String, i64>,
     /// Distinct paths touched by any batch; a batch's paths are indices below this.
     pub path_count: usize,
+    /// Pairs of batches (indices into `batches`) whose heads conflict in `git merge-tree`: the observed
+    /// merge conflicts, taken from git once.
+    #[serde(default)]
+    pub conflicts: Vec<(usize, usize)>,
     pub batches: Vec<Batch>,
 }
 
@@ -63,12 +71,16 @@ pub struct Cut {
     pub land: i64,
     pub parts: Vec<String>,
     pub conflicts: usize,
+    /// Parts that conflicted in git with an earlier part of their train.
+    pub observed: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct Report {
     pub trains: Vec<Cut>,
     pub conflicts: usize,
+    /// The same count by the conflicts git observed between the batch heads.
+    pub observed_conflicts: usize,
     pub longest_wait_secs: i64,
     pub mean_wait_secs: i64,
     pub makespan_secs: i64,
@@ -151,6 +163,17 @@ pub fn replay(h: &History, c: &Config) -> Report {
             .enumerate()
             .filter(|&(k, &b)| riding[..k].iter().any(|&a| sim.overlaps(a, b)))
             .count();
+        let seen: std::collections::BTreeSet<(usize, usize)> =
+            h.conflicts.iter().copied().collect();
+        let observed = riding
+            .iter()
+            .enumerate()
+            .filter(|&(k, &b)| {
+                riding[..k]
+                    .iter()
+                    .any(|&a| seen.contains(&(a.min(b), a.max(b))))
+            })
+            .count();
         let cost = &c.costs;
         let tested = now
             + cost.base_secs
@@ -168,6 +191,7 @@ pub fn replay(h: &History, c: &Config) -> Report {
             land,
             parts: riding.iter().map(|&i| h.batches[i].id.clone()).collect(),
             conflicts,
+            observed,
         });
         // A candidate waits only for the train two back to land: one is on main's tip, one under test.
         now = if c.speculative {
@@ -180,6 +204,7 @@ pub fn replay(h: &History, c: &Config) -> Report {
     let makespan = trains.last().map_or(0, |t| t.land - first);
     Report {
         conflicts: trains.iter().map(|t| t.conflicts).sum(),
+        observed_conflicts: trains.iter().map(|t| t.observed).sum(),
         longest_wait_secs: waits.iter().copied().max().unwrap_or(0),
         mean_wait_secs: waits.iter().sum::<i64>() / waits.len().max(1) as i64,
         makespan_secs: makespan,

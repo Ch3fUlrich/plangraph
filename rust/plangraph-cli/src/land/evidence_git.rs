@@ -6,14 +6,20 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// The names of a NUL-delimited git listing: a path keeps every byte, leading and trailing space included.
+fn names(bytes: &[u8]) -> impl Iterator<Item = String> + '_ {
+    bytes
+        .split(|&b| b == 0)
+        .filter(|n| !n.is_empty())
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+}
+
 fn paths_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
-    Ok(git::out(
+    let out = git::bytes(
         dir,
-        &["diff", "--name-only", "--no-renames", from, to, "--"],
-    )?
-    .lines()
-    .map(str::to_owned)
-    .collect())
+        &["diff", "--name-only", "-z", "--no-renames", from, to, "--"],
+    )?;
+    Ok(names(&out).collect())
 }
 
 /// Paths any commit of `from..to` touched: every commit that brought a change in, and a merge by what it
@@ -23,7 +29,7 @@ fn paths_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, S
 fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
     let range = format!("{from}..{to}");
     let list = |kind: &str, diff: &str| {
-        git::out(
+        git::bytes(
             dir,
             &[
                 "log",
@@ -31,6 +37,7 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
                 diff,
                 "--no-renames",
                 "--name-only",
+                "-z",
                 "--format=",
                 "--end-of-options",
                 &range,
@@ -43,7 +50,7 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
     // line counts by what it changed against main (its first parent), so a merge that takes a side
     // parent's version of a file still counts while a side branch that synced main inherits nothing.
     let nested = list("--merges", "--diff-merges=dense-combined")?;
-    let mainline = git::out(
+    let mainline = git::bytes(
         dir,
         &[
             "log",
@@ -52,18 +59,16 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
             "--diff-merges=first-parent",
             "--no-renames",
             "--name-only",
+            "-z",
             "--format=",
             "--end-of-options",
             &range,
             "--",
         ],
     )?;
-    Ok(commits
-        .lines()
-        .chain(nested.lines())
-        .chain(mainline.lines())
-        .filter(|l| !l.is_empty())
-        .map(str::to_owned)
+    Ok(names(&commits)
+        .chain(names(&nested))
+        .chain(names(&mainline))
         .collect())
 }
 
@@ -153,4 +158,20 @@ pub fn assess(
         trains_now,
     };
     Ok(decide(old, &facts))
+}
+
+/// The two ranges `git range-diff` compares for a re-review: the old head over the base it sat on, the new
+/// head over the main it was rebased onto (the pinned part ranges of the resolution).
+pub fn range_diff_ranges(
+    dir: &Path,
+    old: &Evidence,
+    main: &str,
+    new_head: &str,
+) -> Result<(String, String), String> {
+    let old_fork = git::out(dir, &["merge-base", &old.head, &old.base])?;
+    let new_fork = git::out(dir, &["merge-base", new_head, main])?;
+    Ok((
+        format!("{old_fork}..{}", old.head),
+        format!("{new_fork}..{new_head}"),
+    ))
 }

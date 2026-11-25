@@ -655,3 +655,82 @@ fn a_stacked_child_is_keyed_on_its_own_diff_so_a_parent_only_change_leaves_its_e
         }
     ));
 }
+
+#[test]
+fn a_path_with_significant_whitespace_is_read_whole_and_a_touch_and_revert_of_it_voids() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let p = fx.path();
+    let head = fx.commit(&base, " shared", "mine\n");
+    let old = recorded(&fx, &base, &head);
+    assert!(old.key.paths.contains(" shared"), "{:?}", old.key.paths);
+    // Main adds the path with leading whitespace and removes it again.
+    let touched = advance_main(&fx, " shared", "other\n");
+    g(p, &["rm", "-q", "--", " shared"]);
+    g(p, &["commit", "-q", "-m", "remove it"]);
+    let main = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["update-ref", "refs/heads/main", &main]);
+    g(p, &["checkout", "-q", "main"]);
+    assert_ne!(touched, main);
+    let new_head = rebased(&fx, &head, &main);
+    let d = assess(&fx, &old, &main, &new_head, 1);
+    assert!(
+        matches!(&d.accept, Accept::Void { reason: Void::MainTouched(t), .. } if t.contains(" shared")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn the_re_review_line_names_two_ranges_git_accepts_and_the_delta_is_written() {
+    let fx = Fx::new();
+    let base = fx.base();
+    let p = fx.path();
+    let head = fx.commit(
+        &base,
+        "shared.txt",
+        "mine\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let ev = dir.path().join("ev.json");
+    std::fs::write(
+        &ev,
+        serde_json::to_vec(&recorded(&fx, &base, &head)).unwrap(),
+    )
+    .unwrap();
+    // Main changes the same line: the merge conflicts and the head is resolved onto it.
+    let main1 = advance_main(
+        &fx,
+        "shared.txt",
+        "theirs\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    assert!(evidence_git::rebase_needed(p, &main1, &head).unwrap());
+    g(p, &["checkout", "-q", "--detach", &main1]);
+    g(p, &["cherry-pick", "-X", "theirs", &head]);
+    let resolved = g(p, &["rev-parse", "HEAD"]);
+    g(p, &["checkout", "-q", "main"]);
+    let out_file = dir.path().join("delta.txt");
+    let out = super::evidence_cli::assess_cli(&flags(&[
+        ("repo", p.to_str().unwrap()),
+        ("evidence", ev.to_str().unwrap()),
+        ("main", &main1),
+        ("head", &resolved),
+        ("trains-now", "1"),
+        ("range-diff-out", out_file.to_str().unwrap()),
+    ]))
+    .unwrap();
+    let words: Vec<&str> = out[0].split_whitespace().collect();
+    let at = words
+        .iter()
+        .position(|w| *w == "range-diff")
+        .expect(&out[0]);
+    let (old_range, new_range) = (words[at + 1], words[at + 2]);
+    assert!(
+        old_range.contains("..") && new_range.contains(".."),
+        "{}",
+        out[0]
+    );
+    // Git takes exactly these two ranges, and the delta it prints is what was written for the reviewer.
+    let delta = g(p, &["range-diff", old_range, new_range]);
+    assert!(!delta.is_empty());
+    assert_eq!(std::fs::read_to_string(&out_file).unwrap().trim(), delta);
+}

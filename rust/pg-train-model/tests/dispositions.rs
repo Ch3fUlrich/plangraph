@@ -315,3 +315,41 @@ fn a_part_that_becomes_due_after_the_verification_unverifies_the_train_before_it
     start(&mut m, 0);
     assert_eq!(m.train_parts(0), [0, 1]);
 }
+
+#[test]
+fn verifying_a_legacy_parents_outcome_unverifies_the_open_train_that_left_its_child_out() {
+    let specs = vec![spec(1, None), spec(2, Some(0)), spec(4, None)];
+    let mut m = Model::new(policy(2, 2, 1, Order::Oldest), specs);
+    register_all(&mut m, [0]);
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Select);
+    start(&mut m, 0);
+    ci(&mut m, 0, true);
+    ok(&mut m, Event::SettleLegacy { train: 0 });
+    register_all(&mut m, [1, 2]);
+    ok(&mut m, Event::Tick);
+    ok(&mut m, Event::Select);
+    assert_eq!(
+        m.left_out(1),
+        [(1, Disposition::ParentNotLanded { parent: 0 })]
+    );
+    ok(&mut m, Event::VerifyComplete { train: 1 });
+    let base = m.main();
+    ok(
+        &mut m,
+        Event::Bind {
+            train: 1,
+            build: 1,
+            base,
+            policy: POLICY,
+        },
+    );
+    // The parent's outcome is verified: the recorded reason is false now, and so is the cached verification.
+    ok(&mut m, Event::VerifyOutcome { train: 0 });
+    assert_eq!(
+        denied(&mut m, Event::StartCi { train: 1 }),
+        Denied::Unverified
+    );
+    ok(&mut m, Event::Join { part: 1, train: 1 });
+    start(&mut m, 1);
+}
