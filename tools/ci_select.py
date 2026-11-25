@@ -34,7 +34,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 )
 
 # The standalone Temporal worker job also runs the probe admission guard tests and builds
-# pg-worker-core, so the secret deny-list policy it embeds selects that job too.
+# pg-worker-core; the secret deny-list policy JSON is registered here so it selects that job.
 RUST_WORKER_INPUTS: tuple[str, ...] = (
     "src/plangraph/config/secret_paths.json",
     "tools/probe_admission_policy_guard.py",

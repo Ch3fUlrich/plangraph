@@ -127,19 +127,23 @@ fn native_child_environment_probe() {
     };
     let dir = tempfile::tempdir().unwrap();
     let (mut host, _, _) = fixture_host(&dir);
-    let admitted = format!("/fixture/admitted-bin:{}", std::env::var("PATH").unwrap());
+    let admitted = format!("/fixture/admitted's-bin:{}", std::env::var("PATH").unwrap());
     host.tool_path = admitted.clone();
     let fixture = dir.path().join("fixture-codex");
+    // Values reach the generated script as single-quoted data, an apostrophe included.
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
     let bit = |name: &str| {
         format!("[ -n \"${{{name}+x}}\" ] && echo {name}-present || echo {name}-absent\n")
     };
     pg_worker_core::executable_test_support::write_executable(
         &fixture,
         format!(
-            "#!/bin/sh\n{{ {}{}{}[ \"$PATH\" = '{admitted}' ] && echo path-admitted || echo path-other; }} > '{report}'\n",
+            "#!/bin/sh\n{{ {}{}{}[ \"$PATH\" = {} ] && echo path-admitted || echo path-other; }} > {}\n",
             bit("LANG"),
             bit("LC_FIXTURE_PASSWORD"),
             bit("PG_FIXTURE_PARENT_SECRET_TOKEN"),
+            quote(&admitted),
+            quote(&report),
         ),
     );
     let mut command = host
