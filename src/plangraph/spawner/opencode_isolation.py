@@ -135,28 +135,6 @@ def install_go_credential(job_dir, source=None):
                 Path(str(temporary) + suffix).unlink(missing_ok=True)
 
 
-def review_seat_home(env, job_dir):
-    """Give a review seat its own HOME and config dir under ``job_dir``.
-
-    The seat's HOME hides the user's profile, so cargo and the service's pytest are put on its
-    PATH, from the launching user's home, and the data dirs they read through HOME stay reachable.
-    """
-    from plangraph.routing_support.claude_seat import review_tool_path
-    home = Path(env.get('HOME') or Path.home())
-    env['PATH'] = review_tool_path(env.get('PATH'), str(home))
-    # User installs and rustup proxies find their data through HOME; keep them pointing at the
-    # launching user's. A cargo home that holds registry credentials is never handed over.
-    for name, folder in (('PYTHONUSERBASE', '.local'), ('RUSTUP_HOME', '.rustup'), ('CARGO_HOME', '.cargo')):
-        source = home / folder
-        if name not in env and source.is_dir() and not (
-                name == 'CARGO_HOME' and any((source / f).exists() for f in ('credentials', 'credentials.toml'))):
-            env[name] = str(source)
-    env['HOME'] = job_dir
-    config = os.path.join(job_dir, 'config')
-    os.mkdir(config, 0o700)
-    env['XDG_CONFIG_HOME'] = config
-
-
 def review_credential_reason(model, job_dir, child_env, reason=None):
     """Install only Go auth for an isolated review; fail closed if absent."""
     child_env['XDG_DATA_HOME'] = job_dir

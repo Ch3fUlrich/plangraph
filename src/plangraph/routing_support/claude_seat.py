@@ -150,29 +150,6 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def pytest_bin_dir():
-    """The installed service's bin directory that holds pytest: its own venv, else the checkout's .venv."""
-    for bin_dir in (Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"):
-        if (bin_dir / "pytest").is_file():
-            return bin_dir
-    return None
-
-
-def review_tool_path(path, home):
-    """``path`` with the service's pytest venv first (so `python -m pytest` works) and ~/.cargo/bin last.
-
-    ``home`` is the launching user's home, read before a seat swaps HOME for its own dir. The venv is
-    placed first even when a later PATH entry holds it, so a bare system python never shadows it.
-    """
-    path = path or os.defpath
-    if venv := pytest_bin_dir():
-        path = os.pathsep.join([str(venv), *(d for d in path.split(os.pathsep) if d != str(venv))])
-    cargo_bin = Path(home or Path.home()) / ".cargo/bin"
-    if not shutil.which("cargo", path=path) and (cargo_bin / "cargo").is_file():
-        path = path + os.pathsep + str(cargo_bin)
-    return path
-
-
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                            worktree=None, review_target=None):
     """Apply Sonnet's review profile and return the read-only fallback event, if any."""
@@ -205,8 +182,10 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                PYTEST_ADDOPTS="-p no:cacheprovider", CARGO_NET_OFFLINE="true",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     # The installed service's venv is outside the disposable review clone.
-    if bin_dir := pytest_bin_dir():
-        env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
+    for bin_dir in (Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"):
+        if (bin_dir / "pytest").is_file():
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
+            break
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),
                        "--review-bash", str(checkout)])

@@ -330,7 +330,7 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import apply_review_permissions, close_config_layers, review_credential_reason, review_seat_home
+            from .opencode_isolation import apply_review_permissions, close_config_layers, review_credential_reason
             from plangraph.planner.route_policy import opencode_repository_review
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
@@ -339,7 +339,10 @@ class SpawnerRunner:
                 # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
                 # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
-                review_seat_home(child_env, oc_dir)
+                child_env['HOME'] = oc_dir
+                xdg_config = os.path.join(oc_dir, 'config')
+                os.mkdir(xdg_config, 0o700)
+                child_env['XDG_CONFIG_HOME'] = xdg_config
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
