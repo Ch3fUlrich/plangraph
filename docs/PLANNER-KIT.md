@@ -98,9 +98,16 @@ the tier on `usage_limit`/`outage`, retry up to 3 attempts per tier, promote onc
 ## Context pack layout
 
 Plain text, deterministic: `# CARD <key>` header (outcome, check_cmd, window_class, risk_tags,
-exports, forbid, smoke; never `heldout_check`), optional `# CHECK OUTPUT` tail (last 40-60 lines),
-then `# FILE <path> (write)` blocks, then `(read)` blocks, each in a fenced block. Budget =
-0.55 x window - 8000 tokens; tokens = ceil(chars / 4). A write file that does not fit raises
+exports, forbid, smoke; never `heldout_check`), then `# FILE <path> (write)` blocks, then
+`(read)` blocks, each in a fenced block, then the optional `# CHECK OUTPUT` tail (last 40-60
+lines) last. Stable material comes first so a retry keeps a byte-identical prefix
+(`Pack.prefix_chars`) for prompt-cache reuse. Budget = 0.55 x window - 8000 tokens; `gate_card` refuses a card (`leg_request_too_big`) whose
+full pack, plus the tail reserve of a default retry (the class budget's allowance, up to 2000 tokens), exceeds the
+first leg's `max_request_tokens`. An admitted card therefore has the same files in the first
+pack and every `check_tail` retry, with or without a cap (`pack_for_card(route=...)` or
+`max_request_tokens` apply `leg_budget`), and the retry prefix is the first pack. The reserve
+is held back on every pack, tail or not; a header that alone leaves no room for the tail raises
+`PackTooBig`, whose message gives the effective budget, the limit and the tail reserve; tokens = ceil(chars / 4), `Pack.tokens` as before. A write file that does not fit raises
 `PackTooBig` (route to a bigger class), as does a write file over the read-size limit;
 read files over budget or size are skipped. Entries beyond the 50-file expansion cap are
 listed in `skipped` as `(path, "entry_cap")`. Binary write files are skipped.

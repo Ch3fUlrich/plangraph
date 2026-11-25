@@ -1,0 +1,1 @@
+The CI selector registers `src/plangraph/config/secret_paths.json` as a Rust input, so a change to the secret deny-list policy alone selects both Rust jobs (Linux and native Windows) and the usual pytest jobs. No deploy needed.
