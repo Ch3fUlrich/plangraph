@@ -33,8 +33,9 @@ struct RunValues {
     #[serde(default)]
     #[allow(dead_code)]
     fast_checks: Vec<String>,
-    /// The writer pushes `lane/<NAME>` with its receipt after every item commit; a producer whose
-    /// host pushes the accepted head itself (the feeder) sets this to `false`.
+    /// The writer pushes `lane/<NAME>` with its receipt once per round, on the stamped final
+    /// head; a producer whose host pushes the accepted head itself (the feeder) sets this to
+    /// `false`.
     #[serde(default = "push_by_default")]
     push: bool,
     review_cmd: String,
