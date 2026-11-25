@@ -17,10 +17,12 @@ import copy
 import json
 import sys
 import threading
+import time
 from typing import Any, Mapping
 
 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
 from plangraph.spawner import bench_entry, leg_probe, remote_ps
+from plangraph.spawner.base_fresh import run_exit_code, run_settled, settle_runs
 from plangraph.spawner.clients import effective_child_base_url
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.mcp_limits import SourceGuard, encode_reply, ps_reply
@@ -226,18 +228,18 @@ class MCPSpawnerServer:
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
             native = arguments['card'].get('run_kind') == 'native-codex'
+            wait = arguments.get('wait_seconds') or 0
+            started = time.monotonic()
             record = await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), leg=arguments.get('leg'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
                 review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False),
-                dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
+                dry_run=arguments.get('dry_run', False),
+                wait_seconds=0 if native else arguments.get('wait_seconds', 0),
                 no_fallthrough=arguments.get('no_fallthrough', False), **options)
-            wait = arguments.get('wait_seconds') or 0
-            # A native spawn acknowledges admission; a positive wait is a bounded wait for its saved outcome.
             if native and wait > 0 and not arguments.get('dry_run'):
-                from plangraph.spawner.base_fresh import settle_runs
-                await settle_runs(self.service, record, wait)
+                await settle_runs(self.service, record, wait - (time.monotonic() - started))
             return record
 
         if name == "plangraph_agent_status":
@@ -331,10 +333,13 @@ class MCPSpawnerServer:
             tool_args = params.get("arguments", {})
             try:
                 result = await self.call_tool(tool_name, tool_args)
-                if isinstance(result, dict) and result.get('status') == 'refused':
+                native = isinstance(result, dict) and result.get('run_kind') == 'native-codex'
+                if (isinstance(result, dict) and result.get('status') == 'refused'
+                        and (not native or run_settled(result))):
+                    exit_code = run_exit_code(result) if native else result.get('exit_code', 2)
                     return {'jsonrpc': '2.0', 'id': req_id, 'error': {
                         'code': -32602 if result.get('refusal') in ('ParameterRefused', 'BenchRequired', 'BenchDataError') else -32000, 'message': result.get('error', 'benchmark rows missing'),
-                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'exit_code': result.get('exit_code', 2), 'legs': result.get('legs', []),
+                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'exit_code': exit_code, 'legs': result.get('legs', []),
                                  'run_id': result.get('run_id')}}}
                 return {
                     "jsonrpc": "2.0",
