@@ -424,3 +424,97 @@ with tempfile.TemporaryDirectory() as cwd:
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn go_evidence_binds_the_digest_of_the_manifest_the_proof_parsed() {
+    let fx = Fx::new();
+    let a = fx.commit(&fx.base(), "a.txt", "a\n");
+    let parts = vec![part(1, &a, None)];
+    let outcome = build(&fx.input(parts.clone(), "", None)).unwrap();
+    let m = outcome.manifest.unwrap();
+    let open = BuildOpen {
+        build: m.build.clone(),
+        base: m.base.clone(),
+        policy_version: m.policy.version.clone(),
+        grant_digest: "fixture".into(),
+        snapshot_position: 1,
+    };
+    let freeze = Freeze {
+        policy_version: open.policy_version.clone(),
+        base: open.base.clone(),
+        grant_digest: open.grant_digest.clone(),
+        selection: parts.clone(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let manifest = fixture_file(dir.path(), "manifest.json", &m);
+    let original = std::fs::read(&manifest).unwrap();
+    let args: Vec<String> = [
+        "go-evidence",
+        "--repo",
+        fx.path().to_str().unwrap(),
+        "--manifest",
+        &manifest,
+        "--parts",
+        &fixture_file(dir.path(), "parts.json", &parts),
+        "--open",
+        &fixture_file(dir.path(), "open.json", &open),
+        "--freeze",
+        &fixture_file(dir.path(), "freeze.json", &freeze),
+        "--result",
+        &fixture_file(dir.path(), "result.json", &outcome.result),
+        "--item",
+        "demo:ITEM",
+        "--review-run",
+        "run-fixture",
+        "--pr",
+        "9",
+        "--out",
+        dir.path().join("evidence.json").to_str().unwrap(),
+    ]
+    .map(String::from)
+    .to_vec();
+    // The family script runs while the delta is packaged; the review check runs after the proof and finds no
+    // stdin: it replaces the manifest file, as a concurrent writer would, and passes.
+    let python = || {
+        let mut command = crate::base_fresh::python_command(None);
+        command.env("SWAP", &manifest).args([
+            "-I",
+            "-c",
+            r#"
+import json, os, sys
+try:
+    texts = json.load(sys.stdin)
+except Exception:
+    open(os.environ["SWAP"], "w").write('{"replaced": true}')
+    sys.exit(0)
+print(json.dumps({text: None for text in texts}))
+"#,
+        ]);
+        command
+    };
+    let seen = std::cell::RefCell::new(None);
+    let source = |manifest: &Manifest, digest: &str, run: &str| {
+        *seen.borrow_mut() = Some((
+            manifest.train_sha.clone(),
+            digest.to_owned(),
+            run.to_owned(),
+        ));
+        Err("stop".to_owned())
+    };
+    let error =
+        super::super::cli::run_inner_with(dir.path(), &args, &python, Some(&source)).unwrap_err();
+    assert_eq!(error, "stop");
+    assert_ne!(
+        std::fs::read(&manifest).unwrap(),
+        original,
+        "the file was replaced after the proof"
+    );
+    let (train, digest, run) = seen.into_inner().expect("the source was asked");
+    assert_eq!(train, m.train_sha);
+    assert_eq!(
+        digest,
+        super::super::go_evidence::manifest_digest(&original)
+    );
+    assert_eq!(run, "run-fixture");
+}

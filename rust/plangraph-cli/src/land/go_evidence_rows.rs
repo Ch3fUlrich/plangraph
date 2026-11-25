@@ -151,42 +151,51 @@ fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         .map_err(|_| format!("git {} failed", args[0]))
 }
 
-/// The decisions document as committed on `origin/main` of its repository: the branch is fetched into
-/// `refs/remotes/origin/main`, resolved to one commit, and the blob is read from that commit. A failed fetch or
-/// read is an error; the local file, a local branch or tag of the same name, never stands in for it, and the
-/// file need not exist in the worktree.
+/// The decisions document as committed on `origin/main` of its repository: the branch is fetched into a ref
+/// private to this call, resolved to one commit there, and the blob is read from that commit. A failed fetch or
+/// read is an error; the local file, a local branch or tag of the same name, or a refresh by another process
+/// never stands in for it. A configured symlink is followed like the Keeper does, and the file need not exist
+/// in the worktree.
 pub(in crate::land) fn read_decisions_origin(path: &Path) -> Result<String, String> {
     let unreadable = || "the decisions document is not readable on origin/main".to_owned();
-    let name = path.file_name().ok_or_else(unreadable)?;
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."))
-        .canonicalize()
-        .map_err(|_| unreadable())?;
-    let root = String::from_utf8(git(&parent, &["rev-parse", "--show-toplevel"])?)
+    let resolved = match path.canonicalize() {
+        Ok(real) => real,
+        Err(_) => {
+            let name = path.file_name().ok_or_else(unreadable)?;
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            parent.canonicalize().map_err(|_| unreadable())?.join(name)
+        }
+    };
+    let parent = resolved.parent().ok_or_else(unreadable)?;
+    let root = String::from_utf8(git(parent, &["rev-parse", "--show-toplevel"])?)
         .map_err(|_| unreadable())?;
     let root = Path::new(root.trim())
         .canonicalize()
         .map_err(|_| unreadable())?;
-    let relative = parent
-        .join(name)
+    let relative = resolved
         .strip_prefix(&root)
         .map_err(|_| unreadable())?
         .to_owned();
-    git(
-        &root,
-        &[
-            "fetch",
-            "origin",
-            "+refs/heads/main:refs/remotes/origin/main",
-        ],
-    )?;
-    let commit = String::from_utf8(git(
-        &root,
-        &["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
-    )?)
-    .map_err(|_| unreadable())?;
-    let blob = format!("{}:{}", commit.trim(), relative.to_string_lossy());
-    String::from_utf8(git(&root, &["cat-file", "blob", &blob])?).map_err(|_| unreadable())
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let private = format!("refs/pg-evidence/{}-{nanos}", std::process::id());
+    let read = (|| {
+        git(
+            &root,
+            &["fetch", "origin", &format!("+refs/heads/main:{private}")],
+        )?;
+        let commit = String::from_utf8(git(
+            &root,
+            &["rev-parse", "--verify", &format!("{private}^{{commit}}")],
+        )?)
+        .map_err(|_| unreadable())?;
+        let blob = format!("{}:{}", commit.trim(), relative.to_string_lossy());
+        String::from_utf8(git(&root, &["cat-file", "blob", &blob])?).map_err(|_| unreadable())
+    })();
+    let _ = git(&root, &["update-ref", "-d", &private]);
+    read
 }

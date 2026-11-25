@@ -220,6 +220,16 @@ pub(super) fn run_inner(
     args: &[String],
     python: &dyn Fn() -> Command,
 ) -> Result<Vec<String>, String> {
+    run_inner_with(home, args, python, None)
+}
+
+/// `run_inner` with the source of the go-evidence evidence given (tests); `None` reads the real ones.
+pub(super) fn run_inner_with(
+    home: &Path,
+    args: &[String],
+    python: &dyn Fn() -> Command,
+    evidence_source: Option<super::go_evidence::Source>,
+) -> Result<Vec<String>, String> {
     let (cmd, rest) = args.split_first().ok_or(USAGE)?;
     let mut flags = std::collections::BTreeMap::new();
     let mut it = rest.iter();
@@ -321,12 +331,13 @@ pub(super) fn run_inner(
                 let run_id = need("review-run")?;
                 packet.require_review(&keeper_config(home), &need("item")?, &run_id, python)?;
                 // The bytes the proof parsed are the bytes the evidence is bound to.
+                let live = super::go_evidence::live(home, &flags);
                 return super::go_evidence::run_cli(
-                    home,
                     &flags,
                     &manifest,
                     &manifest_bytes,
                     &run_id,
+                    evidence_source.unwrap_or(&live),
                 );
             }
             let mut lines = vec![format!(

@@ -192,3 +192,48 @@ fn the_manifest_is_parsed_from_the_bytes_the_evidence_is_bound_to() {
     );
     assert!(super::cli::read_with_bytes::<serde_json::Value>("/nonexistent/m.json").is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_configured_symlink_is_followed_and_no_private_ref_is_left_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let (origin, clone) = (dir.path().join("origin.git"), dir.path().join("clone"));
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(clone.join("docs")).unwrap();
+    std::fs::write(clone.join("docs/real.md"), "committed\n").unwrap();
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", "decisions"]);
+    git(&clone, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    let link = dir.path().join("link.md");
+    std::os::unix::fs::symlink(clone.join("docs/real.md"), &link).unwrap();
+    assert_eq!(read_decisions_origin(&link).unwrap(), "committed\n");
+    let refs = std::process::Command::new("git")
+        .args(["for-each-ref", "refs/pg-evidence"])
+        .current_dir(&clone)
+        .output()
+        .unwrap();
+    assert!(
+        refs.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&refs.stdout)
+    );
+}

@@ -281,52 +281,68 @@ pub(super) fn reject_removed_flags(
     Ok(())
 }
 
-/// `land-train go-evidence` after `cli` re-ran the admit proof: collects the evidence of the GO from GitHub,
-/// the decisions on `origin/main` and that proof, and writes it for `go-verify`.
+/// Where the evidence of a GO is read from once the proof is done: given the manifest, its digest and the
+/// review run of the proof, it returns the evidence. `live` reads GitHub, the decisions and main's state.
+pub(super) type Source<'a> =
+    &'a dyn Fn(&super::train::Manifest, &str, &str) -> Result<Evidence, String>;
+
+/// The sources of a real run: GitHub, the decisions on `origin/main`, the state of main.
+pub(super) fn live<'a>(
+    home: &'a std::path::Path,
+    flags: &'a std::collections::BTreeMap<String, String>,
+) -> impl Fn(&super::train::Manifest, &str, &str) -> Result<Evidence, String> + 'a {
+    move |manifest, digest, run_id| {
+        use super::{git, main_gh};
+        let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
+        let pr: u64 = need("pr")?.parse().map_err(|_| "pr must be a number")?;
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("plangraph/keeper.json");
+        let rows = decisions(&config)?;
+        let origin = git::out(
+            std::path::Path::new(need("repo")?),
+            &["remote", "get-url", "origin"],
+        )?;
+        let slug = crate::ci_watch::github::repository(&origin)?;
+        let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
+        let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
+        let main = main_gh::answer_for(repo.clone(), "main", ledger, &matrix);
+        let receipt = admit_receipt(&manifest.base, &manifest.train_sha, digest, run_id);
+        collect(
+            &mut crate::ci_watch::github::Gh { repo: repo.clone() },
+            &Inputs {
+                repo: &repo,
+                pr,
+                base: &manifest.base,
+                train_sha: &manifest.train_sha,
+                manifest: digest,
+                receipt: &receipt,
+                rows: &rows,
+                main: &main,
+            },
+        )
+    }
+}
+
+/// `land-train go-evidence` after `cli` re-ran the admit proof: the evidence is bound to the digest of the
+/// manifest bytes the proof parsed, collected from `source`, and written for `go-verify`.
 pub(super) fn run_cli(
-    home: &std::path::Path,
     flags: &std::collections::BTreeMap<String, String>,
     manifest: &super::train::Manifest,
     manifest_bytes: &[u8],
     run_id: &str,
+    source: Source,
 ) -> Result<Vec<String>, String> {
-    use super::{git, main_gh};
     let need = |k: &str| flags.get(k).ok_or_else(|| format!("missing --{k}"));
-    let pr: u64 = need("pr")?.parse().map_err(|_| "pr must be a number")?;
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".config"))
-        .join("plangraph/keeper.json");
-    let rows = decisions(&config)?;
-    let origin = git::out(
-        std::path::Path::new(need("repo")?),
-        &["remote", "get-url", "origin"],
-    )?;
-    let slug = crate::ci_watch::github::repository(&origin)?;
-    let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
-    let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
-    let main = main_gh::answer_for(repo.clone(), "main", ledger, &matrix);
     let digest = manifest_digest(manifest_bytes);
-    let receipt = admit_receipt(&manifest.base, &manifest.train_sha, &digest, run_id);
-    let evidence = collect(
-        &mut crate::ci_watch::github::Gh { repo: repo.clone() },
-        &Inputs {
-            repo: &repo,
-            pr,
-            base: &manifest.base,
-            train_sha: &manifest.train_sha,
-            manifest: &digest,
-            receipt: &receipt,
-            rows: &rows,
-            main: &main,
-        },
-    )?;
+    let evidence = source(manifest, &digest, run_id)?;
     let out = need("out")?;
     let body = serde_json::to_vec_pretty(&evidence).map_err(|e| e.to_string())?;
     pg_worker_core::run::record_io::atomic_write_private(std::path::Path::new(out), &body)
         .map_err(|e| format!("{out}: {e}"))?;
     Ok(vec![format!(
-        "evidence {repo} #{pr} head {} run {} attempt {} written to {out}",
-        evidence.head, evidence.ci.run_id, evidence.ci.attempt
+        "evidence {} #{} head {} run {} attempt {} written to {out}",
+        evidence.repo, evidence.pr, evidence.head, evidence.ci.run_id, evidence.ci.attempt
     )])
 }
