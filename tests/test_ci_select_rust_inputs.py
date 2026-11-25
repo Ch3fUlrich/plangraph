@@ -225,3 +225,15 @@ def test_pg_hook_runs_in_windows_job():
     for name in ("lib.rs", "main.rs"):
         source = (ROOT / "rust/pg-hook/src" / name).read_text()
         assert "#[cfg(all(test, unix))]\nmod tests" in source
+
+
+@pytest.mark.parametrize("path", [
+    "tests/fixtures/operator_turns/valid/router/operator-turns.tsv",
+    "tests/fixtures/operator_turns/valid/router/operator-turns/"
+    "a7529611e6c74d1d4e1356b338de9c50ca6708c68daac64715c584bc3b08c384.txt",
+    "tests/fixtures/operator_turns/relay-scope-mismatch/router/operator-turns.tsv",
+])
+def test_operator_turn_fixtures_select_rust(path):
+    # The fixtures sit outside rust/ but the reader's tests parse every byte of them.
+    assert (ROOT / path).is_file()
+    assert ci_select.select([path])["rust"]

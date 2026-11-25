@@ -113,7 +113,7 @@ impl Config {
             ("actions_runner.sha256", &self.actions_runner.sha256),
             ("python_seed.sha256", &self.python_seed.sha256),
         ] {
-            if sha.len() != 64 || !sha.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+            if !super::download::valid_hash(sha) {
                 return Err(format!("config: {name} must be 64 lowercase hex digits"));
             }
         }

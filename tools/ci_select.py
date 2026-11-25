@@ -138,6 +138,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/config/role_headers.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
+    "tests/fixtures/operator_turns/**",  # rust/plangraph-cli/tests/operator_turns.rs reads the fixtures.
     "tests/fixtures/redact_parity.json",
     # rust/pg-spawnd/src/round_replan_ports_tests.rs asserts the golden slice definitions.
     "tests/fixtures/replan_slice_definition.json",

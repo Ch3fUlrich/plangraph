@@ -21,6 +21,7 @@ mod landing_ci;
 mod landing_hosts;
 mod landing_report;
 pub mod merge_close;
+pub mod operator_turns;
 pub mod paths;
 pub mod review;
 mod review_git;
