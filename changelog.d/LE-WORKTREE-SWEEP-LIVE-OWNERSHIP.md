@@ -1,0 +1,3 @@
+pg-worktree-sweep and the reaper now report `live-run` only for a tree owned by an unfinished (or survivor-holding) run record whose checkout or attempt is at or inside the tree, and `pinned` for operator pins and reserved names; both still protect, and a run recorded only in an ancestor directory no longer counts as owning the trees below it (the reaper still refuses to move such a tree). `pg-reap` facts without `pinned` still parse as false.
+
+Deploy: no deploy needed beyond the normal rebuild of `pg-worktree-sweep` and the reaper binaries.

@@ -3,25 +3,10 @@
 use crate::errors::ToolError;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
 use serde_json::{json, Value};
-use std::io::Read;
 use std::path::Path;
 
-const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
-
 pub(crate) fn valid_item(value: &str) -> bool {
-    let Some((project, id)) = value.split_once(':') else {
-        return false;
-    };
-    value.len() <= 200
-        && !project.is_empty()
-        && !id.is_empty()
-        && id.len() <= 180
-        && project
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
+    pg_spawnd::lane_guard::valid_key(value)
 }
 
 pub(crate) fn annotate_item(base: &mut Value, card: &Value, events: &mut Vec<Value>) {
@@ -120,58 +105,14 @@ mod tests {
     }
 }
 
-pub(crate) fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x00200000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = options.open(path)?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(std::io::Error::other("invalid run record"));
-        }
-    }
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("invalid run record"));
-    }
-    Ok(file)
-}
+pub(crate) use pg_spawnd::record_file::open_record;
 
 pub(crate) fn read_record_file(path: &Path) -> Result<Value, ToolError> {
-    let invalid = || ToolError::Value("invalid run record".into());
-    let read = || -> std::io::Result<Vec<u8>> {
-        let metadata = std::fs::symlink_metadata(path)?;
-        if !metadata.is_file() || metadata.len() > MAX_RECORD_BYTES {
-            return Err(std::io::Error::other("invalid run record"));
-        }
-        let file = open_record(path)?;
-        let mut bytes = Vec::new();
-        file.take(MAX_RECORD_BYTES + 1).read_to_end(&mut bytes)?;
-        Ok(bytes)
-    };
-    let bytes = read().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ToolError::Value("unknown run id".into())
-        } else {
-            invalid()
-        }
-    })?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES {
-        return Err(invalid());
-    }
-    serde_json::from_slice(&bytes).map_err(|_| invalid())
+    use pg_spawnd::record_file::{read_json, ReadError};
+    read_json(path).map_err(|error| match error {
+        ReadError::Missing => ToolError::Value("unknown run id".into()),
+        ReadError::Invalid => ToolError::Value("invalid run record".into()),
+    })
 }
 
 pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolError> {

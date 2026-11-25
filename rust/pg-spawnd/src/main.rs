@@ -30,6 +30,7 @@ mod land_go;
 mod land_go_shell;
 #[cfg(test)]
 mod land_go_tests;
+mod lane_admit;
 mod late_review;
 mod launch;
 mod leg_ref;
@@ -109,6 +110,12 @@ fn main() {
         std::process::exit(pg_spawnd::session::run(
             std::env::args().skip(2).collect(),
             &ops,
+        ));
+    }
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("round-watch")) {
+        std::process::exit(pg_spawnd::session::round_cli::main(
+            &std::env::args().skip(2).collect::<Vec<_>>(),
         ));
     }
     #[cfg(windows)]

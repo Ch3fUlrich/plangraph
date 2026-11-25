@@ -87,6 +87,7 @@ pub mod remote_steps;
 mod shared_target;
 pub mod sweep_facts;
 mod sweep_runs;
+pub use sweep_runs::finished as run_finished;
 pub mod unit_refs;
 pub mod work_disks;
 pub mod worker_host;

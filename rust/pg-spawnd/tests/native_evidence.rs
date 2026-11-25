@@ -62,6 +62,7 @@ with tempfile.TemporaryDirectory() as tmp:
         probe.returncode = 0
         probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{},"sandbox_ok":true}', b'')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value='/fixture/pg-spawnd'), \
+             patch('plangraph.spawner.overflow.lane_admit', side_effect=lambda service, card, prompt: card), \
              patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
             record = await native_spawn(service, card, dict(prompt='brief'))
         assert record['item_key'] == 'project:item', record

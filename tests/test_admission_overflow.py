@@ -164,6 +164,43 @@ def test_failures_queue_with_safe_reasons(setup, failure, reason):
     assert remote.call_count == 2
 
 
+def test_queue_timeout_keeps_the_target_lane_reason_across_readiness_refreshes(setup, monkeypatch):
+    service, _, remote = setup
+    service.result = Mock(side_effect=OSError('record not saved by this fixture'))  # the record stays queued
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    remote.side_effect = overflow.RemoteRefusal(held)
+    monkeypatch.setenv(a.ADMISSION_WAIT_ENV, '0.2')
+    monkeypatch.setenv(a.ADMISSION_POLL_ENV, '0.01')
+    loads = []
+    def stale_after_the_first_load(config, role):
+        loads.append(role)  # the readiness of both hosts goes stale once the target has refused
+        return {name: dict(ssh=name, ok=True, fresh=len(loads) == 1, live_runs=100,
+                           mem_available_mb=6000, role_mb=2048, floor_mb=3000) for name in ('ash', 'birch')}
+    monkeypatch.setattr(overflow, 'ready_records', stale_after_the_first_load)
+    result = service.admit_spawn({'role': 'implement', 'prompt': 'task'}, card={'diff_ref': {'repo': service.runner.default_cwd}})
+    assert result['status'] == 'refused' and 'admission window' in result['error']
+    assert result['error'].startswith(held), result
+    assert remote.call_count == 2 and len(loads) > 2  # no host was left to try after the refresh
+
+
+def test_a_later_generic_failure_of_the_same_host_does_not_replace_its_lane_refusal(setup, monkeypatch):
+    service, _, remote = setup
+    service.result = Mock(side_effect=OSError('record not saved by this fixture'))  # the record stays queued
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    seen = set()
+    def refuse(name, *args):
+        # The target refuses as a lane once; every retry of that host fails before admission.
+        first, seen_name = name not in seen, seen.add(name)
+        raise overflow.RemoteRefusal(held if first else 'remote preparation failed before launch')
+    remote.side_effect = refuse
+    monkeypatch.setenv(a.ADMISSION_WAIT_ENV, '0.2')
+    monkeypatch.setenv(a.ADMISSION_POLL_ENV, '0.01')
+    result = service.admit_spawn({'role': 'implement', 'prompt': 'task'}, card={'diff_ref': {'repo': service.runner.default_cwd}})
+    assert result['status'] == 'refused' and 'admission window' in result['error']
+    assert result['error'].startswith(held), result
+    assert remote.call_count > 2  # the hosts were retried after their first refusal
+
+
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
@@ -362,6 +399,23 @@ def test_orchestration_remote_first(orchestration, role):
     assert record['placement'] == dict(host='host-b', reason='remote_most_free_ram', free_mb=9000)
     assert service.result(record['run_id'])['placement'] == record['placement']
     assert remote.call_args.args[-1] == ['--role', role]
+
+
+def test_remote_first_final_refusal_keeps_the_target_lane_reason_and_holder(orchestration, monkeypatch):
+    from plangraph.spawner import host_ready
+    service, rows, remote, _, _ = orchestration
+    # The local host is unhealthy too, so the origin has no room to fall back to.
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *a, **k: (None, 'cargo_target_cap: cache full'))
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    remote.side_effect = overflow.RemoteRefusal(held)
+    record = service.admit_spawn({'role': 'implement', 'prompt': 'task'})
+    assert record['status'] == 'refused' and record['exit_code'] == 2
+    assert record['error'].startswith(held), record
+    assert rows['host-b']['refusal'] == held
+    # A refusal that is not a lane keeps its record as it was.
+    remote.side_effect = overflow.RemoteRefusal('remote copy failed')
+    rows['host-b'].pop('refusal')
+    assert 'error' not in service.admit_spawn({'role': 'implement', 'prompt': 'task'})
 
 
 @pytest.mark.parametrize('headroom,tied', [(False, False), (True, False), (False, True)])
@@ -606,6 +660,26 @@ def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, mon
     keeper.deliver.assert_called_once_with('keeper', event)
 
 
+def test_native_queue_checks_the_lane_before_it_publishes_an_owning_record(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner import host_ready, seat_spawn
+
+    service = overflow.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 100))
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs: (None, None))
+    held = Mock(side_effect=SpawnRefused('lane_collision: demo:HELD is held by live lane run-held (run)'))
+    monkeypatch.setattr(overflow, 'lane_admit', held)
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:HELD')
+    with pytest.raises(SpawnRefused, match='lane_collision: demo:HELD is held by live lane run-held'):
+        service.admit_spawn({'role': 'implement', 'prompt': '### demo:HELD | t\n'}, card=card)
+    held.assert_called_once_with(service, card, '### demo:HELD | t\n')
+    assert service.ps()['runs'] == []
+
+
 def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
     receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
     child = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(receipt) + '\n'))
@@ -626,6 +700,7 @@ def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch)
     monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
     monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
     monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(overflow, 'lane_admit', lambda service, card, prompt: card)  # no pg-spawnd on the runner
     disk = Mock(side_effect=[(None, 'cargo_target_cap: cache full'), (None, None)])
     monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
     options = {'role': 'implement'}

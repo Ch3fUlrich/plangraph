@@ -11,7 +11,11 @@ pub struct Facts {
     pub pushed: bool,
     pub failed: bool,
     pub has_claim: bool,
+    /// An unfinished run record (or one with survivors) holds a checkout at or inside the tree.
     pub live_run: bool,
+    /// An operator pin or reserved name protects the tree; it is not a run.
+    #[serde(default)]
+    pub pinned: bool,
     pub open_pr: bool,
     pub in_use_by_process: bool,
     pub in_use_by_unit: bool,
@@ -146,6 +150,7 @@ fn live_protection(w: &Worktree, f: &Facts, inventory: &[Worktree]) -> Option<&'
         (f.in_use_by_unit, "unit-in-use"),
         (f.has_claim, "claim"),
         (f.live_run, "live-run"),
+        (f.pinned, "pinned"),
         (f.open_pr, "open-pr"),
         (duplicate, "same-branch-worktree"),
     ]
