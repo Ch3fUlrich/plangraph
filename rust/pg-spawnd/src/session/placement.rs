@@ -26,7 +26,7 @@ impl Host {
     pub fn name(&self) -> &str {
         self.0["name"].as_str().unwrap_or_default()
     }
-    fn ssh(&self) -> Option<&str> {
+    pub(super) fn ssh(&self) -> Option<&str> {
         self.0["ssh"].as_str()
     }
     fn enabled(&self) -> bool {
@@ -168,9 +168,7 @@ impl Placement {
     }
 
     pub fn local(&self, host: &Host) -> bool {
-        host.name() == self.local
-            || (host.name() == ["coding", "vm"].join(".")
-                && matches!(self.local.split('.').next(), Some("coding" | "code")))
+        pg_worker_core::lane_roster::is_local_host(host.name(), &self.local)
     }
 
     pub fn policy_host<'a>(&self, host: &'a Host) -> Option<&'a str> {

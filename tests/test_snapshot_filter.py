@@ -22,10 +22,10 @@ def test_legacy_bytes_constant_queries(w):
     store, now = w.store, w.clock()
     assert json.dumps(store._snapshot(now)) == json.dumps(_legacy_snapshot(store, now))
     first = store._snapshot(now)["items"][0]
-    assert set(FIELDS) - {"design_ref", "incidents"} == set(first)
+    assert set(FIELDS) - {"design_ref", "incidents", "merge_proven"} == set(first)
     store.incident(w.p("router"), first["key"], "snapshot report")
     reported = store._snapshot(now)["items"][0]
-    assert set(FIELDS) - {"design_ref"} == set(reported)
+    assert set(FIELDS) - {"design_ref", "merge_proven"} == set(reported)
     filtered = store._snapshot(now, fields="incidents")["items"][0]
     assert filtered == {"key": first["key"], "incidents": reported["incidents"]}
     assert [entry["text"] for entry in filtered["incidents"]] == ["snapshot report"]
@@ -41,7 +41,7 @@ def test_legacy_bytes_constant_queries(w):
     finally:
         store.conn = original
     store.edit_definition(w.p("router"), first["key"], {"design_ref": "docs/contract.md"})
-    assert set(FIELDS) == set(store._snapshot(now)["items"][0])
+    assert set(FIELDS) - {"merge_proven"} == set(store._snapshot(now)["items"][0])
     filtered = store._snapshot(now, fields="design_ref")["items"][0]
     assert filtered == {"key": first["key"], "design_ref": "docs/contract.md"}
 

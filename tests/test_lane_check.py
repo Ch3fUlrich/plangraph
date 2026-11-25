@@ -14,7 +14,7 @@ from plangraph.routing_errors import SpawnRefused
 REFUSAL = "lane_conflict: p:X is held by native run lane-one (run-a); pass a lane_override reason"
 
 
-def fake_binary(tmp_path, *, code=0, stderr="", native_tools="{}", real=None):
+def fake_binary(tmp_path, *, code=0, stderr="", native_tools="{}", real=None, keys_out="[]"):
     """A stand-in pg-spawnd: logs the lane-check input, answers native-tools; with ``real`` the
     lane-check verb runs the built guard instead of a canned answer."""
     script = tmp_path / "pg-spawnd"
@@ -29,6 +29,13 @@ if sys.argv[1] == "lane-check":
         sys.exit(done.returncode)
     sys.stderr.write({stderr!r})
     sys.exit({code})
+if sys.argv[1] == "lane-keys":
+    data = sys.stdin.read()
+    if {real!r}:
+        done = subprocess.run([{real!r}, "lane-keys"], input=data, text=True, capture_output=True)
+        sys.stdout.write(done.stdout)
+        sys.exit(done.returncode)
+    print({keys_out!r})
 if sys.argv[1] == "native-tools":
     print({native_tools!r})
 """)
@@ -175,3 +182,63 @@ def test_the_roster_fixture_is_the_body_merge_batch_land_generates(monkeypatch):
              "prs": {"11": {"title": "first"}, "12": {"title": "second"}}}
     fixture = Path(__file__).resolve().parents[1] / "rust/worker-core/tests/fixtures/batch-pr-body.md"
     assert land.render_body(state) == fixture.read_text()
+
+
+class FakeKeeper:
+    """A keeper session whose ``show`` answers per key (an exception is a failed lookup)."""
+
+    def __init__(self, answers):
+        self.answers, self.asked = answers, []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def call(self, method, verb, params):
+        self.asked.append(params["key"])
+        answer = self.answers[params["key"]]
+        if isinstance(answer, Exception):
+            raise answer
+        return {"work_exists": {"lanes": answer}}
+
+
+def test_the_keeper_is_asked_about_every_canonical_key_and_a_failed_lookup_keeps_the_rest(
+        monkeypatch, tmp_path):
+    from plangraph.keeper import cli_verbs
+
+    keeper = FakeKeeper({"p:A": ["lane/a"], "p:B": RuntimeError("keeper down")})
+    monkeypatch.setattr(cli_verbs, "Session", keeper)
+    monkeypatch.setenv("PG_URL", "http://keeper.invalid")
+    # The canonical keys come from the guard (prompt, alias, environment), not from the payload.
+    binary = fake_binary(tmp_path, keys_out='["p:A", "p:B"]')
+    lane_check.lane_check({"prompt": "Item key: p:A\n## p:B | t\n"}, binary=binary)
+    assert keeper.asked == ["p:A", "p:B"]
+    sent = json.loads((tmp_path / "lane-check.json").read_text())
+    assert sent["branches"] == ["lane/a"], "a failed lookup of p:B discards nothing"
+
+    # Strict dispatch: the incomplete picture refuses, and nothing is reserved or recorded.
+    (tmp_path / "lane-check.json").unlink()
+    with pytest.raises(lane_check.LaneRefused, match="open lanes are incomplete"):
+        lane_check.lane_check({"prompt": "x", "reserve": {"run_id": "run-1", "name": None}},
+                              binary=binary, strict=True)
+    sent = json.loads((tmp_path / "lane-check.json").read_text())
+    assert sent["record"] is False and sent["reserve"] is None and sent["branches"] == ["lane/a"]
+
+
+def test_a_verified_empty_keeper_answer_is_complete(monkeypatch, tmp_path):
+    from plangraph.keeper import cli_verbs
+
+    keeper = FakeKeeper({"p:A": []})
+    monkeypatch.setattr(cli_verbs, "Session", keeper)
+    monkeypatch.setenv("PG_URL", "http://keeper.invalid")
+    binary = fake_binary(tmp_path, keys_out='["p:A"]')
+    lane_check.lane_check({"prompt": "x"}, binary=binary, strict=True)
+    assert json.loads((tmp_path / "lane-check.json").read_text())["branches"] == []
+
+
+def test_native_dispatch_publishes_no_run_when_the_admission_lock_cannot_be_taken(
+        monkeypatch, tmp_path):
+    (tmp_path / "state" / "lane-admission.lock").mkdir(parents=True)
+    with pytest.raises(SpawnRefused, match="cannot take the admission lock"):
+        native_dispatch(monkeypatch, tmp_path, {"lane_override": "lane-one is wedged"})
+    assert not (tmp_path / "state" / "lane-reservations").exists()
+    assert sorted(p.name for p in (tmp_path / "state" / "runs").iterdir()) == ["run-held"]

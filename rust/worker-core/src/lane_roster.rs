@@ -87,13 +87,16 @@ pub fn normalize_key(value: &str) -> String {
     format!("{project}:{id}")
 }
 
-/// Every item a card or run record names, resolved as the run record resolves it: `item_key`,
-/// else the `item` alias, else `env_item` (`PLANGRAPH_SPAWN_ITEM`), plus every `item_keys` entry.
+/// Every item a card or run record names, resolved as the run record resolves it: the first
+/// non-empty of `item_key` and the `item` alias is *the* item (an invalid one means no item, it
+/// never falls through to the alias), else `env_item` (`PLANGRAPH_SPAWN_ITEM`); plus every valid
+/// `item_keys` entry.
 pub fn card_keys(card: &Value, env_item: Option<&str>) -> BTreeSet<String> {
-    let text = |value: &Value| value.as_str().filter(|s| !s.is_empty()).map(str::to_owned);
-    let primary = text(&card["item_key"])
-        .or_else(|| text(&card["item"]))
-        .or_else(|| env_item.filter(|s| !s.is_empty()).map(str::to_owned));
+    let given = |value: &&Value| !value.is_null() && value.as_str() != Some("");
+    let primary = match [&card["item_key"], &card["item"]].into_iter().find(given) {
+        Some(value) => value.as_str().map(str::to_owned),
+        None => env_item.filter(|s| !s.is_empty()).map(str::to_owned),
+    };
     let listed = card["item_keys"]
         .as_array()
         .into_iter()
@@ -119,27 +122,38 @@ fn batch_payload(text: &str) -> Option<Value> {
     serde_json::from_str(rest).ok()
 }
 
-/// The items one line of a batch pull request body names: the `GO-KEYS [a,b]` block and the
-/// Plan-Item cell of a table row (`| #12 | a, b | ... |`), as `tools/merge_batch_land.py` renders.
-fn batch_pull_request_keys(line: &str) -> Vec<String> {
-    let listed = if let Some((_, rest)) = line.split_once("GO-KEYS [") {
-        rest.split(']').next().unwrap_or("").to_owned()
-    } else if line.starts_with("| #") {
-        line.split('|').nth(2).unwrap_or("").to_owned()
-    } else {
-        return Vec::new();
+/// The delivered items of a batch pull request body as `tools/merge_batch_land.py` renders it:
+/// the `GO-KEYS [a,b]` block when there is one (authoritative: it leaves deferred keys out even
+/// when the table lists them), else the Plan-Item cells of the table rows (`| #12 | a, b | ... |`).
+fn batch_pull_request_keys(text: &str) -> BTreeSet<String> {
+    let split = |cell: &str| -> Vec<String> {
+        cell.split(',')
+            .map(str::trim)
+            .filter(|key| valid_key(key))
+            .map(str::to_owned)
+            .collect()
     };
-    listed
-        .split(',')
+    let go_keys = text
+        .lines()
+        .filter_map(|line| line.split_once("GO-KEYS [").map(|(_, rest)| rest))
+        .map(|rest| split(rest.split(']').next().unwrap_or("")))
+        .reduce(|mut all, more| {
+            all.extend(more);
+            all
+        });
+    if let Some(go_keys) = go_keys {
+        return go_keys.into_iter().collect();
+    }
+    text.lines()
         .map(str::trim)
-        .filter(|key| valid_key(key))
-        .map(str::to_owned)
+        .filter(|line| line.starts_with("| #"))
+        .flat_map(|line| split(line.split('|').nth(2).unwrap_or("")))
         .collect()
 }
 
 /// The item keys a brief, trailer block or pull request description names.
 pub fn item_keys(text: &str) -> BTreeSet<String> {
-    let mut keys = BTreeSet::new();
+    let mut keys = batch_pull_request_keys(text);
     if let Some(input) = batch_payload(text) {
         for item in input["items"].as_array().into_iter().flatten() {
             keys.extend(
@@ -153,7 +167,6 @@ pub fn item_keys(text: &str) -> BTreeSet<String> {
     }
     for line in text.lines() {
         let line = line.trim();
-        keys.extend(batch_pull_request_keys(line));
         let heading = line
             .strip_prefix('#')
             .map(|rest| rest.trim_start_matches('#').split('|').next().unwrap_or(""));
@@ -235,8 +248,15 @@ pub fn native_lanes(state: &Path) -> Vec<Lane> {
     lanes
 }
 
-/// This host's name, as the fleet launcher records it in a session's `host`.
+/// This host's fleet identity: `FLEET_LOCAL_HOST` (the policy name the launcher records in a
+/// session's `host`) when set, else the OS hostname.
 pub fn local_host() -> String {
+    if let Some(name) = std::env::var("FLEET_LOCAL_HOST")
+        .ok()
+        .filter(|name| !name.is_empty())
+    {
+        return name;
+    }
     #[cfg(unix)]
     {
         let mut name = [0u8; 256];
@@ -253,19 +273,40 @@ pub fn local_host() -> String {
     }
 }
 
+/// The fleet launcher's one host alias: the policy name of a machine whose own name starts
+/// with the alias's first label or its first four letters.
+pub fn local_alias() -> String {
+    ["coding", "vm"].join(".")
+}
+
+/// Whether the fleet host `host` is this machine (`local`): the same name, or the launcher's
+/// one alias (`local_alias`) on a machine of the matching own name.
+pub fn is_local_host(host: &str, local: &str) -> bool {
+    let alias = local_alias();
+    let label = alias.split('.').next().unwrap_or_default();
+    host == local
+        || (host == alias
+            && local
+                .split('.')
+                .next()
+                .is_some_and(|own| own == label || own == &label[..4]))
+}
+
 /// Claude writer sessions the fleet launcher recorded and has not stopped.
 ///
-/// A session recorded for another host runs where `claude agents` here cannot see it, so it
-/// counts while its record is unstopped; a session of `local_host` also needs `live`.
-/// `live` is the set of session ids `claude agents` lists as not finished: a record joins the
-/// fleet lifecycle by its session id, so an exited session drops out at once and a writer that
-/// runs for days stays. When the lifecycle is unknown (`None`) every unstopped record counts.
+/// A record joins the fleet lifecycle by its session id: `live(None)` lists the session ids
+/// `claude agents` shows as not finished on this host, `live(Some(ssh))` the same on the host a
+/// remote record names in `ssh` (the sender mirrors it into the record). An exited session
+/// drops out at once and a writer that runs for days stays. A lifecycle that cannot be read
+/// (`None`), or a remote record without an `ssh` destination, keeps every unstopped record.
 pub fn claude_lanes(
     sessions: &Path,
-    live: Option<&BTreeSet<String>>,
+    live: &dyn Fn(Option<&str>) -> Option<BTreeSet<String>>,
     local_host: &str,
 ) -> Vec<Lane> {
     let mut lanes = Vec::new();
+    let mut polled: std::collections::BTreeMap<Option<String>, Option<BTreeSet<String>>> =
+        std::collections::BTreeMap::new();
     for path in entries(sessions) {
         let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if !file.ends_with(".json") || file.ends_with(".ready.json") {
@@ -283,13 +324,20 @@ pub fn claude_lanes(
         }
         let remote = record["host"]
             .as_str()
-            .is_some_and(|host| !host.is_empty() && host != local_host);
-        if let Some(live) = live.filter(|_| !remote) {
-            if !record["session_id"]
-                .as_str()
-                .is_some_and(|id| live.contains(id))
-            {
-                continue;
+            .is_some_and(|host| !host.is_empty() && !is_local_host(host, local_host));
+        let destination = record["ssh"].as_str().filter(|ssh| !ssh.is_empty());
+        if !remote || destination.is_some() {
+            let target = destination.filter(|_| remote).map(str::to_owned);
+            let listed = polled
+                .entry(target.clone())
+                .or_insert_with(|| live(target.as_deref()));
+            if let Some(listed) = listed {
+                if !record["session_id"]
+                    .as_str()
+                    .is_some_and(|id| listed.contains(id))
+                {
+                    continue;
+                }
             }
         }
         let session = record["session_name"].as_str().unwrap_or("writer");
@@ -322,16 +370,20 @@ const FINISHED: [&str; 6] = [
     "crashed",
 ];
 
-/// Ids of the Claude sessions `claude agents --json` lists as not finished; `None` when the
-/// lifecycle cannot be read (no `claude`, a failed or slow poll), so callers keep every record.
-pub fn live_claude_sessions() -> Option<BTreeSet<String>> {
-    let mut child = std::process::Command::new("claude")
-        .args(["agents", "--json"])
+/// Run `command` (a `claude agents --json`) and return the ids of the sessions not finished;
+/// `None` when it cannot be read: no `claude`, a failed or slow poll.
+fn poll_sessions(mut command: std::process::Command) -> Option<BTreeSet<String>> {
+    let mut child = command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut text).map(|_| text)
+    });
     let started = std::time::Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().ok()? {
@@ -344,8 +396,7 @@ pub fn live_claude_sessions() -> Option<BTreeSet<String>> {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut text).ok()?;
+    let text = reader.join().ok()?.ok()?;
     let rows: Vec<Value> = serde_json::from_str(&text)
         .ok()
         .filter(|_| status.success())?;
@@ -359,6 +410,31 @@ pub fn live_claude_sessions() -> Option<BTreeSet<String>> {
             .filter_map(|row| row["sessionId"].as_str().map(str::to_owned))
             .collect(),
     )
+}
+
+/// The live Claude sessions of this host, or of the host reached by the ssh destination `ssh`.
+pub fn live_claude_sessions_on(ssh: Option<&str>) -> Option<BTreeSet<String>> {
+    let command = match ssh {
+        None => {
+            let mut command = std::process::Command::new("claude");
+            command.args(["agents", "--json"]);
+            command
+        }
+        Some(destination) if !destination.is_empty() && !destination.starts_with('-') => {
+            let mut command = std::process::Command::new("ssh");
+            command
+                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", destination])
+                .arg("bash -lc 'claude agents --json'");
+            command
+        }
+        Some(_) => return None,
+    };
+    poll_sessions(command)
+}
+
+/// The live Claude sessions of this host (`None`: unreadable).
+pub fn live_claude_sessions() -> Option<BTreeSet<String>> {
+    live_claude_sessions_on(None)
 }
 
 /// Open pull requests from `gh pr list --json number,headRefName,title,body`; a pull request
@@ -458,16 +534,34 @@ pub fn reserved_lanes(state: &Path, now: u64) -> Vec<Lane> {
         .collect()
 }
 
-/// Every live local lane: native runs and reservations under `state`, Claude launch records.
+/// Every live local lane: reservations and native runs under `state`, Claude launch records.
 pub fn local_lanes(
     state: &Path,
     sessions: &Path,
-    live_sessions: Option<&BTreeSet<String>>,
+    live: &dyn Fn(Option<&str>) -> Option<BTreeSet<String>>,
     now: u64,
 ) -> Vec<Lane> {
-    let mut lanes = native_lanes(state);
-    lanes.extend(reserved_lanes(state, now));
-    lanes.extend(claude_lanes(sessions, live_sessions, &local_host()));
+    local_lanes_between(state, sessions, live, now, || {})
+}
+
+/// `local_lanes` with a hook that runs between the reservation scan and the run scan.
+///
+/// Reservations are read first: a run record only ever gains items, so a reservation that was
+/// dropped because the record was complete is followed by a run scan that sees the complete
+/// record, and a reservation kept for an incomplete record is covered by the run scan if the
+/// record completed meanwhile. Reading the runs first would let a duplicate through between
+/// an incomplete record and the reservation's removal.
+pub fn local_lanes_between(
+    state: &Path,
+    sessions: &Path,
+    live: &dyn Fn(Option<&str>) -> Option<BTreeSet<String>>,
+    now: u64,
+    between: impl FnOnce(),
+) -> Vec<Lane> {
+    let mut lanes = reserved_lanes(state, now);
+    between();
+    lanes.extend(native_lanes(state));
+    lanes.extend(claude_lanes(sessions, live, &local_host()));
     lanes
 }
 

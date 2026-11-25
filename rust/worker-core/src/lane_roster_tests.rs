@@ -100,12 +100,12 @@ fn a_claude_lane_joins_the_fleet_lifecycle_by_session_id() {
     write(&dir.path().join("writer-0001.ready.json"), "{}");
     let live: BTreeSet<String> = ["sid-live".to_owned()].into();
     // The record is a day and more old (ts 1): a running writer stays, an exited one drops.
-    let lanes = claude_lanes(dir.path(), Some(&live), "here");
+    let lanes = claude_lanes(dir.path(), &|_| Some(live.clone()), "here");
     assert_eq!(lanes.len(), 1);
     assert_eq!(lanes[0].detail, "writer-0001");
     assert_eq!(lanes[0].keys.len(), 2, "the versioned prompt is decoded");
     // With the lifecycle unknown every unstopped writer record counts; never a non-writer.
-    assert_eq!(claude_lanes(dir.path(), None, "here").len(), 2);
+    assert_eq!(claude_lanes(dir.path(), &|_| None, "here").len(), 2);
 }
 
 #[test]
@@ -147,21 +147,138 @@ fn a_reservation_holds_its_items_until_the_record_exists_or_it_ages_out() {
     assert!(write_reservation(dir.path(), "bad id", "n", &keys, 1).is_err());
 }
 
-#[test]
-fn a_remote_writer_stays_and_a_crashed_session_does_not_count() {
-    let dir = tempfile::tempdir().unwrap();
-    let brief = dir.path().join("brief.md");
+fn writer_on(dir: &Path, session: &str, sid: &str, host: &str, ssh: Option<&str>) {
+    let brief = dir.join("brief.md");
     write(&brief, "Item key: p:REMOTE\nNAME: far-lane\n");
-    claude_record(dir.path(), "writer-0001", "writer", "sid-far", &brief);
-    let path = dir.path().join("writer-0001.json");
-    let mut record: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    record["host"] = serde_json::json!("elsewhere");
-    fs::write(&path, record.to_string()).unwrap();
-    // `claude agents` here lists no remote session, yet the writer is live on its own host.
-    let live: BTreeSet<String> = BTreeSet::new();
-    assert_eq!(claude_lanes(dir.path(), Some(&live), "here").len(), 1);
-    assert!(claude_lanes(dir.path(), Some(&live), "elsewhere").is_empty());
+    let mut record = serde_json::json!({"name":"writer","session_name":session,"session_id":sid,
+        "prompt_file":brief,"host":host});
+    if let Some(ssh) = ssh {
+        record["ssh"] = serde_json::json!(ssh);
+    }
+    write(&dir.join(format!("{session}.json")), &record.to_string());
+}
+
+#[test]
+fn a_remote_writer_joins_its_own_hosts_lifecycle_and_a_crashed_session_does_not_count() {
+    let dir = tempfile::tempdir().unwrap();
+    writer_on(
+        dir.path(),
+        "writer-0001",
+        "sid-far",
+        "elsewhere",
+        Some("far-alias"),
+    );
+    writer_on(
+        dir.path(),
+        "writer-0002",
+        "sid-gone",
+        "elsewhere",
+        Some("far-alias"),
+    );
+    writer_on(dir.path(), "writer-0003", "sid-nossh", "elsewhere", None);
+    let polled = std::cell::RefCell::new(Vec::new());
+    let lifecycle = |ssh: Option<&str>| {
+        polled.borrow_mut().push(ssh.map(str::to_owned));
+        // `claude agents` here lists nothing; the far host lists sid-far only.
+        Some(ssh.map_or_else(BTreeSet::new, |_| ["sid-far".to_owned()].into()))
+    };
+    let lanes = claude_lanes(dir.path(), &lifecycle, "here");
+    let sessions: Vec<_> = lanes.iter().map(|l| l.detail.as_str()).collect();
+    // sid-gone is over on its own host; sid-nossh has no destination to ask, so it stays.
+    assert_eq!(sessions, ["writer-0001", "writer-0003"]);
+    assert_eq!(
+        *polled.borrow(),
+        [Some("far-alias".to_owned())],
+        "one poll per host"
+    );
+    // A lifecycle that cannot be read keeps every unstopped record.
+    assert_eq!(claude_lanes(dir.path(), &|_| None, "here").len(), 3);
     assert!(FINISHED.contains(&"crashed") && FINISHED.contains(&"cancelled"));
+}
+
+#[test]
+fn a_writer_recorded_under_the_fleet_alias_of_this_host_is_local() {
+    let dir = tempfile::tempdir().unwrap();
+    // The launcher records the policy alias; the OS hostname differs.
+    let alias = local_alias();
+    let own = format!("{}.lan", &alias[..4]);
+    writer_on(
+        dir.path(),
+        "writer-0001",
+        "sid-dead",
+        &alias,
+        Some("ignored"),
+    );
+    let lifecycle = |ssh: Option<&str>| {
+        assert!(ssh.is_none(), "a local record is polled locally");
+        Some(BTreeSet::new())
+    };
+    assert!(claude_lanes(dir.path(), &lifecycle, &own).is_empty());
+    assert!(is_local_host(&alias, &alias));
+    assert!(is_local_host(&alias, &own));
+    assert!(!is_local_host(&alias, "other"));
+    assert!(!is_local_host("far", "here"));
+}
+
+#[test]
+fn a_bad_primary_item_never_falls_through_to_the_alias() {
+    let by = |card: Value, env: Option<&str>| -> Vec<String> {
+        card_keys(&card, env).into_iter().collect()
+    };
+    // The run record discards an invalid explicit key (item_key stays null); so does admission.
+    assert!(by(
+        serde_json::json!({"item_key":5,"item":"p:ALIAS"}),
+        Some("p:ENV")
+    )
+    .is_empty());
+    assert!(by(
+        serde_json::json!({"item_key":"bad key","item":"p:ALIAS"}),
+        None
+    )
+    .is_empty());
+    assert!(by(serde_json::json!({"item":["x"]}), Some("p:ENV")).is_empty());
+    assert_eq!(
+        by(serde_json::json!({"item_key":"","item":"p:ALIAS"}), None),
+        ["p:ALIAS"]
+    );
+    assert_eq!(
+        by(serde_json::json!({"item_key":null}), Some("bad")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_reservation_dropped_for_a_complete_record_cannot_open_a_gap_between_the_two_scans() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys: BTreeSet<String> = ["p:ONE".to_owned(), "p:TWO".to_owned()].into();
+    write_reservation(dir.path(), "run-g", "lane-g", &keys, 1000).unwrap();
+    let run = dir.path().join("runs/run-g");
+    let partial = serde_json::json!({"run_id":"run-g","run_kind":"native-codex",
+        "status":"running","item_key":"p:ONE"});
+    write(&run.join("record.json"), &partial.to_string());
+    let sessions = dir.path().join("sessions");
+    // The record completes after the reservation scan kept the reservation (the record was
+    // partial) and before the run scan: the run scan must carry the second item.
+    let lanes = local_lanes_between(dir.path(), &sessions, &|_| None, 1001, || {
+        let complete = serde_json::json!({"run_id":"run-g","run_kind":"native-codex",
+            "status":"running","item_key":"p:ONE","item_keys":["p:ONE","p:TWO"]});
+        write(&run.join("record.json"), &complete.to_string());
+    });
+    for key in ["p:ONE", "p:TWO"] {
+        assert!(lanes.iter().any(|lane| lane.holds(key)), "{key} is held");
+    }
+}
+
+#[test]
+fn a_deferred_key_the_table_lists_is_not_held_when_go_keys_leaves_it_out() {
+    let body =
+        "| PR | Plan-Item | Head |\n|---|---|---|\n| #1 | demo:DONE, demo:DEFERRED | `a` |\n\n\
+                GO-KEYS [demo:DONE]; GO-DEFERRED [demo:DEFERRED]\n";
+    let keys: Vec<_> = item_keys(body).into_iter().collect();
+    assert_eq!(keys, ["demo:DONE"]);
+    // Without a GO-KEYS block the table is the list.
+    let table = "| #1 | demo:A, demo:B | `a` |\n";
+    assert_eq!(item_keys(table).len(), 2);
 }
 
 #[test]

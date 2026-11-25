@@ -93,8 +93,8 @@ def test_reaper_keeps_the_claim_of_a_merged_item_waiting_for_its_close_pass(w):
     for key in (merged, unmerged, unverified):
         to_claimed(w, key)
     for key, verified in ((merged, 1), (unverified, 0)):
-        w.conn.execute("INSERT INTO evidence (key, kind, verified) VALUES (?, 'commit+ci', ?)",
-                       (key, verified))
+        w.conn.execute("INSERT INTO evidence (key, epoch, kind, verified)"
+                       " SELECT key, epoch, 'commit+ci', ? FROM items WHERE key=?", (verified, key))
     w.conn.commit()
 
     reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
@@ -116,3 +116,24 @@ def test_reaper_keeps_the_claim_of_a_merge_awaiting_deploy_attribution(w):
 
     assert reaped["expired"] == [control]
     assert snapshot(w, pending)[0] == "claimed"
+
+
+def test_a_merge_proof_protects_only_the_claim_it_proves_and_the_snapshot_agrees(w):
+    current, later = seed(w, [("current", []), ("later", [])])
+    to_claimed(w, current)
+    epoch = to_claimed(w, later)
+    with w.store._write():
+        w.store._finding(current, "deploy_pending", "deploy_pending: unit", w.clock.advance(1))
+        w.store._finding(later, "deploy_pending", "deploy_pending: old", w.clock.advance(1))
+    # `later` is released and claimed again: its finding belongs to the earlier claim.
+    w.store.release(w.p("l1main"), later, epoch)
+    w.clock.advance(1)
+    to_claimed(w, later)
+    snap = {row["key"]: row for row in w.store.snapshot(w.p("router"), fields="merge_proven,merged")["items"]}
+    assert snap[current]["merge_proven"] is True and snap[current]["merged"] is False
+    assert snap[later]["merge_proven"] is False
+
+    reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
+
+    assert reaped["expired"] == [later]
+    assert snapshot(w, current)[0] == "claimed"

@@ -13,7 +13,7 @@ use std::path::Path;
 
 const BATCH: usize = 200;
 const SNAPSHOT: &str =
-    "v1/snapshot?fmt=json&open=1&blocks=items&fields=state,epoch,claimed_by,merged";
+    "v1/snapshot?fmt=json&open=1&blocks=items&fields=state,epoch,claimed_by,merged,merge_proven";
 
 pub trait Keeper {
     fn principal(&mut self) -> Result<String, String>;
@@ -40,7 +40,8 @@ pub fn claims_from_snapshot(snapshot: &Value) -> Vec<Claim> {
                 epoch: item["epoch"].as_i64().unwrap_or(0),
                 state: item["state"].as_str()?.to_owned(),
                 claimed_by: item["claimed_by"].as_str().unwrap_or("").to_owned(),
-                merged: item["merged"].as_bool().unwrap_or(false),
+                merged: item["merge_proven"].as_bool().unwrap_or(false)
+                    || item["merged"].as_bool().unwrap_or(false),
             })
         })
         .collect()
@@ -166,8 +167,12 @@ pub fn run(env: &BTreeMap<String, String>, home: &Path, args: &[String]) -> i32 
     let state = std::env::var_os("PLANGRAPH_SPAWN_STATE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| crate::paths::state(home));
-    let live = pg_worker_core::lane_roster::live_claude_sessions();
-    let mut lanes = local_lanes(&state, &routing.join("launch/sessions"), live.as_ref(), now);
+    let mut lanes = local_lanes(
+        &state,
+        &routing.join("launch/sessions"),
+        &pg_worker_core::lane_roster::live_claude_sessions_on,
+        now,
+    );
     let mut degraded = false;
     match open_pull_requests() {
         Ok(prs) => lanes.extend(prs),

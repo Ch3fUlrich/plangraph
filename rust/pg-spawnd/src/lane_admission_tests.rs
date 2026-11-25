@@ -52,7 +52,7 @@ impl Fixture {
             keys: &keys,
             override_reason: reason,
             own: None,
-            live: || None,
+            live: |_| None,
             record: true,
             reserve,
         })
@@ -98,7 +98,7 @@ fn an_exited_claude_session_stops_holding_its_items() {
     row["session_id"] = json!("sid-1");
     fs::write(&record, row.to_string()).unwrap();
     let keys = ["plangraph:Y-1".to_owned()].into();
-    let ask = |live: fn() -> Option<BTreeSet<String>>| {
+    let ask = |live: fn(Option<&str>) -> Option<BTreeSet<String>>| {
         check(&Request {
             state: &fx.state(),
             sessions: &fx.sessions(),
@@ -112,8 +112,8 @@ fn an_exited_claude_session_stops_holding_its_items() {
             reserve: None,
         })
     };
-    assert!(ask(|| Some(["sid-1".to_owned()].into())).is_err());
-    assert!(ask(|| Some(BTreeSet::new())).is_ok(), "the session exited");
+    assert!(ask(|_| Some(["sid-1".to_owned()].into())).is_err());
+    assert!(ask(|_| Some(BTreeSet::new())).is_ok(), "the session exited");
 }
 
 #[test]
@@ -221,5 +221,30 @@ fn a_batch_input_carries_its_override_reason() {
     assert_eq!(
         crate::batch_writer_brief::lane_override("plain brief"),
         None
+    );
+}
+
+#[test]
+fn a_lock_that_cannot_be_taken_refuses_the_reservation() {
+    let fx = Fixture::new();
+    fs::create_dir_all(fx.state().join(LOCK_FILE)).unwrap();
+    let error = fx
+        .check_with(&["plangraph:L-1"], None, Some(("run-l", "lane-l")))
+        .unwrap_err();
+    assert!(error.contains("cannot take the admission lock"), "{error}");
+    assert!(
+        !fx.state().join("lane-reservations").exists(),
+        "nothing was reserved"
+    );
+}
+
+#[test]
+fn the_canonical_keys_cover_the_prompt_the_alias_and_the_listed_items() {
+    let input = json!({"prompt":"## demo:PROMPT | t\n","card":{"item":"demo:ALIAS",
+        "item_keys":["demo:LISTED"]},"keys":["demo:EXPLICIT","bad key"]});
+    let keys: Vec<String> = serde_json::from_str(&keys_cli(&input.to_string()).unwrap()).unwrap();
+    assert_eq!(
+        keys,
+        ["demo:ALIAS", "demo:EXPLICIT", "demo:LISTED", "demo:PROMPT"]
     );
 }

@@ -268,7 +268,7 @@ fn guard_lanes(state: &Path, sessions: &Path, args: &Args, prompt: &str) -> Resu
         keys: &keys,
         override_reason: reason.as_deref(),
         own: None,
-        live: pg_spawnd::lane_admission::live_claude_sessions,
+        live: pg_spawnd::lane_admission::live_claude_sessions_on,
         record: false,
         reserve: None,
     })

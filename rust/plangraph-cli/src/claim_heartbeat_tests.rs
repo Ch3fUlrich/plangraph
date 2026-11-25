@@ -60,7 +60,7 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
     let record = json!({"name":"writer","session_name":"writer-0001","prompt_file":brief});
     fs::write(sessions.join("writer-0001.json"), record.to_string()).unwrap();
     let mut lanes = native_lanes(&dir.path().join("state"));
-    lanes.extend(claude_lanes(&sessions, None, "here"));
+    lanes.extend(claude_lanes(&sessions, &|_| None, "here"));
     lanes.extend(pull_request_lanes(
         r#"[{"number":9,"headRefName":"lane/x","title":"x","body":"Plan-Item: p:PR\nPlan-Item: p:REFUSED"},
             {"number":10,"headRefName":"lane/branchonly","title":"x","body":""}]"#,
@@ -147,4 +147,34 @@ fn a_failed_batch_names_every_key_and_keeps_the_earlier_reports() {
         "refused p:K{} batch_error: keeper unreachable",
         BATCH + 1
     )));
+}
+
+#[test]
+fn a_claim_whose_close_pass_found_the_merge_is_not_renewed_even_with_a_live_lane() {
+    let mut keeper = Fake {
+        items: json!([
+            {"key":"p:PENDING","state":"claimed","epoch":2,"claimed_by":"plan-order",
+             "merged":false,"merge_proven":true},
+            item("p:LIVE", "plan-order", false),
+        ]),
+        refuse: vec![],
+        sent: vec![],
+        fail_batch: false,
+    };
+    let lane = Lane {
+        name: "lane".into(),
+        kind: pg_worker_core::lane_roster::LaneKind::Native,
+        detail: "run-x".into(),
+        keys: ["p:PENDING".to_owned(), "p:LIVE".to_owned()].into(),
+        branch: None,
+    };
+    let report = pass(&mut keeper, &[lane]).unwrap();
+    assert_eq!(keeper.sent, [("p:LIVE".to_owned(), 4)]);
+    assert!(
+        report
+            .lines
+            .contains(&"skipped p:PENDING merged".to_owned()),
+        "{:#?}",
+        report.lines
+    );
 }

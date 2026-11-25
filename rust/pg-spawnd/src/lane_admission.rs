@@ -6,7 +6,7 @@
 //! The roster is native runs, reservations of submits in flight, Claude writer sessions that
 //! `claude agents` still lists, and the keeper's open lanes (unmerged branches carrying the id).
 use pg_worker_core::lane_guard::{admit, record_override, GuardError};
-pub use pg_worker_core::lane_roster::live_claude_sessions;
+pub use pg_worker_core::lane_roster::live_claude_sessions_on;
 use pg_worker_core::lane_roster::{
     branch_lanes, card_keys, item_keys, local_lanes, valid_key, write_reservation,
 };
@@ -59,7 +59,7 @@ pub struct Request<'a> {
     /// Append an authorized override to the log (a preview never does).
     pub record: bool,
     /// Lists the live Claude sessions (`live_claude_sessions` in production).
-    pub live: fn() -> Option<BTreeSet<String>>,
+    pub live: fn(Option<&str>) -> Option<BTreeSet<String>>,
     /// `(run id, lane name)`: hold the items for a submit that has not published a record yet.
     pub reserve: Option<(&'a str, &'a str)>,
 }
@@ -71,14 +71,15 @@ pub fn check(request: &Request) -> Result<(), String> {
     if request.keys.is_empty() && request.override_reason.is_none() {
         return Ok(());
     }
-    let _lock = lock(request.state);
+    // Check, record and reserve are one decision under the admission lock; a lock that cannot
+    // be taken refuses rather than letting two submits pass together.
+    let _lock = if request.reserve.is_some() || request.record {
+        Some(lock(request.state).map_err(|e| format!("cannot take the admission lock: {e}"))?)
+    } else {
+        None
+    };
     let now = unix_now();
-    let mut lanes = local_lanes(
-        request.state,
-        request.sessions,
-        (request.live)().as_ref(),
-        now,
-    );
+    let mut lanes = local_lanes(request.state, request.sessions, &request.live, now);
     lanes.extend(branch_lanes(request.branches.iter().map(String::as_str)));
     let own = request.reserve.map(|(id, _)| id).or(request.own);
     let admission = admit(request.keys, &lanes, own, request.override_reason)
@@ -100,15 +101,37 @@ pub fn check(request: &Request) -> Result<(), String> {
 }
 
 /// An exclusive advisory lock on the state directory's admission lock file, held until drop.
-fn lock(state: &Path) -> Option<std::fs::File> {
-    std::fs::create_dir_all(state).ok()?;
+fn lock(state: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(state)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(state.join(LOCK_FILE))
-        .ok()?;
-    file.lock().ok()?;
-    Some(file)
+        .open(state.join(LOCK_FILE))?;
+    file.lock()?;
+    Ok(file)
+}
+
+/// The canonical items of a `lane-check` request: the brief, the card as the run record
+/// resolves it (including `PLANGRAPH_SPAWN_ITEM`), and any explicit `keys`.
+fn request_keys(request: &Value) -> BTreeSet<String> {
+    let mut keys = submission_keys(request["prompt"].as_str().unwrap_or(""), &request["card"]);
+    keys.extend(
+        request["keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str().filter(|k| valid_key(k)).map(str::to_owned)),
+    );
+    keys
+}
+
+/// `pg-spawnd lane-keys`: the canonical items of a `lane-check` request as a JSON array, so
+/// the Python caller asks the keeper about exactly the keys the guard will check.
+pub fn keys_cli(input: &str) -> Result<String, String> {
+    let request: Value =
+        serde_json::from_str(input).map_err(|e| format!("lane-keys input: {e}"))?;
+    serde_json::to_string(&request_keys(&request).into_iter().collect::<Vec<_>>())
+        .map_err(|e| e.to_string())
 }
 
 /// `pg-spawnd lane-check`: the Python dispatch boundary and brief generator call this with one
@@ -120,14 +143,7 @@ pub fn cli(input: &str) -> Result<(), String> {
     let text = |key: &str| request[key].as_str();
     let state = PathBuf::from(text("state").ok_or("lane-check needs state")?);
     let sessions = text("sessions").map_or_else(claude_sessions_dir, PathBuf::from);
-    let mut keys = submission_keys(text("prompt").unwrap_or(""), &request["card"]);
-    keys.extend(
-        request["keys"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|k| k.as_str().filter(|k| valid_key(k)).map(str::to_owned)),
-    );
+    let keys = request_keys(&request);
     // A reservation takes the brief's lane name, else the run id.
     let lane_name = pg_worker_core::lane_roster::brief_name(text("prompt").unwrap_or(""));
     let branches: Vec<String> = request["branches"]
@@ -151,7 +167,7 @@ pub fn cli(input: &str) -> Result<(), String> {
             .filter(|r| !r.is_null())
             .map(|r| r.as_str().unwrap_or("")),
         own: text("own"),
-        live: live_claude_sessions,
+        live: live_claude_sessions_on,
         record: request["record"].as_bool().unwrap_or(true),
         reserve,
     })

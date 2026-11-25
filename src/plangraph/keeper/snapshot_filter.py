@@ -14,7 +14,7 @@ FIELDS = tuple((
     "done_criteria design_ref evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
-    "run_ids created_at done_at reviewed merged answer incidents"
+    "run_ids created_at done_at reviewed merged merge_proven answer incidents"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -120,6 +120,9 @@ def _full(store, now, values=None):
         if item.get("fixes"):
             fixed.setdefault(item["fixes"], []).append(item["key"])
     created_ts, done_ts, reviewed_keys, merged_keys = store._snapshot_run_meta()
+    # Opt-in (``fields=merge_proven``): the legacy snapshot bytes stay what they were.
+    proven_claims = store._merge_proven_claims() \
+        if values and values["fields"] and "merge_proven" in values["fields"] else None
     answers = store.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
     evidence = store._evidence_by_key()      # set-based: one query each, not one per item
     verdicts = store._verdicts_by_key()
@@ -172,6 +175,8 @@ def _full(store, now, values=None):
             "done_at": done_ts.get(item["key"]),
             "reviewed": item["key"] in reviewed_keys,
             "merged": item["key"] in merged_keys,
+            # A claim waiting for its close pass needs no lease (the reaper keeps it too).
+            **({"merge_proven": item["key"] in proven_claims} if proven_claims is not None else {}),
             "answer": ({"text": answers[item["key"]]["text"],
                         "decision_id": answers[item["key"]]["decision_id"]}
                        if item["key"] in answers else None),

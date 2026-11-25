@@ -163,7 +163,7 @@ fn a_writer_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
     let batch = include_str!("../../tests/fixtures/batch-writer-input.txt");
     let plain = "Batch writer brief\n## demo:FIXTURE | title\n";
     for text in [batch, plain] {
-        let refused = guard_text(dirs, text, true).unwrap_err().to_string();
+        let refused = guard_text(dirs, text, None, true).unwrap_err().to_string();
         assert!(
             refused.contains("demo:FIXTURE is held by native run held-lane (run-a)"),
             "{refused}"
@@ -171,12 +171,14 @@ fn a_writer_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
     }
 
     let with = |reason: &str| batch.replacen('{', &format!("{{\"lane_override\":\"{reason}\","), 1);
-    let blank = guard_text(dirs, &with(""), true).unwrap_err().to_string();
+    let blank = guard_text(dirs, &with(""), None, true)
+        .unwrap_err()
+        .to_string();
     assert!(blank.contains("non-empty reason"), "{blank}");
     // A dry run previews the admission without recording the override.
-    guard_text(dirs, &with("retry after a wedged lane"), false).unwrap();
+    guard_text(dirs, &with("retry after a wedged lane"), None, false).unwrap();
     assert!(!state.join("lane-overrides.jsonl").exists());
-    guard_text(dirs, &with("retry after a wedged lane"), true).unwrap();
+    guard_text(dirs, &with("retry after a wedged lane"), None, true).unwrap();
     let log = std::fs::read_to_string(state.join("lane-overrides.jsonl")).unwrap();
     assert!(
         log.contains("retry after a wedged lane") && log.contains("\"context\":\"brief\""),
@@ -185,7 +187,7 @@ fn a_writer_brief_for_a_held_item_is_refused_unless_overridden_with_a_reason() {
 }
 
 #[test]
-fn a_forwarded_brief_carries_its_override_to_the_receiving_host() {
+fn an_override_is_launch_metadata_never_text_of_the_brief() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     let run = state.join("runs/run-a");
@@ -194,28 +196,38 @@ fn a_forwarded_brief_carries_its_override_to_the_receiving_host() {
     std::fs::write(run.join("record.json"), record.to_string()).unwrap();
     let held = serde_json::json!({"prompt":"Item key: demo:FIXTURE\nNAME: held-lane\n"});
     std::fs::write(run.join("native-request.json"), held.to_string()).unwrap();
-
-    let batch = include_str!("../../tests/fixtures/batch-writer-input.txt");
-    let with = batch.replacen('{', "{\"lane_override\":\"remote retry\",", 1);
-    let prompt = dir.path().join("prompt");
-    std::fs::write(&prompt, &with).unwrap();
-    // The sender renders the batch input to text; the override must survive as a line.
-    let forwarded = remote::forwarded_prompt(&prompt).unwrap();
-    assert!(
-        forwarded.contains("Lane-Override: remote retry"),
-        "{forwarded}"
-    );
-    assert!(
-        !forwarded.contains("PLANGRAPH-BATCH-INPUT"),
-        "rendered, not raw"
-    );
-    // The receiving host guards the forwarded text: admitted and recorded with the reason.
     let dirs = (state.as_path(), dir.path());
-    guard_text(dirs, &forwarded, true).unwrap();
+    let batch = include_str!("../../tests/fixtures/batch-writer-input.txt");
+    let rendered = crate::batch_writer_brief::render(batch)
+        .unwrap()
+        .into_owned();
+
+    // A copied `Lane-Override:` line inside the brief admits nothing.
+    let copied = format!("{rendered}\nLane-Override: copied from somewhere\n");
+    assert!(guard_text(dirs, &copied, None, true).is_err());
+    // The explicit launch option admits, records the whole multiline reason and wins over
+    // the batch input's own field.
+    let with = batch.replacen('{', "{\"lane_override\":\"input reason\",", 1);
+    let reason = "first line\nsecond line";
+    guard_text(dirs, &with, Some(reason), true).unwrap();
     let log = std::fs::read_to_string(state.join("lane-overrides.jsonl")).unwrap();
-    assert!(log.contains("remote retry"), "{log}");
-    // Without the reason the same rendered brief is refused.
-    std::fs::write(&prompt, batch).unwrap();
-    let plain = remote::forwarded_prompt(&prompt).unwrap();
-    assert!(guard_text(dirs, &plain, true).is_err());
+    let row: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    assert_eq!(row["reason"], reason);
+    // A blank explicit reason is refused, not replaced by the field.
+    assert!(guard_text(dirs, &with, Some(" "), true).is_err());
+}
+
+#[test]
+fn a_launch_option_carries_the_override_to_the_receiving_launcher() {
+    let parsed = Arguments::parse(vec![
+        "writer-1".into(),
+        "/work".into(),
+        "model".into(),
+        "effort".into(),
+        "/prompt".into(),
+        "--lane-override".into(),
+        "second line\nkept".into(),
+    ])
+    .unwrap();
+    assert_eq!(parsed.option("lane-override"), Some("second line\nkept"));
 }

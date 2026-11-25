@@ -212,7 +212,7 @@ fn local(
         }
     };
     if args.role == "writer" && request.restart.is_none() {
-        if let Err(error) = guard_launch(prompt_path, args.dry) {
+        if let Err(error) = guard_launch(prompt_path, args.option("lane-override"), args.dry) {
             log("refused", None);
             eprintln!("fleet-launch: {error}");
             return Ok(2);
@@ -409,20 +409,29 @@ fn read_writer_prompt(path: &Path) -> io::Result<String> {
 
 /// Refuse a writer launch whose items a live lane already holds. A dry run previews the
 /// refusal but records no override.
-fn guard_launch(prompt: &Path, dry: bool) -> io::Result<()> {
+fn guard_launch(prompt: &Path, explicit: Option<&str>, dry: bool) -> io::Result<()> {
     let text = read_text(prompt)?;
     let state = crate::state::resolve_state(None, |key| std::env::var_os(key)).unwrap_or_default();
     guard_text(
         (&state, &crate::lane_admission::claude_sessions_dir()),
         &text,
+        explicit,
         !dry,
     )
 }
 
-fn guard_text(dirs: (&Path, &Path), text: &str, record: bool) -> io::Result<()> {
+fn guard_text(
+    dirs: (&Path, &Path),
+    text: &str,
+    explicit: Option<&str>,
+    record: bool,
+) -> io::Result<()> {
     use crate::lane_admission::{check, submission_keys, Request};
     let keys = submission_keys(text, &Value::Null);
-    let reason = crate::batch_writer_brief::lane_override(text);
+    // An explicit launch option outranks the batch input's field; brief text supplies none.
+    let reason = explicit
+        .map(str::to_owned)
+        .or_else(|| crate::batch_writer_brief::lane_override(text));
     check(&Request {
         state: dirs.0,
         sessions: dirs.1,
@@ -431,7 +440,7 @@ fn guard_text(dirs: (&Path, &Path), text: &str, record: bool) -> io::Result<()> 
         keys: &keys,
         override_reason: reason.as_deref(),
         own: None,
-        live: crate::lane_admission::live_claude_sessions,
+        live: crate::lane_admission::live_claude_sessions_on,
         record,
         reserve: None,
     })

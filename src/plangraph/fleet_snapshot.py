@@ -134,23 +134,31 @@ def lane_state() -> Path:
                 Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph")
 
 
-def keeper_lanes(keys) -> list:
-    """The keeper's open lanes of ``keys`` (``work_exists.lanes`` of ``show``; a branch whose pull
-    request closed is not among them). Unreadable answers give no lanes: the roster still guards."""
+def keeper_lanes(keys):
+    """``(lanes, complete)``: the keeper's open lanes of ``keys`` (``work_exists.lanes`` of
+    ``show``; a branch whose pull request closed is not among them), and whether every lookup
+    answered. A failed lookup keeps the lanes the other keys returned and makes the result
+    incomplete; no configured keeper (``PG_URL`` unset) has nothing to ask and is complete."""
     keys = [key for key in dict.fromkeys(keys) if isinstance(key, str) and key]
     if not keys or not os.environ.get("PG_URL"):
-        return []
+        return [], True
+    lanes, complete = [], True
     try:
         from plangraph.keeper.cli_verbs import Session
         session = Session()
-        lanes = []
-        for key in keys[:50]:
-            found = (session.call("GET", "show", {"key": key}).get("work_exists") or {}).get("lanes")
-            lanes += [lane for lane in found or [] if isinstance(lane, str)]
-        return list(dict.fromkeys(lanes))
-    except Exception as exc:  # the keeper is optional input to the guard
+    except Exception as exc:
         logging.warning("keeper open lanes unavailable: %s", exc)
-        return []
+        return [], False
+    for key in keys:
+        try:
+            found = (session.call("GET", "show", {"key": key}).get("work_exists") or {}).get("lanes")
+            if not isinstance(found, list):
+                raise ValueError("show returned no lane list")
+            lanes += [lane for lane in found if isinstance(lane, str)]
+        except Exception as exc:  # one failed lookup must not discard the others' lanes
+            logging.warning("keeper open lanes of %s unavailable: %s", key, exc)
+            complete = False
+    return list(dict.fromkeys(lanes)), complete
 
 
 def lane_check(payload: dict, binary: str | None = None, *, strict: bool = False) -> None:
@@ -174,10 +182,20 @@ def lane_check(payload: dict, binary: str | None = None, *, strict: bool = False
             return unanswered("pg-spawnd is not installed")
     payload = {"state": str(lane_state()), **payload}
     if "branches" not in payload:
-        card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
-        listed = card.get("item_keys") if isinstance(card.get("item_keys"), list) else []
-        payload["branches"] = keeper_lanes([*(payload.get("keys") or []), card.get("item_key"),
-                                            card.get("item"), *listed])
+        # Ask the keeper about every canonical key the guard will check (prompt, card alias,
+        # PLANGRAPH_SPAWN_ITEM, listed items), as the guard itself resolves them.
+        try:
+            keys = json.loads(subprocess.run(
+                [binary, "lane-keys"], input=json.dumps(payload), text=True, capture_output=True,
+                timeout=30, check=True).stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            return unanswered(f"lane-keys: {exc}")
+        payload["branches"], complete = keeper_lanes(keys)
+        if strict and not complete:
+            # Never reserve or record on an incomplete picture: a preview names a conflict the
+            # known lanes already show, else the lookup failure itself refuses.
+            lane_check({**payload, "record": False, "reserve": None}, binary)
+            raise LaneRefused("lane guard gave no decision: the keeper's open lanes are incomplete")
     try:
         result = subprocess.run([binary, "lane-check"], input=json.dumps(payload), text=True,
                                 capture_output=True, timeout=90, check=False)

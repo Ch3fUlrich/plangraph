@@ -31,11 +31,12 @@ class ReapMixin:
         findings = 0
         with self._write():
             items = self._all_items()
+            proven = self._merge_proven_claims()
             for item in items:
                 if item["state"] == "claimed" and item["lease_until"]:
                     due = self._parse_iso(item["lease_until"])
                     if due is not None and due.timestamp() < now:
-                        if self._merge_proven(item["key"]):
+                        if item["key"] in proven:
                             # Merged and waiting for its close pass: the claim needs no
                             # lease, and lapsing it would show the item as unclaimed work.
                             continue
@@ -63,14 +64,23 @@ class ReapMixin:
             self._reap_revision = getattr(self, "_reap_revision", 0) + 1
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
 
-    def _merge_proven(self, key):
-        """Whether a merge proof names ``key``: verified commit evidence (the ``merged`` flag), or
-        the ``deploy_pending`` finding a close pass writes after it found the merge on the default
-        ref but before the deploy attribution lets it write commit evidence."""
-        return (self.conn.execute(
-            "SELECT 1 FROM evidence WHERE key=? AND verified!=0"
-            " AND kind IN ('commit+ci','commit') LIMIT 1", (key,)).fetchone() is not None
-            or self._has_finding(key, "deploy_pending"))
+    def _merge_proven_claims(self):
+        """Keys of claimed items whose *current* claim has a merge proof.
+
+        The proof is verified ``commit``/``commit+ci`` evidence recorded at the item's current
+        epoch, or the ``deploy_pending`` finding a close pass wrote since the current claim
+        began (the close pass found the merge on the default ref but could not yet write
+        commit evidence). A proof of an earlier delivery protects no later claim. The reaper
+        and the heartbeat snapshot (``merge_proven``) both read this one answer.
+        """
+        since = ("(SELECT MAX(v.ts) FROM events v WHERE v.key=i.key AND v.type='claimed')")
+        rows = self.conn.execute(
+            "SELECT i.key FROM items i WHERE i.state='claimed' AND ("
+            " EXISTS (SELECT 1 FROM evidence e WHERE e.key=i.key AND e.epoch=i.epoch"
+            "  AND e.verified!=0 AND e.kind IN ('commit+ci','commit'))"
+            f" OR EXISTS (SELECT 1 FROM audit_findings f WHERE f.key=i.key"
+            f"  AND f.code='deploy_pending' AND f.ts > {since}))")
+        return {row[0] for row in rows}
 
     def _check_gate_capacity(self, items, now):
         code = "gate_dependency_capacity"
