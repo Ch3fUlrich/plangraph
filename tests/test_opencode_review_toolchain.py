@@ -1,4 +1,4 @@
-"""An OpenCode review seat runs with cargo and the repository's pytest on PATH
+"""An OpenCode review seat runs with cargo and the service's pytest on PATH
 (LE-OPENCODE-REVIEW-SEAT-HAS-NO-CARGO-OR-PYTEST)."""
 import asyncio
 import os
@@ -33,14 +33,12 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     # The service's interpreter lives in a venv that has pytest; the bare PATH python does not.
     venv = tmp_path / 'service-venv'
     _tool(venv / 'bin/pytest')
-    # The venv's interpreter is the real one, so `python -m pytest --version` really imports pytest.
     _tool(venv / 'bin/python', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
     bare = tmp_path / 'bare/bin'
     _tool(bare / 'python', '#!/bin/sh\necho "No module named _pytest" >&2\nexit 1\n')
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('PATH', str(bare))
     monkeypatch.delenv('INVOCATION_ID', raising=False)
-    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
     monkeypatch.setattr(sys, 'prefix', str(venv))
     source = tmp_path / 'source.db'
     source_store(source)
@@ -55,37 +53,20 @@ def test_review_seat_env_resolves_cargo_and_python_pytest(tmp_path, monkeypatch,
     assert env['HOME'] != str(home)  # the seat's own home hides the user's profile
     assert shutil.which('cargo', path=env['PATH']) == str(home / '.cargo/bin/cargo')
     python = shutil.which('python', path=env['PATH'])
-    assert python != str(bare / 'python')  # the seat's python is the validated interpreter's wrapper
+    assert python == str(venv / 'bin/python')
     assert shutil.which('pytest', path=env['PATH']) == str(venv / 'bin/pytest')
     ran = subprocess.run([python, '-m', 'pytest', '--version'], env=env, capture_output=True, text=True)
     assert ran.returncode == 0 and 'pytest' in (ran.stdout + ran.stderr).lower(), ran.stderr
 
 
-def _interpreter(directory, body=None):
-    """An interpreter in ``directory`` that really runs pytest, as the seat's trusted one."""
-    _tool(directory / 'python', body or f'#!/bin/sh\nexec {sys.executable} "$@"\n')
-    return directory / 'python'
-
-
 @pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_the_configured_interpreter_dir_is_first_and_the_checkout_venv_is_never_run(tmp_path, monkeypatch):
+def test_the_service_venv_is_first_and_not_shadowed_by_a_later_path_entry(tmp_path, monkeypatch):
     from plangraph.routing_support.claude_seat import review_tool_path
-    marker = tmp_path / 'checkout-venv-ran'
-    checkout = tmp_path / 'checkout'
-    _tool(checkout / '.venv/bin/pytest')
-    _tool(checkout / '.venv/bin/python', f'#!/bin/sh\ntouch {marker}\nexit 0\n')  # the code under review
-    (tmp_path / 'service/bin').mkdir(parents=True)
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.chdir(checkout)
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
-    assert str(checkout / '.venv/bin') not in review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'job/bin')).split(os.pathsep)
-    other = tmp_path / 'other/bin'
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(_interpreter(other)))
-    venv_bin = str(checkout / '.venv/bin')
-    path = review_tool_path(os.pathsep.join(['/usr/bin', str(other)]), str(tmp_path), str(tmp_path / 'job/bin'))
-    assert path.split(os.pathsep)[:2] == [str(tmp_path / 'job/bin'), str(other)] and path.count(str(other)) == 1
-    assert venv_bin not in path and not marker.exists()
+    venv = tmp_path / 'service-venv'
+    _tool(venv / 'bin/pytest')
+    monkeypatch.setattr(sys, 'prefix', str(venv))
+    path = review_tool_path(os.pathsep.join(['/usr/bin', str(venv / 'bin')]), str(tmp_path))
+    assert path.split(os.pathsep)[0] == str(venv / 'bin') and path.split(os.pathsep).count(str(venv / 'bin')) == 1
 
 
 def test_review_seat_keeps_user_installs_and_rustup_reachable_after_the_home_swap(tmp_path, monkeypatch):
@@ -109,209 +90,3 @@ def test_review_seat_keeps_user_installs_and_rustup_reachable_after_the_home_swa
     env = {'HOME': str(home), 'PATH': '/usr/bin', 'RUSTUP_HOME': '/custom/rustup'}
     review_seat_home(env, str(job2))
     assert env['RUSTUP_HOME'] == '/custom/rustup' and 'CARGO_HOME' not in env
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_the_harness_is_resolved_on_the_launch_path_not_the_interpreter_dir(tmp_path, monkeypatch):
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    trusted = tmp_path / 'trusted'
-    _tool(trusted / 'opencode')
-    checkout = tmp_path / 'checkout'
-    checkout.mkdir()
-    interpreter = _interpreter(tmp_path / 'interp/bin')
-    _tool(interpreter.parent / 'opencode')  # a harness planted next to the interpreter the seat gets
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(interpreter))
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    monkeypatch.setenv('PATH', f'{trusted}{os.pathsep}/usr/bin')
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.delenv('INVOCATION_ID', raising=False)
-    source = tmp_path / 'source.db'
-    source_store(source)
-    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
-    started = []
-
-    async def factory(exe, *args, **kwargs):
-        started.append((exe, kwargs['env']['PATH']))
-        raise RuntimeError('stop before exec')
-
-    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
-    with pytest.raises(RuntimeError):
-        asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
-                                 role='review', cwd=str(checkout)))
-    exe, path = started[0]
-    assert exe == str(trusted / 'opencode')
-    assert str(interpreter.parent) in path.split(os.pathsep)  # pytest still comes from the interpreter's dir
-
-
-@pytest.mark.real_probe
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_host_admission_never_runs_a_harness_from_the_interpreter_dir(tmp_path, monkeypatch):
-    from plangraph.spawner import resolver
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    marker = tmp_path / 'planted-ran'
-    trusted = tmp_path / 'trusted'
-    listing = f'#!/bin/sh\necho {leg.model}\n'
-    _tool(trusted / 'opencode', listing)
-    checkout = tmp_path / 'checkout'
-    checkout.mkdir()
-    interpreter = _interpreter(tmp_path / 'interp/bin')
-    _tool(interpreter.parent / 'opencode', f'#!/bin/sh\ntouch {marker}\necho {leg.model}\n')
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(interpreter))
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    monkeypatch.setenv('PATH', f'{trusted}{os.pathsep}/usr/bin{os.pathsep}/bin')
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.delenv('INVOCATION_ID', raising=False)
-    source = tmp_path / 'source.db'
-    source_store(source)
-    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
-    resolver.served_models.cache_clear()
-
-    async def factory(*args, **kwargs):
-        raise RuntimeError('stop before exec')
-
-    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
-    with pytest.raises(RuntimeError):
-        asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
-                                 role='review', cwd=str(checkout)))
-    assert not marker.exists()
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_a_configured_interpreter_without_a_pytest_script_gets_a_python_on_the_seat_path(tmp_path, monkeypatch):
-    from plangraph.routing_support.claude_seat import review_tool_path
-    configured = tmp_path / 'sys/bin'  # like /usr/bin: python3 only, pytest in the user site
-    _tool(configured / 'python3', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
-    bare = tmp_path / 'bare/bin'
-    _tool(bare / 'python', '#!/bin/sh\necho "No module named pytest" >&2\nexit 1\n')
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured / 'python3'))
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    path = review_tool_path(str(bare), str(tmp_path), str(tmp_path / 'job/bin'))
-    python = shutil.which('python', path=path)
-    assert python == str(tmp_path / 'job/bin/python')
-    ran = subprocess.run([python, '-m', 'pytest', '--version'], capture_output=True, text=True)
-    assert ran.returncode == 0 and 'pytest' in (ran.stdout + ran.stderr).lower()
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_the_seat_python_is_the_validated_interpreter_never_a_sibling(tmp_path, monkeypatch):
-    from plangraph.routing_support.claude_seat import review_tool_path
-    configured = tmp_path / 'sys/bin'
-    _tool(configured / 'python3', f'#!/bin/sh\nexec {sys.executable} "$@"\n')
-    _tool(configured / 'python', '#!/bin/sh\nexit 3\n')  # a sibling that was never validated
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured / 'python3'))
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    path = review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'job/bin'))
-    for name in ('python', 'python3'):
-        ran = subprocess.run([shutil.which(name, path=path), '-m', 'pytest', '--version'], capture_output=True, text=True)
-        assert ran.returncode == 0, (name, ran.stderr)
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_a_pytest_script_beside_an_interpreter_that_cannot_import_pytest_is_not_enough(tmp_path, monkeypatch):
-    from plangraph.routing_support.claude_seat import review_tool_path
-    service = tmp_path / 'service'
-    _tool(service / 'bin/pytest')
-    _tool(service / 'bin/python', '#!/bin/sh\necho "No module named pytest" >&2\nexit 1\n')
-    monkeypatch.setattr(sys, 'prefix', str(service))
-    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
-    monkeypatch.setattr('plangraph.routing_support.claude_seat.__file__', str(tmp_path / 'a/b/c/d/claude_seat.py'))
-    path = review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'job/bin'))
-    assert str(service / 'bin') not in path.split(os.pathsep) and not (tmp_path / 'job/bin').exists()
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_launch_preparation_never_runs_the_review_checkout_interpreter(tmp_path, monkeypatch):
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    marker = tmp_path / 'checkout-python-ran'
-    checkout = tmp_path / 'checkout'
-    _tool(checkout / '.venv/bin/pytest')
-    _tool(checkout / '.venv/bin/python', f'#!/bin/sh\ntouch {marker}\nexit 0\n')
-    (tmp_path / 'service/bin').mkdir(parents=True)
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
-    monkeypatch.delenv('INVOCATION_ID', raising=False)
-    monkeypatch.chdir(checkout)  # the spawner's own cwd is the checkout, too
-    source = tmp_path / 'source.db'
-    source_store(source)
-    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
-    runner = SpawnerRunner(default_cwd=str(checkout))
-    runner._child_envs = _LaunchOwned()
-    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
-                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
-    assert str(checkout / '.venv/bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)
-    assert not marker.exists()
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-@pytest.mark.parametrize('how', ['absolute', 'symlink'])
-def test_a_configured_interpreter_inside_the_review_checkout_is_never_run(tmp_path, monkeypatch, how):
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    marker = tmp_path / 'checkout-python-ran'
-    checkout = tmp_path / 'checkout'
-    inside = _interpreter(checkout / '.venv/bin', f'#!/bin/sh\ntouch {marker}\nexit 0\n')
-    configured = inside
-    if how == 'symlink':  # a path outside the checkout that resolves into it
-        configured = tmp_path / 'elsewhere/python'
-        configured.parent.mkdir()
-        configured.symlink_to(inside)
-    (tmp_path / 'service/bin').mkdir(parents=True)
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(configured))
-    monkeypatch.delenv('INVOCATION_ID', raising=False)
-    monkeypatch.chdir(tmp_path)
-    source = tmp_path / 'source.db'
-    source_store(source)
-    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
-    runner = SpawnerRunner(default_cwd=str(checkout))
-    runner._child_envs = _LaunchOwned()
-    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
-                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
-    assert not marker.exists()
-    assert str(checkout / '.venv/bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_a_relative_preflight_python_is_read_against_the_service_checkout(tmp_path, monkeypatch):
-    from plangraph.routing_support import claude_seat
-    service = tmp_path / 'svc'
-    interpreter = _interpreter(service / 'tools/py')
-    monkeypatch.setattr(claude_seat, '__file__', str(service / 'a/b/c/claude_seat.py'))
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'nothing'))
-    monkeypatch.setenv('PYTHONUSERBASE', site.getuserbase())
-    monkeypatch.setenv('PREFLIGHT_PYTHON', 'tools/py/python')
-    monkeypatch.chdir(tmp_path)  # not the service dir: the setting must not depend on the cwd
-    assert claude_seat.pytest_python() == interpreter
-    path = claude_seat.review_tool_path('/usr/bin', str(tmp_path), str(tmp_path / 'job/bin'))
-    assert str(interpreter) in (tmp_path / 'job/bin/python').read_text()
-    ran = subprocess.run([shutil.which('python3', path=path), '-m', 'pytest', '--version'], capture_output=True, text=True)
-    assert ran.returncode == 0, ran.stderr
-
-
-@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
-def test_a_venv_reached_through_a_directory_alias_is_never_run(tmp_path, monkeypatch):
-    """The alias hides the checkout in the path and the binary resolves outside it, but the venv's
-    startup files (pyvenv.cfg, site-packages) are the reviewed tree's."""
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
-    marker = tmp_path / 'checkout-venv-ran'
-    outside = _interpreter(tmp_path / 'outside', f'#!/bin/sh\ntouch {marker}\nexit 0\n')
-    checkout = tmp_path / 'checkout'
-    (checkout / '.venv/bin').mkdir(parents=True)
-    (checkout / '.venv/bin/python').symlink_to(outside)  # resolves outside, sits inside
-    alias = tmp_path / 'alias'
-    alias.symlink_to(checkout / '.venv')
-    (tmp_path / 'service/bin').mkdir(parents=True)
-    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(alias / 'bin/python'))
-    monkeypatch.delenv('INVOCATION_ID', raising=False)
-    monkeypatch.chdir(tmp_path)
-    source = tmp_path / 'source.db'
-    source_store(source)
-    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
-    runner = SpawnerRunner(default_cwd=str(checkout))
-    runner._child_envs = _LaunchOwned()
-    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
-                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
-    assert not marker.exists()
-    assert str(alias / 'bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)

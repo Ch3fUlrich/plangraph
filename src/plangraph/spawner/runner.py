@@ -161,7 +161,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
-        self._ocdata_dirs, self._exe_paths = {}, {}  # _exe_paths: job id -> the PATH its harness is found on
+        self._ocdata_dirs = {}
         self._reaped_jobs = set()
         self._git_guards = {}
         self._stdin_payloads = {}
@@ -306,7 +306,6 @@ class SpawnerRunner:
         child_env = cargo_child_env(child_env, pin_configured=True, target=review_target)
         render_reason = None
         tools_event = None
-        exe_search_path = child_env.get("PATH")  # the harness is found here, never on a review checkout's venv path
         if cmd[0] == 'opencode':
             # Completion framing distinguishes a final answer from partial text.
             if '--format' not in cmd:
@@ -340,7 +339,7 @@ class SpawnerRunner:
                 # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
                 # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
-                review_seat_home(child_env, oc_dir, work_dir)
+                review_seat_home(child_env, oc_dir)
                 for name in [n for n in child_env
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
@@ -375,7 +374,6 @@ class SpawnerRunner:
                     worktree=work_dir, review_target=review_target)
             if render_reason is None:
                 self._child_envs[job_id] = child_env
-                self._exe_paths[job_id] = exe_search_path
 
             if dry_run:
                 served_model = model_or_combo
@@ -454,7 +452,7 @@ class SpawnerRunner:
             from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING, PromptTransportError, codex_review_client, launch_stdin_payload
             from .resolver import host_skip_reason_async
             codex, missing_client = codex_review_client(cmd[0], role, job_id, env=child_env)
-            unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=dict(child_env, PATH=exe_search_path))
+            unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
                 job.status, job.exit_code = 'failed', CODEX_REVIEW_CLIENT_MISSING if missing_client else 1
                 job.stderr, job.end_time = unavailable, time.time()
@@ -464,7 +462,7 @@ class SpawnerRunner:
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
-            resolved_exe = codex or shutil.which(cmd[0], path=exe_search_path) or cmd[0]
+            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:
@@ -563,7 +561,6 @@ class SpawnerRunner:
                 lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
                 if lease is not None: lease.close()
                 self._child_envs.pop(job_id, None)
-                getattr(self, '_exe_paths', {}).pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
                 oc_dir = self._ocdata_dirs.pop(job_id, None)
@@ -763,7 +760,6 @@ class SpawnerRunner:
             self._git_guards.pop(job_id, None)
             self._stdin_payloads.pop(job_id, None)
             self._child_envs.pop(job_id, None)
-            getattr(self, '_exe_paths', {}).pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)

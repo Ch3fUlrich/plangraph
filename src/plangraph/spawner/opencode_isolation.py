@@ -135,16 +135,15 @@ def install_go_credential(job_dir, source=None):
                 Path(str(temporary) + suffix).unlink(missing_ok=True)
 
 
-def review_seat_home(env, job_dir, review_checkout=None):
+def review_seat_home(env, job_dir):
     """Give a review seat its own HOME and config dir under ``job_dir``.
 
-    The seat's HOME hides the user's profile, so cargo and the repository's pytest are put
-    on its PATH first, from the launching user's home, and the data dirs they read through
-    HOME stay reachable.
+    The seat's HOME hides the user's profile, so cargo and the service's pytest are put on its
+    PATH, from the launching user's home, and the data dirs they read through HOME stay reachable.
     """
     from plangraph.routing_support.claude_seat import review_tool_path
     home = Path(env.get('HOME') or Path.home())
-    env['PATH'] = review_tool_path(env.get('PATH'), str(home), os.path.join(job_dir, 'bin'), review_checkout)
+    env['PATH'] = review_tool_path(env.get('PATH'), str(home))
     # User installs and rustup proxies find their data through HOME; keep them pointing at the
     # launching user's. A cargo home that holds registry credentials is never handed over.
     for name, folder in (('PYTHONUSERBASE', '.local'), ('RUSTUP_HOME', '.rustup'), ('CARGO_HOME', '.cargo')):

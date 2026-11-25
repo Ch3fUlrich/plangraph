@@ -1,7 +1,6 @@
 import io
 import json
 import os
-import sys
 import time
 
 import pytest
@@ -118,32 +117,6 @@ def test_opencode(request_data):
     assert result['stdin'].startswith(header('opencode', 'review'))
     prefix = request_data['state'] + '/launch/' + request_data['run_id'] + '/'
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
-
-
-def test_opencode_review_resolves_the_harness_on_the_launch_path_not_the_interpreter_dir(request_data, tmp_path, monkeypatch):
-    trusted = tmp_path / 'opencode'
-    trusted.write_text('#!/bin/sh\n')
-    trusted.chmod(0o755)
-    for name in ('python', 'opencode'):  # the interpreter the seat gets runs pytest; a harness is planted beside it
-        planted = tmp_path / 'interp/bin' / name
-        planted.parent.mkdir(parents=True, exist_ok=True)
-        planted.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n' if name == 'python' else '#!/bin/sh\n')
-        planted.chmod(0o755)
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(tmp_path / 'interp/bin/python'))
-    (tmp_path / 'checkout').mkdir()  # the interpreter dir is outside the review checkout
-    request_data.update(role='review', leg={'id': 'opencode-glm-5.3-flash-free'}, cwd=str(tmp_path / 'checkout'))
-    admitted_on = []
-
-    async def admission(row, *, env=None):
-        admitted_on.append(env['PATH'])
-
-    monkeypatch.setattr(spec, 'host_skip_reason_async', admission)
-    code, out, err = invoke(request_data)
-    assert (code, err) == (0, '')
-    result = json.loads(out)
-    assert admitted_on == [str(tmp_path)]  # host admission runs the harness on the launch's PATH too
-    assert str(tmp_path / 'interp/bin') in result['env']['PATH'].split(os.pathsep)
-    assert result['argv'][0] == str(trusted)
 
 
 def test_agy_stream_spec(request_data):
