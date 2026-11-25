@@ -220,9 +220,9 @@ def effective_priorities(items):
     item whose own priority gives the value (None when the item's own is the
     maximum); among several such items the smallest key wins, whatever their
     distance or whether an intermediate item has the same priority, and ``hops``
-    is the chain length to it.  The stored priority is never touched.  A
-    dependency cycle is returned as a key list and its back edge is ignored, so
-    the walk always ends.
+    is the longest chain that carries the value to a source.  The stored
+    priority is never touched.  A dependency cycle is returned as a key list
+    and its back edge is ignored, so the walk always ends.
     """
     idx = index(items)
     live = {k for k, it in idx.items() if _state(it) not in TERMINAL}
@@ -231,7 +231,7 @@ def effective_priorities(items):
         for dep in _deps(idx[key]):
             if dep in live:
                 dependents[dep].append(key)
-    eff, cycles, done, origin = {}, [], set(), {}
+    eff, cycles, done, origin, reach = {}, [], set(), {}, {}
     for root in sorted(live):
         if root in done:
             continue
@@ -250,14 +250,15 @@ def effective_priorities(items):
             own = _prio(idx[node])
             value = max([own] + [eff[d]["effective"] for d in dependents[node] if d in eff])
             # Every item whose own priority equals the value is a source; the smallest
-            # source key (then the shortest chain) wins, even when this item is one itself.
-            found = [(node, 0)] if own == value else []
-            found += [(origin[d][0], origin[d][1] + 1) for d in dependents[node]
-                      if d in eff and eff[d]["effective"] == value]
-            origin[node] = min(found)
+            # source key wins, even when this item is one itself.  The chain length is
+            # the longest path that carries the value, whichever source it ends at.
+            carry = [d for d in dependents[node] if d in eff and eff[d]["effective"] == value]
+            sources = ([node] if own == value else []) + [origin[d] for d in carry]
+            origin[node] = min(sources)
+            reach[node] = max((reach[d] + 1 for d in carry), default=0)
             raised = own < value
-            eff[node] = {"effective": value, "via": origin[node][0] if raised else None,
-                         "hops": origin[node][1] if raised else 0}
+            eff[node] = {"effective": value, "via": origin[node] if raised else None,
+                         "hops": reach[node] if raised else 0}
             done.add(node)
             onstack.discard(node)
             stack.pop()

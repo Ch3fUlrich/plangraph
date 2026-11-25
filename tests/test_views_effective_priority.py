@@ -73,3 +73,11 @@ def test_an_intermediate_item_with_the_same_priority_does_not_hide_the_smallest_
     assert eff["d:ROOT"] == {"effective": 10, "via": "d:A", "hops": 2}
     assert eff["d:Z"] == {"effective": 10, "via": None, "hops": 0}     # its own value already is 10
     assert eff["d:M"]["via"] is None
+
+
+def test_hops_count_the_longest_chain_that_carries_the_value():
+    # ROOT blocks MID and TOP, MID blocks TOP: ROOT -> MID -> TOP is two hops, ROOT -> TOP one.
+    items = [_it("ROOT", 1), _it("MID", 2, ["ROOT"]), _it("TOP", 10, ["ROOT", "MID"])]
+    eff, _ = views.effective_priorities(items)
+    assert eff["d:ROOT"] == {"effective": 10, "via": "d:TOP", "hops": 2}
+    assert views.inheritance_stats(eff) == {"raised": 2, "longest_chain": 2}

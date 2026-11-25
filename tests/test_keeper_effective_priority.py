@@ -96,3 +96,17 @@ def test_ready_and_snapshot_name_the_smallest_source_through_equal_priorities(tm
         assert "priority_via" not in items["demo:Z"]
     finally:
         world.close()
+
+
+def test_reap_records_the_longest_chain_when_two_routes_reach_one_source(tmp_path):
+    world = World(tmp_path)
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("ROOT", priority=1), defn("MID", ["ROOT"], priority=2),
+            defn("TOP", ["ROOT", "MID"], priority=10), defn("GOAL", ["TOP"], kind="goal")])
+        world.store.reap(world.p("system"))
+        rows = {r["metric"]: r["value"] for r in world.conn.execute(
+            "SELECT metric, value FROM metrics WHERE metric LIKE 'priority_inherit%'")}
+        assert rows == {"priority_inherit_raised": 2.0, "priority_inherit_longest_chain": 2.0}
+    finally:
+        world.close()
