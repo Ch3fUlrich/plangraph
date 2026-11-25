@@ -258,12 +258,17 @@ fn two_jobs_that_failed_without_a_test_id_are_two_records() {
     let second = record_failure(&mut records, &owners(), &b, 5).unwrap();
     assert_ne!(first, second);
     assert_eq!(records.len(), 2);
-    // A real test keeps its id whatever job names it.
+    // The same test failing in two jobs is two failures with a record each (class and log of each job).
     let (mut c, mut d) = (task(Some(7)), task(Some(7)));
     c.job_id = 1;
     d.job_id = 2;
-    assert_eq!(
+    assert_ne!(
         record_failure(&mut vec![], &owners(), &c, 5),
         record_failure(&mut vec![], &owners(), &d, 5)
+    );
+    // The same job and test again is the same record.
+    assert_eq!(
+        record_failure(&mut vec![], &owners(), &c, 5),
+        record_failure(&mut vec![], &owners(), &c, 9)
     );
 }

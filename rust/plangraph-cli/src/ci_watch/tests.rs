@@ -16,6 +16,8 @@ struct Fixture {
     fail_rerun: bool,
     run_pages: usize,
     two_jobs: bool,
+    /// The log of job 101 when it differs from the log of job 100.
+    second_log: Option<String>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -29,6 +31,7 @@ impl Fixture {
             fail_rerun: false,
             run_pages: 0,
             two_jobs: false,
+            second_log: None,
         }
     }
 }
@@ -70,6 +73,11 @@ impl Github for Fixture {
         self.reads += 1;
         if self.fail_logs {
             return Err("logs expired".into());
+        }
+        if job == 101 {
+            if let Some(log) = &self.second_log {
+                return Ok(log.clone());
+            }
         }
         Ok(self.log.clone())
     }

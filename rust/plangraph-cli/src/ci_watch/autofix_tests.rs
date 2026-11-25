@@ -45,6 +45,7 @@ fn remote(root: &Path) -> PrHead {
     git(&seed, &["init", "-q", "-b", "feature"]);
     std::fs::create_dir_all(seed.join("rust")).unwrap();
     std::fs::write(seed.join("rust/a.txt"), "ugly\n").unwrap();
+    std::fs::write(seed.join(".gitattributes"), "# fixture\n").unwrap();
     git(&seed, &["add", "-A"]);
     git(&seed, &["commit", "-q", "-m", "seed"]);
     git(&seed, &["remote", "add", "origin", bare.to_str().unwrap()]);
@@ -135,6 +136,7 @@ fn a_fix_that_changes_nothing_is_too_large_or_touches_a_gate_file_pushes_nothing
 fn task(head: &str, pr: u64, class: &str, job_id: u64, sha: &str) -> Task {
     Task {
         key: format!("k{job_id}"),
+        job: "Rust workspace on Linux: fmt, clippy, tests".into(),
         head: head.into(),
         pr: Some(pr),
         class: class.into(),
@@ -226,8 +228,8 @@ fn a_run_that_is_no_longer_red_is_never_fixed_nor_reserved() {
         "o/r",
         &tasks,
         lookup,
-        |sha| {
-            assert_eq!(sha, "abc", "the head commit of the task");
+        |task| {
+            assert_eq!(task.head_sha, "abc", "the head commit of the task");
             Ok(false)
         },
         |_: &Request, _: &Path| -> Result<Outcome, String> { panic!("a green run is never fixed") },
@@ -238,8 +240,8 @@ fn a_run_that_is_no_longer_red_is_never_fixed_nor_reserved() {
     assert!(!ledger.contains("o/r@abc"), "{ledger}");
 }
 
-/// Runs of one head as GitHub lists them: (run id, conclusion).
-struct Runs(Vec<(u64, &'static str)>);
+/// Runs of one head as GitHub lists them, (run id, attempt, conclusion), and the conclusion of the task's job.
+struct Runs(Vec<(u64, u64, &'static str)>, &'static str);
 impl super::github::Github for Runs {
     fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
         unreachable!()
@@ -256,13 +258,13 @@ impl super::github::Github for Runs {
         Ok(self
             .0
             .iter()
-            .map(|(id, conclusion)| {
+            .map(|(id, attempt, conclusion)| {
                 let conclusion = if conclusion.is_empty() {
                     serde_json::Value::Null
                 } else {
                     serde_json::json!(conclusion)
                 };
-                serde_json::json!({"id": id, "head_sha": "abc", "conclusion": conclusion})
+                serde_json::json!({"id": id, "run_attempt": attempt, "head_sha": "abc", "conclusion": conclusion})
             })
             .collect())
     }
@@ -272,19 +274,45 @@ impl super::github::Github for Runs {
     fn rerun(&mut self, _: u64) -> Result<(), String> {
         unreachable!()
     }
+    fn value(&mut self, endpoint: &str) -> Result<serde_json::Value, String> {
+        assert_eq!(endpoint, "actions/jobs/77");
+        Ok(serde_json::json!({"conclusion": self.1}))
+    }
+}
+
+fn red_task() -> Task {
+    Task {
+        run_id: 5,
+        attempt: 2,
+        job_id: 77,
+        head_sha: "abc".into(),
+        ..Default::default()
+    }
 }
 
 #[test]
-fn only_the_newest_run_of_the_head_decides_whether_it_is_red() {
-    assert!(head_is_red(&mut Runs(vec![(5, "failure")]), "abc").unwrap());
-    assert!(head_is_red(&mut Runs(vec![(5, "success"), (6, "timed_out")]), "abc").unwrap());
+fn only_the_run_attempt_and_job_of_the_task_authorize_its_fix() {
+    let task = red_task();
+    assert!(still_red(&mut Runs(vec![(5, 2, "failure")], "failure"), &task).unwrap());
     // A newer green run on the same commit makes the older red run ineligible.
-    assert!(!head_is_red(&mut Runs(vec![(5, "failure"), (9, "success")]), "abc").unwrap());
-    assert!(
-        !head_is_red(&mut Runs(vec![(5, "failure"), (9, "")]), "abc").unwrap(),
-        "a run in flight is not red"
-    );
-    assert!(head_is_red(&mut Runs(vec![]), "abc").is_err());
+    assert!(!still_red(
+        &mut Runs(vec![(5, 2, "failure"), (9, 1, "success")], "failure"),
+        &task
+    )
+    .unwrap());
+    // A newer run that is red for another reason has its own task: this one no longer authorizes a fix.
+    assert!(!still_red(
+        &mut Runs(vec![(5, 2, "failure"), (9, 1, "failure")], "failure"),
+        &task
+    )
+    .unwrap());
+    // A newer attempt of the same run, red or not, is the task of the next scan.
+    assert!(!still_red(&mut Runs(vec![(5, 3, "failure")], "failure"), &task).unwrap());
+    // The job the task names has to be the red one.
+    assert!(!still_red(&mut Runs(vec![(5, 2, "failure")], "success"), &task).unwrap());
+    // A run in flight has no conclusion.
+    assert!(!still_red(&mut Runs(vec![(5, 2, "")], "failure"), &task).unwrap());
+    assert!(still_red(&mut Runs(vec![], "failure"), &task).is_err());
 }
 
 #[test]
@@ -314,12 +342,21 @@ impl super::github::Github for Recorded {
 }
 
 #[test]
-fn a_closed_pull_request_is_never_cloned_and_is_read_once() {
-    let pull = |state: &str| serde_json::json!({"state": state, "head": {"ref": "b", "sha": "abc", "repo": {"full_name": "o/r"}}});
+fn a_merged_pull_request_is_never_cloned_and_is_read_once() {
+    let pull = |state: &str| serde_json::json!({"state": state, "merged": state == "merged", "head": {"ref": "b", "sha": "abc", "repo": {"full_name": "o/r"}}});
     let mut open = Recorded(pull("open"), 0);
     assert_eq!(pr_head(&mut open, "o/r", 9).unwrap().sha, "abc");
-    let mut closed = Recorded(pull("closed"), 0);
-    assert_eq!(pr_head(&mut closed, "o/r", 9).err().unwrap(), NOT_OPEN);
+    assert_eq!(
+        pr_head(&mut Recorded(pull("closed"), 0), "o/r", 9)
+            .err()
+            .unwrap(),
+        NOT_OPEN
+    );
+    let mut closed = Recorded(
+        serde_json::json!({"state": "closed", "merged": true, "head": {"ref": "b", "sha": "abc", "repo": {"full_name": "o/r"}}}),
+        0,
+    );
+    assert_eq!(pr_head(&mut closed, "o/r", 9).err().unwrap(), MERGED);
     let dir = tempfile::tempdir().unwrap();
     let tasks: BTreeMap<_, _> = [
         task("pr-9", 9, "fmt", 1, "abc"),
@@ -582,4 +619,86 @@ fn the_fix_command_sees_no_network_interface_and_no_file_of_etc_beyond_the_loade
         "a file of /etc outside the loader set was readable: {seen}"
     );
     assert!(seen.contains("end"), "{seen}");
+}
+
+#[test]
+fn quoted_names_renames_and_binary_files_cannot_hide_a_change() {
+    let root = tempfile::tempdir().unwrap();
+    let head = remote(root.path());
+    let go = |name: &str, command: &str| {
+        apply(
+            &root.path().join(name),
+            &request(&head, &["sh", "-c", command]),
+        )
+        .unwrap()
+    };
+    // Git prints a name with a non-ASCII byte quoted; the NUL-delimited list carries it as it is.
+    assert_eq!(
+        go(
+            "quoted",
+            "mkdir -p ../.github/workflows && echo x > ../.github/workflows/\u{e9}.yml"
+        ),
+        Outcome::GatePath(".github/workflows/\u{e9}.yml".into())
+    );
+    // A protected file moved away is a rename for git, which shows only the new name unless detection is off.
+    assert_eq!(
+        go("moved", "mv ../.gitattributes ../moved.txt"),
+        Outcome::GatePath(".gitattributes".into())
+    );
+    // A binary file has no line count: it is refused, not counted as zero.
+    assert_eq!(
+        go("binary", "printf '\\000\\001' > b.bin"),
+        Outcome::Binary("rust/b.bin".into())
+    );
+    assert_eq!(
+        git(&root.path().join("remote.git"), &["rev-parse", "feature"]),
+        head.sha,
+        "nothing was pushed"
+    );
+}
+
+#[test]
+fn a_pull_request_closed_and_reopened_gets_its_fix_for_a_later_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let tasks = |sha: &str| -> BTreeMap<String, Task> {
+        [task("pr-9", 9, "fmt", 1, sha)]
+            .into_iter()
+            .map(|t| (t.key.clone(), t))
+            .collect()
+    };
+    // While it is closed nothing is fixed and nothing is remembered about it.
+    let rows = pass(
+        dir.path(),
+        "o/r",
+        &tasks("abc"),
+        |_| Err(NOT_OPEN.into()),
+        |_| Ok(true),
+        |_: &Request, _: &Path| -> Result<Outcome, String> {
+            panic!("a closed pull request is not fixed")
+        },
+    )
+    .unwrap();
+    assert!(rows.is_empty());
+    let ledger = std::fs::read_to_string(dir.path().join("autofix.json")).unwrap_or_default();
+    assert!(
+        !ledger.contains("\"closed\":[9]"),
+        "closed is not final: {ledger}"
+    );
+    // Reopened, with a newer head: the fix runs.
+    let rows = pass(
+        dir.path(),
+        "o/r",
+        &tasks("def"),
+        |_| {
+            Ok(PrHead {
+                remote: "r".into(),
+                branch: "b".into(),
+                sha: "def".into(),
+            })
+        },
+        |_| Ok(true),
+        |_: &Request, _: &Path| Ok(Outcome::Pushed("new".into())),
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
 }

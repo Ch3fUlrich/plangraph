@@ -2,7 +2,7 @@
 
 One-off analysis (no workflow change) of the `tests` runs of `land/*` branches created since
 2026-11-21 19:00Z, read from the GitHub API on 2026-11-24. `status=cancelled` returns 36 runs on
-`land/*` branches (41 on all branches); the table has one row for each of the 36, all with event `pull_request`.
+`land/*` branches (52 with the other heads, same interval); the table has one row for each of the 36, all with event `pull_request`.
 Cancellation time is the latest cancelled-job end time; "run update time" marks runs with none.
 The cause is the run that started after the cancelled run was created and before its
 cancellation: a different head commit means a newer push, the same head means the pull request was
@@ -68,15 +68,22 @@ not read from the data (one account does every action). A follow-up item covers 
 
 ## Query
 
-Exported on 2026-11-24 (the runs are the GitHub Actions runs of workflow `tests`):
+Exported on 2026-11-25 for the interval 2026-11-21T19:00:00Z to 2026-11-24T09:00:00Z (the table was read on
+2026-11-24; its last run was created at 08:26Z; three `land/*` runs cancelled later that day, 45374976754,
+45385108859 and 45492431938, are outside it). Workflow `tests`, status cancelled, filtered to `land/*` heads:
 
 ```sh
-gh api --paginate 'repos/<owner>/<repo>/actions/runs?status=cancelled&created=>=2026-11-21T19:00:00Z&per_page=100' \
+gh api --paginate 'repos/<owner>/<repo>/actions/workflows/tests.yml/runs?status=cancelled&created=2026-11-21T19:00:00Z..2026-11-24T09:00:00Z&per_page=100' \
   --jq '.workflow_runs[] | select(.head_branch|startswith("land/")) | .id'
 ```
 
-returned 36 run ids, the 36 rows above; the same query without the branch filter returned 41. Each row's cause
-comes from the jobs of the run (`actions/runs/<id>/jobs`, latest cancelled job end) and from the pull request timeline
-(`issues/<pr>/timeline`, events `reopened` and `renamed`). The follow-up item is proposed as
-`plangraph:CI-REOPEN-CANCELS-LANDING-RUN` in the batch slices (`~/.local/state/po/<batch>.slices.json`, keeper define
-form); it has a registered keeper key only after the orchestrator defines it.
+It returns 36 run ids, and `diff` of the sorted ids against the first column of the table above is empty. The same
+interval without the branch filter returns 52 cancelled runs of the workflow (the repository-wide
+`actions/runs` query returns the same 52, `tests` being the only workflow that cancels). The cause of each row is
+read from three calls: the run's jobs (`actions/runs/<id>/jobs`: the latest `completed_at` of a cancelled job is
+the cancellation time), the next run of the same branch created after it (`actions/workflows/tests.yml/runs?branch=<branch>`;
+same-second runs are ordered by id; a different `head_sha` is a newer push, the same `head_sha` is a restart) and,
+for a restart, the pull request timeline (`issues/<pr>/timeline`, events `reopened` and `renamed` within 90 s before
+the newer run; a restart with no such event is marked inferred). The follow-up is proposed as
+`CI-REOPEN-CANCELS-LANDING-RUN` in the batch slices (keeper define form); a registered keeper key exists only once
+plan-order defines that file.

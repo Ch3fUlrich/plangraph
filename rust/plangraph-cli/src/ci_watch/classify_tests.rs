@@ -1,5 +1,7 @@
 use super::*;
 
+const RUST: &str = "Rust workspace on Linux: fmt, clippy, tests";
+
 fn no_fixes() -> BTreeSet<(String, RedClass)> {
     BTreeSet::new()
 }
@@ -90,7 +92,7 @@ fn mechanical_class_is_fixed_once_per_head_and_the_commit_names_the_job() {
     let mut fixed = no_fixes();
     let Action::AutoFix {
         command, trailer, ..
-    } = decide(RedClass::Fmt, "pr-9", 77, false, &fixed)
+    } = decide(RedClass::Fmt, "pr-9", RUST, 77, false, &fixed)
     else {
         panic!("fmt is mechanical")
     };
@@ -101,15 +103,15 @@ fn mechanical_class_is_fixed_once_per_head_and_the_commit_names_the_job() {
     );
     fixed.insert(("pr-9".into(), RedClass::Fmt));
     assert_eq!(
-        decide(RedClass::Fmt, "pr-9", 78, false, &fixed),
+        decide(RedClass::Fmt, "pr-9", RUST, 78, false, &fixed),
         Action::FixWriter
     );
     assert!(matches!(
-        decide(RedClass::Fmt, "pr-10", 79, false, &fixed),
+        decide(RedClass::Fmt, "pr-10", RUST, 79, false, &fixed),
         Action::AutoFix { .. }
     ));
     assert!(matches!(
-        decide(RedClass::Clippy, "pr-9", 80, false, &fixed),
+        decide(RedClass::Clippy, "pr-9", RUST, 80, false, &fixed),
         Action::AutoFix { .. }
     ));
 }
@@ -117,11 +119,11 @@ fn mechanical_class_is_fixed_once_per_head_and_the_commit_names_the_job() {
 #[test]
 fn flake_is_rerun_once_and_the_rest_get_a_writer() {
     assert_eq!(
-        decide(RedClass::Flake, "pr-1", 1, false, &no_fixes()),
+        decide(RedClass::Flake, "pr-1", RUST, 1, false, &no_fixes()),
         Action::RerunOnce
     );
     assert_eq!(
-        decide(RedClass::Flake, "pr-1", 1, true, &no_fixes()),
+        decide(RedClass::Flake, "pr-1", RUST, 1, true, &no_fixes()),
         Action::FixWriter
     );
     for class in [
@@ -133,7 +135,7 @@ fn flake_is_rerun_once_and_the_rest_get_a_writer() {
         RedClass::FileSize,
     ] {
         assert_eq!(
-            decide(class, "pr-1", 1, false, &no_fixes()),
+            decide(class, "pr-1", RUST, 1, false, &no_fixes()),
             Action::FixWriter
         );
     }
@@ -171,4 +173,34 @@ fn the_brief_lines_carry_class_run_class_job_and_start() {
     assert!(text.contains("Class: configuration (run: mixed)"));
     assert!(text.contains("Failed job id: 9") && text.contains("workflow"));
     assert_eq!(brief_lines("", "", 0), "");
+}
+
+#[test]
+fn the_standalone_worker_crate_is_fixed_in_its_own_workspace_with_both_cargo_commands() {
+    let worker = "Rust worker crate: fmt, clippy, tests";
+    for (class, tool) in [(RedClass::Fmt, "fmt"), (RedClass::Clippy, "clippy")] {
+        let Action::AutoFix { command, dir, .. } =
+            decide(class, "pr-3", worker, 5, false, &no_fixes())
+        else {
+            panic!("{tool} is mechanical")
+        };
+        assert_eq!(dir, "rust/worker", "{tool}");
+        assert_eq!(command[..2], ["cargo", tool]);
+        let Action::AutoFix { dir, .. } = decide(class, "pr-3", RUST, 5, false, &no_fixes()) else {
+            panic!()
+        };
+        assert_eq!(dir, "rust");
+    }
+    // A job of no known workspace is left to a writer.
+    assert_eq!(
+        decide(
+            RedClass::Fmt,
+            "pr-3",
+            "Rust replay spike tests",
+            5,
+            false,
+            &no_fixes()
+        ),
+        Action::FixWriter
+    );
 }

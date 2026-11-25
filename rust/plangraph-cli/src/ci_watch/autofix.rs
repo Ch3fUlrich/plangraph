@@ -66,6 +66,8 @@ pub enum Outcome {
     Unchanged,
     TooLarge(u64),
     GatePath(String),
+    /// A binary file changed: its size cannot be counted or read.
+    Binary(String),
     /// The pull request head moved since the red run; a newer run decides.
     Stale,
 }
@@ -132,20 +134,39 @@ pub fn apply(scratch: &Path, request: &Request) -> Result<Outcome> {
         run(&trusted, "git", &all)
     };
     staged(&["add", "-A"])?;
-    let paths = run(&trusted, "git", &["diff", "--cached", "--name-only"])?;
-    if paths.trim().is_empty() {
+    // NUL-delimited and without rename detection: git quotes unusual names in line output, and a rename shows only
+    // its new name, which would hide a protected path that was moved away or onto.
+    let names = run(
+        &trusted,
+        "git",
+        &["diff", "--cached", "--name-only", "-z", "--no-renames"],
+    )?;
+    let paths: Vec<&str> = names.split('\0').filter(|p| !p.is_empty()).collect();
+    if paths.is_empty() {
         return Ok(Outcome::Unchanged);
     }
-    if let Some(path) = paths.lines().find(|p| protected(p)) {
-        return Ok(Outcome::GatePath(path.to_owned()));
+    if let Some(path) = paths.iter().find(|p| protected(p)) {
+        return Ok(Outcome::GatePath((*path).to_owned()));
     }
-    let lines: u64 = run(&trusted, "git", &["diff", "--cached", "--numstat"])?
-        .lines()
-        .filter_map(|l| {
-            let mut f = l.split_whitespace();
-            Some(f.next()?.parse::<u64>().ok()? + f.next()?.parse::<u64>().ok()?)
-        })
-        .sum();
+    let stat = run(
+        &trusted,
+        "git",
+        &["diff", "--cached", "--numstat", "-z", "--no-renames"],
+    )?;
+    let mut lines = 0_u64;
+    for entry in stat.split('\0').filter(|e| !e.is_empty()) {
+        let mut fields = entry.splitn(3, '\t');
+        let (added, deleted, path) = (
+            fields.next().unwrap_or_default(),
+            fields.next().unwrap_or_default(),
+            fields.next().unwrap_or_default(),
+        );
+        // A binary file counts `-` for both: its change cannot be read, so it is never committed.
+        let (Ok(added), Ok(deleted)) = (added.parse::<u64>(), deleted.parse::<u64>()) else {
+            return Ok(Outcome::Binary(path.to_owned()));
+        };
+        lines += added + deleted;
+    }
     if lines > MAX_LINES {
         return Ok(Outcome::TooLarge(lines));
     }
@@ -190,6 +211,8 @@ pub struct Ledger {
 
 /// What `pr_head` answers for a pull request that is no longer open.
 pub const NOT_OPEN: &str = "pull request is not open";
+/// What `pr_head` answers for a merged pull request, which can never be reopened: it is never read again.
+pub const MERGED: &str = "pull request is merged";
 
 /// Run the automatic fixes the tasks call for. `lookup` reads a pull request's head, `fix` applies one.
 /// A (pull request, class) is reserved before the fix runs, so a crash or a refusal never repeats it.
@@ -198,7 +221,7 @@ pub fn pass(
     repo: &str,
     tasks: &BTreeMap<String, Task>,
     mut lookup: impl FnMut(u64) -> Result<PrHead>,
-    mut still_red: impl FnMut(&str) -> Result<bool>,
+    mut still_red: impl FnMut(&Task) -> Result<bool>,
     mut fix: impl FnMut(&Request, &Path) -> Result<Outcome>,
 ) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -229,13 +252,15 @@ pub fn pass(
             command,
             dir: work,
             trailer,
-        } = classify::decide(class, &label, task.job_id, false, &fixed)
+        } = classify::decide(class, &label, &task.job, task.job_id, false, &fixed)
         else {
             continue;
         };
         let head = match heads.entry(pr).or_insert_with(|| lookup(pr)).clone() {
             Ok(head) => head,
-            Err(error) if error == NOT_OPEN => {
+            // Closed and reopened later, a pull request gets its fixes again; only a merged one is final.
+            Err(error) if error == NOT_OPEN => continue,
+            Err(error) if error == MERGED => {
                 ledger.closed.insert(pr);
                 super::save(&path, &ledger)?;
                 continue;
@@ -255,7 +280,7 @@ pub fn pass(
         }
         // The tasks were read before this pass took the lock: a rerun or a concurrent scan may have turned the
         // run green since, so its outcome is read again at the source before anything is reserved or pushed.
-        match still_red(&task.head_sha) {
+        match still_red(task) {
             Ok(true) => {}
             Ok(false) => continue,
             Err(error) => {
@@ -307,6 +332,7 @@ pub fn pass(
             Ok(Outcome::Unchanged) => "unchanged; left to the fix writer".into(),
             Ok(Outcome::TooLarge(n)) => format!("{n} lines; left to the fix writer"),
             Ok(Outcome::GatePath(p)) => format!("touches {p}; left to the fix writer"),
+            Ok(Outcome::Binary(p)) => format!("changes binary {p}; left to the fix writer"),
             Ok(Outcome::Stale) => "head moved; no fix".into(),
             Err(error) => format!(
                 "failed: {}; left to the fix writer",
@@ -331,29 +357,48 @@ pub fn pass(
     Ok(rows)
 }
 
-/// True while the newest pull-request run of the workflow on head commit `sha` has concluded red. A newer run on
-/// the same commit (a rerun, a run a label or an edit started) decides, whatever run the task came from; a run
-/// in flight has no conclusion and is not red.
-pub fn head_is_red(gh: &mut impl Github, sha: &str) -> Result<bool> {
+/// True while the task still describes the newest pull-request run of its head commit and that run's attempt is
+/// red because of the same failed job. A newer run or attempt (a rerun, a run a label or an edit started) decides
+/// in its own scan, even when it fails for another reason; a run in flight has no conclusion and is not red.
+pub fn still_red(gh: &mut impl Github, task: &Task) -> Result<bool> {
     let runs = gh.page(
-        &format!("actions/workflows/tests.yml/runs?head_sha={sha}&event=pull_request&per_page=30"),
+        &format!(
+            "actions/workflows/tests.yml/runs?head_sha={}&event=pull_request&per_page=30",
+            task.head_sha
+        ),
         Some("workflow_runs"),
     )?;
     let newest = runs
         .iter()
-        .filter(|run| run["head_sha"] == sha)
+        .filter(|run| run["head_sha"] == task.head_sha.as_str())
         .max_by_key(|run| run["id"].as_u64().unwrap_or(0))
         .ok_or("no run of this head")?;
-    Ok(matches!(
-        newest["conclusion"].as_str(),
-        Some("failure" | "timed_out" | "startup_failure")
-    ))
+    let red = |value: &serde_json::Value| {
+        matches!(
+            value["conclusion"].as_str(),
+            Some("failure" | "timed_out" | "startup_failure")
+        )
+    };
+    if newest["id"].as_u64() != Some(task.run_id)
+        || newest["run_attempt"].as_u64().unwrap_or(1) != task.attempt.max(1)
+        || !red(newest)
+    {
+        return Ok(false);
+    }
+    // The failed job the task names must still be red: a rerun of other jobs does not authorize its fix.
+    if task.job_id != 0 {
+        return Ok(red(&gh.value(&format!("actions/jobs/{}", task.job_id))?));
+    }
+    Ok(true)
 }
 
-/// The head of pull request `pr` as GitHub reports it; a closed or merged pull request answers `NOT_OPEN` and a
-/// head from a fork is refused.
+/// The head of pull request `pr` as GitHub reports it; a closed pull request answers `NOT_OPEN`, a merged one
+/// `MERGED`, and a head from a fork is refused.
 pub fn pr_head(gh: &mut impl Github, repo: &str, pr: u64) -> Result<PrHead> {
     let value = gh.value(&format!("pulls/{pr}"))?;
+    if value["merged"] == true || !value["merged_at"].is_null() {
+        return Err(MERGED.into());
+    }
     if value["state"] != "open" {
         return Err(NOT_OPEN.into());
     }

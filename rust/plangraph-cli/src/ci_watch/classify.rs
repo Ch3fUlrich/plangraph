@@ -256,11 +256,25 @@ pub fn hand_edit_trailer(class: RedClass, job_id: u64) -> String {
     )
 }
 
+/// The Cargo workspace a Rust job checks, below the repository root: the root workspace excludes the standalone
+/// worker crate (rust/worker has a workspace of its own), so each needs its own cargo run.
+pub fn workspace_dir(job: &str) -> Option<&'static str> {
+    let job = job.to_ascii_lowercase();
+    if job.contains("worker crate") {
+        Some("rust/worker")
+    } else if job.contains("workspace on linux") {
+        Some("rust")
+    } else {
+        None
+    }
+}
+
 /// First action for `class`. `fixed` holds the (head, class) pairs the watcher already fixed, so one head gets
 /// one automatic fix per class and a second red of that class goes to a writer. A flake is rerun once.
 pub fn decide(
     class: RedClass,
     head: &str,
+    job: &str,
     job_id: u64,
     attempted: bool,
     fixed: &BTreeSet<(String, RedClass)>,
@@ -268,13 +282,17 @@ pub fn decide(
     match class {
         RedClass::Flake if !attempted => Action::RerunOnce,
         RedClass::Fmt | RedClass::Clippy if !fixed.contains(&(head.to_owned(), class)) => {
+            // Cargo is run in the workspace the failed job checked; a job of no known workspace gets a writer.
+            let Some(dir) = workspace_dir(job) else {
+                return Action::FixWriter;
+            };
             Action::AutoFix {
                 command: if class == RedClass::Fmt {
                     &["cargo", "fmt", "--all"]
                 } else {
                     &["cargo", "clippy", "--fix", "--allow-dirty", "--all-targets"]
                 },
-                dir: "rust",
+                dir,
                 trailer: hand_edit_trailer(class, job_id),
             }
         }

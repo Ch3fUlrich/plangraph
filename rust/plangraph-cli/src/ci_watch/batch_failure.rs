@@ -91,13 +91,9 @@ pub trait Deliver {
 pub const CLAIM_MARGIN_SECS: i64 = 30;
 
 pub fn record_id(batch: &str, pr: u64, test: &str, job_id: u64, run_id: u64) -> String {
-    // A job that failed without a test id is told apart by its job id (ids of real tests are unchanged).
-    let test = if test == "<job-failure>" {
-        format!("{test}\0{job_id}")
-    } else {
-        test.to_owned()
-    };
-    let digest = Sha256::digest(format!("{batch}\0{pr}\0{test}\0{run_id}").as_bytes());
+    // One record per failed job of a run: the same test failing in two jobs is two failures, each with its own
+    // class and log.
+    let digest = Sha256::digest(format!("{batch}\0{pr}\0{test}\0{job_id}\0{run_id}").as_bytes());
     format!("batch-failure-{:x}", digest)[..30].to_owned()
 }
 

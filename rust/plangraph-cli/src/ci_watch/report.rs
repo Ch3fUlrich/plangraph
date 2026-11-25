@@ -48,7 +48,13 @@ pub fn report(dir: &Path) -> Result<Value> {
     let mut by_class: BTreeMap<&str, u64> = BTreeMap::new();
     let mut heads: BTreeMap<String, BTreeMap<&str, u64>> = BTreeMap::new();
     let (mut unclassified, mut untasked) = (0, 0);
+    let mut superseded = 0;
     for row in &rows {
+        if row.action == "superseded" {
+            // A red run a newer run replaced before it was read: counted here, never as a run without a task.
+            superseded += 1;
+            continue;
+        }
         *by_class.entry(&row.run_class).or_default() += 1;
         *heads
             .entry(format!("{}@{}", row.head, row.head_sha))
@@ -87,7 +93,8 @@ pub fn report(dir: &Path) -> Result<Value> {
             .insert(class, result);
     }
     Ok(json!({
-        "red_runs": rows.len(),
+        "red_runs": rows.len() - superseded,
+        "red_runs_superseded_without_task": superseded,
         "red_runs_by_class": by_class,
         "red_runs_per_head_sha_by_class": heads,
         "red_runs_without_class": unclassified,

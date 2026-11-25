@@ -56,6 +56,9 @@ pub struct Task {
     /// Head commit of the run that failed; an automatic fix applies to it only.
     #[serde(default)]
     pub head_sha: String,
+    /// Attempt of the run that failed; an automatic fix applies to that attempt only.
+    #[serde(default)]
+    pub attempt: u64,
     /// Set by the newest scan on every failure it saw; a row a rerun made green stays false.
     #[serde(default)]
     pub current: bool,
@@ -188,7 +191,7 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             &repo,
             &tasks,
             |pr| autofix::pr_head(&mut gh, &repo, pr),
-            |sha| autofix::head_is_red(&mut Gh { repo: repo.clone() }, sha),
+            |task| autofix::still_red(&mut Gh { repo: repo.clone() }, task),
             |request, scratch| autofix::apply(scratch, request),
         )?);
     }
@@ -278,6 +281,27 @@ fn scan(
         if reruns.newest.get(&selection).is_some_and(|id| *id > run_id)
             || !seen.insert((head.clone(), event.to_owned()))
         {
+            // A red run a newer run superseded is still a red run: the coverage ledger records it, as
+            // `superseded`, so a newer green run cannot hide one that got no task.
+            if failed(&run) && !dry {
+                let attempt = run["run_attempt"].as_u64().unwrap_or(1);
+                if reruns.sightings.insert(format!("red:{run_id}:{attempt}")) {
+                    report::append(
+                        dir,
+                        &report::RunRow {
+                            run_id,
+                            attempt,
+                            head: head.clone(),
+                            head_sha: sha.to_owned(),
+                            run_class: String::new(),
+                            jobs: Vec::new(),
+                            tasks: 0,
+                            action: "superseded".into(),
+                        },
+                    )?;
+                    save(&dir.join("reruns.json"), &reruns)?;
+                }
+            }
             continue;
         }
         if !dry && reruns.newest.get(&selection) != Some(&run_id) {
@@ -387,6 +411,15 @@ fn scan(
             .map(|f| (f.0.clone(), f.4, f.3.name().to_owned()))
             .collect();
         let mut made = 0usize;
+        // The same test failing in two jobs is two failures: the job name then tells the tasks apart.
+        let mut per_test: BTreeMap<String, usize> = BTreeMap::new();
+        let mut per_job_test: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for failure in &failures {
+            *per_test.entry(failure.1.clone()).or_default() += 1;
+            *per_job_test
+                .entry((failure.0.clone(), failure.1.clone()))
+                .or_default() += 1;
+        }
         for (job, test, excerpt, class, job_id) in failures {
             if !attempted && !rerun_failed && flakes.contains_key(&test) {
                 continue;
@@ -395,6 +428,14 @@ fn scan(
             // two such jobs are two failures.
             let identity = if test == "<job-failure>" {
                 format!("{test}\0{job_id}")
+            } else if per_job_test
+                .get(&(job.clone(), test.clone()))
+                .is_some_and(|n| *n > 1)
+            {
+                // Two jobs of one display name: only the job id tells them apart.
+                format!("{test}\0{job}\0{job_id}")
+            } else if per_test.get(&test).is_some_and(|n| *n > 1) {
+                format!("{test}\0{job}")
             } else {
                 test.clone()
             };
@@ -419,6 +460,7 @@ fn scan(
                 run_class: run_class.name().into(),
                 job_id,
                 head_sha: sha.to_owned(),
+                attempt: run["run_attempt"].as_u64().unwrap_or(1),
                 current: true,
             };
             output.push(format!(

@@ -40,6 +40,7 @@ fn task() -> Task {
         job_id: 4242,
         head_sha: String::new(),
         current: false,
+        attempt: 1,
     }
 }
 #[test]

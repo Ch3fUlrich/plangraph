@@ -1,1 +1,2 @@
 ci-watch --autofix runs the fix under a Landlock jail and revalidates the run before it fixes; throughput joins each landing's parts from landed history and drops a legacy acceptance once verified parts exist; fallback failures are keyed by job id.
+Autofix reads staged paths NUL-delimited and refuses binary changes, runs cargo in the failed job's workspace and revalidates the run, attempt and job; superseded red runs are recorded; throughput trains take their base from the merge's first parent or the latest landing in ancestry and flag incomplete joins.

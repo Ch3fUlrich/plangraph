@@ -182,3 +182,66 @@ fn the_report_keeps_two_head_commits_of_one_pull_request_apart_and_counts_real_f
         "a reservation in flight is not a result: {out}"
     );
 }
+
+#[test]
+fn one_test_failing_in_two_jobs_gets_a_task_with_the_class_and_log_of_each_job() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    gh.two_jobs = true;
+    gh.second_log =
+        Some("test seat_pool::tests::broken ... FAILED\nconnection reset by peer\n".into());
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(false)
+    })
+    .unwrap();
+    let rows = tasks(temp.path());
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows.iter().all(|t| t.test == "seat_pool::tests::broken"));
+    assert_ne!(rows[0].key, rows[1].key);
+    let mut classes: Vec<_> = rows.iter().map(|t| t.class.as_str()).collect();
+    classes.sort_unstable();
+    assert_eq!(classes, ["code", "mixed"], "{rows:?}");
+    assert!(
+        rows.iter().any(|t| t.excerpt.contains("connection reset")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|t| !t.excerpt.contains("connection reset")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_red_run_a_newer_run_superseded_is_recorded_and_reported_as_a_gap() {
+    use super::super::report::report;
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    // Run 899 is red and older; run 900 (the fixture's) is green. Only the newest is acted on.
+    let mut newest = gh.runs[0].clone();
+    newest["conclusion"] = json!("success");
+    let mut old = gh.runs[0].clone();
+    old["id"] = json!(899);
+    gh.runs = vec![newest, old];
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(false)
+    })
+    .unwrap();
+    assert!(
+        std::fs::read_to_string(temp.path().join("tasks.jsonl"))
+            .unwrap_or_default()
+            .is_empty(),
+        "no task for a superseded run"
+    );
+    let out = report(temp.path()).unwrap();
+    assert_eq!(out["red_runs_superseded_without_task"], 1, "{out}");
+    assert_eq!(out["red_runs"], 0, "{out}");
+    // Scanning again does not count it twice.
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(false)
+    })
+    .unwrap();
+    assert_eq!(
+        report(temp.path()).unwrap()["red_runs_superseded_without_task"],
+        1
+    );
+}
