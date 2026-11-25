@@ -667,3 +667,51 @@ fn a_route_answer_after_the_budget_is_spent_does_not_admit_the_expired_seat() {
         "admitted on opencode-go-deepseek-v4-flash"
     );
 }
+
+/// A route call that fails after the budget is spent is a timeout, which falls back; before the budget
+/// is spent the same failure still ends the request.
+#[test]
+fn a_route_error_after_the_budget_is_spent_is_a_timeout_not_an_error() {
+    use std::cell::Cell;
+    struct Failing {
+        mono: Cell<f64>,
+        route_takes: f64,
+    }
+    impl Ports for Failing {
+        fn route(&mut self) -> Result<Value, ToolError> {
+            self.mono.set(self.mono.get() + self.route_takes);
+            Err(ToolError::Internal("route adapter failed".into()))
+        }
+        fn now(&self) -> f64 {
+            1000.0
+        }
+        fn monotonic(&self) -> f64 {
+            self.mono.get()
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.mono.set(self.mono.get() + d.as_secs_f64());
+        }
+    }
+    let outcome = |route_takes: f64| {
+        let state = tempfile::tempdir().unwrap();
+        let mut full = plan(&[HYDROGEN], 1, 1.0);
+        full["seat_admission"]["poll_seconds"] = json!(0.5);
+        let _held = ok(admit(state.path(), full.clone(), &mut quiet())).1;
+        let mut ports = Failing {
+            mono: Cell::new(0.0),
+            route_takes,
+        };
+        match admit(state.path(), full, &mut ports) {
+            Err(error) => is_queue_refusal(&error),
+            Ok(_) => panic!("a full leg must not admit"),
+        }
+    };
+    assert!(
+        outcome(0.6),
+        "the 1.1 s mark is past the 1 s budget: fallback"
+    );
+    assert!(
+        !outcome(0.1),
+        "inside the budget the adapter error still ends the request"
+    );
+}

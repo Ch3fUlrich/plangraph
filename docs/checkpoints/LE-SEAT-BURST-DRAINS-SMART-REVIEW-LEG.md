@@ -36,3 +36,5 @@ A fallback seat is marked on its request (`seat_fallback`, set only by the spawn
 outside request) and gets no second fallback: when it cannot start its own groups it fails its group with the
 run ids it started. Every failed seat group carries `incomplete: true`, which the outer group reads whatever
 the unstarted count says. The wait budget is checked before the route is asked again and after it answers.
+
+A route call that fails after the budget is spent counts as a timeout (fallback), not as the adapter error.

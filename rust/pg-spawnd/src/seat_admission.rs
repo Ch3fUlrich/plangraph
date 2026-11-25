@@ -300,7 +300,13 @@ pub(crate) fn admit<P: Ports>(
         if spent(ports) {
             return Err(queue_timeout(&id, count, limit, ports.monotonic() - began));
         }
-        plan = match ports.route() {
+        let routed = ports.route();
+        // Expiry comes first: a route that failed after the budget was spent is a timeout, which sends
+        // the seat to the fallback, not an error that would end it.
+        if spent(ports) {
+            return Err(queue_timeout(&id, count, limit, ports.monotonic() - began));
+        }
+        plan = match routed {
             Ok(plan) => plan,
             // The `agy-cli` selector found no agy leg left: the queued leg was limited and nothing of
             // its harness is routable, which is the same-harness case below, not a bad request.
@@ -315,9 +321,6 @@ pub(crate) fn admit<P: Ports>(
             }
             Err(error) => return Err(error),
         };
-        if spent(ports) {
-            return Err(queue_timeout(&id, count, limit, ports.monotonic() - began));
-        }
     }
 }
 
