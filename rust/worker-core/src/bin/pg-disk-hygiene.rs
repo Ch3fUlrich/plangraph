@@ -593,9 +593,8 @@ mod tests {
                 .sum::<u64>();
             assert!(left <= 3000, "{left} bytes kept in {}", pool.display());
             assert!(pool.join("slot-1/debug").is_dir(), "ordinary slot kept");
-            assert_eq!(
+            assert!(
                 fs::read_dir(pool.join("slot-review-a")).is_ok(),
-                true,
                 "slot directories are the launch owner's"
             );
         }
