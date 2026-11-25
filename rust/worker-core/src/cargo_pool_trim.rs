@@ -86,6 +86,7 @@ fn trim_slot_to(
             break;
         }
         if apply {
+            #[cfg(target_os = "linux")]
             if !path.is_symlink()
                 && path
                     .canonicalize()

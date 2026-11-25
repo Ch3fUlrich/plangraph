@@ -245,6 +245,7 @@ fn reclaim(
     }
     // A mount (a bind mount included) inside the target: the removal would delete into another
     // filesystem before it failed at the mount point.
+    #[cfg(target_os = "linux")]
     if crate::reap_journal::check_mounts(&canonical).is_err() {
         return Ok(());
     }
