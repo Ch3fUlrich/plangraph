@@ -290,12 +290,18 @@ fn deletion_protection_includes_every_pin_rule_and_adds_run_overlap() {
         assert!(guards.pin_protects(&path), "{}", path.display());
         assert!(guards.protects(&path), "{}", path.display());
     }
-    // A run overlapping the path in either direction protects broadly but owns only below it.
-    for path in [run.clone(), run.join("below"), tmp.path().join("run")] {
-        assert!(guards.protects(&path));
+    // Without pins, a run protects broadly in both directions: the run's own path, a path below
+    // it and an unpinned parent that holds it. Only the run path and the parent are owned.
+    let runs = Guards {
+        pinned: vec![],
+        live: vec![run.clone()],
+    };
+    let parent = tmp.path().to_path_buf();
+    for (path, owned) in [(&run, true), (&parent, true), (&run.join("below"), false)] {
+        assert!(runs.protects(path), "{}", path.display());
+        assert_eq!(runs.live_run_owns(path), owned, "{}", path.display());
+        assert!(!runs.pin_protects(path), "{}", path.display());
     }
-    assert!(guards.live_run_owns(&run) && !guards.live_run_owns(&run.join("below")));
-    assert!(!guards.pin_protects(&run));
     let other = tmp.path().join("other");
-    assert!(!guards.pin_protects(&other) && !guards.protects(&other));
+    assert!(!runs.protects(&other) && !guards.protects(&other) && !guards.pin_protects(&other));
 }
