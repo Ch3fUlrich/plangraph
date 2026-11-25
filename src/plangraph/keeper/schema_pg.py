@@ -394,12 +394,27 @@ LATEST = MIGRATIONS[-1].version
 def registry_version(source):
     """The latest version of the top-level ``MIGRATIONS`` registry in *source* (the text of this file at some
     revision), read by AST and never executed. One reader for the batch land gate and the Rust train gate
-    (``plangraph land-train keeper-schema``). ``ValueError`` when the registry is missing, repeated,
-    not a sequence of ``Migration(N, ...)`` calls numbered 1..n, or the source does not parse."""
+    (``plangraph land-train keeper-schema``, which embeds this function). ``ValueError`` when the registry is
+    missing, repeated, not a sequence of ``Migration(N, ...)`` calls numbered 1..n, written by anything but
+    the one top-level assignment (``+=``, an annotated assignment, an import, a def, ``global``, a loop
+    target), or when the source does not parse."""
     try:
-        registry, = [node.value for node in ast.parse(source).body if isinstance(node, ast.Assign)
+        tree = ast.parse(source)
+        registry, = [node.value for node in tree.body if isinstance(node, ast.Assign)
                      and any(isinstance(target, ast.Name) and target.id == "MIGRATIONS"
                              for target in node.targets)]
+        writes = 0
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "MIGRATIONS" and not isinstance(node.ctx, ast.Load):
+                writes += 1
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler)):
+                writes += node.name == "MIGRATIONS"
+            elif isinstance(node, ast.alias):
+                writes += (node.asname or node.name.split(".")[0]) == "MIGRATIONS"
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                writes += "MIGRATIONS" in node.names
+        if writes != 1:
+            raise ValueError("MIGRATIONS is written other than by its one top-level assignment")
         versions = [entry.args[0].value for entry in registry.elts
                     if isinstance(entry, ast.Call) and isinstance(entry.func, ast.Name)
                     and entry.func.id == "Migration"]
@@ -411,9 +426,6 @@ def registry_version(source):
     except (SyntaxError, AttributeError, IndexError, ValueError) as exc:
         raise ValueError(f"the MIGRATIONS registry is unreadable: {exc}") from None
 
-_TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
-_COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')
-_NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 
 
 def table_bodies(ddl: str) -> dict:
