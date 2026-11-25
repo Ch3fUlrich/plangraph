@@ -68,7 +68,8 @@ def make_plan(kp, n=1, chain=False, project="demo", who="router", goal=True,
         item = {"project": project, "id": f"L{i}-{tag}", "kind": "lane",
                 "title": f"lane {i} {tag}", "description": "a lane",
                 "done_criteria": "criteria", "evidence_kinds": list(evidence if evidence is not None else ("decision",) if fields.get("review_tier") == "none" else ("any",)),
-                "depends_on": [f"L{i - 1}-{tag}"] if chain and i else []}
+                "depends_on": [f"L{i - 1}-{tag}"] if chain and i else [],
+                "note": "no deploy needed: contract fixture"}   # every close needs a deploy row or this line
         item.update(fields)
         items.append(item)
         lanes.append(f"{project}:L{i}-{tag}")

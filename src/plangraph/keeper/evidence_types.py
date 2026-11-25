@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-__all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S"]
+__all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S",
+           "has_live_clause", "live_evidence_status", "no_deploy_declaration",
+           "oneshot_timer", "proven_pairs"]
 
 # A commit reference is a full lowercase hex sha: 40 for sha1, 64 for sha256.
 # Abbreviations, refs ("main") and anything option-like are rejected so a sha
@@ -99,3 +101,71 @@ def as_epoch(value: Any) -> float | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.timestamp()
+
+
+_LIVE_CLAUSE_RE = re.compile(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S")
+
+
+def has_live_clause(item: dict) -> bool:
+    """True when the done criteria carry a ``Live:`` clause."""
+    return bool(_LIVE_CLAUSE_RE.search(item.get("done_criteria") or ""))
+
+
+_NO_DEPLOY_RE = re.compile(r"(?im)^[ \t]*no deploy needed:[ \t]*(.*?)[ \t]*$")
+
+
+def no_deploy_declaration(item: dict) -> str | None:
+    """The reason of a ``no deploy needed: <reason>`` line in the description or note; ``""`` when the
+    line is there with an empty reason; ``None`` when the item has no such line."""
+    text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
+    reasons = [m.group(1) for m in _NO_DEPLOY_RE.finditer(text)]
+    return next((r for r in reasons if r), "" if reasons else None)
+
+
+def oneshot_timer(ref: dict) -> str | None:
+    """The timer a oneshot deploy row needs active beside it, or ``None`` when the row is not a oneshot."""
+    unit = ref.get("unit")
+    if (ref.get("type") == "oneshot" and isinstance(unit, str)
+            and not unit.startswith("bin:") and unit.endswith(".service")):
+        return unit.removesuffix(".service") + ".timer"
+    return None
+
+
+def proven_pairs(refs) -> set:
+    """``(host, unit)`` pairs that verified deploy refs prove: a oneshot service counts only beside an
+    active row of its timer on the same host. The deployment gate and the close gate share this match;
+    each passes the rows it counts as eligible."""
+    refs = list(refs)
+    active = {(ref.get("host"), ref.get("unit")) for ref in refs if ref.get("is_active") == "active"}
+    return {(ref.get("host"), ref.get("unit")) for ref in refs
+            if (timer := oneshot_timer(ref)) is None or (ref.get("host"), timer) in active}
+
+
+def has_live_proof(item: dict, rows, since: float | None = None) -> bool:
+    """A verified ``deploy`` row of the item's current epoch, recorded at or after ``since`` (epoch seconds;
+    ``None`` = no floor, infinity = nothing counts), proves a unit live.
+
+    A timer row that only serves as the companion of a oneshot row in the same set is no proof of its
+    own: the oneshot must have its active timer on the same host, and the pair is one proof."""
+    refs = [row.get("ref") or {} for row in rows
+            if row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
+            and (since is None or (as_epoch(row["at"]) or 0) >= since)]
+    companions = {timer for ref in refs if (timer := oneshot_timer(ref))}
+    return any(unit not in companions for _, unit in proven_pairs(refs))
+
+
+def live_evidence_status(item: dict, rows, since: float | None = None) -> str | None:
+    """Why an item may not close yet, or ``None``: every item needs a verified ``deploy`` row of its current
+    epoch (the item went into production) or a ``no deploy needed: <reason>`` line.
+
+    An explicit ``Live:`` clause is met by the row only; the declaration never excuses it. ``since`` is the
+    item's latest landing: a row recorded before it proves nothing about newer work.
+    Codes: ``live_evidence_missing``, ``no_deploy_reason_empty``."""
+    if has_live_proof(item, rows, since):
+        return None
+    if has_live_clause(item):
+        return "live_evidence_missing"
+    declared = no_deploy_declaration(item)
+    if declared:
+        return None
+    return "no_deploy_reason_empty" if declared == "" else "live_evidence_missing"

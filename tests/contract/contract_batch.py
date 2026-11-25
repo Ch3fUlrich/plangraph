@@ -15,7 +15,7 @@ TOOL = ROOT / "tools" / "apply_batch.py"
 
 def lane(project, ident, deps=(), **fields):
     item = {"project": project, "id": ident, "kind": "lane", "title": f"lane {ident}",
-            "description": "batch lane", "done_criteria": "criteria",
+            "description": "batch lane", "done_criteria": "criteria", "note": "no deploy needed: contract fixture",
             "evidence_kinds": ["decision"] if fields.get("review_tier") == "none" else ["any"], "depends_on": list(deps)}
     item.update(fields)
     return item

@@ -16,7 +16,7 @@ from .. import views
 from . import events
 from .errors import Refused
 from .evidence_floor import event_bases, ref_head
-from .evidence_types import Context, valid_commit_ref
+from .evidence_types import Context, as_epoch, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
@@ -579,18 +579,23 @@ class SupportMixin:
         if reviewer_family in peers and not change_request:
             raise Refused("same_family", f"reviewer shares item family {reviewer_family}")
 
-    def _reverify_all(self, item, now):
+    def _reverify_all(self, item, now, floor=None):
         """Re-run the verifiers for the current epoch's *verified* evidence.
 
         Only rows already recorded as ``verified`` are re-checked: an unverified
         row never contributed to the submit requirement, so it cannot make a
-        verdict fail, and evidence from a released epoch is irrelevant.
+        verdict fail, and evidence from a released epoch is irrelevant. A ``deploy`` row recorded
+        before ``floor`` (the item's latest landing) is not re-checked: a later merge may have changed
+        its unit, and the close gate does not count it. The returned id set holds every verified row,
+        for the locked consistency check.
         """
         evidence = [e for e in self._evidence(item["key"])
                     if e["epoch"] == item["epoch"] and e["verified"]]
         if not evidence:
             raise Refused("evidence_missing", "no verified evidence to verify")
         for record in evidence:
+            if record["kind"] == "deploy" and floor is not None and (as_epoch(record["at"]) or 0) < floor:
+                continue
             verifier = self.verifiers.get(record["kind"])
             if verifier is None:
                 raise Refused("evidence_unverified",

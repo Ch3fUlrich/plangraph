@@ -89,6 +89,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
     _evidence(store, key, item, decision)
     sha, row = _row(store, item, now, decision)
     digest = _proof(store, key, item, decision, row)
+    floor = store._landing_floor(item)   # git and forge reads stay outside the write lock
     with store._write():
         fresh = store._get_or_refuse(key)
         if fresh["epoch"] != item["epoch"]:
@@ -104,6 +105,7 @@ def close_decision(store, principal, key, decision, epoch, batch_ref, now):
             raise Refused("bad_state", "item kind/tier cannot close on a decision; "
                           "decision-only items must declare evidence_kinds: [decision] "
                           "with review_tier='none'")
+        store._require_live_evidence(dict(fresh, _live_floor=floor))
         cursor = store.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=? WHERE key=? AND epoch=?",
             (principal.name, store._iso(now), key, fresh["epoch"]))

@@ -278,3 +278,46 @@ def test_decision_item_end_to_end(w):
     assert w.store._item(key)["state"] == "in_review"
     w.store.verdict(w.p("reviewer2"), key, True, "second family")
     assert w.store._item(key)["state"] == "done"
+
+
+def _deploy_row(unit, active=None, **extra):
+    ref = {"host": "fixture", "unit": unit, **extra, **({"is_active": active} if active else {})}
+    return {"kind": "deploy", "verified": True, "epoch": 1, "at": 100, "ref": ref}
+
+
+def test_the_live_gate_and_the_deployment_gate_share_one_companion_match():
+    from plangraph.keeper.evidence import deploy_missing
+    from plangraph.keeper.evidence_types import live_evidence_status
+
+    item = {"epoch": 1, "done_criteria": "Live: the unit ran.", "description": "", "note": ""}
+    oneshot = _deploy_row("job.service", type="oneshot", result="success")
+    timer = _deploy_row("job.timer", "active")
+    for rows in ([oneshot], [oneshot, timer], [oneshot, _deploy_row("job.timer", "active", host="elsewhere")]):
+        refs = [{"kind": "deploy", "verified": True, "ref": row["ref"]} for row in rows]
+        gate_open = deploy_missing(["job.service"], ["fixture"], refs) == []
+        assert (live_evidence_status(item, rows) is None) == gate_open
+    assert live_evidence_status(item, [oneshot, timer], since=200) == "live_evidence_missing"
+    assert live_evidence_status(item, [_deploy_row("daemon.service", "active")]) is None, "a service needs no timer"
+    assert live_evidence_status(item, [timer]) is None, "a timer alone is the proof of the timer unit itself"
+
+
+def test_the_router_adds_the_no_deploy_reason_in_place_and_an_l1_cannot(w):
+    from plangraph.keeper.auth import ScopedPrincipal
+
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",), review_tier="high", note="plain note")
+    epoch = to_claimed(w, key)
+    w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-209"})
+    w.store.submit(w.p("l1main"), key, epoch)
+    w.store.verdict(w.p("reviewer"), key, True, "first seat")
+    with pytest.raises(Refused) as held:
+        w.store.verdict(w.p("reviewer2"), key, True, "second seat")
+    assert "live_evidence_missing" in held.value.msg
+    router, before = w.p("router"), w.store._item(key)
+    granted = ScopedPrincipal(**{**vars(router), "role": "router", "audit_role": "l1"})
+    with pytest.raises(Refused) as refused:
+        w.store.edit_definition(granted, key, {"note": "plain note\nno deploy needed: docs only"})
+    assert refused.value.code == "bad_state"
+    w.store.edit_definition(router, key, {"note": "plain note\nno deploy needed: docs only"})
+    after = w.store._item(key)
+    assert (after["state"], after["epoch"], after["round"]) == (before["state"], before["epoch"], before["round"])
+    assert w.store.verdict(w.p("reviewer2"), key, True, "second seat")["state"] == "done"

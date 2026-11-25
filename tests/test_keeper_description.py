@@ -37,7 +37,7 @@ def test_create_without_description_leaves_it_null(w):
 
 def test_other_unknown_fields_still_fold_into_the_note(w):
     w.store.create_items(w.p("router"), [
-        defn("X", description="d", intent="why"),
+        defn("X", description="d", intent="why", note=None),
         defn("G2", ["X"], kind="goal")])
     item = _item(w, "demo:X")
     assert item["description"] == "d" and item["note"] == "intent: why"
@@ -196,7 +196,7 @@ def test_migrate_is_idempotent_and_emits_one_event_per_item(w):
 def test_migrate_skips_done_items(w):
     w.store.create_items(w.p("router"), [
         defn("D"), defn("G3", ["D"], kind="goal")])
-    _fold_note(w, "demo:D", "description: locked text")
+    _fold_note(w, "demo:D", "description: locked text\nno deploy needed: fixture")
     to_done(w, "demo:D")
     # the lock trigger froze the row; its note still has the line
     note = _item(w, "demo:D")["note"]

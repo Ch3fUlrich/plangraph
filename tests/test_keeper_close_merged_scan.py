@@ -451,7 +451,7 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     for project, commit, reason in [
             ("nowhere", heads[165], "merge_repo_unknown"),
             ("other", loose, "merge_repo_commit_not_on_default")]:
-        w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: {project} {commit}"})
+        w.store.edit_definition(router, "demo:A", {"note": f"no deploy needed: test fixture\nMerge-Repo: {project} {commit}"})
         assert w.store._item("demo:A")["state"] == "in_review"
         with pytest.raises(Refused, match=reason):
             w.store.close_merged(router, "demo:A", "D-5504", ["google"])
@@ -462,7 +462,7 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     _git(repo, "commit", "-q", "--allow-empty", "-m", "later work")
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "-q", "--no-ff", "-m", "later merge (#166)", "later")
-    w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    w.store.edit_definition(router, "demo:A", {"note": f"no deploy needed: test fixture\nMerge-Repo: other {landed}"})
     edited = w.store._item("demo:A")
     assert [edited[f] for f in ("state", "epoch", "round")] == [before[f] for f in ("state", "epoch", "round")]
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
@@ -504,7 +504,7 @@ def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tm
 
     with pytest.raises(Refused, match="merged_on_default_missing"):
         close()
-    w.store.edit_definition(router, key, {"note": f"Merge-Repo: {data_project}"})
+    w.store.edit_definition(router, key, {"note": f"no deploy needed: test fixture\nMerge-Repo: {data_project}"})
     if evidence in ("wrong-pr", "wrong-project", "duplicate-head"):
         with pytest.raises(Refused, match="merged_on_default_missing"):
             close()
@@ -547,7 +547,7 @@ def test_merge_repo_note_verifies_a_hosted_pr(w, monkeypatch, tmp_path, state):
 
     monkeypatch.setattr(subprocess, "run", hosted)
     router = w.p("router")
-    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #165"})
+    w.store.edit_definition(router, "demo:A", {"note": "no deploy needed: test fixture\nMerge-Repo: other #165"})
     if state == "MERGED":
         result = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
         assert result["state"] == "done"

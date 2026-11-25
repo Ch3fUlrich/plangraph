@@ -70,11 +70,13 @@ class AnswerMixin:
             raise Refused("validation", "decision_id must be a decision id string")
         item = self._answer_target(key)
         self._check_answer_decision(key, decision_id, item, now)
+        floor = self._landing_floor(item)   # git and forge reads stay outside the write lock
         with self._write():
             fresh = self._answer_target(key)
             if int(fresh["epoch"]) != int(item["epoch"]):
                 raise Refused("conflict", f"{key} changed epoch under the transaction")
             self._check_answer_decision(key, decision_id, fresh, now)
+            self._require_live_evidence(dict(fresh, _live_floor=floor))
             # The cache row goes first, exactly like ``close_on_decision``: the
             # event below is what locks the key.
             cursor = self.conn.execute(
