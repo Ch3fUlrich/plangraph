@@ -530,8 +530,8 @@ fn consecutive_blocking_calls_on_one_task_are_one_episode_named_by_its_first_cal
     assert_eq!(wait.call_id, "c1");
     assert_eq!(
         wait.waited_ms,
-        8 * MIN,
-        "age counts from the first call of the chain"
+        8 * MIN - 500,
+        "the time inside the chain's calls, not the gap"
     );
     // Work in between starts a new episode with its own first call and its own age.
     let mut broken = explicit_wait("bg1", "echo started");
@@ -571,4 +571,62 @@ fn consecutive_blocking_calls_on_one_task_are_one_episode_named_by_its_first_cal
     assert!(!broken
         .read()
         .episode_alive("bg1", "c1", T0 + 4_000 + 5 * MIN + 10_000));
+}
+
+#[test]
+fn only_time_inside_blocking_calls_counts_and_a_long_gap_starts_a_new_episode() {
+    let mut t = explicit_wait("bg1", "echo started");
+    t.0.pop();
+    // Two five minute calls back to back, then twenty minutes of nothing, then a new call.
+    t.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.result(4_000 + 5 * MIN, "c1", None);
+    t.tool(
+        4_000 + 5 * MIN + 2_000,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.result(4_000 + 10 * MIN, "c2", None);
+    let chain = t.read().open_wait(T0 + 4_000 + 10 * MIN + 1_000);
+    assert!(chain.is_none(), "no call is open");
+    let at = 4_000 + 30 * MIN;
+    t.tool(
+        at,
+        "c3",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    let wait = t.read().open_wait(T0 + at + 10_000).unwrap();
+    assert_eq!(
+        wait.call_id, "c3",
+        "a call after a long gap is a new episode"
+    );
+    assert_eq!(
+        wait.waited_ms, 10_000,
+        "the idle twenty minutes are not wait time"
+    );
+    // Within the gap the same chain goes on and counts only its calls.
+    let mut chain = explicit_wait("bg1", "echo started");
+    chain.0.pop();
+    chain.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    chain.result(4_000 + 5 * MIN, "c1", None);
+    chain.tool(
+        4_000 + 5 * MIN + 2_000,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    let wait = chain.read().open_wait(T0 + 4_000 + 7 * MIN).unwrap();
+    assert_eq!(wait.call_id, "c1");
+    assert_eq!(wait.waited_ms, 5 * MIN + (7 * MIN - 5 * MIN - 2_000));
 }

@@ -660,15 +660,95 @@ fn the_owners_output_carries_the_stop_mark_for_its_action_only() {
         launched_to_ms: world.origin + 5_000,
     };
     let host = LocalHost::new(world.state.clone(), "sess-mark-0001".into());
-    assert!(!host.has_mark(&task, "r|bgM|w1"));
-    assert!(host.mark_stop(&task, "r|bgM|w1"));
-    assert!(host.has_mark(&task, "r|bgM|w1"));
+    let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert!(
-        !host.has_mark(&task, "r|bgM|w2"),
+        owner.output.is_some(),
+        "the output inode is part of the owner"
+    );
+    assert!(!host.has_mark(&owner, &task, "r|bgM|w1"));
+    assert!(host.mark_stop(&owner, &task, "r|bgM|w1"));
+    assert!(host.has_mark(&owner, &task, "r|bgM|w1"));
+    assert!(
+        !host.has_mark(&owner, &task, "r|bgM|w2"),
         "another action has no mark"
     );
     let text = fs::read_to_string(root.join("tasks/bgM.output")).unwrap();
     assert!(text.contains("[round-watch] ending this command"), "{text}");
     shell.kill().unwrap();
     let _ = shell.wait();
+}
+
+#[test]
+fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
+    let world = World::live();
+    let root = world.state.parent().unwrap().to_path_buf();
+    let mut shell = command_shell(&root, "sess-swap-0001", "bgW", "sleep 312");
+    let path = root.join("tasks/bgW.output");
+    let task = super::round_wait::TaskRef {
+        id: "bgW".into(),
+        output_path: Some(path.display().to_string()),
+        launched_from_ms: world.origin,
+        launched_to_ms: world.origin + 5_000,
+    };
+    let host = LocalHost::new(world.state.clone(), "sess-swap-0001".into());
+    let owner = host.resolve_owner("writer-9", &task).expect("owner");
+    // After the owner was found, the path is replaced by an unrelated file.
+    let moved = root.join("tasks/bgW.moved");
+    fs::rename(&path, &moved).unwrap();
+    fs::write(&path, "unrelated\n").unwrap();
+    assert!(
+        host.mark_stop(&owner, &task, "r|bgW|w1"),
+        "written through the owner's descriptor"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "unrelated\n",
+        "the new file is untouched"
+    );
+    assert!(fs::read_to_string(&moved)
+        .unwrap()
+        .contains("[round-watch]"));
+    assert!(
+        !host.has_mark(&owner, &task, "r|bgW|w1"),
+        "the path no longer reaches the owner's file"
+    );
+    // A forged owner whose recorded inode is another file's is refused.
+    let mut forged = owner.clone();
+    forged.output = Some((1, 1));
+    assert!(!host.mark_stop(&forged, &task, "r|bgW|w2"));
+    shell.kill().unwrap();
+    let _ = shell.wait();
+}
+
+#[test]
+fn a_command_that_ignores_hangup_is_ended_by_the_verified_escalation() {
+    use std::os::unix::process::CommandExt;
+    let world = World::live();
+    let root = world.state.parent().unwrap().to_path_buf();
+    let tasks = root.join("tasks");
+    fs::create_dir_all(&tasks).unwrap();
+    let output = fs::File::create(tasks.join("bgH.output")).unwrap();
+    let mut shell = std::process::Command::new("/bin/sh")
+        .args(["-c", "trap '' HUP; sleep 313; true"])
+        .env("CLAUDE_CODE_SESSION_ID", "sess-hup-0001")
+        .stdout(output.try_clone().unwrap())
+        .stderr(output)
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let task = super::round_wait::TaskRef {
+        id: "bgH".into(),
+        output_path: Some(tasks.join("bgH.output").display().to_string()),
+        launched_from_ms: world.origin,
+        launched_to_ms: world.origin + 5_000,
+    };
+    let host = LocalHost::new(world.state.clone(), "sess-hup-0001".into());
+    let owner = host.resolve_owner("writer-9", &task).expect("owner");
+    assert_eq!(
+        host.stop(&owner, &task, false),
+        super::round_watch::Stop::Ended
+    );
+    let status = shell.wait().unwrap();
+    assert!(!status.success(), "ended by a signal, not by itself");
 }

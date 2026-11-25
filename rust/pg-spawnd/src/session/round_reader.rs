@@ -13,11 +13,17 @@ use super::{
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Calls of one wait follow each other within this many milliseconds.
+pub(super) const EPISODE_GAP_MS: i64 = 30_000;
+
 /// Back-to-back blocking task-output calls on one task, with the first call's id.
 #[derive(Debug)]
 pub(super) struct Episode {
     pub(super) first_call: String,
-    pub(super) start_ms: i64,
+    /// Time spent inside its closed blocking calls: idle time between calls is not counted.
+    pub(super) blocked_ms: i64,
+    /// When its last call returned; a call after a longer gap starts a new episode.
+    pub(super) last_end_ms: i64,
     /// Another call or a new round came between: the next wait call starts a new episode.
     pub(super) interrupted: bool,
 }
@@ -310,11 +316,15 @@ impl Reader {
                     for (other, episode) in self.episodes.iter_mut() {
                         episode.interrupted |= other != task;
                     }
-                    let continues = self.episodes.get(task).is_some_and(|e| !e.interrupted);
+                    let continues = self
+                        .episodes
+                        .get(task)
+                        .is_some_and(|e| !e.interrupted && ts - e.last_end_ms <= EPISODE_GAP_MS);
                     if !continues {
                         let episode = Episode {
                             first_call: id.clone(),
-                            start_ms: ts,
+                            blocked_ms: 0,
+                            last_end_ms: ts,
                             interrupted: false,
                         };
                         self.episodes.insert(task.clone(), episode);
@@ -348,6 +358,12 @@ impl Reader {
             let Some(tool) = self.open.remove(id) else {
                 continue;
             };
+            if let (true, Some(task)) = (tool.structured, &tool.task_ref) {
+                if let Some(episode) = self.episodes.get_mut(task) {
+                    episode.blocked_ms += (ts - tool.started_ms).max(0);
+                    episode.last_end_ms = ts;
+                }
+            }
             let task = value["toolUseResult"]["backgroundTaskId"].as_str();
             if let (true, Some(task)) = (tool.background, task) {
                 self.background.push(Background {

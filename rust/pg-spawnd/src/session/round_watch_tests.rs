@@ -25,6 +25,7 @@ impl Fake {
             owner: owner.then_some(Owner {
                 pid: 4242,
                 start_time: Some(7),
+                output: Some((1, 2)),
             }),
             stop: RefCell::new(stop),
             fail_notify: false,
@@ -53,13 +54,13 @@ impl Host for Fake {
         self.seen_signalled.borrow_mut().push(signalled);
         *self.stop.borrow()
     }
-    fn mark_stop(&self, _: &TaskRef, key: &str) -> bool {
+    fn mark_stop(&self, _: &Owner, _: &TaskRef, key: &str) -> bool {
         if self.mark_ok {
             self.marks.borrow_mut().insert(key.into());
         }
         self.mark_ok
     }
-    fn has_mark(&self, _: &TaskRef, key: &str) -> bool {
+    fn has_mark(&self, _: &Owner, _: &TaskRef, key: &str) -> bool {
         self.marks.borrow().contains(key)
     }
     fn pending(&self, _: &str, _: &str) -> bool {
@@ -277,7 +278,9 @@ fn a_command_that_finished_by_itself_before_the_stop_is_no_strike_and_no_notice(
     let host = Fake::new(true, Stop::Gone);
     let t = first_wait("a");
     run(&t, 1, dir.path(), &host);
-    let done = run(&t, 16, dir.path(), &host);
+    // Gone after the mark: the harness's report decides, and it has not come yet.
+    assert!(run(&t, 16, dir.path(), &host).is_empty());
+    let done = run(&t, 27, dir.path(), &host);
     assert_eq!(
         done,
         vec![Action::Finished {
@@ -364,7 +367,11 @@ fn a_crash_before_the_signal_and_a_natural_exit_is_no_strike() {
         "task_id": "a", "call_id": "w-a", "command": "cargo test -p a", "waited_ms": 1,
         "task": {"id": "a", "output_path": "/t/tasks/a.output", "launched_from_ms": 0, "launched_to_ms": 1}});
     std::fs::write(&path, state.to_string()).unwrap();
-    let done = run(&t, 16, dir.path(), &host);
+    assert!(
+        run(&t, 16, dir.path(), &host).is_empty(),
+        "marked, gone, no report yet"
+    );
+    let done = run(&t, 27, dir.path(), &host);
     assert_eq!(
         done,
         vec![Action::Finished {

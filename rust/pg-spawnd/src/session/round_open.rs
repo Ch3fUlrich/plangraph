@@ -2,7 +2,7 @@
 //! authorise a stop, what still runs, and how a closed round's open gap is booked.
 
 use super::{
-    round_reader::{OpenTool, Prev, Reader, Running},
+    round_reader::{OpenTool, Prev, Reader, Running, EPISODE_GAP_MS},
     round_time::{Class, OpenWait},
     round_wait::command_reads,
 };
@@ -69,21 +69,19 @@ impl Reader {
             call_id: episode.map_or(call_id, |e| e.first_call.clone()),
             command: bg.command.clone(),
             class: bg.class,
-            waited_ms: (now_ms - episode.map_or(tool.started_ms, |e| e.start_ms)).max(0),
+            waited_ms: (episode.map_or(0, |e| e.blocked_ms) + (now_ms - tool.started_ms)).max(0),
         })
     }
 
     /// True while the episode of `call_id` on the task goes on: the writer is between two of
     /// its back-to-back calls (the last line is seconds old) and the command still runs.
     pub fn episode_alive(&self, task_id: &str, call_id: &str, now_ms: i64) -> bool {
-        const BETWEEN_CALLS_MS: i64 = 30_000;
-        self.prev_ts
-            .is_some_and(|last| now_ms - last <= BETWEEN_CALLS_MS)
-            && self.background.iter().any(|bg| bg.task.id == task_id)
-            && self
-                .episodes
-                .get(task_id)
-                .is_some_and(|e| !e.interrupted && e.first_call == call_id)
+        self.background.iter().any(|bg| bg.task.id == task_id)
+            && self.episodes.get(task_id).is_some_and(|e| {
+                !e.interrupted
+                    && e.first_call == call_id
+                    && now_ms - e.last_end_ms <= EPISODE_GAP_MS
+            })
     }
     /// A round the watchdog closed ends at its terminal time: the open wait that earned
     /// the close is booked up to it, so the row holds the minutes that triggered it.

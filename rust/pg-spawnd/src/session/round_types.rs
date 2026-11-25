@@ -7,6 +7,9 @@ use std::io;
 pub const WAIT_LIMIT_MS: i64 = 15 * 60_000;
 /// Waits ended in one round before the round is BLOCKED.
 pub const STRIKE_LIMIT: usize = 2;
+/// The exit code of a command ended by SIGHUP, the first signal of a stop: the harness's
+/// report of it is the receipt of our own signal. Independent ends are almost always 143 or 137.
+pub const OUR_SIGNAL_EXIT: i64 = 129;
 /// How long a BLOCKED round waits for its notices to be delivered before it closes anyway.
 pub const NOTICE_GRACE_MS: i64 = 10 * 60_000;
 
@@ -15,6 +18,9 @@ pub const NOTICE_GRACE_MS: i64 = 10 * 60_000;
 pub struct Owner {
     pub pid: u32,
     pub start_time: Option<u64>,
+    /// Device and inode of the file the owner writes its output to: the identity of the
+    /// output, whatever the path now names.
+    pub output: Option<(u64, u64)>,
 }
 
 /// What a stop found.
@@ -42,9 +48,9 @@ pub trait Host {
     fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop;
     /// Append the line saying why the command is ended to the task's own output file, the
     /// owner's durable acknowledgement that this stop reached its signal stage.
-    fn mark_stop(&self, task: &TaskRef, key: &str) -> bool;
+    fn mark_stop(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool;
     /// True when the output file of the task carries the line `mark_stop` wrote for `key`.
-    fn has_mark(&self, task: &TaskRef, key: &str) -> bool;
+    fn has_mark(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool;
     /// True while the line queued for `recipient` under `key` has not been delivered.
     fn pending(&self, recipient: &str, key: &str) -> bool;
     /// Queue one line for `recipient`; `key` makes a second queue of it a no-op.

@@ -36,7 +36,7 @@ fn a_crash_after_the_kill_is_recovered_from_the_harness_report_of_the_signal_exi
     let mut t = first_wait("a");
     run(&t, 1, dir.path(), &host);
     crashed_after_the_kill(dir.path(), &t);
-    ended_by(&mut t, 143);
+    ended_by(&mut t, 129);
     let restarted = Fake::live();
     restarted.marks.borrow_mut().insert(KEY.into());
     let done = run(&t, 17, dir.path(), &restarted);
@@ -157,7 +157,7 @@ fn a_marked_stop_stays_pending_without_a_new_signal_until_the_harness_reports() 
     t.0.push(json!({"type":"user","timestamp": super::round_time_tests::stamp_from(T0, 17 * MIN),
         "origin":{"kind":"task-notification"},
         "message":{"role":"user","content":
-            "<task-notification><task-id>a</task-id><status>failed</status><summary>Background command \"x\" failed with exit code 143</summary></task-notification>"}}));
+            "<task-notification><task-id>a</task-id><status>failed</status><summary>Background command \"x\" failed with exit code 129</summary></task-notification>"}}));
     let done = run(&t, 18, dir.path(), &restarted);
     assert!(
         done.contains(&Action::Notified {
@@ -214,14 +214,21 @@ fn a_stop_that_reached_no_member_records_no_signal_and_a_later_natural_exit_is_n
         .contains("\"signalled\":true"));
     // The command now ends by itself: the host finds nothing and no signal is on record.
     let later = Fake::new(true, Stop::Gone);
+    assert!(
+        run(&t, 17, dir.path(), &later).is_empty(),
+        "gone, marked, no report yet"
+    );
     assert_eq!(
-        run(&t, 17, dir.path(), &later),
+        run(&t, 28, dir.path(), &later),
         vec![Action::Finished {
             task_id: "a".into()
         }]
     );
     assert!(later.sent.borrow().is_empty());
-    assert_eq!(*later.seen_signalled.borrow(), vec![false]);
+    assert!(
+        later.seen_signalled.borrow().iter().all(|s| !s),
+        "no signal was ever on record"
+    );
 }
 
 #[test]
@@ -357,7 +364,7 @@ fn back_to_back_blocking_calls_are_one_wait_that_the_cap_applies_to() {
 }
 
 #[test]
-fn a_stop_pending_between_two_calls_of_one_wait_is_not_released() {
+fn a_stop_pending_between_two_calls_of_one_wait_signals_nothing_until_a_call_is_open() {
     let dir = tempfile::tempdir().unwrap();
     let host = Fake::new(true, Stop::Survivors);
     let mut t = first_wait("a");
@@ -367,6 +374,22 @@ fn a_stop_pending_between_two_calls_of_one_wait_is_not_released() {
     t.result(16 * MIN + 50_000, "w-a", None);
     let retry = Fake::new(true, Stop::Ended);
     retry.marks.borrow_mut().insert("writer-1:p1|a|w-a".into());
+    assert!(
+        run(&t, 17, dir.path(), &retry).is_empty(),
+        "nothing is signalled between calls"
+    );
+    assert!(retry.stopped.borrow().is_empty());
+    assert!(!std::fs::read_to_string(dir.path().join("w.json"))
+        .unwrap()
+        .contains("released"));
+    // The next call of the chain opens: only now may the stop go on.
+    t.request(16 * MIN + 54_000);
+    t.tool(
+        16 * MIN + 55_000,
+        "w2-a",
+        "TaskOutput",
+        json!({"task_id": "a", "block": true}),
+    );
     let done = run(&t, 17, dir.path(), &retry);
     assert!(
         done.contains(&Action::Stopped {
@@ -375,7 +398,26 @@ fn a_stop_pending_between_two_calls_of_one_wait_is_not_released() {
         }),
         "{done:?}"
     );
-    assert!(!std::fs::read_to_string(dir.path().join("w.json"))
-        .unwrap()
-        .contains("released"));
+    assert_eq!(retry.stopped.borrow().len(), 1);
+}
+
+#[test]
+fn an_exit_report_of_our_signal_is_129_and_an_independent_143_proves_nothing() {
+    for (code, ours) in [(129, true), (143, false), (137, false), (0, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Fake::live();
+        let mut t = first_wait("a");
+        run(&t, 1, dir.path(), &host);
+        crashed_after_the_kill(dir.path(), &t);
+        ended_by(&mut t, code);
+        let restarted = Fake::live();
+        restarted.marks.borrow_mut().insert(KEY.into());
+        let done = run(&t, 17, dir.path(), &restarted);
+        let stopped = done.iter().any(|a| matches!(a, Action::Stopped { .. }));
+        assert_eq!(stopped, ours, "exit {code}: {done:?}");
+        assert!(
+            restarted.stopped.borrow().is_empty(),
+            "no signal without an open call"
+        );
+    }
 }

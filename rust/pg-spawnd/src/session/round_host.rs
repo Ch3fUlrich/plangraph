@@ -1,12 +1,12 @@
 //! Real effects of the round watchdog on the executing host (Linux /proc, signals, outbox).
 
+pub use super::round_signal::{signal_member, Member};
 use super::{
     round_wait::TaskRef,
     round_watch::{Host, Owner, Stop},
 };
 use pg_worker_core::run::{
-    group::{stop_group, Identity, RunGroup, StopOutcome},
-    group_unix::{parse_stat, proc_start_time, Roots, UnixGroup},
+    group_unix::{parse_stat, proc_start_time, Roots},
     record_io::atomic_write_private,
 };
 use serde_json::json;
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// How far a process may have started before the launching call or after its result.
@@ -33,51 +33,6 @@ pub struct LocalHost {
     pub send_signal: fn(&Member, i32) -> bool,
     /// The `claude` binary of `claude stop`; the environment's, then the PATH's when none.
     pub claude_bin: Option<PathBuf>,
-}
-
-/// A process of the owned group as it was seen: the identity a signal must still match.
-#[derive(Clone, Debug)]
-pub struct Member {
-    pub pid: u32,
-    pub start_time: u64,
-    pub group: u32,
-}
-
-fn identity_matches(proc: &Path, member: &Member) -> bool {
-    fs::read_to_string(proc.join(member.pid.to_string()).join("stat"))
-        .ok()
-        .and_then(|text| parse_stat(&text))
-        .is_some_and(|(state, group, start)| {
-            !matches!(state, 'Z' | 'X') && group == member.group && start == member.start_time
-        })
-}
-
-/// Pin the process with a pidfd, check it is still the member that was seen, then signal
-/// through the pidfd: a pid reused or a process that left the group is never signalled.
-pub fn signal_member(member: &Member, signal: i32) -> bool {
-    if member.pid <= 1 || member.pid > i32::MAX as u32 {
-        return false;
-    }
-    // SAFETY: pidfd_open takes a pid and flags and returns a descriptor or -1.
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, member.pid as libc::c_int, 0) };
-    if fd < 0 {
-        return false;
-    }
-    let fd = fd as libc::c_int;
-    let sent = identity_matches(Path::new("/proc"), member)
-        // SAFETY: pidfd_send_signal takes the descriptor, a signal and a null siginfo.
-        && unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                fd,
-                signal,
-                std::ptr::null::<libc::c_void>(),
-                0,
-            )
-        } == 0;
-    // SAFETY: fd is the descriptor opened above.
-    unsafe { libc::close(fd) };
-    sent
 }
 
 impl LocalHost {
@@ -102,17 +57,45 @@ impl LocalHost {
         (name, file)
     }
 
-    fn group(&self, owner: &Owner) -> UnixGroup {
-        UnixGroup {
-            identity: Identity {
-                pid: owner.pid,
-                start_time: owner.start_time,
-                group: None,
-            },
-            roots: Roots {
-                proc: self.roots.proc.clone(),
-                cgroup: self.roots.cgroup.clone(),
-            },
+    /// Every live member of the process group, identity and group read once per process.
+    fn scan_members(&self, group: u32) -> Vec<Member> {
+        let Ok(entries) = fs::read_dir(&self.roots.proc) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+                let text = fs::read_to_string(entry.path().join("stat")).ok()?;
+                let (state, pgrp, start_time) = parse_stat(&text)?;
+                (pgrp == group && !matches!(state, 'Z' | 'X')).then_some(Member {
+                    pid,
+                    start_time,
+                    group: pgrp,
+                })
+            })
+            .collect()
+    }
+
+    /// Signal every member of the group through its pidfd; how many the kernel accepted.
+    fn signal_group(&self, group: u32, signal: i32) -> usize {
+        self.scan_members(group)
+            .iter()
+            .filter(|member| (self.send_signal)(member, signal))
+            .count()
+    }
+
+    /// Wait for the group to empty, up to `limit`.
+    fn emptied(&self, group: u32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.scan_members(group).is_empty() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 }
@@ -158,6 +141,12 @@ fn started_ms(root: &Path, pid: u32) -> Option<i64> {
     Some(boot * 1000 + ticks as i64 * 1000 / hz)
 }
 
+/// Device and inode of what the path (a /proc descriptor link, or a path) reaches.
+fn inode_of(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
 fn leader_of(proc_dir: &Path) -> Option<u32> {
     let stat = fs::read_to_string(proc_dir.join("stat")).ok()?;
     let after: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
@@ -201,6 +190,7 @@ impl Host for LocalHost {
             found.push(Owner {
                 pid,
                 start_time: proc_start_time(&self.roots.proc, pid),
+                output: inode_of(&dir.join("fd/1")),
             });
         }
         // Zero or several matches prove no owner: nothing is ended on a guess.
@@ -209,8 +199,6 @@ impl Host for LocalHost {
 
     fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop {
         let dir = self.roots.proc.join(owner.pid.to_string());
-        let group = self.group(owner);
-        let members = group.members().unwrap_or_default();
         let leader_alive = proc_start_time(&self.roots.proc, owner.pid);
         let output = task.output_path.as_deref().map(PathBuf::from);
         let leader_ours = leader_alive.is_some()
@@ -222,74 +210,85 @@ impl Host for LocalHost {
         if leader_alive.is_some() && !leader_ours {
             return Stop::Gone;
         }
-        if members.is_empty() {
+        let group = owner.pid;
+        if self.scan_members(group).is_empty() {
             // Nothing left to signal: it ended by itself, or after our earlier signal.
             return if signalled { Stop::Ended } else { Stop::Gone };
         }
-        // The kernel must accept a signal for a member that was seen alive: that
-        // acceptance is the evidence of the watchdog's stop. A member that exited
-        // between the scan and the signal is not a stop of ours.
-        let accepted = members
-            .iter()
-            .filter_map(|pid| {
-                let text =
-                    fs::read_to_string(self.roots.proc.join(pid.to_string()).join("stat")).ok()?;
-                let (_, group_id, start_time) = parse_stat(&text)?;
-                Some(Member {
-                    pid: *pid,
-                    start_time,
-                    group: group_id,
-                })
-            })
-            .filter(|member| (self.send_signal)(member, libc::SIGTERM))
-            .count();
-        if accepted == 0 {
-            // No signal reached anyone: members that remain are not stopped, and nothing
-            // may be recorded as signalled.
-            let left = group.members().unwrap_or_default();
-            return match (left.is_empty(), signalled) {
+        // The first signal is SIGHUP, which an independent end of a command rarely is: an
+        // exit report of 129 is then the harness's receipt of this stop. The kernel must
+        // accept it for a member seen alive; a member gone before the signal is no stop of
+        // ours.
+        if self.signal_group(group, libc::SIGHUP) == 0 {
+            return match (self.scan_members(group).is_empty(), signalled) {
                 (true, true) => Stop::Ended,
                 (true, false) => Stop::Gone,
                 (false, _) => Stop::Unsignalled,
             };
         }
-        match stop_group(&group, Duration::from_secs(5), Duration::from_secs(5)) {
-            StopOutcome::Empty => Stop::Ended,
-            StopOutcome::Survivors(_) => Stop::Survivors,
+        // Escalation goes through the same verified signalling, member by member.
+        for (signal, limit) in [
+            (None, Duration::from_secs(5)),
+            (Some(libc::SIGTERM), Duration::from_secs(5)),
+            (Some(libc::SIGKILL), Duration::from_secs(5)),
+        ] {
+            if let Some(signal) = signal {
+                self.signal_group(group, signal);
+            }
+            if self.emptied(group, limit) {
+                return Stop::Ended;
+            }
         }
+        Stop::Survivors
     }
 
-    fn mark_stop(&self, task: &TaskRef, key: &str) -> bool {
+    fn mark_stop(&self, owner: &Owner, _task: &TaskRef, key: &str) -> bool {
         use std::io::Write;
-        let Some(path) = task.output_path.as_deref() else {
+        let dir = self.roots.proc.join(owner.pid.to_string());
+        let Some(expected) = owner.output else {
             return false;
         };
+        if proc_start_time(&self.roots.proc, owner.pid) != owner.start_time
+            || inode_of(&dir.join("fd/1")) != Some(expected)
+        {
+            return false;
+        }
         let line = format!(
             "\n[round-watch] ending this command: the writer waited on it over 15 minutes (stop {})\n",
             mark_id(key)
         );
-        fs::OpenOptions::new()
-            .append(true)
-            .open(path)
-            .and_then(|mut file| {
-                file.write_all(line.as_bytes())?;
-                file.sync_all()
-            })
-            .is_ok()
+        // Written through the owner's own descriptor, never through the recorded path: the
+        // file reached is the one the command writes to, checked by inode after the open.
+        let Ok(mut file) = fs::OpenOptions::new().append(true).open(dir.join("fd/1")) else {
+            return false;
+        };
+        let same = {
+            use std::os::unix::fs::MetadataExt;
+            file.metadata()
+                .is_ok_and(|m| (m.dev(), m.ino()) == expected)
+        };
+        same && file.write_all(line.as_bytes()).is_ok() && file.sync_all().is_ok()
     }
 
-    fn has_mark(&self, task: &TaskRef, key: &str) -> bool {
+    fn has_mark(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool {
         use std::io::{Read, Seek, SeekFrom};
-        let Some(path) = task.output_path.as_deref() else {
+        use std::os::unix::fs::MetadataExt;
+        let (Some(path), Some(expected)) = (task.output_path.as_deref(), owner.output) else {
             return false;
         };
         let Ok(mut file) = fs::File::open(path) else {
             return false;
         };
-        let len = file.metadata().map_or(0, |m| m.len());
+        let Ok(meta) = file.metadata() else {
+            return false;
+        };
+        // A file that is not the owner's output proves nothing.
+        if (meta.dev(), meta.ino()) != expected {
+            return false;
+        }
         let mut tail = Vec::new();
         let ok = file
-            .seek(SeekFrom::Start(len.saturating_sub(256 * 1024)))
+            .seek(SeekFrom::Start(meta.len().saturating_sub(256 * 1024)))
             .is_ok()
             && file.read_to_end(&mut tail).is_ok();
         ok && String::from_utf8_lossy(&tail).contains(&format!("(stop {})", mark_id(key)))

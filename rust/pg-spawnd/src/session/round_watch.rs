@@ -10,7 +10,7 @@
 pub use super::round_state::{blocked_outcome, closed_rounds, spawn_state_dir, state_file};
 use super::round_state::{closed_rounds_of, notice_line, read_state};
 pub use super::round_types::{
-    Action, Host, Owner, Stop, NOTICE_GRACE_MS, STRIKE_LIMIT, WAIT_LIMIT_MS,
+    Action, Host, Owner, Stop, NOTICE_GRACE_MS, OUR_SIGNAL_EXIT, STRIKE_LIMIT, WAIT_LIMIT_MS,
 };
 use super::{round_reader::Reader, round_time::OpenWait, round_wait::TaskRef};
 use pg_worker_core::run::record_io::atomic_write_private;
@@ -102,6 +102,10 @@ impl Watch<'_> {
         Some(Owner {
             pid: u32::try_from(record.get("pid")?.as_u64()?).ok()?,
             start_time: record.get("start_time").and_then(Value::as_u64),
+            output: match (record.get("output_dev"), record.get("output_ino")) {
+                (Some(dev), Some(ino)) => Some((dev.as_u64()?, ino.as_u64()?)),
+                _ => None,
+            },
         })
     }
 
@@ -115,8 +119,8 @@ impl Watch<'_> {
                 continue;
             }
             if let Some(owner) = self.host.resolve_owner(self.session, &task.task) {
-                self.state["owners"][&key] =
-                    json!({"pid": owner.pid, "start_time": owner.start_time});
+                self.state["owners"][&key] = json!({"pid": owner.pid, "start_time": owner.start_time,
+                        "output_dev": owner.output.map(|o| o.0), "output_ino": owner.output.map(|o| o.1)});
                 changed = true;
             }
         }
@@ -126,7 +130,13 @@ impl Watch<'_> {
         Ok(())
     }
 
-    fn finish(&mut self, key: &str, mut phase: Phase, wait: &OpenWait) -> io::Result<()> {
+    fn finish(
+        &mut self,
+        key: &str,
+        mut phase: Phase,
+        wait: &OpenWait,
+        exit: Option<i64>,
+    ) -> io::Result<()> {
         if phase == Phase::Stopping {
             let Some(owner) = self.owner_of(&owner_key(&wait.round_key, &wait.task_id)) else {
                 self.settle(key, "unowned")?;
@@ -143,7 +153,7 @@ impl Watch<'_> {
             // the kill leaves the mark, and mark plus the harness's report of a signal
             // exit is the receipt that settles it; without the mark no signal was sent.
             if self.state["actions"][key]["marked"] != json!(true) {
-                if !self.host.mark_stop(&wait.task, key) {
+                if !self.host.mark_stop(&owner, &wait.task, key) {
                     self.done.push(Action::StopPending {
                         task_id: wait.task_id.clone(),
                     });
@@ -169,11 +179,23 @@ impl Watch<'_> {
                     return Ok(());
                 }
                 Stop::Gone => {
-                    self.settle(key, "finished")?;
-                    self.done.push(Action::Finished {
-                        task_id: wait.task_id.clone(),
-                    });
-                    return Ok(());
+                    // Gone after the mark: either the command ended by itself or our signal
+                    // ended it before this look. Only the harness's report tells them apart,
+                    // and only the exit our own signal produces counts as a stop.
+                    let since = self.state["actions"][key]["marked_ms"]
+                        .as_i64()
+                        .unwrap_or(self.now_ms);
+                    match exit {
+                        Some(OUR_SIGNAL_EXIT) => {}
+                        None if self.now_ms - since < NOTICE_GRACE_MS => return Ok(()),
+                        _ => {
+                            self.settle(key, "finished")?;
+                            self.done.push(Action::Finished {
+                                task_id: wait.task_id.clone(),
+                            });
+                            return Ok(());
+                        }
+                    }
                 }
                 Stop::Ended => {}
             }
@@ -317,36 +339,45 @@ pub fn tick(
         })
         .collect();
     for (key, phase, wait) in pending {
-        // A stop is only authorised while the very wait call that earned it is still
-        // open: a command that finished, a wait that returned or a new round releases it.
-        let same = open.as_ref().is_some_and(|o| {
+        let exit = reader.exit_of(&wait.task_id);
+        // A stop is only carried out while the very wait call that earned it is open: only
+        // then may a signal be sent. A command that finished, a wait that returned or a new
+        // round never signals again.
+        let open_same = open.as_ref().is_some_and(|o| {
             o.round_key == wait.round_key && o.task_id == wait.task_id && o.call_id == wait.call_id
-        }) || reader.episode_alive(&wait.task_id, &wait.call_id, now_ms);
-        if phase == Phase::Stopping && !same {
-            // The wait closed. No new signal is sent. If this stop reached its signal stage
-            // (its mark is in the owner's output) the harness's report decides it: a
-            // signal exit is the stop, any other exit means the command ended by itself.
-            // Until the report arrives the stop stays pending, up to the grace.
-            let marked = watch.host.has_mark(&wait.task, &key);
+        });
+        if phase == Phase::Stopping && !open_same {
+            // Between two calls of one wait episode the stop stays as it is.
+            if reader.episode_alive(&wait.task_id, &wait.call_id, now_ms) {
+                continue;
+            }
+            // The wait is over. If the stop reached its signal stage (its mark is in the
+            // owner's output) the harness's report decides it: the exit of our own signal
+            // is the stop, any other exit means the command ended by itself. Until the
+            // report arrives the stop stays pending, up to the grace; no signal is sent.
+            let owner = watch.owner_of(&owner_key(&wait.round_key, &wait.task_id));
+            let marked = owner
+                .as_ref()
+                .is_some_and(|o| watch.host.has_mark(o, &wait.task, &key));
             let since = watch.state["actions"][&key]["marked_ms"]
                 .as_i64()
                 .unwrap_or(now_ms);
-            match (marked, reader.exit_of(&wait.task_id)) {
-                (true, Some(137 | 143)) => {
+            match (marked, exit) {
+                (true, Some(OUR_SIGNAL_EXIT)) => {
                     watch.set_phase(&key, Phase::Stopped, &wait);
                     watch.save()?;
                     watch.done.push(Action::Stopped {
                         task_id: wait.task_id.clone(),
                         command: wait.command.clone(),
                     });
-                    watch.finish(&key, Phase::Stopped, &wait)?;
+                    watch.finish(&key, Phase::Stopped, &wait, exit)?;
                 }
                 (true, None) if now_ms - since < NOTICE_GRACE_MS => {}
                 _ => watch.settle(&key, "released")?,
             }
             continue;
         }
-        watch.finish(&key, phase, &wait)?;
+        watch.finish(&key, phase, &wait, exit)?;
     }
     if let Some(wait) = open.filter(|w| w.waited_ms > WAIT_LIMIT_MS) {
         let key = action_key(&wait);
@@ -354,7 +385,7 @@ pub fn tick(
             watch.set_phase(&key, Phase::Stopping, &wait);
             watch.state["actions"][&key]["waited_ms"] = json!(wait.waited_ms);
             watch.save()?;
-            watch.finish(&key, Phase::Stopping, &wait)?;
+            watch.finish(&key, Phase::Stopping, &wait, reader.exit_of(&wait.task_id))?;
         }
     }
     watch.end_blocked_round()?;
