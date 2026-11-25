@@ -672,10 +672,15 @@ def placement_hosts():
     from plangraph.fleet_sync.genconfig import work_mounts
     registry = registry_caps()
     hosts = placement_config(registry).get('hosts', {})
-    registered = {row.get('id') for row in registry.get('hosts', []) if isinstance(row, dict)}
+    registered = {row.get('id'): row for row in registry.get('hosts', []) if isinstance(row, dict)}
     for name, config in hosts.items():
         if name in registered and isinstance(config, dict):
             config['registry'] = True  # a registry host is probed as one, with or without `roles`
+            # The projection keeps the session only for hosts with `roles`; the registry row has it always.
+            env = registered[name].get('env')
+            session = env.get('PG_SESSION_UNIT') if isinstance(env, dict) else None
+            if session and not config.get('session_unit'):
+                config['session_unit'] = session
     local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
     if local:
         if local['id'] in hosts:

@@ -192,7 +192,7 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
     config = tmp_path / 'plangraph'
     config.mkdir()
     checkouts = {}
-    for name in ('alpha', 'beta', 'gamma', 'delta'):
+    for name in ('alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'):
         # A checkout whose src is the real source: the probe imports plangraph from it.
         (tmp_path / name).mkdir()
         (tmp_path / name / 'src').symlink_to(ROOT / 'src')
@@ -203,12 +203,17 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
                     state_dir=str(tmp_path / 'state' / name), caps=dict(mem_floor_mb=3000),
                     repos={'plangraph': {'root': checkouts[name]}}, **extra)
     excluded = dict(host('gamma'), repos={})  # no plangraph checkout, so no spawner source
-    roleless = host('delta', session=None)  # a valid registry host the projection leaves unmarked
-    for key in ('roles', 'state_dir', 'session'):
-        roleless.pop(key)
+    def without_roles(name, session=None):
+        """A valid registry host the projection leaves unmarked (and without its session)."""
+        row = host(name, session=None)
+        for key in ('roles', 'state_dir', 'session'):
+            row.pop(key)
+        return dict(row, env={'PG_SESSION_UNIT': session}) if session else row
+    roleless = [without_roles('delta'), without_roles('epsilon', 'stopped.service'),
+                without_roles('zeta', 'running.service')]
     registry = {'self': 'coord', 'hosts': [
         dict(id='coord', transport='local', os='linux', caps=dict(mem_floor_mb=3000), repos={}),
-        host('alpha'), host('beta'), excluded, roleless]}
+        host('alpha'), host('beta'), excluded, *roleless]}
     (config / 'hosts.json').write_text(json.dumps(registry))
     genconfig.sync(registry, write=True, directory=config)
     binary = tmp_path / 'bin'
@@ -218,6 +223,8 @@ def test_host_ready_unit_publishes_registry_candidates(tmp_path, monkeypatch):
 for arg do script="$arg"; done
 case "$script" in
   *"echo src_missing"*|*--test-tools*) exec env -u PYTHONPATH sh -c "umask 022; $script";;
+  *is-active*running.service*) exit 0;;
+  *is-active*) exit 1;;
   *"command -v"*|*"codex login"*) echo ok;;
   *pg-host-readiness*) echo '{"errors":[],"sandbox_ok":true}';;
   *meminfo*) echo 'MemAvailable: 8000000 kB';;
@@ -236,6 +243,9 @@ esac
     for module in ('pytest', 'xdist'):
         (deps / module).mkdir(parents=True)
         (deps / module / '__init__.py').write_text('')
+    systemctl = binary / 'systemctl'  # the session unit's UMask the readiness report asks for
+    systemctl.write_text('#!/bin/sh\necho 0022\n')
+    systemctl.chmod(0o755)
     python = binary / 'python3'
     python.write_text(f'#!/bin/sh\nPYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{deps}" exec {sys.executable} "$@"\n')
     python.chmod(0o755)
@@ -244,20 +254,28 @@ esac
     env.pop('PLANGRAPH_HOST_NAME', None)
     command = [sys.executable, *unit_command()[1:]]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
-    # delta has no roles and no session unit: still a registry host, ready, with its source resolved.
-    assert result.returncode == 0, result.stdout + result.stderr
+    # Without roles a host is still probed as a registry host and keeps its configured session:
+    # none configured is ready, a running session is ready, a stopped one is not.
+    expected = int(unit_command()[unit_command().index('--not-ready-exit') + 1])
+    assert result.returncode == expected, result.stdout + result.stderr
     check = subprocess.run([sys.executable, '-m', 'plangraph.spawner.host_ready', '--check-records'],
                            env=env, capture_output=True, text=True, timeout=60)
     assert check.returncode == 0, check
-    assert check.stdout.splitlines() == ['alpha ready', 'beta ready', 'delta ready'], check
+    assert check.stdout.splitlines() == [
+        'alpha ready', 'beta ready', 'delta ready',
+        'epsilon not-ready session: command_failed', 'zeta ready'], check
     monkeypatch.setenv('HOME', str(tmp_path))
-    records = {name: overflow.read_readiness(name) for name in ('alpha', 'beta', 'delta')}
-    assert all(record['fresh'] and record['ok'] for record in records.values()), records
+    names = ('alpha', 'beta', 'delta', 'epsilon', 'zeta')
+    records = {name: overflow.read_readiness(name) for name in names}
+    assert all(record['fresh'] for record in records.values()), records
+    assert [name for name in names if records[name]['ok']] == ['alpha', 'beta', 'delta', 'zeta']
     assert records['delta']['src_ok'] is True and records['delta']['failures'] == []
+    assert records['delta']['spawner_session'] is None and records['zeta']['spawner_session'] is True
+    assert records['epsilon']['spawner_session'] is False
     with pytest.raises(FileNotFoundError):
         overflow.read_readiness('gamma')
     assert sorted(path.name for path in overflow.readiness_dir().iterdir()) == [
-        'alpha.json', 'beta.json', 'delta.json']
+        'alpha.json', 'beta.json', 'delta.json', 'epsilon.json', 'zeta.json']
 
 
 def run_unit(tmp_path, registry, ssh_body=''):
