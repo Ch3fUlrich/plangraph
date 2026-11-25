@@ -173,22 +173,43 @@ def paths_overlap(a: str, b: str) -> bool:
 _SCOPE_SKIP_DIRS = frozenset({".git", "target", "node_modules", ".venv", "__pycache__"})
 
 
+def _scope_start(root: Path, parts: Sequence[str], scope: str) -> Path | None:
+    """The directory a scope's walk starts in; ``None`` when it leads out of ``root``.
+
+    A symlink loop or a dangling link in the prefix raises ``ValueError``: the scope cannot be
+    resolved, so the card must not be rated from files it could not see.
+    """
+    try:
+        for i in range(1, len(parts) + 1):
+            link = root.joinpath(*parts[:i])
+            if link.is_symlink() and not link.exists():
+                raise ValueError(f"write scope {scope!r} cannot be resolved: {link.name} is a symlink loop or dangling")
+        start = root.joinpath(*parts)
+        return start if start.resolve().is_relative_to(root.resolve()) else None
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"write scope {scope!r} cannot be resolved: {exc}") from exc
+
+
 def scope_files(repo_root: Path | str, write_set: Sequence[str]) -> list[str]:
     """Files under ``repo_root`` that the directory and glob scopes of ``write_set`` may name.
 
     A scope that names one file as written is left out: the card's own paths already carry it.
+    ``.`` and ``./`` name the whole repository. Raises ``ValueError`` for a scope that cannot be
+    resolved (see ``_scope_start``).
     """
     root, found = Path(repo_root), set()
-    real_root = root.resolve()
     for scope in write_set:
-        norm = _norm(scope)
+        raw = str(scope).strip().replace("\\", "/")
+        root_scope = bool(raw) and set(raw.split("/")) <= {"", "."}
         # A scope the card check rejects (absolute, drive, parent step) is never walked.
-        if path_problem("write_set", str(scope), normalise_path(str(scope))) is not None:
+        if not root_scope and path_problem("write_set", str(scope), normalise_path(raw)) is not None:
             continue
-        if norm and not _is_glob(norm) and _looks_like_file(norm):
+        norm = "" if root_scope else _norm(scope)
+        start = _scope_start(root, _literal_prefix(norm), str(scope))
+        if start is None:
             continue
-        start = root.joinpath(*_literal_prefix(norm))
-        if not start.resolve().is_relative_to(real_root):  # a symlink leading out of the repo
+        # A dotted name is a directory when the repository says so (package.v1/).
+        if norm and not _is_glob(norm) and not start.is_dir() and _looks_like_file(norm):
             continue
         for here, dirs, names in os.walk(start):
             dirs[:] = [d for d in dirs if d not in _SCOPE_SKIP_DIRS]

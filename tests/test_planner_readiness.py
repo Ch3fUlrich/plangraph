@@ -79,6 +79,36 @@ def test_scope_files_does_not_follow_a_symlink_out_of_the_repo(tmp_path):
     assert rd.scope_files(repo, ["link", "link/*.py"]) == []
 
 
+@pytest.mark.parametrize("scope", [".", "./", ".//", r".\\"])
+def test_scope_files_root_scope_names_the_whole_repo(tmp_path, scope):
+    assert rd.scope_files(_scope_tree(tmp_path), [scope]) == ["src/b.py", "tools/a.py"]
+
+
+@pytest.mark.parametrize("scope", ["pkg.v1/", "pkg.v1", "./pkg.v1//"])
+def test_scope_files_walks_a_dotted_directory(tmp_path, scope):
+    repo = _scope_tree(tmp_path)
+    (repo / "pkg.v1").mkdir()
+    (repo / "pkg.v1" / "m.py").write_text("M = 1\n", encoding="utf-8")
+    assert rd.scope_files(repo, [scope]) == ["pkg.v1/m.py"]
+    assert rd.scope_files(repo, ["pkg.v1/m.py"]) == []  # a file as written stays with the card's paths
+
+
+def test_scope_files_a_symlink_loop_is_an_error_not_a_crash_or_a_skip(tmp_path):
+    repo = _scope_tree(tmp_path)
+    (repo / "loop").symlink_to(repo / "loop")
+    with pytest.raises(ValueError, match="loop"):
+        rd.scope_files(repo, ["loop/*.py"])
+
+
+def test_scope_files_a_resolve_runtime_error_is_a_value_error(tmp_path, monkeypatch):
+    # Python 3.12 raises RuntimeError from Path.resolve on a symlink loop.
+    def boom(self, *a, **k):
+        raise RuntimeError("Symlink loop from 'x'")
+    monkeypatch.setattr(rd.Path, "resolve", boom)
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        rd.scope_files(_scope_tree(tmp_path), ["tools/*.py"])
+
+
 # ---------------------------------------------------------------- paths_overlap
 
 OVERLAP = [

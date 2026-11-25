@@ -82,6 +82,28 @@ def test_plan_phase_one_rule_33_answer_for_every_scope_spelling(w, repo, scope):
     assert plan["cards"][0]["route"]["review_seats"] == 2
 
 
+@pytest.mark.parametrize("scope", [".", "./", "pkg.v1/", "pkg.v1"])
+def test_plan_phase_root_and_dotted_directory_scopes_count_for_rule_33(w, repo, scope):
+    keeper = repo / "pkg.v1" / "src" / "plangraph" / "keeper"
+    keeper.mkdir(parents=True)
+    (keeper / "api_routes.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["cards"][0]["route"]["review_seats"] == 2
+
+
+def test_plan_phase_symlink_loop_scope_fails_that_card_only(w, repo):
+    (repo / "loop").symlink_to(repo / "loop")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["loop/*.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    first, second = plan["cards"]
+    assert first["route"] is None and "loop" in first["route_error"]
+    assert second["route"] is not None
+
+
 def test_plan_phase_does_not_walk_a_parent_relative_scope(w, repo, monkeypatch):
     (repo.parent / "outside").mkdir()
     walked = []
