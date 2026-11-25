@@ -8,21 +8,32 @@ use crate::test_python;
 const CLOSE: &str = r#"
 import json, sys
 from pathlib import Path
-root, repo = Path(sys.argv[1]), sys.argv[2]
-sys.path.insert(0, str(Path.cwd() / 'tests'))
-from keeper_util import World, defn, to_in_review
+from types import SimpleNamespace
+from plangraph.keeper import auth, db
 from plangraph.keeper.evidence_git import GitAdapter
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
-(root / 'w').mkdir()
-w = World(root / 'w', backend='sqlite')
-w.store.require_seats = True
-w.store.create_items(w.p('router'), [defn('A', review_tier='standard'), defn('B', review_tier='standard'),
-    defn('G', ['A', 'B'], kind='goal')])
-for key in 'AB':
-    to_in_review(w, f'demo:{key}')
-w.store.ctx = {'git': GitAdapter({'demo': repo}), 'spawner_records': SpawnerRecordAdapter(root / 'mirror')}
-print(json.dumps(w.store.close_merged_auto(w.p('system'))))
-w.close()
+from plangraph.keeper.evidence_types import Result
+from plangraph.keeper.store import Store
+root, repo = Path(sys.argv[1]), sys.argv[2]
+conn = db.open_db(root / 'keeper.db', create=True, backend='sqlite')
+router = auth.authenticate(conn, auth.add_principal(conn, 'router', 'router', []))
+system = auth.authenticate(conn, auth.add_principal(conn, 'system', 'system', []))
+writer = auth.authenticate(conn, auth.add_principal(conn, 'writer', 'l1', ['demo'], family='teamA'))
+store = Store(conn, clock=lambda: 1700000000.0,
+              verifiers={'decision': SimpleNamespace(verify=lambda *a: Result(True, 'verified'))})
+store.require_seats = True
+store.create_items(router, [dict(
+    project='demo', id=name, title=name, kind=kind, track='T0', owner='tester',
+    estimate_h=1, depends_on=deps, done_criteria='criteria', evidence_kinds=['any'],
+    operator=False, review_tier='standard'
+) for name, kind, deps in [('A', 'lane', []), ('B', 'lane', []), ('G', 'goal', ['demo:A', 'demo:B'])]])
+for key in ('demo:A', 'demo:B'):
+    epoch = store.claim(writer, key)['epoch']
+    store.add_evidence(writer, key, epoch, 'decision', {'id': 'D-1'})
+    store.submit(writer, key, epoch)
+store.ctx = {'git': GitAdapter({'demo': repo}), 'spawner_records': SpawnerRecordAdapter(root / 'mirror')}
+print(json.dumps(store.close_merged_auto(system)))
+conn.close()
 "#;
 
 fn commit(dir: &Path, message: &str) -> String {
