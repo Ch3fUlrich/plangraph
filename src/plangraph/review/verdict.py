@@ -25,6 +25,8 @@ __all__ = [
     "Findings",
     "classify_findings",
     "diff_paths",
+    "diff_binding",
+    "bound_diff_paths",
 ]
 
 VERDICTS = ("pass", "fix", "halt")
@@ -325,18 +327,24 @@ def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
     return paths or None
 
 
-# Words by which a PROCESS diagnostic names the context field it reports as empty.
+# A PROCESS diagnostic is one fixed statement form: a defect word, then the context field it
+# reports. Advice after "fix"/"suggest"/"should"... is cut first, so a finding about other
+# wording that merely suggests adding callers is not a statement about the prompt.
+_ADVICE = re.compile(r"\b(?:fix|fixes|suggest\w*|should|recommend\w*|replace|change|edit|add|adding|"
+                     r"require|consider)\b.*$", re.I | re.S)
+_DEFECT = r"(?:omits?|omitted|lacks?|lacking|missing|empty|without|unrendered|unavailable|" \
+          r"does not (?:carry|include|supply|render|list|contain))\b[^.;]*?"
 _FIELD_WORDS = {
-    "public_symbols": re.compile(r"\bsymbols?\b", re.I),
-    "callers": re.compile(r"\bcallers?\b", re.I),
-    "test_output_paths": re.compile(r"\btest[- ]output|\boutput paths?\b|\btest logs?\b", re.I),
+    "public_symbols": r"\bsymbols?\b",
+    "callers": r"\bcallers?\b",
+    "test_output_paths": r"\btest[- ]output\b|\boutput paths?\b|\btest logs?\b",
 }
 
 
 def _primary_path(rest: str) -> str | None:
     """The file of the finding itself: its first token, not a path cited in the advice."""
-    token = rest.strip().lstrip("`'\"(").split(None, 1)[0] if rest.strip() else ""
-    path = token.strip("`'\",;)").partition(":")[0]
+    tokens = rest.strip().lstrip("`'\"(").split(None, 1)
+    path = tokens[0].strip("`'\",;)").partition(":")[0] if tokens else ""
     for name in PROCESS_PATHS:
         if path == name or path.endswith("/" + name):
             return path
@@ -344,8 +352,46 @@ def _primary_path(rest: str) -> str | None:
 
 
 def _names_defect(rest: str, defects: list[str]) -> bool:
-    """The finding names at least one context field the emitted prompt really lacks."""
-    return any(_FIELD_WORDS[field].search(rest) for field in defects)
+    """The finding states that the prompt omits a context field the prompt really lacks."""
+    claim = _ADVICE.sub("", rest.partition(" - ")[2] or rest)
+    return any(re.search(_DEFECT + "(?:" + _FIELD_WORDS[field] + ")", claim, re.I)
+               for field in defects)
+
+
+def diff_binding(base: str, head: str, cwd: str) -> tuple[str, set[str]] | None:
+    """(sha256, paths) of the endpoint-tree diff base..head as the CLI seat binding computes
+    them (`cli_review_binding.rs::binding`: raw records sorted by path, hashed), or None."""
+    import hashlib
+
+    if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (base, head)):
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "--no-replace-objects", "diff", "--no-color", "--no-renames",
+             "--no-relative", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
+             "--raw", "--abbrev=40", "-z", base, head, "--"],
+            capture_output=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    fields = out.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 2:
+        return None
+    changes = sorted((fields[i + 1], fields[i]) for i in range(0, len(fields), 2))
+    digest = hashlib.sha256()
+    for path, change in changes:
+        digest.update(change + b"\0" + path + b"\0")
+    return digest.hexdigest(), {path.decode("utf-8", "replace") for path, _ in changes}
+
+
+def bound_diff_paths(binding: object, cwd: str | None) -> set[str] | None:
+    """Paths of the dispatched diff when the seat's recorded `review_binding` digest matches
+    the diff recomputed in `cwd`; None (scope unknown, fail closed) otherwise."""
+    if not isinstance(binding, dict) or not cwd:
+        return None
+    found = diff_binding(str(binding.get("base_sha")), str(binding.get("head_sha")), cwd)
+    return found[1] if found and found[0] == binding.get("diff_sha256") else None
 
 
 def classify_findings(text: str, *, prompt: str = "",

@@ -383,3 +383,64 @@ def test_legacy_unbound_seat_goes_to_routing_recovery(tmp_path, monkeypatch):
     argv.remove("--dry-run")
     assert sv.main(argv + ["--url", "unused"]) == sv.EXIT_REFUSED
     assert "no proven admission binding" in (directory / "verdict.recovery.json").read_text()
+
+
+BRIEF_MED = "MED src/plangraph/review/review_brief.md:26 - the supplied brief omits the public symbols"
+EMPTY_BRIEF = "=== ITEM CONTEXT\nItem key: demo:A\nChanged public symbols: unavailable (request before acceptance)\n"
+
+
+def bound_record(tmp_path, name, reply, digest=None, touch_brief=False):
+    """A record-derived seat run bound to a real two-commit repository diff (src/a.py)."""
+    import hashlib
+    import subprocess
+
+    from plangraph.review.verdict import diff_binding
+
+    repo = tmp_path / (name + "-repo")
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+    repo.mkdir()
+    git("init", "-q")
+    (repo / "x.txt").write_text("1")
+    git("add", "."); git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "src").mkdir()
+    (repo / "src/a.py").write_text("def run(): pass\n")
+    if touch_brief:
+        (repo / "src/plangraph/review").mkdir(parents=True)
+        (repo / "src/plangraph/review/review_brief.md").write_text("changed\n")
+    git("add", "."); git("commit", "-qm", "head")
+    head = git("rev-parse", "HEAD")
+    prompt = EMPTY_BRIEF
+    binding = {"base_sha": base, "head_sha": head, "diff_sha256": diff_binding(base, head, str(repo))[0]}
+    argv = record_dir(
+        tmp_path, name, live_log=reply, head=head, cwd=str(repo), head_sha=head,
+        review_binding=binding, completion={"head_sha": head, "review_binding": binding},
+        prompt_sha256=digest or hashlib.sha256(prompt.encode()).hexdigest(),
+        request={"verdict_binding": {"key": "demo:A", "epoch": 1, "round": 1, "head": head, "seat_run": name}})
+    seat_dir = Path(argv[argv.index("--seat-dir") + 1])
+    (seat_dir / "prompt.txt").write_text(prompt)
+    return argv, seat_dir
+
+
+@pytest.mark.parametrize("verdict", ["REQUEST_CHANGES", "ACCEPT"])
+def test_record_derived_process_only_reply_is_held_for_either_verdict(tmp_path, capsys, verdict):
+    reply = f"{BRIEF_MED}\nTESTS: none: x\nTEST_GAMING: no\nVERDICT: {verdict}\n"
+    argv, seat_dir = bound_record(tmp_path, "held", reply)
+    assert sv.main(argv) == sv.EXIT_PROCESS
+    assert "body" not in json.loads(capsys.readouterr().out)
+    assert json.loads((seat_dir / "process.json").read_text())["lines"] == [BRIEF_MED]
+
+
+def test_record_derived_digest_mismatch_and_changed_brief_keep_the_finding(tmp_path, capsys):
+    reply = f"{BRIEF_MED}\nTEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    argv, seat_dir = bound_record(tmp_path, "wrongdigest", reply, digest="ab" * 32)
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
+    # the bound diff changes the brief itself: a finding about it is a finding of the head
+    argv, seat_dir = bound_record(tmp_path, "inscope", reply, touch_brief=True)
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
