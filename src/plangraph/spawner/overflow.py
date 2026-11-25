@@ -590,15 +590,15 @@ def native_queue_card(service, card, options):
     return lane_admit(service, card, options.get('prompt', ''))
 
 
-def lane_text(rows, text):
-    """`text` after the lane refusals that hosts of `rows` reported, which keep their holders."""
-    lanes = [row['refusal'] for row in rows.values() if str(row.get('refusal', '')).startswith(LANE_REFUSALS)]
+def lane_text(refusals, text):
+    """`text` after the lane refusals that hosts reported (`refusals`: host -> refusal), which keep their holders."""
+    lanes = [why for why in refusals.values() if str(why).startswith(LANE_REFUSALS)]
     return '; '.join([*lanes, text])
 
 
-def lane_error(rows, text):
+def lane_error(refusals, text):
     """The `error` of a final refusal when a host refused the launch as a lane; nothing otherwise."""
-    return {'error': lane_text(rows, text)} if lane_text(rows, '') else {}
+    return {'error': lane_text(refusals, text)} if lane_text(refusals, '') else {}
 
 
 async def native_spawn(self, card, options):

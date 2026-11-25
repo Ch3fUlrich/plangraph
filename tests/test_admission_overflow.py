@@ -164,6 +164,25 @@ def test_failures_queue_with_safe_reasons(setup, failure, reason):
     assert remote.call_count == 2
 
 
+def test_queue_timeout_keeps_the_target_lane_reason_across_readiness_refreshes(setup, monkeypatch):
+    service, _, remote = setup
+    service.result = Mock(side_effect=OSError('record not saved by this fixture'))  # the record stays queued
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    remote.side_effect = overflow.RemoteRefusal(held)
+    monkeypatch.setenv(a.ADMISSION_WAIT_ENV, '0.2')
+    monkeypatch.setenv(a.ADMISSION_POLL_ENV, '0.01')
+    loads = []
+    def stale_after_the_first_load(config, role):
+        loads.append(role)  # the readiness of both hosts goes stale once the target has refused
+        return {name: dict(ssh=name, ok=True, fresh=len(loads) == 1, live_runs=100,
+                           mem_available_mb=6000, role_mb=2048, floor_mb=3000) for name in ('ash', 'birch')}
+    monkeypatch.setattr(overflow, 'ready_records', stale_after_the_first_load)
+    result = service.admit_spawn({'role': 'implement', 'prompt': 'task'}, card={'diff_ref': {'repo': service.runner.default_cwd}})
+    assert result['status'] == 'refused' and 'admission window' in result['error']
+    assert result['error'].startswith(held), result
+    assert remote.call_count == 2 and len(loads) > 2  # no host was left to try after the refresh
+
+
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
