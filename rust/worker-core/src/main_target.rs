@@ -19,7 +19,7 @@ fn identified(target: &Path) -> bool {
 /// A Git repository below the target is someone's source tree, never a build cache, whatever markers
 /// sit beside it: a `.git` directory or file (a repository or linked worktree) or a bare repository
 /// (a `HEAD` file beside `objects` and `refs` directories, which may be symlinks) at any depth.
-fn holds_git_repository(target: &Path) -> io::Result<bool> {
+pub(crate) fn holds_git_repository(target: &Path) -> io::Result<bool> {
     let mut pending = vec![target.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let (mut head, mut objects, mut refs) = (false, false, false);
@@ -165,6 +165,14 @@ fn sweep_owned(
         ));
         return Ok(());
     }
+    // The sibling lease a build holds shared is held exclusively through the scan and the removal.
+    let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&canonical)? else {
+        report.skipped.push(format!(
+            "{}: main checkout target cache lease held; not touched",
+            target.display()
+        ));
+        return Ok(());
+    };
     let (bytes, newest) = scan(&target)?;
     let idle = now.duration_since(newest).unwrap_or_default();
     report.actions.push(format!(
@@ -462,6 +470,22 @@ mod tests {
         assert_eq!(report.freed_bytes, 0);
         assert!(bare.join("HEAD").exists());
         assert!(report.skipped.iter().any(|s| s.contains("git repository")));
+    }
+
+    #[test]
+    fn a_held_cache_lease_keeps_an_idle_main_checkout_target() {
+        let (_tmp, repo) = fixture(7200);
+        let target = repo.join("rust/target").canonicalize().unwrap();
+        let lease = crate::cargo_cache::try_exclusive_lease(&target)
+            .unwrap()
+            .unwrap();
+        let report = run(&repo, true, false);
+        assert_eq!(report.freed_bytes, 0);
+        assert!(target.join("debug/blob").exists());
+        assert!(report.skipped.iter().any(|s| s.contains("lease held")));
+        drop(lease);
+        assert!(run(&repo, true, false).freed_bytes > 0);
+        assert!(!target.exists());
     }
 
     #[test]

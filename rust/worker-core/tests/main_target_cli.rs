@@ -92,14 +92,14 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
 
 /// A shared target configured under a legacy container (`~/.cache/cargo-target/…`) is the
 /// host's live target: the legacy sweep must keep it however long it sat idle, while a
-/// neighbouring idle legacy target is removed.
+/// neighbouring idle legacy target is removed and one holding a git repository is not.
 #[test]
 fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let (tmp, repo, root) = fixture();
     let home = tmp.path().join("home");
     let container = home.join(".cache/cargo-target");
     let old = SystemTime::now() - Duration::from_secs(3 * 86400);
-    for name in ["shared", "batch23"] {
+    for name in ["shared", "batch23", "holds-repository"] {
         let dir = container.join(name);
         fs::create_dir_all(dir.join("debug")).unwrap();
         fs::write(dir.join(".rustc_info.json"), b"{}").unwrap();
@@ -112,6 +112,16 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
         ] {
             fs::File::open(p).unwrap().set_modified(old).unwrap();
         }
+    }
+    // An idle legacy target that also holds a bare repository with a commit is source, not cache.
+    let mirror = container.join("holds-repository/mirror.git");
+    git(&repo, &["init", "-q", "--bare", mirror.to_str().unwrap()]);
+    let mut pending = vec![container.join("holds-repository")];
+    while let Some(path) = pending.pop() {
+        if fs::symlink_metadata(&path).unwrap().is_dir() {
+            pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        }
+        fs::File::open(&path).unwrap().set_modified(old).unwrap();
     }
     let pins = tmp.path().join("pins.json");
     fs::write(&pins, "[]").unwrap();
@@ -146,6 +156,7 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     assert!(output.status.success(), "{row}");
     assert!(container.join("shared/debug/blob").exists(), "{row}");
     assert!(!container.join("batch23").exists(), "{row}");
+    assert!(mirror.join("HEAD").exists(), "{row}");
 }
 
 /// An aged cargo-marked target that also holds a bare repository with a commit is source: the CLI

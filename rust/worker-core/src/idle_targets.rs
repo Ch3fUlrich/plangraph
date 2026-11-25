@@ -72,6 +72,14 @@ pub fn sweep(
                 ));
                 continue;
             }
+            // A git repository below the target is someone's source tree, whatever markers sit beside it.
+            if crate::main_target::holds_git_repository(&canonical)? {
+                report.skipped.push(format!(
+                    "{}: legacy target holds a git repository; not touched",
+                    target.display()
+                ));
+                continue;
+            }
             // The cache lease a build holds shared is held exclusively through the scan and the removal.
             let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&target)? else {
                 report

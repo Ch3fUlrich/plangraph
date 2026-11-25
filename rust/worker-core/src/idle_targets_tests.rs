@@ -156,3 +156,58 @@ fn a_held_cache_lease_keeps_an_idle_legacy_target() {
     assert!(run(&[container], &Guards::default(), true, false).freed_bytes > 0);
     assert!(!old.exists());
 }
+
+fn age_all(path: &Path) {
+    let old = SystemTime::now() - Duration::from_secs(3 * 86400);
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(entry) = pending.pop() {
+        if fs::symlink_metadata(&entry).unwrap().is_dir() {
+            pending.extend(fs::read_dir(&entry).unwrap().map(|e| e.unwrap().path()));
+        }
+        fs::File::open(&entry).unwrap().set_modified(old).unwrap();
+    }
+}
+
+#[test]
+fn a_git_repository_below_a_legacy_target_keeps_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let container = tmp.path().join("cargo-target");
+    let sweep = |container: &Path| {
+        run(
+            std::slice::from_ref(&container.to_path_buf()),
+            &Guards::default(),
+            true,
+            false,
+        )
+    };
+    // A checkout, a linked worktree's `.git` file, and a bare repository (HEAD beside objects and refs).
+    for shape in ["checkout", "linked", "bare"] {
+        let old = target(&container, "batch23", Duration::from_secs(3 * 86400));
+        let repository = old.join("scratch");
+        match shape {
+            "checkout" => fs::create_dir_all(repository.join(".git")).unwrap(),
+            "linked" => {
+                fs::create_dir_all(&repository).unwrap();
+                fs::write(repository.join(".git"), "gitdir: elsewhere\n").unwrap();
+            }
+            _ => {
+                fs::create_dir_all(repository.join("objects")).unwrap();
+                fs::create_dir_all(repository.join("refs")).unwrap();
+                fs::write(repository.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            }
+        }
+        age_all(&old);
+        let report = sweep(&container);
+        assert_eq!(report.freed_bytes, 0, "{shape}");
+        assert!(repository.exists(), "{shape}");
+        assert!(
+            report.skipped.iter().any(|s| s.contains("git repository")),
+            "{shape}"
+        );
+        // Without the repository the same aged target goes.
+        fs::remove_dir_all(&repository).unwrap();
+        age_all(&old);
+        assert!(sweep(&container).freed_bytes > 0, "{shape}");
+        assert!(!old.exists(), "{shape}");
+    }
+}
