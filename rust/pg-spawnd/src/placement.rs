@@ -225,7 +225,7 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     if args.get("role").is_some_and(|role| role != "implement") {
         return Err(parameter("native-codex requires implement role"));
     }
-    crate::native_writer_host::writer_effort(&args["card"]).map_err(parameter)?;
+    crate::native_writer_host::check_launch_card(&args["card"]).map_err(parameter)?;
     let prompt = args
         .get("prompt")
         .and_then(Value::as_str)
@@ -248,10 +248,10 @@ fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value
         .filter(|record| record["run_id"].is_string())
         .ok_or_else(|| match code {
             2 | 3 => ToolError::Refused {
-                kind: if code == 2 {
-                    RefusalKind::Spawn
-                } else {
-                    RefusalKind::Benchmark
+                kind: match (code, crate::lane_admit::refusal_reason(&line)) {
+                    (2, Some(reason)) => RefusalKind::Lane(reason),
+                    (2, None) => RefusalKind::Spawn,
+                    _ => RefusalKind::Benchmark,
                 },
                 message: if line.is_empty() {
                     "spawn refused".into()

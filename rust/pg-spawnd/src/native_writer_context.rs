@@ -1,6 +1,6 @@
 //! Evidence for the item-context block of the native review brief, read from the writer
 //! brief (feeder or batch layout) and the exact diff.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 const MAX_CALLERS_PER_SYMBOL: usize = 3;
 
@@ -63,15 +63,7 @@ fn joined(sections: Vec<String>) -> Option<String> {
 
 /// The plan-item keys named by the writer brief.
 pub(super) fn item_keys(brief: &str) -> Vec<String> {
-    let assignment = regex::Regex::new(
-        r"(?m)^(?:## |### |Plan item: |Item key: )([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)(?::|[ \t|]|\r?$)",
-    )
-    .expect("valid assignment pattern");
-    let found: BTreeSet<String> = assignment
-        .captures_iter(brief)
-        .map(|capture| capture[1].to_owned())
-        .collect();
-    found.into_iter().collect()
+    pg_spawnd::lane_guard::item_keys(brief)
 }
 
 /// The done criteria of every item of the brief, whole.

@@ -520,6 +520,8 @@ def remote_spawn(name, host, card, prompt, options):
             reason = receipt.get('reason')
             if card.get('run_kind') == 'native-codex' and isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
                 raise RemoteRefusal(reason)
+            if isinstance(receipt.get('error'), str) and receipt['error'].startswith(LANE_REFUSALS):
+                raise RemoteRefusal(receipt['error'])  # the target's lane reason and holder, kept
             raise RemoteRefusal('target rejected admission')
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):
@@ -545,24 +547,77 @@ def native_repo(card):
     return Path(repo).resolve()
 
 
+LANE_REFUSALS = ('lane_unreadable:', 'lane_collision:', 'lane_too_many_keys:')
+
+
+def lane_admit(service, card, prompt):
+    """Admit the launch against this host's run records; return the card to register.
+
+    The one door of the lane guard: every native launch that runs here (MCP, CLI, a forwarded
+    target) and every local queueing passes it, and it alone sets the admitted-keys mark that
+    the supervisor publishes. Launch options that no host state decides are refused first."""
+    from plangraph.fleet_snapshot import _projection_binary
+    from plangraph.routing_errors import SpawnRefused
+    done = subprocess.run([_projection_binary(), 'lane-admit', '--state', str(service.state)],
+                          input=json.dumps(dict(prompt=prompt, card=card)).encode(),
+                          capture_output=True, timeout=60)
+    if done.returncode:
+        raise SpawnRefused(done.stderr.decode(errors='replace').strip() or 'lane admission failed')
+    return json.loads(done.stdout)
+
+
+def native_launch_checks(card, options):
+    """The launch options of a native writer that no host state decides; returns (repo, effort).
+
+    Shared by the launch boundary and the queue, so a request that cannot launch is refused
+    on its options before any run record is read."""
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.planner.routing import rule_level
+    if options.get('role', 'implement') != 'implement' or options.get('cwd'):
+        raise ValueError('native-codex requires implement role and a host-relative card.repo')
+    if options.get('dry_run'):
+        raise ValueError('native-codex dry-run is not supported')
+    repo = native_repo(card)
+    try:
+        return repo, rule_level(card)
+    except (TypeError, ValueError) as exc:
+        raise SpawnRefused(str(exc)) from exc
+
+
+def native_queue_card(service, card, options):
+    """The card of a native launch that waits for room: its options checked, its keys admitted."""
+    native_launch_checks(card, options)
+    return lane_admit(service, card, options.get('prompt', ''))
+
+
+def keep_lane(held, name, refusal):
+    """Note a host's refusal in `held`; a lane refusal is not replaced by a later generic failure of that host."""
+    if refusal.startswith(LANE_REFUSALS) or name not in held:
+        held[name] = refusal
+    return refusal
+
+
+def lane_text(refusals, text):
+    """`text` after the lane refusals that hosts reported (`refusals`: host -> refusal), which keep their holders."""
+    lanes = [why for why in refusals.values() if str(why).startswith(LANE_REFUSALS)]
+    return '; '.join([*lanes, text])
+
+
+def lane_error(refusals, text):
+    """The `error` of a final refusal when a host refused the launch as a lane; nothing otherwise."""
+    return {'error': lane_text(refusals, text)} if lane_text(refusals, '') else {}
+
+
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
     import asyncio, time
     from plangraph.fleet_snapshot import _projection_binary
     from .private_io import atomic_write_private
     import socket
-    if options.get('role', 'implement') != 'implement' or options.get('cwd'):
-        raise ValueError('native-codex requires implement role and a host-relative card.repo')
-    if options.get('dry_run'):
-        raise ValueError('native-codex dry-run is not supported')
-    repo = native_repo(card)
     from plangraph.routing_errors import SpawnRefused
-    from plangraph.planner.routing import rule_level
-    try:
-        effort = rule_level(card)
-    except (TypeError, ValueError) as exc:
-        raise SpawnRefused(str(exc)) from exc
+    repo, effort = native_launch_checks(card, options)
     binary = _projection_binary()
+    card = await asyncio.to_thread(lane_admit, self, card, options.get('prompt', ''))
     from .host_ready import harness_path
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)

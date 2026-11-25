@@ -94,3 +94,19 @@ fn refused_table() {
     assert!(refused_record_error(&json!({"status":"completed"})).is_none());
     assert!(refused_record_error(&json!([])).is_none());
 }
+
+#[test]
+fn a_refused_record_of_the_lane_guard_keeps_its_reason() {
+    // The record the Python launch boundary saves for a refused launch: the reply of the adapter.
+    for reason in ["lane_unreadable", "lane_collision", "lane_too_many_keys"] {
+        let record = json!({"status":"refused","refusal":"SpawnRefused","run_id":"run-r",
+            "error":format!("{reason}: demo:K is held by live lane run-x (run)"),"exit_code":2});
+        let error = refused_record_error(&record).unwrap();
+        assert_eq!(error.data.unwrap()["reason"], reason);
+    }
+    let other = refused_record_error(
+        &json!({"status":"refused","error":"cargo_target_cap: cache full","exit_code":2}),
+    )
+    .unwrap();
+    assert!(other.data.unwrap().get("reason").is_none());
+}

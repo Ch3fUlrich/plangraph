@@ -7,6 +7,9 @@ pub(crate) enum RefusalKind {
     Parameter,
     Spawn,
     Benchmark,
+    /// A parameter refusal of the lane guard; the data carries its stable `reason` code
+    /// (`lane_unreadable`, `lane_collision`, ...).
+    Lane(&'static str),
 }
 #[allow(dead_code)]
 pub(crate) enum ToolError {
@@ -28,16 +31,22 @@ impl ToolError {
                 message,
                 legs,
             } => {
+                let reason = match &kind {
+                    RefusalKind::Lane(reason) => Some(*reason),
+                    _ => None,
+                };
                 let (code, name, exit) = match kind {
-                    RefusalKind::Parameter => (-32602, "ParameterRefused", 2),
+                    RefusalKind::Parameter | RefusalKind::Lane(_) => {
+                        (-32602, "ParameterRefused", 2)
+                    }
                     RefusalKind::Spawn => (-32000, "SpawnRefused", 2),
                     RefusalKind::Benchmark => (-32602, "BenchmarkError", 3),
                 };
-                (
-                    code,
-                    message,
-                    json!({"type":name,"exit_code":exit,"legs":legs}),
-                )
+                let mut data = json!({"type":name,"exit_code":exit,"legs":legs});
+                if let Some(reason) = reason {
+                    data["reason"] = json!(reason);
+                }
+                (code, message, data)
             }
             other => {
                 let (code, name, message) = match other {
@@ -67,18 +76,18 @@ pub(crate) fn refused_record_error(value: &Value) -> Option<ErrorData> {
         Some("ParameterRefused" | "BenchRequired" | "BenchDataError") => -32602,
         _ => -32000,
     };
-    Some(ErrorData::new(
-        ErrorCode(code),
-        value["error"]
-            .as_str()
-            .unwrap_or("benchmark rows missing")
-            .to_owned(),
-        Some(
-            json!({"type":refusal,"exit_code":value.get("exit_code").unwrap_or(&json!(2)),
-            "legs":value.get("legs").filter(|v| python_truthy(v)).unwrap_or(&json!([])),
-            "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)}),
-        ),
-    ))
+    let message = value["error"]
+        .as_str()
+        .unwrap_or("benchmark rows missing")
+        .to_owned();
+    let mut data = json!({"type":refusal,"exit_code":value.get("exit_code").unwrap_or(&json!(2)),
+        "legs":value.get("legs").filter(|v| python_truthy(v)).unwrap_or(&json!([])),
+        "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)});
+    // A refusal of the lane guard keeps its stable reason, whichever door reported it.
+    if let Some(reason) = crate::lane_admit::refusal_reason(&message) {
+        data["reason"] = json!(reason);
+    }
+    Some(ErrorData::new(ErrorCode(code), message, Some(data)))
 }
 
 fn python_truthy(value: &Value) -> bool {

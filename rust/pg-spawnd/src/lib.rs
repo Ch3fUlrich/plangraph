@@ -7,7 +7,10 @@ pub mod brief_gate_paths;
 #[cfg(target_os = "linux")]
 pub mod external_run;
 pub mod landing_journal;
+pub mod lane_guard;
+pub mod lane_launch;
 pub mod pyjson;
+pub mod record_file;
 pub mod role_header;
 #[cfg(target_os = "linux")]
 pub mod session;

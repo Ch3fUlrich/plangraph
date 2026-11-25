@@ -69,6 +69,27 @@ def test_remote_outer_receipt(monkeypatch, stdout, expected):
     assert o.remote_spawn('invented', host, {}, 'prompt', []) == expected
 
 
+@pytest.mark.parametrize('error,expected', [
+    ('lane_collision: demo:HELD is held by live lane run-held (run)',
+     'lane_collision: demo:HELD is held by live lane run-held (run)'),
+    ('lane_unreadable: unreadable run record run-odd; the keys cannot be admitted until that state can be read',
+     'lane_unreadable: unreadable run record run-odd; the keys cannot be admitted until that state can be read'),
+    ('cargo_target_cap: cache full', 'target rejected admission'),
+])
+def test_remote_refusal_keeps_the_lane_reason_and_holder_of_the_target(monkeypatch, error, expected):
+    receipt = json.dumps(dict(run_id='run-t', status='refused', refusal='SpawnRefused', exit_code=2, error=error))
+    def run(argv, **kwargs):
+        output = '/invented-stage'
+        if argv[0] == 'ssh' and 'plangraph.spawner.cli' in argv[-1]:
+            output = bracket(argv[-1], receipt)
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(o.subprocess, 'run', run)
+    host = dict(ssh='invented-alias', repo='/invented', spawner_src='/invented/src', env_file='/invented/env')
+    with pytest.raises(o.RemoteRefusal) as refused:
+        o.remote_spawn('invented', host, {}, 'prompt', [])
+    assert str(refused.value) == expected
+
+
 @pytest.fixture
 def inputs(tmp_path, monkeypatch):
     monkeypatch.setenv('HOME', str(tmp_path))

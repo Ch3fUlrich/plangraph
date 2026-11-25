@@ -73,13 +73,7 @@ impl Host {
     }
 
     pub(super) fn configure(&mut self, request: &Value) -> Result<(), String> {
-        if self
-            .push_ref
-            .as_ref()
-            .is_some_and(|target| !target.starts_with("refs/heads/"))
-        {
-            return Err("push_ref must name refs/heads/...".into());
-        }
+        super::check_push_ref(&request["card"])?;
         self.brief = pg_spawnd::batch_writer_brief::render_in(
             request["prompt"].as_str().ok_or("prompt missing")?,
             // A fresh launch renders before its worktree exists: the host repository is the checkout.
@@ -168,6 +162,7 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
             .ok_or("record_path missing")?,
     );
     mark_process(&mut record);
+    pg_spawnd::lane_guard::publish_marker(request, &mut record);
     let mut host = Host::from_request(request, &record, record_path)?;
     if let Err(reason) = host.configure(request) {
         record["status"] = json!("failed");
