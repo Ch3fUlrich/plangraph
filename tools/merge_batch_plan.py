@@ -384,6 +384,7 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
 
 # --- entry replay: the tests a part changed run five times on a clean checkout of its head (LE-CI-FLAKE-ENTRY-REPLAY)
 
+_SKIPPED = re.compile(r"^(?:(\S+::.+?) SKIPPED\b.*|\[gw\d+\] \[ *\d+%\] SKIPPED (\S+::.+?)\s*)$", re.M)
 _OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (.+?)(?: - .*)?|test (\S+) \.\.\. (ok|FAILED))$", re.M)
 
 
@@ -405,13 +406,13 @@ def changed_tests(root, base: str, head: str) -> dict:
         for m in re.finditer(r"^([ \t]*)#\[(?:\w+::)?test\b.*\n(?:\1#\[.*\n)*\1(?:async )?fn (\w+)(?:.*\{\}|.*\n(?:.*\n)*?\1\})", text, re.M):
             if touched & set(range(text.count("\n", 0, m.start()) + 1, text.count("\n", 0, m.end()) + 2)):
                 rust.append([f"{owner}/Cargo.toml", m[2]])
-    return {"python": python, "rust": rust}
+    return {"python": python, "rust": rust, "files": sorted(git("diff", "--name-only", diff).splitlines())}
 
 
 def replay_commands(changed: dict, runs: int = 5, workers: bool = True) -> list[tuple[list[str], list[str]]]:
     """``(command, wanted)`` per run: each changed test ``runs`` times on one head, the last run with every worker or
     thread. ``wanted`` names what the run must report an outcome for (a test file prefix or a Rust test name)."""
-    py = [sys.executable, "-m", "pytest", "-q", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
+    py = [sys.executable, "-m", "pytest", "-v", "-rA", "--no-header", "-p", "no:cacheprovider", *changed["python"]]
     commands = [(py + (["-n", "auto"] if workers and i == runs - 1 else []), [f"{f}::" for f in changed["python"]])
                 for i in range(runs)] if changed["python"] else []
     for manifest, name in changed["rust"]:
@@ -445,11 +446,14 @@ def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: 
             log = out / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
             log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
             outcomes = [(m[2] or m[3], m[1] == "PASSED" or m[4] == "ok") for m in _OUTCOME.finditer(text)]
+            skipped = {m[1] or m[2] for m in _SKIPPED.finditer(text)}   # not applicable on this platform: no outcome expected
             for test, ok in outcomes:
                 seen.setdefault(test, {}).setdefault(ok, str(log))
-            incomplete += [f"{w} (run {n})" for w in wanted if not any(t.startswith(w) if w.endswith("::") else (t == w or t.split("::")[-1] == w) for t, _ in outcomes)]
-            if done.returncode and not outcomes:
-                failed.append(" ".join(command[:6]))
+            incomplete += [f"{w} (run {n})" for w in wanted if w not in skipped
+                           and not any(t.startswith(w) if w.endswith("::") else (t == w or t.split("::")[-1] == w) for t, _ in outcomes)]
+            # A runner error or an interrupted run (pytest 2-5, anything but cargo's 101) is a failure even when it printed passes.
+            if done.returncode not in (0, 1, 101) or (done.returncode and all(ok for _, ok in outcomes)):
+                failed.append(f"{' '.join(command[:6])} (exit {done.returncode}, run {n})")
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", checkout], cwd=root, capture_output=True)
     flaky = sorted(t for t, r in seen.items() if len(r) == 2)

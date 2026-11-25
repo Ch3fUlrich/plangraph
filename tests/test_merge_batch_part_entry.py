@@ -235,11 +235,14 @@ def test_a_green_part_with_changed_tests_needs_a_replay_receipt_bound_to_its_hea
     assert any("five-run replay" in p for p in missing)
     folder = tmp_path / "entry-replay" / part["head"]
     folder.mkdir(parents=True)
-    other = dict(head="b" * 40, ok=True, runs=5, flaky=[], failed=[], logs={})
+    other = dict(head="b" * 40, ok=True, runs=5, flaky=[], failed=[], logs={}, changed={"python": ["tests/test_a.py"], "rust": [], "files": ["tests/test_a.py"]})
     (folder / "replay.json").write_text(json.dumps(other))
     assert any("five-run replay" in p for p in build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok))
     (folder / "replay.json").write_text(json.dumps(other | {"head": part["head"]}))
     assert build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok) == []
+    wrong_base = other | {"head": part["head"], "changed": {"python": [], "rust": [], "files": []}}   # zero changed tests: another comparison base
+    (folder / "replay.json").write_text(json.dumps(wrong_base))
+    assert any("another comparison base" in p for p in build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok))
     flaky = other | {"head": part["head"], "ok": False, "flaky": ["tests/test_a.py::t"],
                      "logs": {"tests/test_a.py::t": ["fail.log", "pass.log"]}}
     (folder / "replay.json").write_text(json.dumps(flaky))
