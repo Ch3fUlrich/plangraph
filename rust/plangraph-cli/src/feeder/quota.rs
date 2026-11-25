@@ -99,8 +99,9 @@ pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
     Some(ns.clamp(-STAMP_BOUND_NS, STAMP_BOUND_NS))
 }
 /// A decimal number text (checked by the caller to be a finite float) as nanoseconds: seconds,
-/// or milliseconds once the value passes 1e11 as in the legacy reader. The digits are scaled,
-/// never routed through a float, and the fraction is cut at the nanosecond.
+/// or milliseconds once the value passes 1e11 as in the legacy reader. The digits and the
+/// exponent are scaled as text, never routed through a float (which keeps 15 to 17 digits), and
+/// the fraction is cut at the nanosecond. The float is read only for the size of the value.
 fn decimal_ns(text: &str) -> Option<i128> {
     let n = text.parse::<f64>().ok().filter(|n| n.is_finite())?;
     if n.abs() > 1e15 {
@@ -110,22 +111,30 @@ fn decimal_ns(text: &str) -> Option<i128> {
             STAMP_BOUND_NS
         });
     }
-    let digits = if n > 1e11 { 6 } else { 9 };
-    // An exponent form (Python writes 1e-05) has no digits to keep: its float prints plain.
-    let plain = if text.contains(['e', 'E']) {
-        n.to_string()
-    } else {
-        text.to_owned()
+    let places = if n > 1e11 { 6 } else { 9 };
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (unsigned, 0),
     };
-    let plain = plain.strip_prefix('+').unwrap_or(&plain);
-    let (negative, plain) = plain
-        .strip_prefix('-')
-        .map_or((false, plain), |t| (true, t));
-    let (whole, fraction) = plain.split_once('.').unwrap_or((plain, ""));
-    let fraction = format!("{fraction:0<digits$}");
-    let value = whole.parse::<i128>().unwrap_or(0) * 10_i128.pow(digits as u32)
-        + fraction[..digits].parse::<i128>().ok()?;
-    Some(if negative { -value } else { value })
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    // The digits and how many of them lie before the decimal point, leading zeros dropped.
+    let all = format!("{whole}{fraction}");
+    let digits = all.trim_start_matches('0');
+    let point = whole.len() as i32 + exponent - (all.len() - digits.len()) as i32;
+    // The first `point + places` digits are the value in units of 10^-places of the unit.
+    let keep = usize::try_from(point + places).unwrap_or(0);
+    let kept: String = digits
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(keep)
+        .collect();
+    let value = if kept.is_empty() {
+        0
+    } else {
+        kept.parse::<i128>().ok()?
+    };
+    Some(if text.starts_with('-') { -value } else { value })
 }
 /// Latest snapshot per account/window; stale or malformed windows disable that
 /// account, never an independent healthy account. Hourly store default: 3 hours.
@@ -314,6 +323,17 @@ mod tests {
         assert_eq!(ms, 1_795_581_490_000_001_500);
         assert_eq!(stamp_ns(&json!("1795581490.0000015")), Some(ms));
         assert_eq!(stamp_ns(&json!("1.5e-07")), Some(150));
+        // Exponent text keeps every digit: a float would drop the last nanosecond here.
+        assert_eq!(
+            stamp_ns(&json!("1.795581490000001501e12")),
+            Some(1_795_581_490_000_001_501)
+        );
+        assert_eq!(
+            stamp_ns(&json!("17955814900000015.01e-4")),
+            Some(1_795_581_490_000_001_501)
+        );
+        assert_eq!(stamp_ns(&json!("0.0000000000001e13")), Some(1_000_000_000));
+        assert_eq!(stamp_ns(&json!("-1.5e0")), Some(-1_500_000_000));
         assert_eq!(
             stamp_ns(&json!("+1800000000.5")),
             stamp_ns(&json!(1_800_000_000.5))

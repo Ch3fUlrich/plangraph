@@ -93,3 +93,48 @@ fn quota_pool_keeps_the_decimal_of_a_millisecond_timestamp_through_decoding() {
         assert_eq!(at, t as i64 * 1_000_000_000 + 1_500, "{name}");
     }
 }
+
+#[test]
+fn quota_pool_ranks_exponent_form_times_by_their_digits() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    // The same instant as milliseconds in exponent form, one nanosecond after (a) or before (b)
+    // the ISO twin; a float conversion of that text drops the nanosecond.
+    let exponent = |extra_ns: i64| {
+        let digits = (t as i64 * 1_000_000_000 + extra_ns).to_string();
+        format!("'{}.{}e12'", &digits[..1], &digits[1..])
+    };
+    let text = |extra_ns: u32| iso(t, extra_ns, 'T', 9);
+    let directory = tempfile::tempdir().unwrap();
+    // The newer reading sits at the lower id; the older one, at the higher id, must not win.
+    let inserts = [
+        insert(
+            1,
+            "codex:a",
+            "NULL",
+            "weekly",
+            "40",
+            &exponent(1_501),
+            reset,
+        ),
+        insert(2, "codex:a", "NULL", "weekly", "90", &text(1_500), reset),
+        insert(3, "codex:b", "NULL", "weekly", "40", &text(1_501), reset),
+        insert(
+            4,
+            "codex:b",
+            "NULL",
+            "weekly",
+            "90",
+            &exponent(1_500),
+            reset,
+        ),
+    ]
+    .concat();
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&account(&weekly, "a")["used_pct"], 60.0);
+    near(&account(&weekly, "b")["used_pct"], 60.0);
+    for name in ["a", "b"] {
+        let at = account(&weekly, name)["observed_at_ns"].as_i64().unwrap();
+        assert_eq!(at, t as i64 * 1_000_000_000 + 1_501, "{name}");
+    }
+}
