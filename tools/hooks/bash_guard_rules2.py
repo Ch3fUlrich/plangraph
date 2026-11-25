@@ -79,24 +79,10 @@ def scan(command):
     return commands, heredocs
 
 
-def scan_flow(command):
-    """Like `scan`, plus how each command is joined to its neighbours: returns (commands, flow) where
-    ``flow[k] = (before, after, depth, chain)``: the operator before and after command k (``""`` at the start
-    or end, ``"\\n"``, ``";"``, ``"&&"``, ``"||"``, ``"|"``, ``"&"``, ``"("``, ``")"``; a newline after
-    `&&`, `||` or `|` does not replace that operator), how many ( ), $( ) or backtick scopes enclose it, and
-    the ids of those scopes, outermost first (every scope has an id of its own, siblings never share one).
-    Raises ParseError like `scan`."""
-    commands, flow = [], []
-    _Scanner(command, commands, [], flow=flow).parse()
-    return commands, flow
-
-
 class _Scanner:
-    def __init__(self, text, commands, heredocs, nest=0, flow=None, chain=(), ids=None):
+    def __init__(self, text, commands, heredocs, nest=0):
         self.s, self.n, self.i = text, len(text), 0
         self.commands, self.heredocs, self.nest = commands, heredocs, nest
-        self.flow = flow  # when given, one (before, after, depth, scope chain) per command
-        self.chain, self.ids = chain, ids if ids is not None else [0]  # the ids of the enclosing scopes
         self.pending = []  # heredocs (delimiter, quoted, dash) whose body starts at the next newline
         self.shift = 0     # > 0 inside (( )) and $(( )): `<<` is a shift, not a heredoc
         if nest > _MAX_NEST:
@@ -111,31 +97,14 @@ class _Scanner:
     # ─── statement level ──────────────────────────────────────────────────
 
     def parse(self, closer=None):
-        """Read commands until the `closer` (")" or "))") or the end of text. Every nested list is a scope
-        of its own with a fresh id, appended to the chain of the enclosing ones."""
-        outer = self.chain
-        if self.nest > 0:
-            self.ids[0] += 1
-            self.chain = outer + (self.ids[0],)
-        try:
-            self._parse(closer)
-        finally:
-            self.chain = outer
-
-    def _parse(self, closer):
+        """Read commands until the `closer` (")" or "))") or the end of text."""
         s, n = self.s, self.n
         cmd, cases = [], []  # words of the current command; one state per open `case`
-        before = [""]  # the operator that ended the previous command of this list
 
-        def flush(after=""):
+        def flush():
             if cmd:
                 self.commands.append(cmd[:])
-                if self.flow is not None:
-                    self.flow.append((before[0], after, self.nest, self.chain))
-            # A newline after `&&`, `||` or `|` continues the list: the operator still joins the next command.
-            if cmd or after != "\n" or before[0] not in ("&&", "||", "|", "|&"):
-                before[0] = after
-            del cmd[:]
+                del cmd[:]
 
         while True:
             self.blanks()
@@ -150,7 +119,7 @@ class _Scanner:
                 j = s.find("\n", i)
                 self.i = n if j < 0 else j
             elif c == "\n":
-                flush("\n")
+                flush()
                 self.i += 1
                 self.gather()
             elif c in "<>" or s.startswith("&>", i):
@@ -158,19 +127,18 @@ class _Scanner:
             elif c in ";&|":
                 m = _OP.match(s, i)
                 self.i = m.end()
-                flush(m.group())
+                flush()
                 if m.group() in (";;", ";&", ";;&") and cases and cases[-1] == "body":
                     cases[-1] = "pat"
             elif c == "(":
                 if cases and cases[-1] == "pat":
                     self.i += 1  # the optional "(" before a case pattern
                 elif not (s.startswith("((", i) and lead(cmd, ("for",)) == len(cmd) and self.arith(i + 2)):
-                    flush("(")
+                    flush()
                     self.i += 1
                     self.sub(")")
-                    before[0] = ")"
             elif c == ")":
-                flush(")")
+                flush()
                 if closer == "))":
                     if not s.startswith("))", i):
                         raise ParseError("unbalanced arithmetic expression")
@@ -411,7 +379,7 @@ class _Scanner:
             raise ParseError("unterminated backtick")
         text.append(s[self.i:j + 1])
         self.i = j + 1
-        _Scanner("".join(buf), self.commands, self.heredocs, self.nest + 1, self.flow, self.chain, self.ids).parse()
+        _Scanner("".join(buf), self.commands, self.heredocs, self.nest + 1).parse()
 
     def dollar(self, text):
         """Read `$(...)` or `$((...))` at self.i; the source text stays in the word."""

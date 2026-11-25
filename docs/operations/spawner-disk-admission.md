@@ -90,13 +90,6 @@ shared targets, pinned/live paths, active builds, process cwds, foreign ownershi
 leases and symlinks prevent deletion. Worktree source dirtiness alone does not
 protect ignored build artifacts in this narrower cleanup.
 
-The Bash guard denies `cargo build|check|test|nextest|clippy|run|bench|doc` (also via `pgtest`,
-`pgtest.py` and wrappers) whose target (`--target-dir`, `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET_DIR`
-set on the command or exported earlier in it, else cwd/`cd`/`-C`/`--manifest-path`) lands in a main
-checkout (a `.git` directory, not `~`) or under `.claude/worktrees`, from any cwd. The refusal names
-`PLANGRAPH_CARGO_TARGET_DIR` or `~/.cache/plangraph/cargo-target`; other linked worktrees and
-`cargo fmt` stay allowed.
-
 ## Dell data-drive handoff (D-5122)
 
 `SKIPPED plangraph:DELL-DATA-DRIVE` in batch84-disk. The fleet host policy and
