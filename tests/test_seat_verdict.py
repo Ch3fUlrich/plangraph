@@ -493,3 +493,29 @@ def test_accept_with_a_counted_process_citation_is_not_posted_as_a_pass(tmp_path
     argv, _ = _process_seat(tmp_path, f"{BRIEF_MED}\nTESTS: none: x\nVERDICT: ACCEPT\n", PROCESS_PROMPT + changed)
     assert sv.main(argv + ["--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+
+
+def test_clean_accept_with_severity_words_in_prose_is_posted_as_a_pass(tmp_path, capsys):
+    review = "HIGH-level test coverage looks good.\nTESTS: none: x\nVERDICT: ACCEPT\n"
+    argv, _ = _process_seat(tmp_path, review, PROCESS_PROMPT + PROCESS_DIFF)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
+
+
+def test_a_saved_passing_retry_registers_the_pass_like_the_first_send(tmp_path, monkeypatch):
+    import subprocess
+    import time
+
+    from plangraph.review import verdict as seats
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    head, binding = "c" * 40, {"head": "c" * 40, "key": "demo:A", "seat_run": "run-retry"}
+    seats.record_hold(str(tmp_path), head, "run-held")
+    identity = {"binding": binding, "cwd": str(tmp_path), "started": time.time() + 10}
+    monkeypatch.setattr(sv, "check_record_permissions", lambda path: None)
+    monkeypatch.setattr(sv, "read_verdict_payload", lambda d: {"payload": {"ok": True, "binding": binding}})
+    monkeypatch.setattr(sv, "read_record_identity", lambda d, key=None: identity)
+    monkeypatch.setattr(sv, "dispatch_verdict", lambda *args: 0)
+    assert sv.send_saved_verdict(tmp_path, "demo:A", "http://x", tmp_path) == 0
+    approval = f"RUN: run-retry\nHEAD: {head}\nVERDICT: PASS\n"
+    assert seats.approval_hold_error(approval, head, str(tmp_path)) is None

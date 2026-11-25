@@ -487,14 +487,36 @@ def test_a_brief_changed_by_the_head_is_compared_by_its_canonical_path():
 
 def test_hold_registry_lets_only_a_pass_posted_after_the_hold_approve(tmp_path):
     import subprocess
+    import time
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     head, approval = "a" * 40, f"HEAD: {'a' * 40}\nVERDICT: PASS\n"
     assert v.approval_hold_error(approval, head, str(tmp_path)) is None  # nothing held
+    before = time.time() - 1000
     v.record_hold(str(tmp_path), head, "run-held")
     assert "held by process findings" in v.approval_hold_error(approval, head, str(tmp_path))
     assert v.approval_hold_error("RUN: run-held\n" + approval, head, str(tmp_path))  # the held run itself
-    v.record_pass(str(tmp_path), head, "run-fresh")
+    # A run of before the hold stays stale however late it is registered or replayed.
+    v.record_pass(str(tmp_path), head, "run-stale", before)
+    v.record_pass(str(tmp_path), head, "run-unknown-start", None)
+    for run in ("run-stale", "run-unknown-start"):
+        assert v.approval_hold_error(f"RUN: {run}\n" + approval, head, str(tmp_path))
+    v.record_pass(str(tmp_path), head, "run-fresh", time.time() + 1)
+    v.record_pass(str(tmp_path), head, "run-fresh", time.time() + 2)  # a replay adds nothing
     assert v.approval_hold_error("RUN: run-fresh\n" + approval, head, str(tmp_path)) is None
     assert v.approval_hold_error(approval, head, str(tmp_path))  # a copy with no RUN line is not enough
     assert v.approval_hold_error(approval.replace("a", "b"), "b" * 40, str(tmp_path)) is None  # other head
+
+
+@pytest.mark.parametrize("prose", ["HIGH-level test coverage looks good", "HIGH level coverage is fine",
+                                   "MED-sized change", "P1 is the priority of the plan"])
+def test_prose_opening_with_a_severity_word_is_not_a_finding(prose):
+    assert v.classify_findings(prose + "\nVERDICT: ACCEPT\n").blocking == 0
+    for documented in ("HIGH src/a.py:3 - wrong", "- **MED** src/a.py:3-9 - wrong", "P2 a.rs:1:7 x"):
+        assert v.classify_findings(documented + "\n").blocking == 1, documented
+
+
+def test_an_inline_diff_is_the_scope_whatever_git_commands_the_prompt_quotes(tmp_path):
+    prompt = ("diff --git a/src/a.py b/src/a.py\n+x\n"
+              f"unrelated advice: run\ngit diff {'a' * 40} {'b' * 40}\n")
+    assert v.diff_paths(prompt, str(tmp_path)) == {"src/a.py"}

@@ -291,7 +291,7 @@ _SEVERITY = {"HIGH": "high", "P1": "high", "MED": "med", "P2": "med",
              "LOW": "low", "P3": "low", "PROCESS": "process"}
 _FINDING_LINE = re.compile(
     r"^[\s#*\-\[(]*(?:\d+[.)][\s#*\-\[(]*)?(?:FINDING:[\s#*\-\[(]*)?"
-    r"(HIGH|MED|LOW|P1|P2|P3|PROCESS)\b[\s:*\])]*(.*)$")
+    r"(HIGH|MED|LOW|P1|P2|P3|PROCESS)(?=[\s:*\])`]|$)[\s:*\])]*(.*)$")
 _DIFF_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)$", re.M)
 _DIFF_COMMAND = re.compile(r"^git diff ([0-9a-f]{7,40}) ([0-9a-f]{7,40})$", re.M)
 
@@ -320,6 +320,8 @@ def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
     paths: set[str] = set()
     for old, new in _DIFF_HEADER.findall(prompt):
         paths.update((old, new))
+    if paths:
+        return paths  # an inline seat's diff is the one in its prompt, whatever commands it quotes
     for base, head in _DIFF_COMMAND.findall(prompt):
         if cwd is None:
             return None
@@ -407,6 +409,11 @@ def classify_findings(text: str, *, prompt: str = "",
         if not found:
             continue
         kind = _SEVERITY[found.group(1)]
+        cite = found.group(2).split(None, 1)[0] if found.group(2).strip() else ""
+        # The documented finding is "<SEVERITY> <path>:<line> - <text>": a label opening
+        # prose ("HIGH level coverage ...") is not one; a bare or markup-only citation still is.
+        if kind != "process" and any(c.isalnum() for c in cite) and not re.search(r":\d+", cite):
+            continue
         if kind == "process":
             typed = _typed_process(found.group(2))
             if (typed is not None and typed[1] in defects and changed_paths is not None
@@ -476,16 +483,20 @@ def record_hold(cwd: str | None, head: str, run_id: str) -> None:
                            "held_at": time.time(), "passes": []})
 
 
-def record_pass(cwd: str | None, head: str, run_id: str) -> None:
-    """A passing seat verdict of `head` was posted: when the head is held, it is registered."""
+def record_pass(cwd: str | None, head: str, run_id: str, started: float | None) -> None:
+    """A passing seat verdict of `head` was posted: when the head is held, the run is
+    registered, but only a run that started after the hold (its immutable `started` time in
+    the run record) can release it; a run of before the hold is never fresh, however late it
+    is registered or replayed."""
     import json
-    import time
 
     path = _hold_path(cwd, head)
     if path is not None and path.is_file():
         doc = json.loads(path.read_text("utf-8"))
-        doc["passes"] = [*doc.get("passes", []), {"run_id": run_id, "at": time.time()}]
-        _write_json(path, doc)
+        if isinstance(started, (int, float)) and started > doc.get("held_at", 0):
+            if run_id not in {entry.get("run_id") for entry in doc.get("passes", [])}:
+                doc["passes"] = [*doc.get("passes", []), {"run_id": run_id, "started": started}]
+                _write_json(path, doc)
 
 
 def approval_hold_error(approval: str, head: str, repo: str | None) -> str | None:
@@ -499,7 +510,7 @@ def approval_hold_error(approval: str, head: str, repo: str | None) -> str | Non
     if path is None or not path.is_file():
         return None
     doc = json.loads(path.read_text("utf-8"))
-    runs = {entry.get("run_id") for entry in doc.get("passes", []) if entry.get("at", 0) > doc.get("held_at", 0)}
+    runs = {entry.get("run_id") for entry in doc.get("passes", [])}
     named = {m.group(1) for m in re.finditer(r"^RUN: (\S+)\s*$", approval, re.M)}
     if named & runs:
         return None

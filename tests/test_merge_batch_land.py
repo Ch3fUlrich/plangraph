@@ -142,7 +142,11 @@ def test_land_binds_a_held_head_to_a_passing_seat_run_posted_after_the_hold(env)
     for refused in (approval, copy):
         res = land(env, refused)
         assert res.returncode == 1 and "held by process findings" in res.stderr and not env.calls("pr", "merge")
-    seats.record_pass(repo, head, "run-fresh")
+    seats.record_pass(repo, head, "run-stale", time.time() - 1000)  # started before the hold
+    stale = env.tmp / "stale.txt"
+    stale.write_text(f"RUN: run-stale\nHEAD: {head}\nVERDICT: PASS\n")
+    assert land(env, stale).returncode == 1
+    seats.record_pass(repo, head, "run-fresh", time.time() + 5)
     for still_refused in (approval, copy):
         assert land(env, still_refused).returncode == 1
     fresh = env.tmp / "fresh.txt"
