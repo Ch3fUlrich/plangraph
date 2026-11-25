@@ -11,14 +11,10 @@ use serde_json::json;
 use std::{fs, path::Path};
 
 fn claude_stub(root: &Path, name: &str, stop_rc: i32, agents_json: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let stub = root.join(name);
     let script = format!(
         "#!/bin/sh\nif [ \"$1\" = stop ]; then exit {stop_rc}; fi\ncat <<'EOF'\n{agents_json}\nEOF\n"
     );
-    fs::write(&stub, script).unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-    stub
+    pg_worker_core::executable_test_support::write_script(root, name, &script)
 }
 
 #[test]
