@@ -17,17 +17,23 @@ from .base_fresh import admitted_spawn, run_exit_code, run_settled, spawn_runs, 
 from .seat_spawn import live_runner
 
 def _wait_runs(service, result, wait):
-    """Poll leaf records until every one is settled or `wait` seconds pass; exit codes derive from the updated leaves.
+    """Poll unfinished leaves within the wait limit, preserving terminal seat acknowledgements."""
 
-    A run is settled once its durable `ended` is set (a status alone can be provisional), so a bounded
-    spawn returns a running acknowledgement only for `wait` 0 or when the bound ends first."""
+    def pending(run):
+        # Native records and explicit pending timestamps use durable settlement.
+        # Legacy seat acknowledgements can be terminal without an ended field.
+        if run.get('run_kind') == 'native-codex' or 'ended' in run:
+            return not run_settled(run)
+        return run.get('status') == 'running'
+
     deadline = time.monotonic() + max(0, wait)
     runs = spawn_runs(result)
-    while not all(run_settled(r) for r in runs) and time.monotonic() < deadline:
+    while any(pending(run) for run in runs) and time.monotonic() < deadline:
         interval = 2 if any(run.get('overflow_remote') for run in runs) else .02
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
         for run in runs:
-            if not run_settled(run): run.update(_read_result(service, run['run_id']))
+            if pending(run):
+                run.update(_read_result(service, run['run_id']))
     if wait > 0:
         for run in runs:
             if (run.get('run_kind') == 'native-codex' and run.get('status') != 'running'
