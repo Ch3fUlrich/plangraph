@@ -66,7 +66,32 @@ fn local_base_fixture(dir: &Path) -> Host {
 #[cfg(unix)]
 #[test]
 fn host_reaps_a_writer_when_disk_crosses_the_stop_floor() {
-    let dir = tempfile::tempdir().unwrap();
+    const FIXTURE: &str = "PG_NATIVE_DISK_FLOOR_FIXTURE";
+    let Some(root) = std::env::var_os(FIXTURE) else {
+        let root = tempfile::tempdir().unwrap();
+        let name = std::thread::current();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        pg_worker_core::git_test_support::configure(&mut child, root.path());
+        // The real launch takes a cargo lease. A cache trim of the caller's target must
+        // not stop the fixture before it reaches the mocked disk probe.
+        let result = child
+            .args(["--exact", name.name().unwrap(), "--nocapture"])
+            .env(FIXTURE, root.path())
+            .env(
+                "PLANGRAPH_CARGO_TARGET_DIR",
+                root.path().join("cargo-target"),
+            )
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            result.status.success() && stdout.contains("1 passed; 0 failed"),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    };
+    let dir = tempfile::tempdir_in(root).unwrap();
     let mut host = local_base_fixture(dir.path());
     host.cwd = host.repo.clone();
     for (name, script) in [
