@@ -222,9 +222,11 @@ and
 then run `systemctl --user daemon-reload` and
 `systemctl --user enable --now pg-feeder.timer`.
 Do not enable the timer on the WSL workstation. Before its checkout takes the
-RAM-budget policy, the host must show `systemctl --user is-enabled pg-feeder.timer`
-not `enabled` and `systemctl --user is-active pg-feeder.timer` not `active` (stop a
-running timer with `systemctl --user disable --now pg-feeder.timer`), or
-`~/.config/plangraph/feeder.off` must exist: an enabled or active timer still fires
-and admits writers. WSL free RAM overstates
+RAM-budget policy, the host must show positive evidence of one of two states:
+`systemctl --user is-enabled pg-feeder.timer` prints exactly `disabled` and
+`systemctl --user is-active pg-feeder.timer` prints exactly `inactive` (any other
+output, such as `enabled`, `enabled-runtime`, `active` or `activating`, does not count;
+`systemctl --user disable --now pg-feeder.timer` reaches the state), or
+`~/.config/plangraph/feeder.off` exists. An enabled or active timer still fires and
+admits writers. WSL free RAM overstates
 what the workstation has until the Windows RAM sampling slice is deployed.
