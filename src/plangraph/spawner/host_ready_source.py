@@ -182,7 +182,12 @@ def drop_review_slot(slot):
     except OSError:
         return
     try:
-        shutil.rmtree(slot, ignore_errors=True)
+        try:
+            shutil.rmtree(slot)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return  # a partial removal leaves the slot, so its lock stays too (the finally closes the lease)
         # The slot's name is unique to one run, so once it is gone nothing asks for the lock.
         Path(str(slot) + '.plangraph-lock').unlink(missing_ok=True)
     finally:

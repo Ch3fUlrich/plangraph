@@ -365,3 +365,27 @@ def test_a_review_seat_with_neither_target_nor_allocator_is_refused_not_built_un
         patch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
         with pytest.raises(ValueError, match="slot allocator"):
             claude_seat.configure_review_tests(argv, {}, leg, "review", {}, "job1")
+
+
+def test_a_partial_removal_keeps_the_slots_lock_file(tmp_path):
+    import os
+    import stat
+
+    from plangraph.spawner.host_ready import _cargo_lease_for
+    from plangraph.spawner.host_ready_source import drop_review_slot
+
+    if os.geteuid() == 0:
+        pytest.skip("root removes read-only trees")
+    slot = tmp_path / "cargo-target-pool" / "slot-review-job7"
+    (slot / "target").mkdir(parents=True)
+    (slot / "target" / "object").write_text("build")
+    _cargo_lease_for(slot).close()
+    lock = Path(str(slot) + ".plangraph-lock")
+    (slot / "target").chmod(stat.S_IRUSR | stat.S_IXUSR)  # its entries cannot be unlinked
+    try:
+        drop_review_slot(str(slot))
+        assert (slot / "target" / "object").exists() and lock.exists(), "slot and lock stay together"
+    finally:
+        (slot / "target").chmod(stat.S_IRWXU)
+    drop_review_slot(str(slot))
+    assert not slot.exists() and not lock.exists()
