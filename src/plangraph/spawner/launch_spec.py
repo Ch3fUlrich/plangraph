@@ -178,6 +178,7 @@ def build(request: dict) -> dict:
     current.chmod(0o700)
     previous = tempfile.tempdir
     tempfile.tempdir = str(current)
+    handed_off = False  # the Rust supervisor owns the allocated slot only once the spec is returned
     try:
         _sweep(service, current)
         rec = dict(run_id=request['run_id'], role=request['role'], cwd=request['cwd'], warnings=[], events=[])
@@ -229,24 +230,33 @@ def build(request: dict) -> dict:
         events.append(dict(event='launch_spec', python_job_id=job.job_id))
         slot = allocated_review_slot(service.runner._ocdata_dirs.get(job.job_id), env)
         if request['dry_run']:
-            drop_review_slot(slot)  # nothing will run, so nothing will release the slot later
-            slot = None
+            slot = None  # nothing will run; the cleanup below returns the slot
+        else:
+            handed_off = True
         return dict(review_slot=slot, argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
                     prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=payload.decode('utf-8') if payload is not None else None,
                     warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
     finally:
         tempfile.tempdir = previous
+        if not handed_off:
+            # A refusal, an error or a dry request: no run will use the slots this launch allocated.
+            for allocated in list(service.runner._ocdata_dirs.values()):
+                drop_review_slot(review_slot_dir(allocated))
+
+
+def review_slot_dir(allocated):
+    """``allocated`` (what the allocator recorded) when it names a review slot of a pool, else None."""
+    slot = Path(allocated) if allocated else None
+    named = slot and slot.name.startswith('slot-review-') and slot.parent.name.endswith('-pool')
+    return str(slot) if named else None
 
 
 def allocated_review_slot(allocated, env):
     """The review build slot this launch allocated (recorded by the allocator, not guessed from env), or None."""
-    if not allocated:
-        return None
-    slot = Path(allocated)
+    slot = review_slot_dir(allocated)
     target = Path(env.get('CARGO_TARGET_DIR') or '/')
-    named = slot.name.startswith('slot-review-') and slot.parent.name.endswith('-pool')
-    return str(slot) if named and target.parent == slot else None
+    return slot if slot and target.parent == Path(slot) else None
 
 
 class WindowsEnvIncomplete(Exception):

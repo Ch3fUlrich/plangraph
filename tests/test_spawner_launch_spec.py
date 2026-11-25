@@ -596,3 +596,44 @@ def test_review_launch_resolves_latest_nvm_harness_under_user_manager_path(
     assert str(node / 'v24.19.0/bin') in launch['env']['PATH'].split(os.pathsep)
     assert launch['argv'][0] == expected
     assert shutil.which(harness, path=launch['env']['PATH']) == expected
+
+
+def _spawn_that_allocates_a_review_slot(monkeypatch, tmp_path):
+    """A real dry spawn, followed by the slot a Claude review seat's configuration allocates."""
+    from plangraph.spawner.host_ready_source import review_cargo_slot
+
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cache/cargo-target'))
+    allocated = []
+    original = spec.runner.SpawnerRunner.spawn
+
+    async def spawn(self, *args, **kwargs):
+        job = await original(self, *args, **kwargs)
+        slot = review_cargo_slot('slotted')
+        (slot / 'target').mkdir()
+        self._ocdata_dirs[job.job_id] = str(slot)
+        self._child_envs[job.job_id]['CARGO_TARGET_DIR'] = str(slot / 'target')
+        allocated.append(slot)
+        return job
+    monkeypatch.setattr(spec.runner.SpawnerRunner, 'spawn', spawn)
+    return allocated
+
+
+def test_a_refusal_after_the_slot_was_allocated_hands_the_slot_back(request_data, monkeypatch, tmp_path):
+    allocated = _spawn_that_allocates_a_review_slot(monkeypatch, tmp_path)
+
+    async def unavailable(*a, **kw):
+        return 'blocked: no key'
+    monkeypatch.setattr(spec, 'host_skip_reason_async', unavailable)
+    code, out, err = invoke(request_data)
+    assert code == 2 and err.startswith('unavailable: ')
+    [slot] = allocated
+    assert not slot.exists() and not (slot.parent / (slot.name + '.plangraph-lock')).exists()
+
+
+def test_a_launch_that_succeeds_keeps_its_slot_for_the_supervisor(request_data, monkeypatch, tmp_path):
+    allocated = _spawn_that_allocates_a_review_slot(monkeypatch, tmp_path)
+    code, out, err = invoke(request_data)
+    assert code == 0, err
+    [slot] = allocated
+    assert json.loads(out)['review_slot'] == str(slot) and slot.is_dir()
