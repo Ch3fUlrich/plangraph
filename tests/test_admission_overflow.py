@@ -183,6 +183,24 @@ def test_queue_timeout_keeps_the_target_lane_reason_across_readiness_refreshes(s
     assert remote.call_count == 2 and len(loads) > 2  # no host was left to try after the refresh
 
 
+def test_a_later_generic_failure_of_the_same_host_does_not_replace_its_lane_refusal(setup, monkeypatch):
+    service, _, remote = setup
+    service.result = Mock(side_effect=OSError('record not saved by this fixture'))  # the record stays queued
+    held = 'lane_collision: demo:HELD is held by live lane run-held (run)'
+    seen = set()
+    def refuse(name, *args):
+        # The target refuses as a lane once; every retry of that host fails before admission.
+        first, seen_name = name not in seen, seen.add(name)
+        raise overflow.RemoteRefusal(held if first else 'remote preparation failed before launch')
+    remote.side_effect = refuse
+    monkeypatch.setenv(a.ADMISSION_WAIT_ENV, '0.2')
+    monkeypatch.setenv(a.ADMISSION_POLL_ENV, '0.01')
+    result = service.admit_spawn({'role': 'implement', 'prompt': 'task'}, card={'diff_ref': {'repo': service.runner.default_cwd}})
+    assert result['status'] == 'refused' and 'admission window' in result['error']
+    assert result['error'].startswith(held), result
+    assert remote.call_count > 2  # the hosts were retried after their first refusal
+
+
 def test_private_card_never_copies(setup):
     service, _, remote = setup
     result = service.admit_spawn({}, card={'diff_ref': {'repo': '/private'}})
