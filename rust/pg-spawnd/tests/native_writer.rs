@@ -327,6 +327,8 @@ async def check():
         await service.tasks[run['run_id']]
     record = service.result(run['run_id'])
     assert record['status'] == 'completed', record
+    # The launch boundary admitted the keys and the supervisor published the mark.
+    assert record['item_keys'] == ['demo:FIXTURE'] and record['lane_admitted'] is True, record
     assert record['base_sha'] == os.environ['FIXTURE_BASE'], record
     assert record['final_head'] != record['base_sha'], record
     assert record['host'] and record['exit_code'] == 0, record

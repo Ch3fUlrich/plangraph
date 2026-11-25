@@ -123,13 +123,33 @@ fn parse(text: &str) -> Option<Result<BatchInput, String>> {
     Some(serde_json::from_str(payload).map_err(|err| format!("invalid batch writer input: {err}")))
 }
 
+/// The members of a batch input, checked once for the renderer and for admission: at least one,
+/// each a one-line key, title and brief, and each key exactly an item key as run records keep
+/// it, so the key the writer reads in its heading is the key that was admitted.
+fn check_items(items: &[Item]) -> Result<(), String> {
+    if items.is_empty() {
+        return Err("batch writer input requires at least one item".into());
+    }
+    for item in items {
+        if !single_line(&item.key) || !single_line(&item.title) || item.brief.trim().is_empty() {
+            return Err("batch writer input requires an item key, title and brief".into());
+        }
+        if !crate::lane_guard::valid_key(&item.key) {
+            return Err(format!(
+                "batch writer input item key is not a valid item key: {:?}",
+                item.key
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The item keys a versioned batch input assigns, in its own `items[].key` order: its typed
-/// membership, which no heading inside an item body can extend. None for a plain brief.
+/// membership, which no heading inside an item body can extend. A malformed member refuses the
+/// whole input. None for a plain brief.
 pub fn typed_keys(text: &str) -> Option<Result<Vec<String>, String>> {
     Some(parse(text)?.and_then(|input| {
-        if input.items.is_empty() {
-            return Err("batch writer input requires at least one item".into());
-        }
+        check_items(&input.items)?;
         Ok(input.items.into_iter().map(|item| item.key).collect())
     }))
 }
@@ -146,14 +166,9 @@ pub fn render_in<'a>(text: &'a str, checkout: &Path) -> Result<Cow<'a, str>, Str
         return Ok(Cow::Borrowed(text));
     };
     let BatchInput { items, run } = parsed?;
-    if items.is_empty() {
-        return Err("batch writer input requires at least one item".into());
-    }
+    check_items(&items)?;
     let mut rendered = "# Batch writer brief\n\n# Items\n".to_owned();
     for item in items {
-        if !single_line(&item.key) || !single_line(&item.title) || item.brief.trim().is_empty() {
-            return Err("batch writer input requires an item key, title and brief".into());
-        }
         writeln!(
             rendered,
             "\n### {} | {}\n{}",
@@ -170,7 +185,7 @@ pub fn render_in<'a>(text: &'a str, checkout: &Path) -> Result<Cow<'a, str>, Str
 
 #[cfg(test)]
 mod tests {
-    use super::{render, render_in, Cow, PREFIX};
+    use super::{render, render_in, typed_keys, Cow, PREFIX};
     use serde_json::{json, Value};
 
     const FIXTURE: &str = include_str!("../tests/fixtures/batch-writer-input.txt");
@@ -327,6 +342,26 @@ mod tests {
                 "batch writer input requires an item key, title and brief",
             );
         }
+    }
+
+    #[test]
+    fn rejects_an_item_key_the_writer_would_read_as_another_key() {
+        for key in [
+            "demo:HELD ",
+            " demo:HELD",
+            "demo:HELD|x",
+            "nokey",
+            "demo:",
+            "a b:c",
+        ] {
+            let mut input = fixture();
+            input["items"][0]["key"] = json!(key);
+            let text = format!("{PREFIX}{input}");
+            let error = render(&text).unwrap_err();
+            assert!(error.contains("not a valid item key"), "{key:?}: {error}");
+            assert_eq!(typed_keys(&text), Some(Err(error)));
+        }
+        assert_eq!(typed_keys("plain brief"), None);
     }
 
     #[test]

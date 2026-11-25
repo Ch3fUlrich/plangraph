@@ -200,6 +200,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("finish-late-review") {
         return crate::late_review::execute(rest);
     }
+    if verb.as_deref() == Some("lane-admit") {
+        return crate::lane_admit::execute(&rest, std::io::stdin(), out);
+    }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }
