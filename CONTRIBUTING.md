@@ -222,9 +222,8 @@ Rust review tests also execute keeper evidence and planner routing code; changes
 `tools/ci_select.py` selects `rust` and `rust-windows` through the shared `rust`
 output for paths in `RUST_INPUTS`, including documentation under `docs/schemas/`.
 The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to that
-skill also select Rust CI. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
-literals, manifest-relative reads and paths leaving `rust/`; new repository
-inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
+skill also select Rust CI. `src/plangraph/config/secret_paths.json` is a `RUST_WORKER_INPUTS` entry, so a change to it alone selects `rust` and `rust-worker`. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
+literals, manifest-relative reads and paths leaving `rust/`; new repository inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
 and environment template they read. The merge-close test reads both the
 `pg-reconcile-merged.service` and `pg-reconcile-merged.timer` units.
 `deploy/manifest.toml` and every unit suffix of `DEPLOY_UNIT_SUFFIXES` (also as `.in` templates) are `RUST_INPUTS` entries: the `deploy_manifest` tests read them.
