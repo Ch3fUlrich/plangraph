@@ -218,7 +218,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 /// The largest decisions document the collector reads.
 const MAX_DECISIONS: u64 = 64 * 1024 * 1024;
 
-/// A blob read whole: the helper `git` returns at most 1 MiB, and the blob of a long decisions log is more.
+/// A blob read whole within the same deadline as the other reads: the shared helper's default stops at
+/// 1 MiB, and the blob of a long decisions log is more.
 fn git_blob(dir: &Path, blob: &str) -> Result<Vec<u8>, String> {
     let mut command = Command::new("git");
     pg_worker_core::host_command::isolate_git(&mut command);
@@ -227,13 +228,12 @@ fn git_blob(dir: &Path, blob: &str) -> Result<Vec<u8>, String> {
         .arg("-C")
         .arg(dir)
         .args(["cat-file", "blob", blob]);
-    let out = command
-        .output()
-        .map_err(|_| "git cat-file failed".to_owned())?;
-    if !out.status.success() {
-        return Err("git cat-file failed".into());
-    }
-    Ok(out.stdout)
+    pg_worker_core::host_command::output_up_to(
+        &mut command,
+        std::time::Duration::from_secs(60),
+        MAX_DECISIONS,
+    )
+    .map_err(|_| "git cat-file failed or took too long".to_owned())
 }
 
 /// The decisions document as committed on `origin/main` of its repository: the branch is fetched into a ref

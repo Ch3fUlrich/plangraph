@@ -59,12 +59,18 @@ pub fn isolate_git(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
 }
 pub fn output(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
+    output_up_to(command, timeout, 1024 * 1024)
+}
+
+/// Like `output`, with the largest accepted stdout given: a blob of a long log is more than 1 MiB, and the
+/// deadline and the kill of the process group still apply.
+pub fn output_up_to(command: &mut Command, timeout: Duration, limit: u64) -> io::Result<Vec<u8>> {
     let stdout = tempfile::tempfile()?;
     command.stdout(stdout.try_clone()?).stderr(Stdio::null());
     if !run_bounded(command, timeout)?.is_some_and(|status| status.success()) {
         return Err(io::Error::other("command failed or timed out"));
     }
-    read_bounded(stdout)
+    read_limited(stdout, limit)
 }
 
 /// Run one command within the supplied deadline and preserve its exit status.
@@ -116,11 +122,15 @@ fn run_bounded(
     Ok(status)
 }
 
-fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
+fn read_bounded(file: File) -> io::Result<Vec<u8>> {
+    read_limited(file, 1024 * 1024)
+}
+
+fn read_limited(mut file: File, limit: u64) -> io::Result<Vec<u8>> {
     file.rewind()?;
     let mut bytes = Vec::new();
-    file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > 1024 * 1024 {
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         return Err(io::Error::other("command output too large"));
     }
     Ok(bytes)
@@ -129,6 +139,30 @@ fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn output_up_to_reads_past_the_default_cap_and_keeps_the_deadline() {
+        let big = |bytes: u64| {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("head -c {bytes} /dev/zero")]);
+            c
+        };
+        assert!(output(&mut big(2 * 1024 * 1024), Duration::from_secs(20)).is_err());
+        let all = output_up_to(
+            &mut big(2 * 1024 * 1024),
+            Duration::from_secs(20),
+            4 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(all.len(), 2 * 1024 * 1024);
+        assert!(output_up_to(&mut big(2048), Duration::from_secs(20), 1024).is_err());
+        let mut sleeper = Command::new("sleep");
+        sleeper.arg("30");
+        let started = Instant::now();
+        assert!(output_up_to(&mut sleeper, Duration::from_millis(200), 1024).is_err());
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn ssh_routes_preserve_destination_after_option_terminator() {
