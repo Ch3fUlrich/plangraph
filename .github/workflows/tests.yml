@@ -782,6 +782,20 @@ jobs:
             exit 0
           fi
           cargo run --locked --quiet --manifest-path rust/Cargo.toml -p plangraph-cli --bin plangraph -- land-train go-verify --evidence "$GO_EVIDENCE"
+      # A pull request that raises the keeper schema version must name it: its body holds the standalone line
+      # `MIGRATION <version>` (merge-batch writes it; land copies it into the GO row and refuses a GO without it).
+      # The versions come from the merge base and the head; a rise without the line fails the gate, no rise needs
+      # nothing. The deploy of a rise is `plangraph keeper-restart`, never a plain restart.
+      - name: Require MIGRATION on a keeper schema rise
+        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          cargo run --locked --quiet --manifest-path rust/Cargo.toml -p plangraph-cli --bin plangraph -- land-train require-migration --repo . --base "$(git merge-base "$PR_BASE" "$PR_HEAD")" --head "$PR_HEAD" --body-file "$RUNNER_TEMP/pr-body.md"
       # Evidence for the landing mode tested-ff: the full run of a train pull request says which tree it
       # tested. `ci-full` is posted only when that tree is the head commit's tree (tools/ci_select.py ci-full);
       # it is evidence for the lander, never a required check: the step runs after the required checks and
