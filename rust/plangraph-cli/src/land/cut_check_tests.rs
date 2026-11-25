@@ -141,24 +141,28 @@ fn cut_check_accepts_an_ordinary_range() {
     assert!(g(fx.p(), &["status", "--porcelain"]).is_empty());
 }
 
+/// The head's tree holds a passing gate script and the base commit holds a failing one that prints its
+/// arguments. The base is not an ancestor of the head (their fork point holds the passing script), so the range
+/// edits no gate file, and only a check that loads the base object's script sees the failure.
 #[test]
 fn cut_check_uses_the_base_gate() {
-    let fx = fx_with_base_gate(&stub_gate("print('BASE-GATE', *sys.argv[1:]); sys.exit(1)"));
-    let head = fx.hand_cut("a.txt", "");
+    let mut fx = fx_with_base_gate(&stub_gate("sys.exit(0)"));
+    let fork = fx.base.clone();
+    let failing = stub_gate("print('BASE-GATE', *sys.argv[1:]); sys.exit(1)");
+    fx.commit_file("tools/ci_commit_gate.py", &failing, "failing base gate");
+    let head = fx.child(&fork, "a.txt", "x\n", "");
     let base = fx.base.clone();
-    // The working copy holds a passing gate.
-    std::fs::write(
-        fx.p().join("tools/ci_commit_gate.py"),
-        "import sys\nGATE_PATHS = ()\nsys.exit(0)\n",
-    )
-    .unwrap();
-    // The gate of the base commit refuses, and it is called with full commit ids.
+    // The gate of the base commit refuses and is called with the full commit ids, in its own argument order.
     let a = check_args(&fx, &head[..12], &[]);
     let err = super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
     assert!(
-        err.contains("BASE-GATE") && err.contains(&base) && err.contains(&head),
+        err.contains(&format!("\nBASE-GATE check --base {base} --head {head}\n")),
         "{err}"
     );
+    // Control: with the fork point as base, the passing script is the base's and the range is accepted.
+    let at_head = Fx { base: fork, ..fx };
+    run_check(&at_head, &head).unwrap();
+    let fx = at_head;
     // No flag names another gate.
     let a = check_args(&fx, &head, &["--gate", "tools/ci_commit_gate.py"]);
     let err = super::cli::run_inner(fx.p(), &a, &python).unwrap_err();
@@ -413,6 +417,38 @@ fn a_clean_merge_of_the_base_inherits_a_protected_change_without_editing_it() {
         err.contains(&edited) && err.contains(".github/workflows/w.yml"),
         "{err}"
     );
+}
+
+/// One parent changed a workflow, the other did not touch it, and the merge puts the other parent's version back:
+/// git's own merge of the parents keeps the change, so the committed tree differs from it, yet the result equals
+/// one parent, which a combined diff leaves out. The parents are in the base, so only the merge is scanned. Both a
+/// gate with replay evidence and a gate without it refuse, naming the merge and the path.
+#[test]
+fn cut_check_refuses_a_clean_merge_that_restores_a_protected_file_from_one_parent() {
+    let workflow = ".github/workflows/w.yml";
+    for gate_text in [
+        std::fs::read_to_string(gate()).unwrap(),
+        stub_gate_paths("('.github/workflows/*',)", "sys.exit(0)"),
+    ] {
+        let mut fx = fx_with_base_gate(&gate_text);
+        fx.commit_file(workflow, "one\ntwo\nthree\n", "workflow");
+        let fork = fx.base.clone();
+        let changed = fx.child(&fork, workflow, "ONE\ntwo\nthree\n", "");
+        let other = fx.child(&fork, "other.txt", "x\n", "");
+        // The base is a clean merge of both parents (the change kept); the range holds the merge that restores.
+        let clean = merge_of(&fx, &changed, &other, None);
+        assert_eq!(
+            g(fx.p(), &["show", &format!("{clean}:{workflow}")]),
+            "ONE\ntwo\nthree"
+        );
+        let restored = merge_of(&fx, &changed, &other, Some((workflow, "one\ntwo\nthree\n")));
+        let fx = Fx { base: clean, ..fx };
+        let err = run_check(&fx, &restored).unwrap_err();
+        assert!(
+            err.contains(&restored) && err.contains(&format!("edits the gate path {workflow}")),
+            "{err}"
+        );
+    }
 }
 
 /// The parents are not in the range (the base holds both), so only the merge is scanned: it resolves the
