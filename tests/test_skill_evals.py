@@ -55,7 +55,17 @@ def test_must_phrases_appear_in_skill_text():
                     f"{skill.name}/{item['id']}: must phrase {phrase!r} not in skill text")
 
 
+def test_batch_writer_stamps_and_pushes_once_per_round():
+    """One fast-checks stamp and one push per round: the per-item form multiplies the stamp cost."""
+    text = " ".join((SKILLS / "batch-writer" / "SKILL.md").read_text(encoding="utf-8").lower().split())
+    for banned in ("after every item commit run", "after each item commit run", "push after each item"):
+        assert banned not in text, f"batch-writer: per-item stamp or push wording {banned!r}"
+    assert "never push after a single item commit" in text
+    assert "run it now, once, on this green head" in text
+
+
 if __name__ == "__main__":
     test_evals_shape_and_unique_ids()
     test_must_phrases_appear_in_skill_text()
+    test_batch_writer_stamps_and_pushes_once_per_round()
     print("ok")

@@ -70,8 +70,9 @@ Use grep for text that is not a symbol.
    A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
-   When the Run values carry a `PUSH:` line, after every item commit run the one stamp
-   command (`plangraph fast-checks --owned-worktree`), then run the PUSH command exactly as
+   Never push after a single item commit and never run the stamp command per commit: the
+   stamp and the push happen once per round, in step 7.
+   When the Run values carry a `PUSH:` line, the PUSH command is run exactly as
    printed: one atomic push of `lane/<NAME>` and its designated receipt ref (one parentless receipt commit), no pull request.
    For a `lane/*` ref the pre-push hook runs the public scrub, the commit gate and the receipt
    gate only (seconds, no test, no worktree); it refuses a head whose green receipt is not in
@@ -88,7 +89,8 @@ Use grep for text that is not a symbol.
    exit code and the stamp (`head`, `result`, one `check` line each), never the tail of a
    log: `affected_tests.py --run` ends with `AFFECTED rc=<n> batches=<k> failed=<m>`.
    Fix, commit and rerun until green. A head without a green stamp is neither pushed nor
-   reviewed.
+   reviewed. When the Run values carry a `PUSH:` line, run it now, once, on this green
+   head; after a fix round the same holds: one stamp and one push after its last commit.
 8. Write the review prompt file: the item keys with their Done-when lines, the skipped
    items with their reasons, the range BASE..HEAD. From round 2 on add the previously
    reviewed head and every earlier finding with what you did: `fixed in <sha>` or
