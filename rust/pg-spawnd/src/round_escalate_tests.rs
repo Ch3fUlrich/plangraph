@@ -230,3 +230,35 @@ fn members_and_pre_pr_rounds_keep_their_own_verdict_identity() {
         3
     );
 }
+
+#[test]
+fn an_initial_attempt_that_did_no_work_is_retried_and_leaves_the_ledger_empty() {
+    use pg_worker_core::run::record::Status;
+    let dir = tempfile::tempdir().unwrap();
+    let mut record = crate::runs::create(
+        dir.path(),
+        "run-init",
+        "fixture",
+        json!({"role":"implement", "item_key":"p:I", "round_cause":"initial"}),
+        Status::Failed,
+    )
+    .ok()
+    .unwrap();
+    crate::round_progress::finish_round(&mut record, Status::Failed);
+    assert_eq!(record.get("round_void"), Some(&json!(true)));
+    // The runner saves the record; the test writes the voided one back.
+    std::fs::write(
+        dir.path().join("runs/run-init/record.json"),
+        record.to_value().to_string(),
+    )
+    .unwrap();
+    let launch = json!({"card":{"item_key":"p:I", "pr":PR}})
+        .as_object()
+        .unwrap()
+        .clone();
+    for args in [launch, card("initial", 0)] {
+        let admitted = admit(dir.path(), &args).ok().unwrap();
+        assert_eq!(admitted.fields["round_cause"], "initial");
+        assert!(admitted.fields.get("writer_round").is_none());
+    }
+}

@@ -79,6 +79,8 @@ pub(crate) fn start(
         r["round_cause"] == INITIAL
             && batch_key(r) == Some(batch)
             && !matches!(r["status"].as_str(), Some("dry_run" | "refused"))
+            // An attempt that did no work (voided) leaves the batch as it was: retry the initial run.
+            && !(r["round_void"] == true && crate::runs::terminal(r) && r["status"] != "completed")
     });
     // A finished initial run leaves the numbered history empty but is not to be repeated.
     let seen = initials.clone().next().is_some();

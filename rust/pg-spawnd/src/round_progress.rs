@@ -363,7 +363,9 @@ pub(crate) fn finish_round(
     status: pg_worker_core::run::record::Status,
 ) {
     use pg_worker_core::run::record::Status;
-    if record.get("writer_round").is_none() || status == Status::Completed {
+    // The initial run holds no round number but is voided the same way when it did no work.
+    let initial = record.get("round_cause").and_then(Value::as_str) == Some("initial");
+    if (record.get("writer_round").is_none() && !initial) || status == Status::Completed {
         return;
     }
     let before = record.get("round_work_before").and_then(Value::as_str);

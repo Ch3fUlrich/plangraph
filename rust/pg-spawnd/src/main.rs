@@ -71,6 +71,7 @@ mod round_progress;
 mod round_replan;
 mod round_replan_ports;
 mod runs;
+mod runs_wait;
 mod serve;
 mod serve_options;
 mod shim;
