@@ -665,14 +665,64 @@ def test_an_older_keepers_note_is_exported_and_imported_as_fields(w, decisions, 
     items = {i["id"]: i for i in load_dir(out)}
     assert (items["L"]["session"], items["L"].get("note")) == ("D-999999", None)
     assert (items["M"]["note"], items["M"]["similar"]) == ("plain note", ["demo:L"])
-    # a note that carries such lines in a YAML written by hand is split at the door as well
+
+
+def test_a_note_written_by_hand_is_authored_text_at_the_door(w, decisions, tmp_path):
+    from plangraph.keeper.importer import load_dir
     plan = tmp_path / "plan"
     plan.mkdir()
     (plan / "p.yaml").write_text(
-        "items:\n- {project: demo, id: H, title: h, note: \"plain\\nsession: D-999999\", owner: tester,"
+        "items:\n- {project: demo, id: H, title: h, note: \"plain\\ncategory: see D-5 for context\", owner: tester,"
         " track: T0, estimate_h: 1, kind: lane}\n", encoding="utf-8")
     [hand] = load_dir(plan)
-    assert (hand["note"], hand["session"]) == ("plain", "D-999999")
+    assert hand["note"] == "plain\ncategory: see D-5 for context" and "category" not in hand
+    _mk(w, defn("A", note="plain\ncategory: see D-5 for context"))        # and so is a created one
+    _decide(decisions, 5, "an old plan")
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), "demo:A")
+    assert "premise D-5 superseded by D-9" in exc.value.msg
+
+
+@pytest.mark.parametrize("legacy", [
+    "session: D-999999\nworkstreams: [a, b]",
+    "category: first line\nsecond line cites D-999999\nthird line\nsession: D-999999",
+    "authored per D-8\nsimilar: [\"D-999999\"]\nsupersedes: D-999999\nzeta: kept",
+])
+def test_every_shape_of_an_older_keepers_fold_is_read_as_metadata(w, decisions, legacy):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("L"))
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:L'", (legacy,))        # as an older Keeper left it
+    _decide(decisions, 5900, "demo:L scope changed")
+    assert "D-5900" in _refuses(w, "demo:L")
+    assert "D-999999" not in str(w.store._decision_clock()["marks"])
+
+
+def test_an_edit_that_adds_a_title_citation_does_not_make_a_legacy_note_authored(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("L", title="plain title"))
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:L'", ("session: D-999999",))
+    w.store.edit_definition(w.p("router"), "demo:L", {"title": "plain title per D-5801"})
+    _decide(decisions, 5900, "demo:L scope changed")
+    assert "D-5900" in _refuses(w, "demo:L")
+
+
+def test_rehome_keeps_the_provenance_of_an_authored_note_and_of_a_legacy_one(w, decisions):
+    _mk(w, defn("P", note="authored\ncategory: see D-5 for context"))
+    _mk(w, defn("Q"))
+    w.conn.execute("UPDATE items SET note=? WHERE key='demo:Q'", ("session: D-999999",))
+    _decide(decisions, 5, "an old plan")
+    _decide(decisions, 9, "supersedes D-5 for demo")
+    _decide(decisions, 5900, "plangraph:Q scope changed")
+    _mk(w, defn("C", description="per D-5800"))
+    for key in ("demo:P", "demo:Q"):
+        w.store.rehome(w.p("router"), key, "plangraph", "workstation")
+    with pytest.raises(Refused) as exc:
+        w.store.worker_claim_lease(w.p("system"), "plangraph:P")
+    assert "premise D-5 superseded by D-9" in exc.value.msg                   # authored: still cited
+    with pytest.raises(Refused) as exc:
+        w.store.worker_claim_lease(w.p("system"), "plangraph:Q")
+    assert "D-5900" in exc.value.msg                                          # legacy: still not cited
 
 
 def test_a_credential_label_in_a_still_folded_extension_field_covers_the_metadata_value(w):

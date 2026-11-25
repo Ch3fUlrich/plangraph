@@ -206,8 +206,8 @@ class ContextMixin:
                 mark = max(mark, _num(ids[-1]))
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
-            if ("note" in payload and row["type"] == "item_created") or payload.get("premise_cites"):
-                clock["authored"].add(row["key"])    # a note this Keeper recorded is authored text
+            if row["type"] == "item_created" and "note" in payload:
+                clock["authored"].add(row["key"])    # a creation this Keeper wrote with its note
             if _changes_premise(row["type"], payload):
                 clock["last"][row["key"]] = row["seq"]
                 clock["reconfirmed"].pop(row["key"], None)     # the router read an earlier premise
@@ -236,7 +236,7 @@ class ContextMixin:
         with the note (an older Keeper's) ends in the metadata lines it folded: those are not
         premise text."""
         if clock is not None and item["key"] not in clock["authored"]:
-            item = {**item, "note": split_legacy_metadata(item.get("note"), whole=True)[0]}
+            item = {**item, "note": split_legacy_metadata(item.get("note"))[0]}
         return premise_texts(item)
 
     def _work(self, item, fetch, fresh_lanes=False):

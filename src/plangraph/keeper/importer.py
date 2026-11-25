@@ -25,8 +25,7 @@ from .note_fold import (DESCRIPTION_CAP, METADATA_FIELDS, fold_checked as _fold_
                         split_legacy_metadata)
 from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_design_ref, check_host, check_kind,
                           check_metadata, check_model_fields, check_wait, creation_metadata, creation_payloads,
-                          kind_defaults,
-                          move_legacy_metadata)
+                          kind_defaults)
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
@@ -85,7 +84,6 @@ def _normalise_item(raw, where):
         raise Refused("validation",
                       f"{where}: item in {project!r} needs an id string")
     key = f"{project}:{identifier}"
-    raw = move_legacy_metadata(raw, key)
     declared = raw.get("key")
     if declared is not None and declared != key:
         raise _bad(key, f"key {declared!r} != {key!r}")
@@ -267,7 +265,7 @@ def export_yaml(conn_or_store, dir):
         item = {**item, "metadata": metadata.get(item["key"], {})}
         if item["key"] not in authored:
             # An older Keeper folded metadata into this note: export it as the fields it was.
-            note, found = split_legacy_metadata(item.get("note"), whole=True)
+            note, found = split_legacy_metadata(item.get("note"))
             if found:
                 item = {**item, "note": note,
                         "metadata": {**found, **item["metadata"]}}

@@ -16,7 +16,7 @@ from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
 from .context_sources import decision_ids
 from .item_fields import (MODEL_FIELDS, SMALL_FIELDS, check_choices, check_design_ref, check_host, check_kg_refs, check_kind, check_model_fields,
-                          check_metadata, check_wait, kind_defaults, move_legacy_metadata)
+                          check_metadata, check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -196,7 +196,6 @@ class InputMixin:
         # refusal so a batch of 40 items says which one failed (PL-33).
         key = f"{project}:{identifier}" if project and identifier else None
         self._check_text(raw, key)
-        raw = move_legacy_metadata(raw, key)
         if not project or not identifier:
             raise Refused("validation", "each item needs project and id")
         if raw.get("key") and raw["key"] != key:

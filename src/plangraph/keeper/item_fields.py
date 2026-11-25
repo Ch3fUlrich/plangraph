@@ -25,7 +25,7 @@ import re
 
 from .credential_guard import guard
 from .errors import Refused
-from .note_fold import METADATA_FIELDS, NOTE_CAP, fold_note, render, split_legacy_metadata
+from .note_fold import METADATA_FIELDS, NOTE_CAP, fold_note, render
 
 _HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked against):|\Z)",
                   re.M | re.S)
@@ -148,21 +148,6 @@ def check_metadata(raw, key, extra=None):
         view = fold_note(raw.get("note"), {**(extra or {}), **out}, key)
         guard("/".join(sorted(out)), view, key)
     return out
-
-
-def move_legacy_metadata(raw, key):
-    """*raw* with the metadata lines an older Keeper's export folded at the end of its note
-    moved to their own fields: ``note`` keeps the authored part, the fields travel on the
-    creation event.  A line whose value does not validate stays in the note."""
-    authored, found = split_legacy_metadata(raw.get("note"))
-    found = {name: value for name, value in found.items() if raw.get(name) is None}
-    if not found:
-        return raw
-    try:
-        check_metadata({**raw, **found}, key)
-    except Refused:
-        return raw
-    return {**raw, "note": authored, **found}
 
 
 def creation_payloads(conn, key=None):

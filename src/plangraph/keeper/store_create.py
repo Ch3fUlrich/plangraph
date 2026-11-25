@@ -375,6 +375,8 @@ class CreateMixin:
                 created[name] = row[name]
         if not definition.get("rehomed_from"):      # a moved premise is carried, not authored
             created.update(citing_premise(row, ("title", "done_criteria", "note", "source")))
+        elif definition.get("authored_note") and row["note"] is not None:
+            created["note"] = row["note"]           # the note stays marked as authored text
         created.update(definition.get("metadata") or {})
         if parent := definition.get("slice_parent"):
             created["slice_parent"] = parent
