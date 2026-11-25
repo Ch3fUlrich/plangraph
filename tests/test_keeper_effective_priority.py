@@ -80,3 +80,19 @@ def test_reap_replaces_the_source_of_an_existing_metric_row(w):
     row = w.conn.execute("SELECT value, source FROM metrics WHERE day=? AND metric=?",
                          (day, "priority_inherit_raised")).fetchone()
     assert (row["value"], row["source"]) == (1.0, "reap")
+
+
+def test_ready_and_snapshot_name_the_smallest_source_through_equal_priorities(tmp_path):
+    world = World(tmp_path)
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("ROOT", priority=1), defn("M", ["ROOT"], priority=10),
+            defn("Z", ["ROOT"], priority=10), defn("A", ["Z"], priority=10),
+            defn("GOAL", ["M", "A"], kind="goal")])
+        root = next(r for r in world.store._ready_items(project="demo", n=None) if r["key"] == "demo:ROOT")
+        assert (root["effective_priority"], root["priority_via"]) == (10, "demo:A")
+        items = {i["key"]: i for i in world.store._snapshot(world.clock())["items"]}
+        assert items["demo:ROOT"]["priority_via"] == "demo:A"
+        assert "priority_via" not in items["demo:Z"]
+    finally:
+        world.close()
