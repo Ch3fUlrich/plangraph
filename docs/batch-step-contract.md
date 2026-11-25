@@ -74,3 +74,13 @@ was granted are released, each at its epoch, and a failed release is reported), 
 (a skipped one is no evidence) and nothing failed, red naming the failing run, an error when the runs do not finish within
 the waiting budget) and `train_join` (the `--train-cmd`, called with `--head --pr --run
 --attempt`, printing `{"train":..,"manifest":..}`).
+
+Resuming is bound to the batch: the saved rows must carry this call's items, base and brief and
+the worktree of this native run, or the call is refused before a step runs. `push` verifies
+the stamp and a recorded, accepting review of the exact head (the review reference of a row is
+not trusted by itself). The claim keeps its keeper idempotency key beside the steps file
+(`<steps>.claim-key`), so a process killed after the keeper granted the claim retries with the
+same key and is answered from the keeper's receipt; a refused claim settles and drops the key.
+`ci_class` judges the latest run of each workflow; for a draft `lane/*` part (the default
+publish path) the part policy of `.github/workflows/tests.yml` applies: its jobs are skipped by
+design, a skipped required workflow is its passing evidence and a failure is still red.

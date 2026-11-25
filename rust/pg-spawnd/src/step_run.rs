@@ -15,7 +15,7 @@
 
 use pg_spawnd::step_runner::{Inputs, Limits, Outcome, Runner, StepActions};
 use pg_spawnd::step_runner_log::StepLog;
-use pg_worker_core::batch_steps::BatchSteps;
+use pg_worker_core::batch_steps::{BatchSteps, ResultOf, Step};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -128,11 +128,49 @@ pub(crate) fn limits() -> Limits {
     }
 }
 
+/// Refuse a saved list that was made for other inputs. The repo and batch key are checked by
+/// the runner; the items (journal rows and claims are keyed by them), the base, the brief and,
+/// when known, the worktree of this native run are immutable inputs of the batch, so a
+/// mismatch is an error before any step runs.
+fn bind(steps: &BatchSteps, inputs: &Inputs, worktree: Option<&Path>) -> Result<(), String> {
+    for row in &steps.rows {
+        let mismatch = match &row.step {
+            Step::Claim { items, .. } if items != &inputs.items => Some("items"),
+            Step::Worktree { base, result, .. } => {
+                let other = match (worktree, result) {
+                    (Some(path), ResultOf::Completed { output }) => {
+                        Path::new(&output.worktree) != path
+                    }
+                    _ => false,
+                };
+                if base != &inputs.base {
+                    Some("base")
+                } else if other {
+                    Some("worktree of the native run")
+                } else {
+                    None
+                }
+            }
+            Step::Write { brief, .. } if brief != &inputs.brief => Some("brief"),
+            _ => None,
+        };
+        if let Some(what) = mismatch {
+            return Err(format!(
+                "the saved steps were made for other {what} (row {})",
+                row.stage.step_index
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The runner for `inputs`: new when the steps file is missing, else resumed from its rows.
-pub(crate) fn load(path: &Path, inputs: Inputs) -> Result<Runner, String> {
+pub(crate) fn load(path: &Path, inputs: Inputs, worktree: Option<&Path>) -> Result<Runner, String> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let steps: BatchSteps = serde_json::from_slice(&bytes)
+                .map_err(|err| format!("steps file {}: {err}", path.display()))?;
+            bind(&steps, &inputs, worktree)
                 .map_err(|err| format!("steps file {}: {err}", path.display()))?;
             Runner::resume(inputs, limits(), steps)
                 .map_err(|err| format!("steps file {}: {err}", path.display()))
@@ -196,10 +234,11 @@ pub(crate) fn clock() -> i64 {
 /// the return value is the exit code.
 pub(crate) fn drive(
     args: &Args,
+    worktree: Option<&Path>,
     actions: &mut dyn StepActions,
     out: &mut dyn std::io::Write,
 ) -> Result<i32, String> {
-    let mut runner = load(&args.steps, args.inputs.clone())?;
+    let mut runner = load(&args.steps, args.inputs.clone(), worktree)?;
     let mut sink = log_for(args);
     let outcome = runner.run(actions, &mut sink, &mut clock);
     let (code, line) = report(&outcome, &runner);
@@ -219,8 +258,9 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result
         findings,
         args.steps.clone(),
     )?;
+    let worktree = host.worktree.clone();
     let mut actions = crate::step_run_actions::production(&args, host);
-    let code = drive(&args, &mut actions, out)?;
+    let code = drive(&args, Some(&worktree), &mut actions, out)?;
     if code != 0 {
         let _ = out.flush();
         std::process::exit(code);

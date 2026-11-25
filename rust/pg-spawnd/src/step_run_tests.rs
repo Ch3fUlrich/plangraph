@@ -102,7 +102,7 @@ fn the_round_cap_allows_eight_reviews_and_so_seven_fixes() {
 #[test]
 fn a_missing_steps_file_starts_the_list() {
     let dir = tempfile::tempdir().unwrap();
-    let runner = load(&dir.path().join("steps.json"), inputs(dir.path())).unwrap();
+    let runner = load(&dir.path().join("steps.json"), inputs(dir.path()), None).unwrap();
     assert!(runner.steps().rows.is_empty());
 }
 
@@ -110,7 +110,7 @@ fn a_missing_steps_file_starts_the_list() {
 fn a_steps_file_that_is_not_a_list_is_refused_with_its_path() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("steps.json"), "{}").unwrap();
-    let error = load(&dir.path().join("steps.json"), inputs(dir.path()))
+    let error = load(&dir.path().join("steps.json"), inputs(dir.path()), None)
         .err()
         .unwrap();
     assert!(error.contains("steps.json"), "{error}");
@@ -191,7 +191,7 @@ fn start(dir: &Path, die_on: Option<usize>) -> (Calls, Option<i32>) {
     };
     let mut calls = Calls(Vec::new(), die_on);
     let code = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        drive(&args, &mut calls, &mut Vec::new()).unwrap()
+        drive(&args, None, &mut calls, &mut Vec::new()).unwrap()
     }));
     (calls, code.ok())
 }
@@ -232,14 +232,16 @@ fn a_steps_file_of_another_batch_is_not_resumed() {
     start(dir.path(), None);
     let mut other = inputs(dir.path());
     other.batch_key = "batch-2".into();
-    let error = load(&dir.path().join("steps.json"), other).err().unwrap();
+    let error = load(&dir.path().join("steps.json"), other, None)
+        .err()
+        .unwrap();
     assert!(error.contains("another repo or batch"), "{error}");
 }
 
 #[test]
 fn the_outcome_sets_the_exit_code_and_the_report() {
     let dir = tempfile::tempdir().unwrap();
-    let runner = load(&dir.path().join("none.json"), inputs(dir.path())).unwrap();
+    let runner = load(&dir.path().join("none.json"), inputs(dir.path()), None).unwrap();
     let joined = Outcome::Joined {
         train: "t".into(),
         manifest: "m".into(),
@@ -277,4 +279,53 @@ fn the_subcommand_refuses_a_run_that_has_no_record() {
         !dir.path().join("steps.json").exists(),
         "nothing was started"
     );
+}
+
+/// A list saved by a finished run, to be resumed with changed inputs.
+fn saved_list(dir: &Path) {
+    start(dir, None);
+}
+
+#[test]
+fn saved_steps_for_other_items_base_or_brief_are_refused_before_a_step_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    saved_list(dir.path());
+    let path = dir.path().join("steps.json");
+    type Edit = fn(&mut Inputs);
+    let change: [(&str, Edit); 3] = [
+        ("items", |i| i.items = vec!["demo:Z".into()]),
+        ("base", |i| i.base = HEAD.into()),
+        ("brief", |i| i.brief = "/elsewhere/brief.md".into()),
+    ];
+    for (what, edit) in change {
+        let mut other = inputs(dir.path());
+        edit(&mut other);
+        let error = load(&path, other, None).err().unwrap();
+        assert!(error.contains(&format!("other {what}")), "{what}: {error}");
+    }
+}
+
+#[test]
+fn saved_steps_of_another_native_run_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    saved_list(dir.path());
+    let path = dir.path().join("steps.json");
+    // The recorded worktree is `w`; the run this call resolved has its own checkout.
+    let error = load(&path, inputs(dir.path()), Some(Path::new("/runs/other/wt")))
+        .err()
+        .unwrap();
+    assert!(error.contains("native run"), "{error}");
+    assert!(load(&path, inputs(dir.path()), Some(Path::new("w"))).is_ok());
+}
+
+#[test]
+fn the_default_publish_path_is_a_draft_lane_part_with_the_part_ci_policy() {
+    use crate::step_run_actions::{branch_of, is_draft_part};
+    let dir = tempfile::tempdir().unwrap();
+    let args = parse(&call(dir.path())).unwrap();
+    assert_eq!(branch_of(&args), "lane/batch-1");
+    assert!(is_draft_part(&branch_of(&args)));
+    let mut other = call(dir.path());
+    other.extend(strings(&["--branch", "batch/x"]));
+    assert!(!is_draft_part(&branch_of(&parse(&other).unwrap())));
 }

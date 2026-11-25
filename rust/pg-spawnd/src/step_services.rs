@@ -71,10 +71,30 @@ pub enum Reading {
 /// Conclusions that do not make a head red: the run did what it was asked to.
 const PASSING: [&str; 3] = ["success", "skipped", "neutral"];
 
-/// Green when every run completed without a failure; red as soon as one completed with one,
-/// naming that run, so the autofix item reads the run that failed. A head without runs is
+/// The runs that count: the latest run of each workflow. An older run of the same workflow
+/// (an earlier push, a superseded dispatch) is history, not the state of the head.
+fn current(runs: &[CiRun]) -> Vec<&CiRun> {
+    let mut latest: Vec<&CiRun> = Vec::new();
+    for run in runs {
+        match latest.iter_mut().find(|seen| seen.name == run.name) {
+            Some(seen) if seen.id < run.id => *seen = run,
+            Some(_) => {}
+            None => latest.push(run),
+        }
+    }
+    latest
+}
+
+/// Green when every current run completed without a failure; red as soon as one completed with
+/// one, naming that run, so the autofix reads the run that failed. A head without runs is
 /// pending, never green.
-pub fn classify(runs: &[CiRun], required: &[String]) -> Reading {
+///
+/// `draft_part` is the policy of a draft `lane/*` pull request: it runs no job (its jobs are
+/// skipped, a skipped required check reports success; admission is review and the fast gates
+/// on the writer host), so a skipped required workflow is the passing evidence there. For any
+/// other pull request a required workflow needs a run that succeeded.
+pub fn classify(runs: &[CiRun], required: &[String], draft_part: bool) -> Reading {
+    let runs = current(runs);
     if runs.is_empty() {
         return Reading::Pending("no CI run for the head yet");
     }
@@ -97,14 +117,17 @@ pub fn classify(runs: &[CiRun], required: &[String]) -> Reading {
     if runs.iter().any(|run| conclusion(run).is_none()) {
         return Reading::Pending("a CI run has not completed");
     }
-    // Green speaks for the required workflows: each ran for this head and one of its runs
-    // passed. A skipped or neutral run satisfies "no failure" but proves nothing.
+    // Green speaks for the required workflows: each has a current run that passed.
     for name in required {
-        let mut of_name = runs.iter().filter(|run| &run.name == name).peekable();
-        if of_name.peek().is_none() {
+        let Some(run) = runs.iter().find(|run| &run.name == name) else {
             return Reading::Pending("a required workflow has no run for the head yet");
-        }
-        if !of_name.any(|run| run.conclusion.as_deref() == Some("success")) {
+        };
+        let passed = match run.conclusion.as_deref() {
+            Some("success") => true,
+            Some("skipped" | "neutral") => draft_part,
+            _ => false,
+        };
+        if !passed {
             return Reading::Unproven(format!("required workflow {name} has no passing run"));
         }
     }
@@ -127,6 +150,8 @@ pub struct ServiceSteps<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> {
     pub wait: CiWait,
     /// Workflow names that must have passed for the head to be green.
     pub required: Vec<String>,
+    /// The pull request is a draft `lane/*` part: see `classify`.
+    pub draft_part: bool,
     /// Called between two looks at the CI; a test passes a no-op.
     pub sleep: Box<dyn FnMut(Duration)>,
     pub rest: A,
@@ -153,7 +178,7 @@ impl<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> StepActions for Service
             if look > 0 {
                 (self.sleep)(self.wait.interval);
             }
-            match classify(&self.ci.runs(head, pr)?, &self.required) {
+            match classify(&self.ci.runs(head, pr)?, &self.required, self.draft_part) {
                 Reading::Done(class) => return Ok(class),
                 Reading::Unproven(why) => return Err(format!("CI of {head}: {why}")),
                 Reading::Pending(why) => last = why,

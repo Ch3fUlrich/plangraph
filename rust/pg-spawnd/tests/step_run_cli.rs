@@ -50,7 +50,7 @@ impl Fixture {
         let pg = bin.join("pg");
         fs::write(
             &pg,
-            "#!/bin/sh\necho \"$*\" >> \"$PG_LOG\"\n\
+            "#!/bin/sh\necho \"$PG_IDEMPOTENCY_KEY $*\" >> \"$PG_LOG\"\n\
              if [ \"$(wc -l < \"$PG_LOG\")\" = 1 ]; then kill -9 $PPID; sleep 5; fi\n\
              printf '{\"results\":[{\"key\":\"demo:A\",\"epoch\":3}]}\\n'\n",
         )
@@ -156,6 +156,15 @@ fn a_killed_step_run_resumes_from_its_steps_file() {
     let (code, line) = fixture.start();
     assert_eq!(code, Some(1), "{line}");
     assert_eq!(fixture.claims(), 2);
+    // The killed claim and its retry carry one idempotency key: a keeper that had granted the
+    // first would answer the second from its receipt instead of refusing the keys.
+    let log = fs::read_to_string(fixture.path("pg.log")).unwrap();
+    let keys: Vec<&str> = log
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert_eq!(keys[0], keys[1], "{log}");
+    assert_eq!(keys[0].len(), 32, "{log}");
     let rows = fixture.rows();
     assert_eq!(
         &rows[..2],

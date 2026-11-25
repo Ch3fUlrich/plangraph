@@ -349,7 +349,9 @@ impl Driver for Host {
         Some(self.cwd.clone())
     }
     fn clean(&mut self) -> Result<(), String> {
-        // The review directory may sit inside the checkout; it holds evidence, not code.
+        // Only untracked review artifacts may sit in the checkout; any change to a tracked
+        // file, even one under the review directory, would let the gates speak for a tree
+        // that is not the commit.
         let reviews = self
             .reviews
             .strip_prefix(&self.cwd)
@@ -360,9 +362,12 @@ impl Driver for Host {
             .lines()
             .filter(|line| {
                 // `output` trims the text, so the first line may have lost its leading blank.
-                let path = line.trim_start().split_once(' ').map_or(*line, |(_, p)| p);
-                let path = Path::new(path.trim());
-                !reviews.as_ref().is_some_and(|dir| path.starts_with(dir))
+                let (code, path) = line.trim_start().split_once(' ').unwrap_or((line, ""));
+                let artifact = code == "??"
+                    && reviews
+                        .as_ref()
+                        .is_some_and(|dir| Path::new(path.trim()).starts_with(dir));
+                !artifact
             })
             .collect();
         if dirty.is_empty() {
@@ -483,6 +488,9 @@ use review::{review_run_text, review_verdict};
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
+#[cfg(test)]
+#[path = "native_writer_host_clean_tests.rs"]
+mod clean_tests;
 #[cfg(test)]
 #[path = "native_writer_host_review_tests.rs"]
 mod review_tests;

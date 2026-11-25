@@ -112,6 +112,17 @@ impl<D: Driver> AgentSteps<D> {
         self.driver.save(&record)
     }
 
+    /// The review the push may consume: a recorded row accepted exactly `head` in a kept run.
+    pub(crate) fn verify_review(&self, head: &str, review: &str) -> Result<(), String> {
+        let recorded = self.committed_reviews().into_iter().any(|(verdict, run)| {
+            matches!(verdict, Verdict::Accept) && run["run_id"] == review && run["head"] == head
+        });
+        if recorded {
+            return Ok(());
+        }
+        Err(format!("no recorded accepting review {review} for {head}"))
+    }
+
     /// The stamp the push may consume: the one this driver wrote for exactly `head`.
     pub(crate) fn verify_stamp(&mut self, head: &str, stamp: &str) -> Result<(), String> {
         match self.driver.stamp_path(head) {
