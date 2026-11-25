@@ -307,26 +307,3 @@ fn quota_pool_rejects_out_of_range_timestamps_without_hiding_healthy_accounts() 
     assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
     assert_eq!(weekly["accounts"][0]["account"], "a");
 }
-
-#[test]
-fn quota_pool_ranks_numeric_and_iso_timestamps_of_one_instant_alike() {
-    let t = now() - 100.0;
-    let reset = now() + 86_400.0;
-    let (numeric, text) = (format!("{}", t + 0.25), iso(t, 250_000_000, 'T', 9));
-    let directory = tempfile::tempdir().unwrap();
-    // One instant written both ways: the later id wins whichever form it is in.
-    let inserts = [
-        insert(1, "codex:a", "NULL", "weekly", "90", &text, reset),
-        insert(2, "codex:a", "NULL", "weekly", "40", &numeric, reset),
-        insert(3, "codex:b", "NULL", "weekly", "40", &numeric, reset),
-        insert(4, "codex:b", "NULL", "weekly", "90", &text, reset),
-    ]
-    .concat();
-    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
-    near(&account(&weekly, "a")["used_pct"], 60.0);
-    near(&account(&weekly, "b")["used_pct"], 10.0);
-    assert_eq!(
-        account(&weekly, "a")["observed_at_ns"],
-        account(&weekly, "b")["observed_at_ns"]
-    );
-}

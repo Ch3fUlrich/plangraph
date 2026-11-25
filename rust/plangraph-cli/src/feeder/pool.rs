@@ -1,6 +1,8 @@
 //! `plangraph quota pool`: the per-window readout of one provider pool from quota snapshots.
 use super::adapters::{quota_snapshot_history, Env};
-use super::quota::{field, observed, pool_identity, remaining_percent, stamp_ns, window};
+use super::quota::{
+    field, observed, pool_identity, remaining_percent, stamp_ns, window, STAMP_MAX_NS,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -92,8 +94,12 @@ pub(crate) fn pool_use_samples(
         let reset = field(row, &["next_reset_at", "nextResetAt", "resetAt"]).and_then(stamp_ns);
         let length_ns = window_seconds(w).map(|l| l as i128 * NANOS as i128);
         if let (Some(at), Some(used), Some(reset)) = (at, used, reset) {
+            // Ranked above by every parseable instant; only a reportable one is a reading.
+            let reportable =
+                (0..=STAMP_MAX_NS).contains(&at) && (0..=STAMP_MAX_NS).contains(&reset);
             let begun = length_ns.is_none_or(|l| at >= reset - l);
-            if at <= now_ns
+            if reportable
+                && at <= now_ns
                 && now_ns - at <= max_age as i128 * NANOS as i128
                 && reset > now_ns
                 && begun
