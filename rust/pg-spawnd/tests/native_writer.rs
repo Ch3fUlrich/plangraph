@@ -318,6 +318,8 @@ async def check():
             prefix, payload = os.environ['FIXTURE_BATCH_INPUT'].replace('\r\n', '\n').split('\n', 1)
             batch = json.loads(payload)
             batch['items'][0]['brief'] += '\n### demo:BODYONLY | a heading inside the item body'
+            # A second member that only the typed batch names: the card carries demo:FIXTURE alone.
+            batch['items'].append(dict(key='demo:SECOND', title='second member', brief='Why: second member of the batch'))
             prompt = prefix + '\n' + json.dumps(batch)
         run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
@@ -326,7 +328,7 @@ async def check():
     record = service.result(run['run_id'])
     assert record['status'] == 'completed', record
     # The launch boundary admitted the keys and the supervisor published the mark.
-    assert record['item_keys'] == ['demo:FIXTURE'] and record['lane_admitted'] is True, record
+    assert record['item_keys'] == (['demo:FIXTURE', 'demo:SECOND'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else ['demo:FIXTURE']) and record['lane_admitted'] is True, record
     assert record['base_sha'] == os.environ['FIXTURE_BASE'], record
     assert record['final_head'] != record['base_sha'], record
     assert record['host'] and record['exit_code'] == 0, record
@@ -349,7 +351,7 @@ async def check():
         assert pathlib.Path(record['resolved_tools']['codex']) == expected, record
         assert str(expected.parent) in record['tool_path'].split(os.pathsep), record
         # The record the real supervisor published, held again: the follow-up launches meet it.
-        assert '### demo:BODYONLY' in brief and record['item_keys'] == ['demo:FIXTURE'], record
+        assert '### demo:BODYONLY' in brief and record['item_keys'] == ['demo:FIXTURE', 'demo:SECOND'], record
         held = dict(record, status='running')
         held.pop('ended', None)
         service._path(run['run_id']).write_text(json.dumps(held))
@@ -357,12 +359,14 @@ async def check():
         follow = dict(run_kind='native-codex', repo=str(root/'checkout'))
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']):
             assert overflow.lane_admit(service, follow, '### demo:BODYONLY | body only\nWhy: x\n')['item_keys'] == ['demo:BODYONLY']
-            try:
-                overflow.lane_admit(service, follow, '### demo:FIXTURE | member\nWhy: x\n')
-            except SpawnRefused as exc:
-                assert 'demo:FIXTURE is held by live lane ' in str(exc), exc
-            else:
-                raise AssertionError('the genuine batch member was admitted')
+            # Each genuine member is refused by the published record: demo:SECOND is in no card.
+            for member in ('demo:FIXTURE', 'demo:SECOND'):
+                try:
+                    overflow.lane_admit(service, follow, '### ' + member + ' | member\nWhy: x\n')
+                except SpawnRefused as exc:
+                    assert member + ' is held by live lane ' in str(exc), exc
+                else:
+                    raise AssertionError('the genuine batch member was admitted: ' + member)
         return
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')

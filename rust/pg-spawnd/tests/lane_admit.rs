@@ -367,3 +367,104 @@ fn a_valid_near_limit_card_stays_admissible_after_the_keys_are_attached() {
     assert_eq!(admitted["item_keys"], json!(["demo:BIG"]));
     assert!(admitted.to_string().len() > 24000);
 }
+
+/// Drive `seat_spawn._open_queue` against the real binary. Prints the queued record, or the
+/// refusal text of the options or the lane check.
+fn open_queue(state: &Path, prompt: &str, card: &Value, options: Value) -> String {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = test_python::command()
+        .current_dir(&root)
+        .env("NATIVE_BINARY", binary::spawnd())
+        .env("STATE", state)
+        .env("PROMPT", prompt)
+        .env("CARD", card.to_string())
+        .env("OPTIONS", options.to_string())
+        .args(["-c", r#"
+import json, os
+from pathlib import Path
+from unittest.mock import patch
+from plangraph.routing_errors import SpawnRefused
+from plangraph.spawner import overflow, seat_spawn
+from plangraph.spawner.service import SpawnService
+service = SpawnService(state=Path(os.environ['STATE']))
+card, options = json.loads(os.environ['CARD']), dict(json.loads(os.environ['OPTIONS']), prompt=os.environ['PROMPT'])
+try:
+    with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']):
+        record = seat_spawn._open_queue(service, options.get('role'), overflow.Decision(None, 'no room'), 60, 'local', card, options)
+    print('QUEUED', json.dumps(record))
+except (SpawnRefused, ValueError) as exc:
+    print(exc)
+"#])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn a_queued_native_launch_publishes_its_admitted_keys_and_a_second_dispatch_meets_them() {
+    let state = tempfile::tempdir().unwrap();
+    // The key only the brief names: the queue record must carry it, not just the card's key.
+    let card = json!({"run_kind":"native-codex","repo":"/r","item_key":"demo:CARD"});
+    let text = open_queue(
+        state.path(),
+        "### demo:BRIEFONLY | t\nWhy: x\n",
+        &card,
+        json!({"role":"implement"}),
+    );
+    let queued: Value = serde_json::from_str(text.strip_prefix("QUEUED ").expect(&text)).unwrap();
+    assert_eq!(queued["status"], "queued");
+    assert_eq!(queued["item_keys"], json!(["demo:BRIEFONLY", "demo:CARD"]));
+    for key in ["demo:BRIEFONLY", "demo:CARD"] {
+        let error = lane_admit(state.path(), &format!("### {key} | t\n"), json!({})).unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "{key} is held by live lane {}",
+                queued["run_id"].as_str().unwrap()
+            )),
+            "{error}"
+        );
+    }
+    // The second queueing of a held key is refused before it publishes a record of its own.
+    let text = open_queue(
+        state.path(),
+        "### demo:BRIEFONLY | t\n",
+        &card,
+        json!({"role":"implement"}),
+    );
+    assert!(
+        text.contains("demo:BRIEFONLY is held by live lane run-"),
+        "{text}"
+    );
+    assert_eq!(fs::read_dir(state.path().join("runs")).unwrap().count(), 1);
+}
+
+#[test]
+fn a_native_request_with_invalid_options_is_refused_at_the_queue_before_any_run_state_is_read() {
+    let state = tempfile::tempdir().unwrap();
+    write_run(state.path(), "run-odd", &json!({"role":"implement"}));
+    let before = tree(state.path());
+    let card = json!({"run_kind":"native-codex","repo":"/r","item_key":"demo:K"});
+    for (options, expected) in [
+        (
+            json!({"role":"review"}),
+            "native-codex requires implement role",
+        ),
+        (
+            json!({"role":"implement","cwd":"/elsewhere"}),
+            "native-codex requires implement role",
+        ),
+        (
+            json!({"role":"implement","dry_run":true}),
+            "dry-run is not supported",
+        ),
+    ] {
+        let text = open_queue(state.path(), "### demo:K | t\n", &card, options);
+        assert!(text.contains(expected) && !text.contains("lane_"), "{text}");
+    }
+    assert_eq!(tree(state.path()), before);
+}
