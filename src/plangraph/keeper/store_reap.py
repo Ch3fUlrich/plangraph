@@ -67,10 +67,7 @@ class ReapMixin:
         stamp = self._iso(now)
         for metric, value in (("priority_inherit_raised", stats["raised"]),
                               ("priority_inherit_longest_chain", stats["longest_chain"])):
-            self.conn.execute(
-                "INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)"
-                " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
-                "computed_at=excluded.computed_at", (stamp[:10], metric, float(value), "reap", stamp))
+            self._put_metric(stamp[:10], metric, float(value), "reap", stamp)
 
     def _check_gate_capacity(self, items, now):
         code = "gate_dependency_capacity"

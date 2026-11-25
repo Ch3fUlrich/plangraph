@@ -218,8 +218,8 @@ def effective_priorities(items):
     PRIORITY-INHERIT-FROM-BLOCKED: effective = max(own, effective of every
     non-terminal item that depends on it), transitively.  ``via`` is the
     dependent whose own priority gives the value (None when the item's own is
-    the maximum; the smallest key wins a tie) and ``hops`` the chain length to
-    it.  The stored priority is never touched.  A dependency cycle is returned
+    the maximum; the smallest source key wins a tie, also through a longer
+    chain) and ``hops`` the chain length to it.  The stored priority is never touched.  A dependency cycle is returned
     as a key list and its back edge is ignored, so the walk always ends.
     """
     idx = index(items)
@@ -247,9 +247,13 @@ def effective_priorities(items):
                 continue
             best = {"effective": _prio(idx[node]), "via": None, "hops": 0}
             for dep in sorted(dependents[node]):
-                if dep in eff and eff[dep]["effective"] > best["effective"]:
-                    best = {"effective": eff[dep]["effective"],
-                            "via": eff[dep]["via"] or dep, "hops": eff[dep]["hops"] + 1}
+                if dep not in eff:
+                    continue
+                value, source = eff[dep]["effective"], eff[dep]["via"] or dep
+                # the highest value wins; a tie keeps the smallest source key, however far away
+                if value > best["effective"] or (value == best["effective"] and best["via"] is not None
+                                                 and source < best["via"]):
+                    best = {"effective": value, "via": source, "hops": eff[dep]["hops"] + 1}
             eff[node] = best
             done.add(node)
             onstack.discard(node)

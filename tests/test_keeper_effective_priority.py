@@ -70,3 +70,13 @@ def test_reap_records_the_telemetry_of_the_graph_after_aging(tmp_path):
         assert rows == {"priority_inherit_raised": 0.0, "priority_inherit_longest_chain": 0.0}
     finally:
         world.close()
+
+
+def test_reap_replaces_the_source_of_an_existing_metric_row(w):
+    day = w.store._iso(w.clock())[:10]
+    w.conn.execute("INSERT INTO metrics(day,metric,value,source,computed_at) VALUES(?,?,?,?,?)",
+                   (day, "priority_inherit_raised", 99.0, "manual", "2020-01-01T00:00:00Z"))
+    w.store.reap(w.p("system"))
+    row = w.conn.execute("SELECT value, source FROM metrics WHERE day=? AND metric=?",
+                         (day, "priority_inherit_raised")).fetchone()
+    assert (row["value"], row["source"]) == (1.0, "reap")
