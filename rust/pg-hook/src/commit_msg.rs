@@ -50,6 +50,24 @@ fn config_value(key: &str) -> Result<Option<String>, Box<dyn std::error::Error>>
     }
 }
 
+/// Refusals for every Class-Search line of the message file. The whole file is read, before any
+/// cleanup: Git keeps the text below a scissors-looking line for most commits, and a retained line
+/// is what the range check reads. A diff tail Git generates holds no line that starts this way.
+fn class_search_violations(raw: &[u8]) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (index, line) in raw.split(|b| *b == b'\n').enumerate() {
+        let line = String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line));
+        if line.starts_with("Class-Search:") && pg_policy::parse(&line).is_none() {
+            violations.push(format!(
+                "line {}: malformed Class-Search: {}",
+                index + 1,
+                pg_policy::refusal(&line)
+            ));
+        }
+    }
+    violations
+}
+
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let message = std::env::args_os().nth(1).ok_or("missing message file")?;
     if message == "--install" {
@@ -66,8 +84,14 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let merge = Command::new("git")
         .args(["rev-parse", "--verify", "-q", "MERGE_HEAD"])
         .output()?;
+    let raw = std::fs::read(message)?;
+    let class_search = class_search_violations(&raw);
     if merge.status.success() {
-        return Ok(0);
+        // A merge needs no attribution, but its Class-Search lines reach the same range check.
+        for violation in &class_search {
+            eprintln!("commit-msg: {violation}");
+        }
+        return Ok(i32::from(!class_search.is_empty()));
     }
     if merge.status.code() != Some(1) {
         return Err("cannot inspect merge state".into());
@@ -87,7 +111,6 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     };
     // Git removes editor comments after this hook runs. Validate that same
     // message, honoring core.commentChar, without rewriting the user's file.
-    let raw = std::fs::read(message)?;
     // Git sets GIT_EDITOR=: when no editor is used (-m/-F/--no-edit).
     // Its default cleanup then preserves comments, unlike editor commits.
     let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
@@ -208,15 +231,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         remaining -= 1;
     }
     // The range check of fast checks reads the same parser: a bad line fails here, not at review.
-    for (index, line) in message.lines().enumerate() {
-        if line.starts_with("Class-Search:") && pg_policy::parse(line).is_none() {
-            violations.push(format!(
-                "line {}: malformed Class-Search: {}",
-                index + 1,
-                pg_policy::refusal(line)
-            ));
-        }
-    }
+    violations.extend(class_search);
     for violation in &violations {
         eprintln!("commit-msg: {violation}");
     }

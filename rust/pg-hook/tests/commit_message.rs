@@ -287,3 +287,55 @@ fn a_malformed_class_search_line_is_refused_with_the_expected_form() {
         assert!(output.status.success(), "{line}: {output:?}");
     }
 }
+
+const BAD: &str = "Class-Search: fixture -> 1 hit, 1 changed (prose)";
+
+#[test]
+fn a_merge_commit_and_a_stripped_message_keep_the_class_search_check() {
+    let dir = repo();
+    let root = dir.path();
+    let commit = |message: &str| git(root, &["commit", "--allow-empty", "-m", message]);
+    assert!(commit("base\n\nWriter: codex").status.success());
+    assert!(git(root, &["checkout", "-qb", "side"]).status.success());
+    assert!(commit("side\n\nWriter: codex").status.success());
+    assert!(git(root, &["checkout", "-q", "main"]).status.success());
+    assert!(commit("main\n\nWriter: codex").status.success());
+    // The merge exemption covers attribution only.
+    let merge = git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            &format!("Merge side\n\n{BAD}"),
+            "side",
+        ],
+    );
+    assert!(!merge.status.success(), "{merge:?}");
+    let stderr = String::from_utf8_lossy(&merge.stderr);
+    assert!(
+        stderr.contains("line 3: malformed Class-Search"),
+        "{stderr}"
+    );
+    assert!(git(root, &["merge", "--abort"]).status.success());
+    let merge = git(root, &["merge", "--no-ff", "-m", "Merge side", "side"]);
+    assert!(merge.status.success(), "{merge:?}");
+    // `--cleanup=strip` without an editor keeps a line below a scissors-looking comment.
+    let message = format!(
+        "x\n\nWriter: codex\n# ------------------------ >8 ------------------------\n{BAD}\n"
+    );
+    let output = git(
+        root,
+        &["commit", "--allow-empty", "--cleanup=strip", "-m", &message],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("line 5: malformed Class-Search"),
+        "{output:?}"
+    );
+    assert!(git(root, &["config", "commit.cleanup", "strip"])
+        .status
+        .success());
+    let output = git(root, &["commit", "--allow-empty", "-m", &message]);
+    assert!(!output.status.success(), "{output:?}");
+}
