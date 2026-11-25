@@ -2384,6 +2384,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         phase: it.phase || it.track || "", phaseIdx: phaseIdxOf[it.key] || 0,
         kind: it.kind, state: it.state, display: display[it.key],
         owner: it.owner, operator: !!it.operator, priority: num(it.priority),
+        effective_priority: num(it.effective_priority != null ? it.effective_priority : it.priority),
+        priority_via: it.priority_via || null,
         estimate_h: G.estimate(it), deps: depsOf(it), unblocks: waiters[it.key] || [],
         critical: !!critSet[it.key],
         slack: G.isTerminal(it) ? 0 : (slack[it.key] || 0),
@@ -6389,7 +6391,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       d = naturalCmp(a.phase || "", b.phase || "") || ((p1 === undefined ? 9999 : p1) - (p2 === undefined ? 9999 : p2));
     } else if (col === "title" || col === "owner" || col === "kind") {
       d = plainAsc(String(a[col] || "").toLowerCase(), String(b[col] || "").toLowerCase());
-    } else if (col === "priority") d = (Number(a.priority) || 0) - (Number(b.priority) || 0);
+    } else if (col === "priority") d = PlanUI.effectivePriority(a) - PlanUI.effectivePriority(b);
     else if (col === "est") d = (Number(a.estimate_h) || 0) - (Number(b.estimate_h) || 0);
     else if (col === "unblocks") d = (a.unblocks ? a.unblocks.length : 0) - (b.unblocks ? b.unblocks.length : 0);
     else if (col === "op") d = (operatorNeeded(a) ? 1 : 0) - (operatorNeeded(b) ? 1 : 0);
@@ -6767,6 +6769,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.tableUrlDecode = tableUrlDecode;
   PlanUI.tableUrlMerge = tableUrlMerge;
 
+  PlanUI.effectivePriority = function (r) {
+    return Number(r.effective_priority != null ? r.effective_priority : r.priority) || 0;
+  };
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = PlanUI;
   }
@@ -7093,7 +7099,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     { id: "prev", label: "Previous", val: function (r) { return pick(r, "prev").length; }, num: true, group: function (r) { var n = pick(r, "prev").length; return n ? "has previous" : "no previous"; } },
     { id: "next", label: "Next", val: function (r) { return pick(r, "next").length; }, num: true, group: function (r) { var n = pick(r, "next").length; return n ? "has next" : "no next"; } },
     { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } },
-    { id: "prio", label: "Prio", val: function (r) { return Number(r.priority) || 0; }, num: true },
+    { id: "prio", label: "Prio", val: function (r) { return global.PlanUI.effectivePriority(r); }, num: true },
     { id: "kind", label: "Kind", val: function (r) { return r.kind || ""; } },
     { id: "op", label: "Op", val: function (r) { return global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? 1 : 0; }, num: true }
   ];
@@ -7174,7 +7180,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var tdL = el("td", "tc-links");
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
-    tr.appendChild(el("td", null, r.priority == null ? "" : String(r.priority)));
+    var raised = r.priority_via && r.effective_priority != null && r.effective_priority !== r.priority;
+    var tdP = el("td", null, r.priority == null ? "" : String(r.priority) + (raised ? " -> " + r.effective_priority + " via " + r.priority_via : ""));
+    if (raised) tdP.title = "raised from " + r.priority + " to " + r.effective_priority + " via " + r.priority_via;
+    tr.appendChild(tdP);
     tr.appendChild(el("td", null, r.kind || "—"));
     tr.appendChild(el("td", null, global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? "●" : ""));
     for (var ci = 0; ci < COLS.length && ci < tr.childNodes.length; ci++) {

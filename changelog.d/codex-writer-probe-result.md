@@ -1,0 +1,1 @@
+A writer liveness probe now passes only when the writer job completed with exit code zero as well as committing `ok.txt`; a commit from a failed, nonzero, cancelled or timed-out job books a probe failure (or the recognised usage limit) and records no pass. No deploy needed beyond the normal spawner service restart on merge.

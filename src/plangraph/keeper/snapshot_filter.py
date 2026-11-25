@@ -6,6 +6,7 @@ import re
 
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
+from .. import views
 from ..views_progress import progress
 
 FIELDS = tuple((
@@ -14,7 +15,8 @@ FIELDS = tuple((
     "done_criteria design_ref evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
-    "run_ids created_at done_at reviewed merged answer incidents"
+    "run_ids created_at done_at reviewed merged answer incidents "
+    "effective_priority priority_via"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -113,6 +115,7 @@ def _selected(item, done_at, values):
 def _full(store, now, values=None):
     from .store_read import _decode_models, _decode_run_ids
     items = store._all_items()
+    eff = views.effective_priorities(items)[0]
     corrected, fixed = {}, {}
     for item in items:
         if item["corrects"]:
@@ -148,6 +151,9 @@ def _full(store, now, values=None):
             "depends_on": item["depends_on"], "corrects": item["corrects"],
             "done_criteria": item["done_criteria"],
             **({"design_ref": item["design_ref"]} if item.get("design_ref") else {}),
+            **({"effective_priority": eff[item["key"]]["effective"],
+                "priority_via": eff[item["key"]]["via"]}
+               if eff.get(item["key"], {}).get("via") else {}),
             "evidence_kinds": item["evidence_kinds"],
             "operator": item["operator"], "priority": item["priority"],
             "review_tier": item["review_tier"],

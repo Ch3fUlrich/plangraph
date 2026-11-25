@@ -1,0 +1,1 @@
+Add the versioned format of the pinned operator turns of the data repository (`router/operator-turns.tsv` and `router/operator-turns/<sha256>.txt`) with a Rust reader, `validate`, that takes table bytes and a text-entry inventory, and fixtures for a valid release, a relay whose scope exceeds its source and a withdrawn release.

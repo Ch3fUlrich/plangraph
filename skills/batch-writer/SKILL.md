@@ -70,8 +70,9 @@ Use grep for text that is not a symbol.
    A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
-   When the Run values carry a `PUSH:` line, after every item commit run the one stamp
-   command (`plangraph fast-checks --owned-worktree`), then run the PUSH command exactly as
+   Never push after a single item commit and never run the stamp command per commit: the
+   stamp and the push happen once per round, in step 7.
+   When the Run values carry a `PUSH:` line, the PUSH command is run exactly as
    printed: one atomic push of `lane/<NAME>` and its designated receipt ref (one parentless receipt commit), no pull request.
    For a `lane/*` ref the pre-push hook runs the public scrub, the commit gate and the receipt
    gate only (seconds, no test, no worktree); it refuses a head whose green receipt is not in
@@ -88,7 +89,8 @@ Use grep for text that is not a symbol.
    exit code and the stamp (`head`, `result`, one `check` line each), never the tail of a
    log: `affected_tests.py --run` ends with `AFFECTED rc=<n> batches=<k> failed=<m>`.
    Fix, commit and rerun until green. A head without a green stamp is neither pushed nor
-   reviewed.
+   reviewed. When the Run values carry a `PUSH:` line, run it now, once, on this green
+   head; after a fix round the same holds: one stamp and one push after its last commit.
 8. Write the review prompt file: the item keys with their Done-when lines, the skipped
    items with their reasons, the range BASE..HEAD. From round 2 on add the previously
    reviewed head and every earlier finding with what you did: `fixed in <sha>` or
@@ -111,14 +113,15 @@ Use grep for text that is not a symbol.
 
 ## Never
 
-- Never push (except the lane push of step 5), open a pull request, merge, rebase, switch branches, `git reset` a commit
+- Never push (except the one lane push per round of step 7), open a pull request, merge, rebase, switch branches, `git reset` a commit
   away or touch another worktree. After your ACCEPT the orchestrator pushes your head
   once, opens the draft pull request and merges it with the other batches into one batch
-  branch; the full test suite runs once there. A push per round wastes a CI run.
+  branch; the full test suite runs once there. A second push in a round, or a push per item,
+  wastes a stamp run.
 - Never change git config and never bypass a hook (`--no-verify`, `core.hooksPath`).
   Never work around a refusal of a tool, hook or guard: quote it verbatim in STATUS_FILE.
 - Never run `git push --dry-run` or the push gate yourself: the pre-push hook runs on every
-  real push (the lane pushes of step 5 and the final head); a gate hit comes back to you as
+  real push (the lane push of step 7 and the final head); a gate hit comes back to you as
   its own short round.
 - Never weaken or delete a test to make it pass. Never run the full test suite. Never
   commit STATUS_FILE. Never put a hostname, key, real user path or private project name
@@ -133,9 +136,9 @@ Use grep for text that is not a symbol.
   echo rc=$?`, and you wait for the harness notification. A command that hits its limit is
   ended: write `LESSON <command> hit its limit` and go on with a narrower one.
 - Never run a test selection again that already passed, unless the code under it changed.
-  The exceptions are the stamp command of step 5 and FAST_CHECKS in step 7: each runs on the
-  committed head and writes the stamp for that exact head, also when a pre-commit run chose
-  the same tests.
+  The one exception is FAST_CHECKS in step 7 (the stamp command): it runs once per round on
+  the committed head and writes the stamp for that exact head, also when a pre-commit run
+  chose the same tests.
 
 ## Fix round
 
@@ -165,7 +168,9 @@ resume message of a native run).
    sibling function, a second path, another test) and fix what you find; write one line
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.
 4. Run the seconds-fast checks, the tests the findings name and the tests of the files you
-   touched; then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`,
+   touched; then step 7 once on the last commit of the round (the stamp and, when the Run
+   values carry a `PUSH:` line, the one push; a native run skips this: its driver runs the
+   stamp after you return); then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`,
    `REFUTED <finding> <test>` or `BLOCKED evidence <finding>: orchestrator`. A round with a
    BLOCKED evidence line is not accepted on that head: the orchestrator supplies the evidence
    and has the same head reviewed again; you change nothing for that finding meanwhile.

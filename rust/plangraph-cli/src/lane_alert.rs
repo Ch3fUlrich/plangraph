@@ -2,7 +2,7 @@
 //!
 //! plangraph wait lane-alert --status FILE [--remote origin] [--branch lane/NAME] [--grace SECS]
 //! Exit 0 when the head is on the remote (or the writer is not done, or inside the grace), 1 with an
-//! `ALERT` line otherwise, 2 on a usage or git error. The writer pushes each item commit; a DONE
+//! `ALERT` line otherwise, 2 on a usage or git error. The writer pushes once per round; a DONE
 //! whose head never reached the remote after the grace (default 600 s) is nobody's to review.
 use std::path::Path;
 use std::process::Command;

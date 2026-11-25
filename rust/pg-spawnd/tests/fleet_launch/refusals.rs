@@ -243,3 +243,70 @@ fn check_enforcement(launcher: &Launcher) {
     );
     assert!(!s.path("child.json").exists());
 }
+
+/// A target setting that cannot resolve refuses the launch before the durable "starting" row
+/// and before any run is registered.
+pub fn check_cargo_target(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let out = s
+        .launch("review")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", "~nouser-fixture-zz/x")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(s.normalize(&out.stdout).is_empty());
+    let stderr = s.normalize(&out.stderr);
+    assert!(
+        stderr.contains("fleet-launch: shared cargo target:"),
+        "{stderr}"
+    );
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("state/fleet-launch-fallback.jsonl").exists());
+    let ledger = records::ledger(&s, "ledger");
+    assert_eq!(ledger.len(), 1, "{ledger:?}");
+    assert_eq!(ledger[0]["result"], "refused");
+    let leftovers = fs::read_dir(s.path("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("run") && name != "role-locks")
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// The configured target reaches the session the launcher starts, and nothing is created at the default.
+pub fn check_cargo_target_reaches_the_child(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let data = s.path("data-drive/cargo-target");
+    let out = s
+        .launch("review")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", &data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    let child = s.json("child.json");
+    assert_eq!(child["cargo_target"], data.to_str().unwrap());
+    assert_eq!(child["plangraph_cargo_target"], data.to_str().unwrap());
+    assert!(!s.path("home/.cache/plangraph/cargo-target").exists());
+
+    // A target the caller already set is kept.
+    let s = Sandbox::new(launcher);
+    let out = s
+        .launch("review")
+        .env("CARGO_TARGET_DIR", "/caller/target")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", &data)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert_eq!(s.json("child.json")["cargo_target"], "/caller/target");
+
+    // Unconfigured, the child builds into the host's default shared target under its home.
+    let s = Sandbox::new(launcher);
+    let out = s.launch("review").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert_eq!(
+        s.json("child.json")["cargo_target"],
+        s.path("home/.cache/plangraph/cargo-target")
+            .to_str()
+            .unwrap()
+    );
+}

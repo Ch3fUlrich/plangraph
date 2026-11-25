@@ -4,7 +4,9 @@ Run `plangraph ci-watch` from a plangraph checkout with authenticated `gh` on PA
 It scans completed `tests.yml` runs, paginates open PRs and jobs, reads one page
 (100 newest) of runs per main branch or open PR head, and takes only the newest completed run per open PR head/event or main branch/event.
 PR runs must match the current open PR head SHA. Successful newest runs suppress
-older failures. Closed PRs are ignored. The repository comes from origin.
+older failures. Closed PRs, drafts, `CI probe:` PRs are ignored and landing trains (`land/*` branches) file no CI-FIX item; a train's failure still reaches the writer recorded for it in `owners.json`. Each pass sweeps before it scans, so an item of an old head is cancelled before the same failing test is filed on the new head. The sweep cancels (reason recorded in the keeper) and forgets every tracked CI-FIX item
+whose PR closed, became a draft, probe or train, or whose head moved past the failing run's head (`sha` in
+`tasks.jsonl`, read from the stored run for older rows); a refused cancel, or a run without `--keeper`, keeps the item and its local row for the next pass. The repository comes from origin.
 Run queries are capped at one page (newest first), so API use is one call per
 open PR head plus one for main and does not grow with run history.
 
