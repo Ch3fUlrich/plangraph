@@ -183,6 +183,17 @@ and a new crate ships by marking itself. It writes them to
 `${XDG_STATE_HOME:-$HOME/.local/state}/plangraph/release-built-tree`.
 Keep `~/.local/bin` on the landing and pre-push workers' PATH.
 
+An authorized release install also writes a JSON receipt alongside the tree
+stamp with the build commit and the SHA-256 digest of every published binary.
+Run `plangraph host-sync --check-release REPO FULL_HEAD` on the target host
+to check the pinned checkout and installed files in one read-only invocation. Use
+`--with-keeper-backup` for the optional keeper release. The check reads the
+receipt under the release lock and requires neither Cargo nor the build cache.
+It exits nonzero for a missing or stale receipt, an install in progress, or
+different binary bytes. For an older install with only the tree stamp, retry
+the authorized installer to build and republish the expected files. For live
+evidence, also record the configured unit and run the deployment smoke check.
+
 
 On disk-hygiene workers, run `host-sync --install-env disk-hygiene` to create
 `~/.config/plangraph/disk-hygiene-service.env` with the checkout at
