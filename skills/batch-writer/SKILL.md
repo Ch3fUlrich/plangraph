@@ -169,7 +169,8 @@ resume message of a native run).
    `CLASS <finding> | <class> | searched: <files and symbols> | <n more fixed or none>`.
 4. Run the seconds-fast checks, the tests the findings name and the tests of the files you
    touched; then step 7 once on the last commit of the round (the stamp and, when the Run
-   values carry a `PUSH:` line, the one push); then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`,
+   values carry a `PUSH:` line, the one push; a native run skips this: its driver runs the
+   stamp after you return); then STATUS_FILE as in "End", with one line per finding: `FIXED <finding> <sha>`,
    `REFUTED <finding> <test>` or `BLOCKED evidence <finding>: orchestrator`. A round with a
    BLOCKED evidence line is not accepted on that head: the orchestrator supplies the evidence
    and has the same head reviewed again; you change nothing for that finding meanwhile.
