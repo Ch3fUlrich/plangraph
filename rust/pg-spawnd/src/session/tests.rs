@@ -209,3 +209,21 @@ fn a_plain_launch_or_another_session_is_not_refused() {
     );
     assert_eq!(blocked_reason(true, &[Some("../x")], &spawn), None);
 }
+
+#[test]
+fn the_refusal_redacts_a_command_stored_raw_by_an_older_watchdog() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = round_watch::state_file(dir.path(), "writer-0884");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        json!({"actions": {}, "blocked": {"round_key": "k",
+            "command": "deploy API_TOKEN=hunter2hunter2hunter2",
+            "reason": "second wait over the cap in one round"}})
+        .to_string(),
+    )
+    .unwrap();
+    let reason = blocked_reason(true, &[Some("writer-0884")], dir.path()).unwrap();
+    assert!(reason.contains("deploy"), "{reason}");
+    assert!(!reason.contains("hunter2"), "{reason}");
+}

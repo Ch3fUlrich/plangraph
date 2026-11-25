@@ -24,6 +24,7 @@ pub mod round_store;
 pub mod round_time;
 #[cfg(test)]
 mod round_time_tests;
+pub mod round_types;
 pub mod round_wait;
 pub mod round_watch;
 #[cfg(test)]
@@ -108,7 +109,8 @@ fn blocked_reason(respawn: bool, names: &[Option<&str>], spawn_state: &Path) -> 
             Some(format!(
                 "{name}: {} (command `{}`); clear {} after the operator has looked",
                 blocked["reason"].as_str().unwrap_or("blocked"),
-                blocked["command"].as_str().unwrap_or("?"),
+                // Records written before the command was redacted at write time are redacted here.
+                round_state::redacted(blocked["command"].as_str().unwrap_or("?")),
                 path.display()
             ))
         })

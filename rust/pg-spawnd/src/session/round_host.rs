@@ -6,7 +6,7 @@ use super::{
 };
 use pg_worker_core::run::{
     group::{stop_group, Identity, RunGroup, StopOutcome},
-    group_unix::{proc_start_time, Roots, UnixGroup},
+    group_unix::{parse_stat, proc_start_time, Roots, UnixGroup},
     record_io::atomic_write_private,
 };
 use serde_json::json;
@@ -28,18 +28,56 @@ pub struct LocalHost {
     /// Launch window slack; none skips the check (fixtures that start processes now
     /// under a transcript of another time).
     pub launch_slack_ms: Option<i64>,
-    /// Sends one signal to one process; true only when the kernel accepted it.
-    pub send_signal: fn(u32, i32) -> bool,
+    /// Sends one signal to one member of the owned group; true only when the kernel
+    /// accepted it for that very process.
+    pub send_signal: fn(&Member, i32) -> bool,
     /// The `claude` binary of `claude stop`; the environment's, then the PATH's when none.
     pub claude_bin: Option<PathBuf>,
 }
 
-fn kill_process(pid: u32, signal: i32) -> bool {
-    if pid <= 1 || pid > i32::MAX as u32 {
+/// A process of the owned group as it was seen: the identity a signal must still match.
+#[derive(Clone, Debug)]
+pub struct Member {
+    pub pid: u32,
+    pub start_time: u64,
+    pub group: u32,
+}
+
+fn identity_matches(proc: &Path, member: &Member) -> bool {
+    fs::read_to_string(proc.join(member.pid.to_string()).join("stat"))
+        .ok()
+        .and_then(|text| parse_stat(&text))
+        .is_some_and(|(state, group, start)| {
+            !matches!(state, 'Z' | 'X') && group == member.group && start == member.start_time
+        })
+}
+
+/// Pin the process with a pidfd, check it is still the member that was seen, then signal
+/// through the pidfd: a pid reused or a process that left the group is never signalled.
+pub fn signal_member(member: &Member, signal: i32) -> bool {
+    if member.pid <= 1 || member.pid > i32::MAX as u32 {
         return false;
     }
-    // SAFETY: kill takes numeric identifiers and dereferences nothing.
-    unsafe { libc::kill(pid as i32, signal) == 0 }
+    // SAFETY: pidfd_open takes a pid and flags and returns a descriptor or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, member.pid as libc::c_int, 0) };
+    if fd < 0 {
+        return false;
+    }
+    let fd = fd as libc::c_int;
+    let sent = identity_matches(Path::new("/proc"), member)
+        // SAFETY: pidfd_send_signal takes the descriptor, a signal and a null siginfo.
+        && unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                fd,
+                signal,
+                std::ptr::null::<libc::c_void>(),
+                0,
+            )
+        } == 0;
+    // SAFETY: fd is the descriptor opened above.
+    unsafe { libc::close(fd) };
+    sent
 }
 
 impl LocalHost {
@@ -49,7 +87,7 @@ impl LocalHost {
             session_id,
             roots: Roots::default(),
             launch_slack_ms: Some(LAUNCH_SLACK_MS),
-            send_signal: kill_process,
+            send_signal: signal_member,
             claude_bin: None,
         }
     }
@@ -77,6 +115,23 @@ impl LocalHost {
             },
         }
     }
+}
+
+/// The short id of one stop action in the owner's output.
+fn mark_id(key: &str) -> String {
+    Sha256::digest(key.as_bytes())
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// `SID_RE` of the session store: one alphanumeric, then up to 63 of `[A-Za-z0-9._-]`.
+fn plain_session_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 fn environ_has(environ: &[u8], session_id: &str) -> bool {
@@ -176,20 +231,68 @@ impl Host for LocalHost {
         // between the scan and the signal is not a stop of ours.
         let accepted = members
             .iter()
-            .filter(|pid| (self.send_signal)(**pid, libc::SIGTERM))
+            .filter_map(|pid| {
+                let text =
+                    fs::read_to_string(self.roots.proc.join(pid.to_string()).join("stat")).ok()?;
+                let (_, group_id, start_time) = parse_stat(&text)?;
+                Some(Member {
+                    pid: *pid,
+                    start_time,
+                    group: group_id,
+                })
+            })
+            .filter(|member| (self.send_signal)(member, libc::SIGTERM))
             .count();
         if accepted == 0 {
+            // No signal reached anyone: members that remain are not stopped, and nothing
+            // may be recorded as signalled.
             let left = group.members().unwrap_or_default();
             return match (left.is_empty(), signalled) {
                 (true, true) => Stop::Ended,
                 (true, false) => Stop::Gone,
-                (false, _) => Stop::Survivors,
+                (false, _) => Stop::Unsignalled,
             };
         }
         match stop_group(&group, Duration::from_secs(5), Duration::from_secs(5)) {
             StopOutcome::Empty => Stop::Ended,
             StopOutcome::Survivors(_) => Stop::Survivors,
         }
+    }
+
+    fn mark_stop(&self, task: &TaskRef, key: &str) -> bool {
+        use std::io::Write;
+        let Some(path) = task.output_path.as_deref() else {
+            return false;
+        };
+        let line = format!(
+            "\n[round-watch] ending this command: the writer waited on it over 15 minutes (stop {})\n",
+            mark_id(key)
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .and_then(|mut file| {
+                file.write_all(line.as_bytes())?;
+                file.sync_all()
+            })
+            .is_ok()
+    }
+
+    fn has_mark(&self, task: &TaskRef, key: &str) -> bool {
+        use std::io::{Read, Seek, SeekFrom};
+        let Some(path) = task.output_path.as_deref() else {
+            return false;
+        };
+        let Ok(mut file) = fs::File::open(path) else {
+            return false;
+        };
+        let len = file.metadata().map_or(0, |m| m.len());
+        let mut tail = Vec::new();
+        let ok = file
+            .seek(SeekFrom::Start(len.saturating_sub(256 * 1024)))
+            .is_ok()
+            && file.read_to_end(&mut tail).is_ok();
+        ok && String::from_utf8_lossy(&tail).contains(&format!("(stop {})", mark_id(key)))
     }
 
     fn pending(&self, recipient: &str, key: &str) -> bool {
@@ -233,11 +336,22 @@ impl Host for LocalHost {
         let Some(rows) = rows.as_array() else {
             return false;
         };
-        !rows.iter().any(|row| {
-            row["sessionId"] == json!(self.session_id)
-                && !["finished", "stopped", "done", "failed"]
-                    .contains(&row["state"].as_str().unwrap_or(""))
-        })
+        // The same strict contract as `Sessions._agents_rows_strict`: every row is an object
+        // and its id, when present, is a plain session id; anything else is unconfirmed.
+        let well_formed = |row: &serde_json::Value| {
+            row.is_object()
+                && match row.get("sessionId") {
+                    None | Some(serde_json::Value::Null) => true,
+                    Some(serde_json::Value::String(id)) => plain_session_id(id),
+                    Some(_) => false,
+                }
+        };
+        rows.iter().all(well_formed)
+            && !rows.iter().any(|row| {
+                row["sessionId"] == json!(self.session_id)
+                    && !["finished", "stopped", "done", "failed"]
+                        .contains(&row["state"].as_str().unwrap_or(""))
+            })
     }
 
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {

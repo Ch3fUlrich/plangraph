@@ -342,8 +342,12 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         except (OSError, ValueError, AttributeError):
             return
         if isinstance(blocked, dict):
+            # The command is text from a transcript: redact it here too, for records
+            # written before the watchdog redacted it at write time.
+            from .env_redact import redact_output
+            command = redact_output(_scrub(str(blocked.get("command"))))
             raise _refuse(f"round BLOCKED for {name}: {blocked.get('reason')} "
-                          f"(command: {blocked.get('command')}); clear {path} to relaunch")
+                          f"(command: {command}); clear {path} to relaunch")
 
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()

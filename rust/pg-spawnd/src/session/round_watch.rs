@@ -9,53 +9,13 @@
 
 pub use super::round_state::{blocked_outcome, closed_rounds, spawn_state_dir, state_file};
 use super::round_state::{closed_rounds_of, notice_line, read_state};
+pub use super::round_types::{
+    Action, Host, Owner, Stop, NOTICE_GRACE_MS, STRIKE_LIMIT, WAIT_LIMIT_MS,
+};
 use super::{round_reader::Reader, round_time::OpenWait, round_wait::TaskRef};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Map, Value};
 use std::{io, path::Path};
-
-/// Longest wait on one background command before the watchdog ends it.
-pub const WAIT_LIMIT_MS: i64 = 15 * 60_000;
-/// Waits ended in one round before the round is BLOCKED.
-pub const STRIKE_LIMIT: usize = 2;
-/// How long a BLOCKED round waits for its notices to be delivered before it closes anyway.
-pub const NOTICE_GRACE_MS: i64 = 10 * 60_000;
-
-/// The process that runs a background command, found on the executing host.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Owner {
-    pub pid: u32,
-    pub start_time: Option<u64>,
-}
-
-/// What a stop found.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stop {
-    /// The recorded process is gone or is no longer that task's command: nothing was signalled.
-    Gone,
-    /// The watchdog signalled it and nothing of it is left.
-    Ended,
-    /// The watchdog signalled it and part of it is still running.
-    Survivors,
-}
-
-/// Effects of the watchdog. The real host reads /proc and signals; tests fake it.
-pub trait Host {
-    /// The one live process of `session` that launched `task`: its output is the task's
-    /// full output path and it started inside the task's launch window; none otherwise.
-    fn resolve_owner(&self, session: &str, task: &TaskRef) -> Option<Owner>;
-    /// End the recorded owner's process group, only while that very process (same start
-    /// time) still writes the task's output file. `signalled` says an earlier stop left
-    /// survivors. `Ended` needs evidence: live members were signalled and the group was
-    /// then found empty, or the group was empty after an earlier signal.
-    fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop;
-    /// True while the line queued for `recipient` under `key` has not been delivered.
-    fn pending(&self, recipient: &str, key: &str) -> bool;
-    /// Queue one line for `recipient`; `key` makes a second queue of it a no-op.
-    fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()>;
-    /// End the live writer session of a BLOCKED round; true once it is stopped.
-    fn end_session(&self, session: &str) -> bool;
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
@@ -80,41 +40,6 @@ impl Phase {
             .into_iter()
             .find(|phase| phase.name() == text)
     }
-}
-
-/// What one tick did, for the log.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Action {
-    Stopped {
-        task_id: String,
-        command: String,
-    },
-    StopPending {
-        task_id: String,
-    },
-    /// The command finished by itself before the stop: no strike, no notice.
-    Finished {
-        task_id: String,
-    },
-    /// No recorded owner: nothing is signalled on a guess.
-    OwnerUnknown {
-        task_id: String,
-    },
-    Notified {
-        task_id: String,
-    },
-    Blocked {
-        round_key: String,
-        command: String,
-    },
-    /// The live session of the BLOCKED round was stopped.
-    RoundEnded {
-        round_key: String,
-    },
-    /// The notices of a BLOCKED round stayed queued past the grace: the session was ended anyway.
-    NoticesOverdue {
-        round_key: String,
-    },
 }
 
 /// Owners are recorded per task; stops and strikes per wait call.
@@ -214,11 +139,27 @@ impl Watch<'_> {
             // signal that was really sent. A crash before the signal leaves none, so an
             // owner that then ends by itself is a finished command, not a strike.
             let signalled = self.state["actions"][key]["signalled"] == json!(true);
-            // The intent is written before any signal: a crash after the kill leaves it,
-            // and the harness's report of the signal exit is the receipt that settles it.
-            self.state["actions"][key]["intent"] = json!(true);
-            self.save()?;
+            // The mark goes into the owner's own output before any signal. A crash after
+            // the kill leaves the mark, and mark plus the harness's report of a signal
+            // exit is the receipt that settles it; without the mark no signal was sent.
+            if self.state["actions"][key]["marked"] != json!(true) {
+                if !self.host.mark_stop(&wait.task, key) {
+                    self.done.push(Action::StopPending {
+                        task_id: wait.task_id.clone(),
+                    });
+                    return Ok(());
+                }
+                self.state["actions"][key]["marked"] = json!(true);
+                self.state["actions"][key]["marked_ms"] = json!(self.now_ms);
+                self.save()?;
+            }
             match self.host.stop(&owner, &wait.task, signalled) {
+                Stop::Unsignalled => {
+                    self.done.push(Action::StopPending {
+                        task_id: wait.task_id.clone(),
+                    });
+                    return Ok(());
+                }
                 Stop::Survivors => {
                     self.state["actions"][key]["signalled"] = json!(true);
                     self.save()?;
@@ -251,7 +192,7 @@ impl Watch<'_> {
                 // The round is closed, with its terminal time, before anyone is told:
                 // the reader books nothing later and relaunch refuses from here on.
                 self.state["blocked"] = json!({
-                    "round_key": wait.round_key, "command": wait.command,
+                    "round_key": wait.round_key, "command": super::round_state::redacted(&wait.command),
                     "reason": "second wait over the cap in one round",
                     "closed_ms": self.now_ms, "action": key,
                 });
@@ -298,26 +239,26 @@ impl Watch<'_> {
     /// and delivered: the writer is not stopped before it can read the reason.
     fn end_blocked_round(&mut self) -> io::Result<()> {
         let blocked = &self.state["blocked"];
-        if !blocked.is_object()
-            || blocked["ended"] == json!(true)
-            || blocked["notified"] != json!(true)
-        {
+        if !blocked.is_object() || blocked["ended"] == json!(true) {
             return Ok(());
         }
-        let undelivered = blocked["notices"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|notice| {
-                self.host.pending(
-                    notice["recipient"].as_str().unwrap_or(""),
-                    notice["key"].as_str().unwrap_or(""),
-                )
-            });
+        let queued = blocked["notified"] == json!(true);
+        let undelivered = !queued
+            || blocked["notices"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|notice| {
+                    self.host.pending(
+                        notice["recipient"].as_str().unwrap_or(""),
+                        notice["key"].as_str().unwrap_or(""),
+                    )
+                });
         let round_key = blocked["round_key"].as_str().unwrap_or("").to_owned();
-        // A delivery outage must not keep the writer running: past the grace the session
-        // is ended anyway, and the notices stay queued for the bridge to retry.
-        let overdue = blocked["notified_ms"]
+        // The grace runs from the durable BLOCKED transition, whether or not its notices
+        // could be queued: a delivery outage must not keep the writer running. Past it the
+        // session is ended anyway and the notices stay queued for the bridge to retry.
+        let overdue = blocked["closed_ms"]
             .as_i64()
             .is_some_and(|at| self.now_ms - at >= NOTICE_GRACE_MS);
         if undelivered && !overdue {
@@ -382,22 +323,26 @@ pub fn tick(
             o.round_key == wait.round_key && o.task_id == wait.task_id && o.call_id == wait.call_id
         });
         if phase == Phase::Stopping && !same {
-            // The wait closed. If the watchdog had decided to signal and the harness
-            // reports the command ended by that signal, the stop did happen: recover it.
-            let intent = watch.state["actions"][&key]["intent"] == json!(true);
-            let by_signal = reader
-                .exit_of(&wait.task_id)
-                .is_some_and(|code| matches!(code, 137 | 143));
-            if intent && by_signal {
-                watch.set_phase(&key, Phase::Stopped, &wait);
-                watch.save()?;
-                watch.done.push(Action::Stopped {
-                    task_id: wait.task_id.clone(),
-                    command: wait.command.clone(),
-                });
-                watch.finish(&key, Phase::Stopped, &wait)?;
-            } else {
-                watch.settle(&key, "released")?;
+            // The wait closed. No new signal is sent. If this stop reached its signal stage
+            // (its mark is in the owner's output) the harness's report decides it: a
+            // signal exit is the stop, any other exit means the command ended by itself.
+            // Until the report arrives the stop stays pending, up to the grace.
+            let marked = watch.host.has_mark(&wait.task, &key);
+            let since = watch.state["actions"][&key]["marked_ms"]
+                .as_i64()
+                .unwrap_or(now_ms);
+            match (marked, reader.exit_of(&wait.task_id)) {
+                (true, Some(137 | 143)) => {
+                    watch.set_phase(&key, Phase::Stopped, &wait);
+                    watch.save()?;
+                    watch.done.push(Action::Stopped {
+                        task_id: wait.task_id.clone(),
+                        command: wait.command.clone(),
+                    });
+                    watch.finish(&key, Phase::Stopped, &wait)?;
+                }
+                (true, None) if now_ms - since < NOTICE_GRACE_MS => {}
+                _ => watch.settle(&key, "released")?,
             }
             continue;
         }
