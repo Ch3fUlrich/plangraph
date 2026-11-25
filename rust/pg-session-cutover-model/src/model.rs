@@ -150,7 +150,6 @@ impl Model {
             Event::Receive,
             Event::Crash,
             Event::Nudge,
-            Event::Kill,
             Event::StartShadow,
             Event::SignOffShadow,
             Event::DeployFence,

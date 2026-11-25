@@ -139,14 +139,15 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
         (m.stage(0), m.session_secs(0), m.operator_secs(0)),
         (Stage::Received, Some(80), Some(60))
     );
-    // A session that ignores it up to the bound is ended by the supervisor: no receipt at 100 s.
-    pass(&mut ignoring, 30);
-    assert_eq!(ignoring.apply(Event::Tick), Err(Denied::Deadline));
-    run(&mut ignoring, &[Event::Kill]);
-    assert_eq!(
-        (ignoring.life(), ignoring.stage(0)),
-        (Life::Stopped, Stage::Detected)
-    );
+    assert_eq!(m.misses(), vec![], "read inside the bound: no miss");
+    // A session that ignores it keeps working: nothing ends it, time runs past the bound, and
+    // the miss is reported although the operator was told. Reading late keeps the evidence.
+    pass(&mut ignoring, 40);
+    assert_eq!((ignoring.life(), ignoring.age_secs(0)), (Life::Active, 100));
+    assert_eq!(ignoring.violations(), vec![]);
+    assert_eq!(ignoring.misses(), vec![Miss::Unread(0)]);
+    run(&mut ignoring, &[Event::Receive]);
+    assert_eq!(ignoring.misses(), vec![Miss::Late(0)]);
     // A session that reads in time closes the event itself and the alarm has nothing to do.
     let mut m = armed_idle(params(vec![go(0)]));
     run(
@@ -162,10 +163,9 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     run(&mut m, &[Event::Receive]);
     assert_eq!((m.stage(0), m.alarmed(0)), (Stage::Received, false));
     pass(&mut m, 120);
-    // Without the alarm the same session passes the bound unread.
-    let mut late = armed_idle(params(vec![go(0)]))
-        .with_defect(Defect::NoAlarm)
-        .with_defect(Defect::NoKill);
+    assert_eq!(m.misses(), vec![]);
+    // Without the alarm the operator is never told and the bound is broken.
+    let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
     run(
         &mut late,
         &[
@@ -178,10 +178,8 @@ fn a_woken_session_that_keeps_working_does_not_freeze_time_and_the_alarm_holds_t
     pass(&mut late, 40);
     run(&mut late, &[Event::Escalate(0)]);
     pass(&mut late, 60);
-    assert_eq!(
-        late.violations(),
-        vec![Invariant::UrgentBound, Invariant::SessionUnread]
-    );
+    assert_eq!(late.violations(), vec![Invariant::UrgentBound]);
+    assert_eq!(late.misses(), vec![Miss::Unread(0)]);
 }
 
 #[test]
@@ -201,6 +199,8 @@ fn a_dead_role_hands_the_event_to_the_operator_by_the_bound_not_at_recovery() {
     );
     pass(&mut m, 60);
     assert_eq!((m.stage(0), m.life()), (Stage::Detected, Life::Stopped));
+    // The session's deadline is still missed, and stays reported after the alarm.
+    assert_eq!(m.misses(), vec![Miss::Unread(0)]);
     // The old exemption (an escalated event of a dead role is fine) lets it pass 100 s unread.
     let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
     run(&mut late, &[Event::Occur(0), Event::Scan(0), Event::Crash]);
@@ -287,28 +287,23 @@ fn rollback_and_a_lost_go_keep_the_deadline_of_an_event_that_occurred_while_acti
         ticks(&mut m, 20);
         run(&mut m, &[Event::Receive]);
         assert_eq!((m.stage(0), m.session_secs(0)), (Stage::Received, Some(80)));
-        // Without the alarm and the supervisor's kill the session reads at 100 s, and that stays
-        // visible after it happened, although the operator might have been told.
-        let mut late = armed_idle(params(vec![go(0)]))
-            .with_defect(Defect::NoAlarm)
-            .with_defect(Defect::NoKill);
-        run(&mut late, &[Event::Occur(0), off, Event::BeginTurn]);
-        ticks(&mut late, 100);
-        assert_eq!(
-            late.violations(),
-            vec![Invariant::UrgentBound, Invariant::SessionUnread]
-        );
-        assert_eq!(late.apply(Event::Receive), Ok(Outcome::Applied));
-        assert_eq!(late.violations(), vec![Invariant::LateReceipt]);
-        // With the alarm but no kill, a receipt at 100 s is still a late receipt.
-        let mut slow = armed_idle(params(vec![go(0)])).with_defect(Defect::NoKill);
+        assert_eq!(m.misses(), vec![], "read at 80 s: inside the bound");
+        // The operator is told but the session works on unread: the miss is reported, and a
+        // late receipt keeps it visible.
+        let mut slow = armed_idle(params(vec![go(0)]));
         run(&mut slow, &[Event::Occur(0), off, Event::BeginTurn]);
         ticks(&mut slow, 60);
         run(&mut slow, &[Event::Alarm(0)]);
         ticks(&mut slow, 40);
-        assert_eq!(slow.violations(), vec![Invariant::SessionUnread]);
-        assert_eq!(slow.apply(Event::Receive), Ok(Outcome::Applied));
-        assert_eq!(slow.violations(), vec![Invariant::LateReceipt]);
+        assert_eq!(slow.violations(), vec![]);
+        assert_eq!(slow.misses(), vec![Miss::Unread(0)]);
+        run(&mut slow, &[Event::Receive]);
+        assert_eq!(slow.misses(), vec![Miss::Late(0)]);
+        // With no alarm either, the operator is never told.
+        let mut late = armed_idle(params(vec![go(0)])).with_defect(Defect::NoAlarm);
+        run(&mut late, &[Event::Occur(0), off, Event::BeginTurn]);
+        ticks(&mut late, 100);
+        assert_eq!(late.violations(), vec![Invariant::UrgentBound]);
     }
 }
 
@@ -372,19 +367,21 @@ fn a_hung_source_with_a_lost_fallback_wake_still_gets_a_nudge_and_ends_at_the_bo
         (delivered.stage(0), delivered.session_secs(0)),
         (Stage::Received, Some(60))
     );
-    // Another: every wake is lost; recovery stays eligible until the bound, then the session ends.
+    // Another: every wake is lost. Recovery stays eligible past the bound; nothing ends the
+    // session, and the missed session deadline is reported.
     run(&mut m, &[Event::WakeLost]);
     ticks(&mut m, 20);
     run(&mut m, &[Event::Nudge, Event::WakeLost]);
-    ticks(&mut m, 10);
-    assert_eq!(
-        m.apply(Event::Tick),
-        Err(Denied::Deadline),
-        "the bound is reached unread"
-    );
-    run(&mut m, &[Event::Kill]);
+    ticks(&mut m, 20);
     assert_eq!(
         (m.life(), m.stage(0), m.operator_secs(0)),
-        (Life::Stopped, Stage::Occurred, Some(60))
+        (Life::Idle, Stage::Occurred, Some(60))
+    );
+    assert_eq!(m.misses(), vec![Miss::Unread(0)]);
+    assert_eq!(m.violations(), vec![]);
+    assert_eq!(
+        m.apply(Event::Nudge),
+        Ok(Outcome::Applied),
+        "a nudge is still open at 100 s"
     );
 }

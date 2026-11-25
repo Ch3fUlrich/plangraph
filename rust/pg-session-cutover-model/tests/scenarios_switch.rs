@@ -49,10 +49,8 @@ fn activation_is_refused_with_an_urgent_event_that_is_already_overdue() {
     let mut bad = shadow_with_working_session().with_defect(Defect::ActivateOverdue);
     pass(&mut bad, 100);
     assert_eq!(bad.apply(Event::Activate), Ok(Outcome::Applied));
-    assert_eq!(
-        bad.violations(),
-        vec![Invariant::UrgentBound, Invariant::SessionUnread]
-    );
+    assert_eq!(bad.violations(), vec![Invariant::UrgentBound]);
+    assert_eq!(bad.misses(), vec![Miss::Unread(0)]);
 }
 
 #[test]

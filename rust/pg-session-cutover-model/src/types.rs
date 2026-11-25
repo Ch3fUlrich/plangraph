@@ -104,8 +104,6 @@ pub enum Event {
     Crash,
     Escalate(u8),
     Alarm(u8),
-    /// The supervisor ends a live session that has not read a pending urgent event in time.
-    Kill,
     Nudge,
     StartShadow,
     SignOffShadow,
@@ -141,13 +139,19 @@ pub enum Invariant {
     /// Req 1: the operator is told of a binding urgent event by its class bound, in any mode
     /// (or a session has received it); a dead role and a hung source are not exempt.
     UrgentBound,
-    /// Req 1: a live session has received a binding event by its class bound. An alarm to the
-    /// operator does not count: the supervisor ends a session that has not.
-    SessionUnread,
-    /// Req 1: a session's receipt after the bound stays visible after it happened, alarm or not.
-    LateReceipt,
     /// An event is received only by a session's receipt, never by a scan or an alarm.
     ReceivedUnread,
     /// Req 4: no active role stays asleep with nothing armed or woken beyond one supervisor pass.
     Unattended,
+}
+
+/// A session's deadline that was missed. It is reported, not prevented: a receipt timeout does
+/// not stop a working session (that takes the authorized recovery sequence of the next slice).
+/// The miss stays attached to the event whatever happens to the session or the operator alarm.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Miss {
+    /// No session has received the event and it is past its class bound.
+    Unread(u8),
+    /// A session received the event after its class bound.
+    Late(u8),
 }

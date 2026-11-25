@@ -145,35 +145,7 @@ impl Model {
             && self.unattended()
             && self.nudge_target()
             && u16::from(self.asleep_age) + 1 > self.sup_ticks();
-        takeover || alarm || scans || asleep || self.session_overdue()
-    }
-
-    /// A live session has not read a binding event by its bound: the supervisor must end it,
-    /// or time stops; time is not left to a session that ignores the event.
-    fn session_overdue(&self) -> bool {
-        self.session.live()
-            && !self.has(Defect::NoKill)
-            && self.events.iter().any(|e| {
-                let bound = u16::from(self.bound_ticks(e.class));
-                e.binding && e.open() && u16::from(e.age) + 1 > bound
-            })
-    }
-
-    /// The supervisor ends a live session that has not read a binding event by its alarm age.
-    /// What replaces it belongs to the next slice; meanwhile the alarm keeps the operator told.
-    pub(crate) fn kill(&mut self) -> Result<(), Denied> {
-        let late = self.events.iter().any(|e| {
-            e.binding && e.open() && e.age >= Params::ticks(self.p.budget(e.class).alarm_secs)
-        });
-        if self.has(Defect::NoKill) || !self.session.live() || !late {
-            return Err(Denied::Guard);
-        }
-        self.session = Session {
-            life: Life::Stopped,
-            waiter: Waiter::Dead,
-            notify: false,
-        };
-        Ok(())
+        takeover || alarm || scans || asleep
     }
 
     pub(crate) fn tick(&mut self) -> Result<(), Denied> {
