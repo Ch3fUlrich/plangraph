@@ -16,6 +16,8 @@ struct Options {
     repo: PathBuf,
     /// Where `--live-facts` reads the kernel counters; tests point it at a fixture.
     proc: PathBuf,
+    /// Opens `<proc>/pressure/cpu`; tests inject an error here.
+    open_psi: capacity::OpenPsi,
 }
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
@@ -26,6 +28,7 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
         rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
         proc: "/proc".into(),
+        open_psi: capacity::open_psi,
     };
     let mut once = false;
     let mut explicit_facts = false;
@@ -123,7 +126,7 @@ fn decide(
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, cpu) = capacity::sample(host, disk_root, env, &o.proc)?;
+        let (sample, cpu) = capacity::sample(host, disk_root, env, &o.proc, o.open_psi)?;
         (sample, Some(cpu))
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)

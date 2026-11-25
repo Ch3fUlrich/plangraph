@@ -18,8 +18,10 @@ pub(super) struct Cpu {
 fn psi_present<T>(opened: std::io::Result<T>) -> bool {
     !matches!(opened, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
-fn has_psi(proc_root: &Path) -> bool {
-    psi_present(std::fs::File::open(proc_root.join("pressure/cpu")))
+/// Opens a file for the PSI check; tests replace it to inject an open error.
+pub(super) type OpenPsi = fn(&Path) -> std::io::Result<std::fs::File>;
+pub(super) fn open_psi(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 pub(super) fn sample(
@@ -27,6 +29,7 @@ pub(super) fn sample(
     disk_root: &Path,
     env: &Env,
     proc_root: &Path,
+    open: OpenPsi,
 ) -> Result<(HostFacts, Cpu), String> {
     let metrics = host_probe::probe_load_optional(host, proc_root)
         .map_err(|e| format!("capacity probe: {e}"))?;
@@ -54,7 +57,7 @@ pub(super) fn sample(
     let cpu = Cpu {
         cpus: metrics.cpus,
         load1: metrics.load1,
-        psi: has_psi(proc_root),
+        psi: psi_present(open(&proc_root.join("pressure/cpu"))),
     };
     Ok((facts, cpu))
 }
