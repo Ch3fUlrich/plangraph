@@ -271,3 +271,31 @@ fn ancestor_only_run_blocks_quarantine() {
     assert!(!out.contains("quarantined") && tree.exists(), "{out}");
     assert!(!f.state.join("reap-quarantine").exists());
 }
+
+#[test]
+fn deletion_protection_includes_every_pin_rule_and_adds_run_overlap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (pin, run) = (tmp.path().join("pin"), tmp.path().join("run"));
+    let guards = Guards {
+        pinned: vec![pin.clone()],
+        live: vec![run.clone()],
+    };
+    for path in [
+        pin.clone(),
+        pin.join("below"),
+        tmp.path().to_path_buf(),
+        tmp.path().join("plangraph-md-sync/x"),
+        tmp.path().join("live-keeper"),
+    ] {
+        assert!(guards.pin_protects(&path), "{}", path.display());
+        assert!(guards.protects(&path), "{}", path.display());
+    }
+    // A run overlapping the path in either direction protects broadly but owns only below it.
+    for path in [run.clone(), run.join("below"), tmp.path().join("run")] {
+        assert!(guards.protects(&path));
+    }
+    assert!(guards.live_run_owns(&run) && !guards.live_run_owns(&run.join("below")));
+    assert!(!guards.pin_protects(&run));
+    let other = tmp.path().join("other");
+    assert!(!guards.pin_protects(&other) && !guards.protects(&other));
+}
