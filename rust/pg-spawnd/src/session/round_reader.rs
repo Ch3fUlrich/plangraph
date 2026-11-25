@@ -1,7 +1,8 @@
 //! Transcript reader: books each gap between two lines once and names the open wait.
 //!
 //! Timing evidence comes from four line kinds of the harness transcript: `api-request`
-//! (the request left), `assistant` (first output, then more output of the same message),
+//! (the request left, with its id), `assistant` (first output, then more output of the
+//! same request, named by `requestRef`),
 //! tool calls with their results, and task notifications. A gap that these lines do not
 //! explain is booked as `unknown`.
 
@@ -47,7 +48,9 @@ pub struct Reader {
     session: String,
     prev_ts: Option<i64>,
     prev: Option<Prev>,
-    prev_message: Option<String>,
+    prev_request: Option<String>,
+    /// Rounds the watchdog closed (round key to closing time): later lines are not booked.
+    closed: HashMap<String, i64>,
     open: HashMap<String, OpenTool>,
     background: Vec<Background>,
 }
@@ -68,15 +71,25 @@ impl Reader {
         }
     }
 
-    /// Read a whole transcript. Lines that are not JSON or carry no timestamp are skipped.
-    pub fn read(session: &str, text: &str) -> Self {
+    /// Read a transcript in which the given rounds were closed at the given times.
+    pub fn read_closed(session: &str, text: &str, closed: HashMap<String, i64>) -> Self {
         let mut reader = Self::new(session);
+        reader.closed = closed;
+        reader.feed_all(text);
+        reader
+    }
+
+    fn feed_all(&mut self, text: &str) {
         for line in text.lines() {
             if let Ok(value) = serde_json::from_str::<Value>(line) {
-                reader.feed(&value);
+                self.feed(&value);
             }
         }
-        reader
+    }
+
+    /// Read a whole transcript. Lines that are not JSON or carry no timestamp are skipped.
+    pub fn read(session: &str, text: &str) -> Self {
+        Self::read_closed(session, text, HashMap::new())
     }
 
     fn book(&mut self, cause: Cause, ms: i64) {
@@ -88,14 +101,19 @@ impl Reader {
         }
     }
 
-    /// The background task a wait call names: its id appears in the call's own text.
+    /// The background task a wait call names: its id is one whole word of the call's text
+    /// (`bg1` is not named by `bg10`).
     fn named_task(&self, hint: &str) -> Option<usize> {
+        let words: Vec<&str> = hint
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
         self.background
             .iter()
-            .position(|bg| !bg.id.is_empty() && hint.contains(&bg.id))
+            .position(|bg| !bg.id.is_empty() && words.contains(&bg.id.as_str()))
     }
 
-    fn cause_of_gap(&mut self, next: Prev, message: Option<&str>, human: bool, gap: i64) -> Cause {
+    fn cause_of_gap(&mut self, next: Prev, request: Option<&str>, human: bool, gap: i64) -> Cause {
         if human {
             return Cause::BetweenRounds;
         }
@@ -104,16 +122,19 @@ impl Reader {
         }
         match (self.prev.unwrap_or(Prev::None), next) {
             (Prev::Assistant { end_turn: true }, _) if !self.background.is_empty() => {
-                // The writer ended its turn with a command running: time is booked to
-                // the oldest one, but no call names it, so this never authorises a stop.
-                self.background[0].waited_ms += gap;
+                // The writer ended its turn with a command running: the time is booked
+                // to the oldest one, but no call names it, so it never counts toward a stop.
                 Cause::wait_for_class(self.background[0].class)
             }
-            (Prev::Request, Prev::Assistant { .. }) => Cause::ModelWait,
-            // More output counts as writing only inside one message; a new message
-            // without its own request line is not explained by the transcript.
+            // The request line and the first output are one request: their ids agree.
+            (Prev::Request, Prev::Assistant { .. })
+                if request.is_some() && request == self.prev_request.as_deref() =>
+            {
+                Cause::ModelWait
+            }
+            // More output counts as writing only inside one request.
             (Prev::Assistant { .. }, Prev::Assistant { .. })
-                if message.is_some() && message == self.prev_message.as_deref() =>
+                if request.is_some() && request == self.prev_request.as_deref() =>
             {
                 Cause::ModelWrite
             }
@@ -140,7 +161,7 @@ impl Reader {
         if self.open.values().any(|tool| tool.class == Class::Wait) {
             return match self.named_task(&hint) {
                 Some(index) => {
-                    self.background[index].waited_ms += gap;
+                    self.background[index].waited_ms += gap; // explicit waits only
                     Cause::wait_for_class(self.background[index].class)
                 }
                 None => Cause::WaitSleep,
@@ -190,22 +211,34 @@ impl Reader {
             return;
         }
         let ts = self.prev_ts.map_or(ts, |previous| ts.max(previous));
+        let closed_at = self
+            .rows
+            .last()
+            .and_then(|row| self.closed.get(&row.round_key));
+        if !human && closed_at.is_some_and(|at| ts > *at) {
+            return;
+        }
         if human {
             self.start_round(value, ts);
         }
-        let message = value["message"]["id"].as_str().map(str::to_owned);
+        let request = match kind {
+            "api-request" => value["id"].as_str(),
+            "assistant" => value["requestRef"].as_str(),
+            _ => None,
+        }
+        .map(str::to_owned);
         if let Some(previous) = self.prev_ts {
             let gap = ts - previous;
             if gap > 0 && !self.rows.is_empty() {
                 let cause =
-                    self.cause_of_gap(next, message.as_deref(), human && self.rows.len() > 1, gap);
+                    self.cause_of_gap(next, request.as_deref(), human && self.rows.len() > 1, gap);
                 self.book(cause, gap);
             }
         }
         self.prev_ts = Some(ts);
         self.prev = Some(next);
-        if kind == "assistant" {
-            self.prev_message = message;
+        if request.is_some() {
+            self.prev_request = request;
         }
         match kind {
             "assistant" => self.open_tools(value),
@@ -311,26 +344,25 @@ impl Reader {
     pub fn open_wait(&self, now_ms: i64) -> Option<OpenWait> {
         let row = self.rows.last()?;
         let tail = (now_ms - self.prev_ts?).max(0);
-        let hint: String = self
+        let mut calls: Vec<(&String, &OpenTool)> = self
             .open
-            .values()
-            .filter(|tool| tool.class == Class::Wait)
-            .map(|tool| {
-                format!(
-                    "{} {}",
-                    tool.task_ref.clone().unwrap_or_default(),
-                    tool.command
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        if hint.trim().is_empty() {
-            return None;
-        }
-        let task = &self.background[self.named_task(&hint)?];
+            .iter()
+            .filter(|(_, tool)| tool.class == Class::Wait)
+            .collect();
+        calls.sort_by_key(|(id, _)| id.as_str());
+        let (call_id, index) = calls.into_iter().find_map(|(id, tool)| {
+            let hint = format!(
+                "{} {}",
+                tool.task_ref.clone().unwrap_or_default(),
+                tool.command
+            );
+            Some((id.clone(), self.named_task(&hint)?))
+        })?;
+        let task = &self.background[index];
         Some(OpenWait {
             round_key: row.round_key.clone(),
             task_id: task.id.clone(),
+            call_id,
             command: task.command.clone(),
             class: task.class,
             waited_ms: task.waited_ms + tail,
