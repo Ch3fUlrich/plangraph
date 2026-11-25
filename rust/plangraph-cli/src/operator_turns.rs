@@ -209,14 +209,20 @@ fn parse_pin_ref(value: &str) -> Option<PinRef> {
     })
 }
 
-/// Comma-joined pin references, at least one, strictly ascending (no duplicate).
+/// Comma-joined pin references of ONE human turn (same hash and time), at least one, strictly
+/// ascending by D-id (no duplicate): a relay relays one turn.
 fn parse_pin_refs(value: &str) -> Option<Vec<PinRef>> {
     let refs: Vec<PinRef> = value
         .split(',')
         .map(parse_pin_ref)
         .collect::<Option<Vec<_>>>()?;
-    let text: Vec<String> = refs.iter().map(PinRef::to_string).collect();
-    text.windows(2).all(|w| w[0] < w[1]).then_some(refs)
+    let id = |r: &PinRef| canonical_decision(&r.decision);
+    let one_turn = refs.windows(2).all(|w| {
+        w[0].turn_sha256 == w[1].turn_sha256
+            && w[0].utc_timestamp == w[1].utc_timestamp
+            && id(&w[0]) < id(&w[1])
+    });
+    one_turn.then_some(refs)
 }
 
 fn parse_lifts(value: &str) -> Result<Vec<Lift>, &'static str> {
@@ -283,7 +289,15 @@ fn parse_row(line: usize, text: &str) -> Result<PinnedTurn, Vec<Problem>> {
     };
     let relay_of = match (kind, fields[4]) {
         _ if blank[4] => Vec::new(),
-        (Some(Kind::Human), "-") | (None, _) => Vec::new(),
+        (Some(Kind::Human), "-") | (None, "-") => Vec::new(),
+        // An unknown kind: the value is still checked, it is valid for neither kind if garbled.
+        (None, value) => parse_pin_refs(value).unwrap_or_else(|| {
+            bad(
+                "relay_of",
+                "not - or <turn_sha256>@<utc_timestamp>@D-<n> pins of one turn",
+            );
+            Vec::new()
+        }),
         (Some(Kind::Human), _) => {
             bad("relay_of", "a human row must hold -");
             Vec::new()
@@ -291,7 +305,7 @@ fn parse_row(line: usize, text: &str) -> Result<PinnedTurn, Vec<Problem>> {
         (Some(Kind::Relay), value) => parse_pin_refs(value).unwrap_or_else(|| {
             bad(
                 "relay_of",
-                "not strictly ascending <turn_sha256>@<utc_timestamp>@D-<n>, comma-joined",
+                "not <turn_sha256>@<utc_timestamp>@D-<n> pins of one turn, comma-joined, ascending by D-id",
             );
             Vec::new()
         }),
@@ -424,6 +438,14 @@ pub fn parse(tsv: &str) -> Result<Vec<PinnedTurn>, Vec<Problem>> {
     }
 }
 
+/// The human turn a relay relays; its pin lists may differ between rows of one relay turn, each
+/// row being validated against its own named pins.
+fn relayed_turn(row: &PinnedTurn) -> Option<(&str, &str)> {
+    row.relay_of
+        .first()
+        .map(|p| (p.turn_sha256.as_str(), p.utc_timestamp.as_str()))
+}
+
 fn cross_row(rows: &[PinnedTurn]) -> Vec<Problem> {
     let mut out = Vec::new();
     let mut identity: BTreeMap<(&str, &str), &PinnedTurn> = BTreeMap::new();
@@ -434,14 +456,14 @@ fn cross_row(rows: &[PinnedTurn]) -> Vec<Problem> {
         match identity.get(&key) {
             Some(first) => {
                 if first.kind != row.kind
-                    || first.relay_of != row.relay_of
+                    || relayed_turn(first) != relayed_turn(row)
                     || first.session_uuid != row.session_uuid
                     || first.transcript_line != row.transcript_line
                 {
                     out.push(problem(
                         row.line,
                         "turn_conflict",
-                        format!("{} differs from line {} in kind, relay_of, session_uuid or transcript_line", row.turn_ref(), first.line),
+                        format!("{} differs from line {} in kind, relayed turn, session_uuid or transcript_line", row.turn_ref(), first.line),
                     ));
                 }
             }

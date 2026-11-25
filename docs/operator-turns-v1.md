@@ -27,7 +27,7 @@ rows are never rewritten.
    short turns such as "go" repeat byte for byte.
 4. `kind`: `human` (typed by the operator) or `relay` (a message relaying an operator turn).
 5. `relay_of`: `-` for a human row. For a relay, one or more exact source pins
-   `<turn_sha256>@<utc_timestamp>@D-<n>`, comma-joined, strictly ascending as text, no
+   `<turn_sha256>@<utc_timestamp>@D-<n>`, comma-joined, all of ONE human turn (same hash and time), strictly ascending by D-id, no
    duplicate: each is a human row of that turn identity and that D-id. A relay whose lifts
    come from several pins of one human turn names each of them.
 6. `session_uuid`: lowercase 8-4-4-4-12 hex UUID of the transcript holding the text.
@@ -48,7 +48,8 @@ is `encoding`.
 
 ### Cross-row rules
 
-- `turn_conflict`: rows of one turn identity agree on `kind`, `relay_of`, `session_uuid`,
+- `turn_conflict`: rows of one turn identity agree on `kind`, the relayed turn (hash and time of
+  the pins in `relay_of`; the pin lists may differ per row), `session_uuid`,
   `transcript_line`.
 - `duplicate_pin`: one turn identity and one `decision` occur once.
 - `withdrawal_conflict`: withdrawal is decision-wide. Every row of a D-id, later appends

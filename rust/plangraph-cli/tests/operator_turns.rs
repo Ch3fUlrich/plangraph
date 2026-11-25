@@ -651,3 +651,98 @@ fn d_row_citation_names_every_turn_of_a_decision() {
     assert!(cited_refs(&descending).is_err());
     assert!(cited_refs("operator-turns=nothash@2026-01-05T10:00:00.000Z").is_err());
 }
+
+#[test]
+fn relay_of_names_pins_of_one_human_turn() {
+    // D-101 (H1 at 10:00) and D-107 (H3 at 12:00) are two turns: one relay may not join them.
+    let mut mixed = fields(3);
+    mixed[2] = "2026-01-05T12:30:00.000Z".into();
+    mixed[4] = format!("{H1}@2026-01-05T10:00:00.000Z@D-101,{H3}@2026-01-05T12:00:00.000Z@D-107");
+    mixed[7] = "D-130".into();
+    mixed[8] =
+        r#"[{"item":"demo:A","gate":"operator"},{"item":"demo:C","gate":"operator"}]"#.into();
+    let err = parse(&rows_of(&[fields(2), fields(7), mixed])).unwrap_err();
+    assert_eq!(codes(&err), [(4, "field:relay_of")]);
+}
+
+#[test]
+fn a_relay_turn_may_be_pinned_again_to_other_source_pins() {
+    let dir = copy_of("valid");
+    let u1 = "00000000-0000-4000-8000-000000000001";
+    let u2 = "00000000-0000-4000-8000-000000000002";
+    let t = "2026-01-05T10:00:00.000Z";
+    let z = r#"[{"item":"demo:Z","gate":"operator"}]"#;
+    append_row(
+        dir.path(),
+        &["1", H1, t, "human", "-", u1, "12", "D-111", z, "-"],
+    );
+    // The relay turn of line 3 (H2 at 10:05, source D-101) gets a later decision on source D-111.
+    let source = format!("{H1}@{t}@D-111");
+    append_row(
+        dir.path(),
+        &[
+            "1",
+            H2,
+            "2026-01-05T10:05:00.000Z",
+            "relay",
+            &source,
+            u2,
+            "40",
+            "D-113",
+            z,
+            "-",
+        ],
+    );
+    let rows = load(dir.path()).unwrap();
+    assert_eq!(items(&rows, "D-113"), ["demo:Z"]);
+    assert_eq!(items(&rows, "D-102"), ["demo:A"]);
+    // Another session line is still a turn_conflict.
+    let moved =
+        tsv_text(dir.path()).replace(&format!("{u2}\t40\tD-113"), &format!("{u2}\t41\tD-113"));
+    fs::write(dir.path().join(TSV_PATH), moved).unwrap();
+    assert_eq!(
+        codes(&load(dir.path()).unwrap_err()),
+        [(10, "turn_conflict")]
+    );
+}
+
+#[test]
+fn unknown_kind_still_checks_relay_of() {
+    for kind in ["", "operator"] {
+        let mut f = fields(2);
+        f[3] = kind.into();
+        f[4] = "garbage".into();
+        let err = parse(&rows_of(&[f])).unwrap_err();
+        assert_eq!(
+            codes(&err),
+            [(2, "field:kind"), (2, "field:relay_of")],
+            "{kind:?}"
+        );
+    }
+    // A valid relay_of of an unknown kind reports the kind alone.
+    let mut f = fields(3);
+    f[3] = String::new();
+    let err = parse(&rows_of(&[f])).unwrap_err();
+    assert_eq!(codes(&err), [(2, "field:kind")]);
+}
+
+/// The committed blobs, not the checkout: `git ls-files --eol` reports the index side (`i/`).
+/// A CRLF in a committed fixture would otherwise pass the tests, which restore CRLF on copy.
+#[test]
+fn committed_fixture_blobs_hold_no_crlf() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let listing = std::process::Command::new("git")
+        .args(["ls-files", "--eol", "--", "tests/fixtures/operator_turns"])
+        .current_dir(&root)
+        .output();
+    let Some(out) = listing.ok().filter(|o| o.status.success()) else {
+        eprintln!("not a git work tree: committed blobs not checked");
+        return;
+    };
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.lines().count() >= 8, "fixture listing: {text}");
+    for line in text.lines() {
+        let index = line.split_whitespace().next().unwrap();
+        assert!(index == "i/lf" || index == "i/none", "{line}");
+    }
+}
