@@ -1,7 +1,7 @@
 //! Fix-round counting and the replan gate of a stall (rule 3.35, D-6731, D-6746): every writer
 //! fix round of a batch counts, whatever started it (`CAUSES`); `round_progress::admit` adds the
 //! failing checks to the findings (`counts`) and `govern` holds a stalled round for its replan job.
-use crate::{errors::ToolError, round_progress::refused};
+use crate::{errors::ToolError, placement::Args, round_progress::refused};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -74,22 +74,25 @@ pub(crate) fn start(
     batch: &str,
     history: &[Value],
 ) -> Result<Result<(&'static str, Option<u64>), Value>, ToolError> {
-    let running = crate::records::list_runs(state).iter().any(|r| {
+    let runs = crate::records::list_runs(state);
+    let mut initials = runs.iter().filter(|r| {
         r["round_cause"] == INITIAL
             && batch_key(r) == Some(batch)
             && !matches!(r["status"].as_str(), Some("dry_run" | "refused"))
-            && !crate::runs::terminal(r)
     });
-    if running {
+    // A finished initial run leaves the numbered history empty but is not to be repeated.
+    let seen = initials.clone().next().is_some();
+    if initials.any(|r| !crate::runs::terminal(r)) {
         return Err(refused("round_in_flight"));
     }
     let named = card.get("round_cause").is_some_and(|v| !v.is_null());
-    let cause = match history.is_empty() && !named {
+    let first = history.is_empty() && !seen;
+    let cause = match first && !named {
         true => INITIAL,
         false => cause(card)?,
     };
     if cause == INITIAL {
-        return match history.is_empty() {
+        return match first {
             true => Ok(Err(json!({"round_cause":cause, "batch_key":batch}))),
             false => Err(refused("round_initial_after_fix")),
         };
@@ -99,6 +102,17 @@ pub(crate) fn start(
         return Err(refused("round_failing_checks_missing"));
     }
     Ok(Ok((cause, checks)))
+}
+
+/// `args` with `addendum` appended to its prompt, None when there is none.
+pub(crate) fn with_addendum(args: &Args, addendum: &Option<String>) -> Option<Args> {
+    let mut copy = args.clone();
+    let prompt = args["prompt"].as_str().unwrap_or("");
+    copy.insert(
+        "prompt".into(),
+        json!(format!("{prompt}\n\n{}", addendum.as_ref()?)),
+    );
+    Some(copy)
 }
 
 /// The cause of the round the card starts; a card without one is a review finding.

@@ -55,17 +55,8 @@ impl Runs {
             Ok(admission) => admission,
             Err(error) => return crate::round_progress::record_refusal(state, host, args, error),
         };
-        let patched;
-        let args = match &admission.prompt_addendum {
-            Some(addendum) => {
-                let mut copy = args.clone();
-                let prompt = args["prompt"].as_str().unwrap_or("");
-                copy.insert("prompt".into(), json!(format!("{prompt}\n\n{addendum}")));
-                patched = copy;
-                &patched
-            }
-            None => args,
-        };
+        let patched = crate::round_escalate::with_addendum(args, &admission.prompt_addendum);
+        let args = patched.as_ref().unwrap_or(args);
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;

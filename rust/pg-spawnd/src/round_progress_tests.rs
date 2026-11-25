@@ -123,7 +123,6 @@ fn narrow_med_exception_is_explicit_and_single_use() {
     for count in [1, 2, 3] {
         let dir = tempfile::tempdir().unwrap();
         let mut args = history(dir.path(), &[count, count, count], true);
-        assert!(reason(admit(dir.path(), &args)).starts_with("round_replan_pending"));
         args["card"]["narrow_fix"] = json!(true);
         if count == 3 {
             assert!(reason(admit(dir.path(), &args)).starts_with("round_exception_invalid"));
@@ -162,6 +161,12 @@ fn narrow_med_exception_is_explicit_and_single_use() {
     let mut args = history(dir.path(), &[2, 2, 2], false);
     args["card"]["narrow_fix"] = json!(true);
     assert!(reason(admit(dir.path(), &args)).starts_with("round_exception_invalid"));
+    // A narrow card does not slip past a replan job that is already queued.
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = history(dir.path(), &[1, 1, 1], true);
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_replan_pending"));
+    args["card"]["narrow_fix"] = json!(true);
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_replan_pending"));
 }
 #[test]
 fn missing_corrupt_or_mismatched_verdicts_fail_closed() {

@@ -114,7 +114,8 @@ fn last_round_findings(state: &Path, item: &str, pr: &str) -> Result<Vec<String>
         };
         let Ok(verdict) = verdict else { continue };
         let pr_value = json!(pr);
-        if crate::round_progress::summarize(&verdict, run, item, &pr_value).is_err() {
+        let own = record["item_key"].as_str().unwrap_or(item);
+        if crate::round_progress::summarize(&verdict, run, own, &pr_value).is_err() {
             continue;
         }
         return Ok(verdict["findings"]

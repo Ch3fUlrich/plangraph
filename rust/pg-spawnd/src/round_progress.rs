@@ -184,7 +184,12 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
     let mut summaries = vec![];
     for (index, record) in history.iter().enumerate() {
-        if record["writer_round"] != index as u64 + 1 || record["round_pr"] != pr {
+        // A round numbered before the batch had a PR stays in the ledger of its first PR.
+        let (rpr, own) = (
+            &record["round_pr"],
+            record["item_key"].as_str().unwrap_or(item),
+        );
+        if record["writer_round"] != index as u64 + 1 || !(rpr.is_null() || *rpr == pr) {
             return Err(refused("round_history_invalid"));
         }
         if !crate::runs::terminal(record) {
@@ -196,7 +201,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
             .join("round-verdict.json");
         let summary = if snapshot.exists() {
             let saved = read_json(&snapshot)?;
-            let checked = summarize(&saved["verdict"], run, item, &pr)?;
+            let checked = summarize(&saved["verdict"], run, own, rpr)?;
             if saved != checked {
                 return Err(refused("round_history_invalid"));
             }
@@ -212,7 +217,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
             let source = record["round_verdict_file"]
                 .as_str()
                 .ok_or_else(|| refused("round_verdict_missing"))?;
-            let summary = summarize(&read_json(Path::new(source))?, run, item, &pr)?;
+            let summary = summarize(&read_json(Path::new(source))?, run, own, rpr)?;
             pg_worker_core::run::record_io::atomic_write_private(
                 &snapshot,
                 summary.to_string().as_bytes(),
@@ -250,11 +255,9 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         return Err(refused("round_exception_invalid"));
     }
     let dry = args.get("dry_run") == Some(&json!(true));
-    // The narrow exception is the alternative to a replan: it does not wait for one.
-    let resume = match narrow {
-        true => None,
-        false => crate::round_escalate::govern(state, item, &pr, level, reason, dry)?,
-    };
+    // A narrow card queues no replan but still waits for one that is already saved.
+    let stall = reason.filter(|_| !narrow);
+    let resume = crate::round_escalate::govern(state, item, &pr, level, stall, dry)?;
     let (new_level, why, replan, addendum) = match resume {
         Some(r) => (r.level, json!(r.reason), json!("done"), r.addendum),
         None => (level, Value::Null, Value::Null, None),

@@ -314,3 +314,21 @@ fn the_generated_slice_definitions_match_the_golden_file_the_keeper_test_uses() 
     let want: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
     assert_eq!(items, want);
 }
+
+#[test]
+fn findings_of_a_batch_come_from_verdicts_naming_each_runs_own_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("v.json");
+    let finding = json!({"severity":"HIGH", "confirmed":true, "text":"member finding"});
+    let verdict = json!({"writer_run_id":"run-r1", "item_key":"p:One", "pr":"https://forge/p/1",
+        "verdict":"REQUEST_CHANGES", "findings":[finding]});
+    std::fs::write(&source, verdict.to_string()).unwrap();
+    let record = json!({"role":"implement", "item_key":"p:One", "batch_key":"p:Batch",
+        "round_pr":"https://forge/p/1", "writer_round":1, "round_verdict_file":source});
+    use pg_worker_core::run::record::Status;
+    crate::runs::create(dir.path(), "run-r1", "fixture", record, Status::Completed)
+        .ok()
+        .unwrap();
+    let found = last_round_findings(dir.path(), "p:Batch", "https://forge/p/1");
+    assert_eq!(found.ok().unwrap(), ["HIGH member finding"]);
+}

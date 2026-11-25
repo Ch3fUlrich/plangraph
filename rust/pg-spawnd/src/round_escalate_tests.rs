@@ -124,8 +124,10 @@ fn a_first_launch_without_a_cause_is_the_initial_implementation_and_holds_its_ba
     let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     record["status"] = json!("completed");
     std::fs::write(path, record.to_string()).unwrap();
-    let first = admit(dir.path(), &card("red_ci", 3)).ok().unwrap();
+    // The same card, still without a cause, is now the first fix (review default): round 1.
+    let first = admit(dir.path(), &launch).ok().unwrap();
     assert_eq!(first.fields["writer_round"], 1);
+    assert_eq!(first.fields["round_cause"], "review_finding");
     drop(first);
 }
 
@@ -197,4 +199,34 @@ fn unknown_check_counts_never_credit_progress() {
         .unwrap()
         .remove("failing_checks");
     assert!(message(admit(dir.path(), &args)).starts_with("round_replan_pending"));
+}
+
+#[test]
+fn members_and_pre_pr_rounds_keep_their_own_verdict_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    // Round 1 (member One) ran before the batch had a PR; round 2 (member Two) has the first PR.
+    for (i, (item, pr)) in [("p:One", Value::Null), ("p:Two", json!(PR))]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("run-r{}", i + 1);
+        let source = dir.path().join(format!("v{i}.json"));
+        let verdict = json!({"writer_run_id":id, "item_key":item, "pr":pr,
+            "verdict":"REQUEST_CHANGES", "findings":[]});
+        std::fs::write(&source, verdict.to_string()).unwrap();
+        book(
+            dir.path(),
+            &id,
+            i as u64 + 1,
+            json!({"item_key":item, "batch_key":"p:Batch",
+            "round_pr":pr, "round_verdict_file":source, "round_cause":"review_finding"}),
+        );
+    }
+    let mut args = card("red_ci", 2);
+    args["card"]["item_key"] = json!("p:Three");
+    args["card"]["batch_key"] = json!("p:Batch");
+    assert_eq!(
+        admit(dir.path(), &args).ok().unwrap().fields["writer_round"],
+        3
+    );
 }
