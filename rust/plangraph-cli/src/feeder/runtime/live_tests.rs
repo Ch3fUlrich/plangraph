@@ -1,6 +1,18 @@
 //! Live-facts decisions: the RAM budget, PSI pacing and unknown-host refusal.
 use super::*;
 
+/// Held by every test of this module that starts a process and by the lock test: a child
+/// forked while the lock file is open keeps the `flock` until its exec, so the lock test could
+/// read a lock this module's own forks still hold.
+#[cfg(unix)]
+pub(super) static FORKS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(unix)]
+pub(super) fn fork_guard() -> std::sync::MutexGuard<'static, ()> {
+    FORKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn live_facts(host: &str, running: usize, free_ram: u64) -> HostFacts {
     serde_json::from_value(json!({
         "host":host, "free_ram_bytes":free_ram,
@@ -86,7 +98,6 @@ fn no_free_ram_above_the_floor_gives_no_slot_whatever_the_load() {
 #[cfg(target_os = "linux")]
 mod proc_fixture {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     /// A live decision on a fixture host: 16 000 000 kB available (3 slots above the 3 GB floor
     /// at 4 GB each), one eligible item and a fresh codex quota row. The quota adapter is a
@@ -114,8 +125,19 @@ mod proc_fixture {
             let row = json!([{"provider":"codex","window_key":"w","remaining_percentage":80,
                 "created_at":chrono::Utc::now().timestamp()}]);
             let stub = bin.join("python3");
-            fs::write(&stub, format!("#!/bin/sh\nprintf '%s' '{row}'\n")).unwrap();
-            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+            let _forks = fork_guard();
+            pg_worker_core::executable_test_support::write_executable(
+                &stub,
+                format!("#!/bin/sh\nprintf '%s' '{row}'\n"),
+            );
+            // A concurrent test's fork can still hold the stub's write descriptor, and the
+            // adapter would then fail with "text file busy" and read as no quota. The shared
+            // spawn retries until that window has passed; later forks cannot inherit it.
+            pg_worker_core::executable_test_support::spawn(
+                std::process::Command::new(&stub).stdout(std::process::Stdio::null()),
+            )
+            .and_then(|mut child| child.wait())
+            .unwrap();
             let env = Env::from([
                 ("PLANGRAPH_HOST_NAME".into(), host.into()),
                 ("PATH".into(), bin.to_string_lossy().into()),
@@ -143,6 +165,7 @@ mod proc_fixture {
             self.dir.path().join("proc").join(name)
         }
         fn decide(&self) -> Value {
+            let _forks = fork_guard();
             let policy: Policy =
                 toml::from_str(&fs::read_to_string(&self.options.policy).unwrap()).unwrap();
             decide(

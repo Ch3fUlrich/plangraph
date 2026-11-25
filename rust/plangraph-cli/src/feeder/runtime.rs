@@ -268,6 +268,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn lock_excludes_concurrent_ticks_then_reopens() {
+        let _forks = live_tests::fork_guard();
         let d = tempfile::tempdir().unwrap();
         let first = lock(d.path()).unwrap();
         assert!(lock(d.path()).is_err());
