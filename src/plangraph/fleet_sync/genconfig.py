@@ -55,8 +55,9 @@ def generate(registry):
         src = root.rstrip('/\\') + '/src'
         hop = {'wsl_distro': distro} if distro else {}
         state = host.get('state_dir')  # `ps` reads the spawner state the host's runs are written to
+        # A malformed value is carried on so the consumer rejects the host, not the default store.
         ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src},
-                       **({'state_dir': state} if isinstance(state, str) and state else {})))
+                       **({} if state in (None, '') else {'state_dir': state})))
         if not windows:
             overflow[name] = dict(ssh=target, repo=root, spawner_src=src,
                 floor_mb=host['caps']['mem_floor_mb'], **hop)

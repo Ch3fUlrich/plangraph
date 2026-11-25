@@ -321,10 +321,12 @@ def test_registry_state_dir_replaces_a_stale_one_in_the_configured_host(config):
     assert (host['src'], host['state_dir']) == ('/srv/pg/src', STATE)
 
 
-@pytest.mark.parametrize('bad', ['relative', '/state;rm', 3, '/a\nb'])
+@pytest.mark.parametrize('bad', ['relative', 3, '/a\nb', 'C:/s\x00', '', []])
 def test_invalid_state_dir_is_an_invalid_host(config, bad):
     write(config, [dict(name='dell', target='dell', src='/s/src', state_dir=bad)])
-    assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+    expected = [dict(name='dell', target='dell', src='/s/src', state_dir='')] if bad == '' else [
+        dict(name='invalid-config', invalid=True)]
+    assert remote_ps.configured_hosts() == expected
 
 
 def test_state_dir_reaches_every_remote_query_form():
@@ -441,3 +443,68 @@ def test_registry_overlay_state_dir_is_validated_like_the_configured_one(config)
     write(config, [dict(name='dell', target='dell', src='/s/src', state_dir='relative/state')])
     (config / 'hosts.json').unlink()
     assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+
+
+def test_a_malformed_registry_state_dir_is_carried_for_rejection():
+    from plangraph.fleet_sync import genconfig
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'os': 'linux',
+            'repos': {'plangraph': {'root': '/srv/pg'}}}
+    rows = {r['name']: r for r in genconfig.generate({'self': 'c', 'hosts': [
+        dict(base, id='num', state_dir=5), dict(base, id='blank', state_dir='')]})['ps-hosts.json']['hosts']}
+    assert rows['num']['state_dir'] == 5 and 'state_dir' not in rows['blank']
+
+
+def test_source_precedence_is_resolved_before_validation(config):
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'os': 'linux',
+            'repos': {'plangraph': {'root': '/srv/pg'}}}
+
+    def registry(state):
+        (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'c', 'hosts': [
+            dict(base, id='dell', state_dir=state)]}))
+    # A stale malformed configured value does not block a valid registry value.
+    write(config, [dict(name='dell', target='dell', src='/s/src', state_dir='relative')])
+    registry('/srv/state')
+    assert remote_ps.configured_hosts()[0]['state_dir'] == '/srv/state'
+    # A malformed registry value is rejected, not dropped to the default store.
+    registry(5)
+    assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+
+
+@pytest.mark.parametrize('state', ['/srv/spawn+state', "/srv/it's here", '/srv/a;b $x'])
+def test_posix_state_dir_the_registry_accepts_is_encoded_safely(state):
+    import shlex
+    command = remote_ps.host_command(dict(name='p', target='p', src='/s/src', state_dir=state), query=True)
+    assert remote_ps.state_dir_ok(dict(src='/s/src', state_dir=state))
+    assert f'{remote_ps.STATE_ENV}={state}' in shlex.split(command.split('; ', 1)[1])
+
+
+@pytest.mark.parametrize('state', ['\\\\fileserver\\spawn\\state', '//fileserver/spawn/state', 'D:\\state'])
+def test_windows_state_dir_the_registry_accepts_is_encoded_for_cmd(state):
+    host = dict(name='w', target='w', win_src='C:/s/src', state_dir=state)
+    assert remote_ps.state_dir_ok(host)
+    command = remote_ps.host_command(host, query=True)
+    assert 'set "PLANGRAPH_SPAWN_STATE=' + state.replace('/', '\\') + '"' in command
+
+
+@pytest.mark.parametrize('state', ['C:/a"b', 'C:/a%PATH%', '\\\\server\\x"&calc'])
+def test_windows_state_dir_with_cmd_metacharacters_is_refused(state):
+    assert not remote_ps.state_dir_ok(dict(win_src='C:/s/src', state_dir=state))
+
+
+def test_two_overlapping_polls_share_one_transport_and_its_result(config):
+    write(config, [dict(name='slow', target='slow', src='/s/src')])
+    calls = []
+
+    def transport(host, timeout):
+        calls.append(1)
+        time.sleep(0.5)
+        return json.dumps({'runs': [dict(run_id='r', host='x', status='running')]})
+    results = []
+    first = threading.Thread(target=lambda: results.append(remote_ps.list_runs([], transport=transport)))
+    first.start()
+    time.sleep(0.15)
+    second = threading.Thread(target=lambda: results.append(remote_ps.list_runs([], transport=transport)))
+    second.start()
+    first.join(30)
+    second.join(30)
+    assert [[r['status'] for r in rows] for rows in results] == [['running']] * 2 and len(calls) == 1

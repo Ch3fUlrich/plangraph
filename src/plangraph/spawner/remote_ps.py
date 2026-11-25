@@ -55,13 +55,23 @@ STATE_ENV = 'PLANGRAPH_SPAWN_STATE'
 
 
 def state_dir_ok(host):
-    """The optional spawner state directory of a host: an absolute path of its own kind."""
+    """The optional spawner state directory of a host, as the registry accepts it.
+
+    Absolute for the host's own kind (a POSIX path, or a Windows drive or UNC path); an empty
+    value means none. Characters that cannot be passed on safely are refused: control characters,
+    and for cmd.exe the quote and percent sign.
+    """
     state = host.get('state_dir')
-    if state is None:
+    if state is None or state == '':
         return True
-    pattern = (r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*' if 'win_src' in host
-               else r'/[A-Za-z0-9_ ./-]*')
-    return isinstance(state, str) and re.fullmatch(pattern, state) is not None
+    if not isinstance(state, str) or re.search(r'[\x00-\x1f\x7f]', state):
+        return False
+    if 'win_src' not in host:
+        return state.startswith('/')
+    if re.search(r'["%]', state):
+        return False
+    unc = re.fullmatch(r'(?:\\\\|//)[^\\/]+[\\/][^\\/]+.*', state)
+    return unc is not None or re.match(r'[A-Za-z]:[/\\]', state) is not None
 
 
 def state_env(host):
@@ -294,8 +304,7 @@ def configured_hosts():
                 or not isinstance(host.get('target'), str)
                 or not re.fullmatch(r'[A-Za-z0-9_@.:-]+', host['target'])
                  or host['target'].startswith('-')
-                 or not state_dir_ok(host)
-                or ('win_src' in host and (
+                 or ('win_src' in host and (
                      not isinstance(host['win_src'], str)
                       or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*',
                                          host['win_src'])
@@ -314,28 +323,30 @@ def configured_hosts():
             validated.append(host)
     sources = registry_sources(path / 'plangraph')
     for index, host in enumerate(validated):
-        entry = None if host.get('invalid') else _registry_entry(host, sources)
+        if host.get('invalid'):
+            continue
+        entry = _registry_entry(host, sources)
         if entry:
             keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro', 'state_dir')}
-            merged = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
-                                 if k in entry}}
-            # The effective entry is validated, whichever file its values came from.
-            validated[index] = merged if state_dir_ok(merged) else dict(name='invalid-config', invalid=True)
+            host = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
+                               if k in entry}}
+        # The effective entry is validated, whichever file its values came from.
+        validated[index] = host if state_dir_ok(host) else dict(name='invalid-config', invalid=True)
     return validated
 
 
-# A host has at most one transport at a time, and at most MAX_WORKERS transports are in flight
-# across every caller; a caller waits for either, up to its budget. A transport whose caller gave
-# up is "stuck": it keeps running (a thread cannot be cancelled) but frees its slot, so it cannot
-# starve other hosts; its host is not queried again until it ends, so threads never exceed the
-# number of configured hosts.
+# A host has at most one transport at a time: a caller that finds one in flight shares its result
+# instead of starting another, and at most MAX_WORKERS transports are in flight across every
+# caller. A transport whose caller gave up is "stuck": it keeps running (a thread cannot be
+# cancelled) but frees its slot, so it cannot starve other hosts; its host is not queried again
+# until it ends, so threads never exceed the number of configured hosts.
 GRACE = 1  # seconds beyond a host's budget before its caller stops waiting
 _SLOTS = threading.Condition()
-_state = dict(in_flight=0, hosts=set(), stuck={})
+_state = dict(in_flight=0, flights={}, stuck={})
 
 
-def _claim(name, budget):
-    """Reserve the host and a slot together under the lock; False means refused."""
+def _join_or_claim(name, budget):
+    """Under the lock: the flight to share, or a new one that holds a slot; None when refused."""
     deadline = time.monotonic() + budget + GRACE
     with _SLOTS:
         while True:
@@ -343,14 +354,17 @@ def _claim(name, budget):
             for key in [key for key, thread in stuck.items() if not thread.is_alive()]:
                 del stuck[key]
             if name in stuck:
-                return False
-            if name not in _state['hosts'] and _state['in_flight'] < MAX_WORKERS:
-                _state['hosts'].add(name)
+                return None
+            if name in _state['flights']:
+                return _state['flights'][name], False
+            if _state['in_flight'] < MAX_WORKERS:
+                flight = dict(outcome=[], done=threading.Event(), thread=None)
+                _state['flights'][name] = flight
                 _state['in_flight'] += 1
-                return True
+                return flight, True
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not _SLOTS.wait(remaining):
-                return False
+                return None
 
 
 def _bounded(host, transport):
@@ -360,33 +374,39 @@ def _bounded(host, transport):
     interpreter exit, a daemon thread is not, so `ps` prints and exits while it stays blocked.
     """
     budget = host_timeout(host)
-    outcome = []
     name = str(host.get('name'))
+    claimed = _join_or_claim(name, budget)
+    if claimed is None:
+        raise TimeoutError('host query failed')
+    flight, owner = claimed
+    outcome = flight['outcome']
+    if owner:
+        def run():
+            try:
+                outcome.append((True, transport(host, budget)))
+            except BaseException as exc:  # handed to the caller, which classifies it
+                outcome.append((False, exc))
+            finally:
+                flight['done'].set()
+                with _SLOTS:
+                    if _state['stuck'].get(name) is threading.current_thread():
+                        del _state['stuck'][name]
+                    _SLOTS.notify_all()
 
-    def run():
+        thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
         try:
-            outcome.append((True, transport(host, budget)))
-        except BaseException as exc:  # handed to the caller, which classifies it
-            outcome.append((False, exc))
+            thread.start()
+            thread.join(budget + GRACE)  # the transport's own deadline answers first when it holds
         finally:
             with _SLOTS:
-                if _state['stuck'].get(name) is threading.current_thread():
-                    del _state['stuck'][name]
+                _state['in_flight'] -= 1
+                _state['flights'].pop(name, None)
+                if thread.is_alive():
+                    _state['stuck'][name] = thread
+                    flight['done'].set()  # callers sharing this flight stop waiting with no result
                 _SLOTS.notify_all()
-
-    thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
-    if not _claim(name, budget):
-        raise TimeoutError('host query failed')
-    try:
-        thread.start()
-        thread.join(budget + GRACE)  # the transport's own deadline answers first when it holds
-    finally:
-        with _SLOTS:
-            _state['in_flight'] -= 1
-            _state['hosts'].discard(name)
-            if thread.is_alive():
-                _state['stuck'][name] = thread
-            _SLOTS.notify_all()
+    else:
+        flight['done'].wait(budget + GRACE)
     if not outcome:
         raise TimeoutError('host query failed')
     done, value = outcome[0]
