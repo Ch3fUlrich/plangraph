@@ -53,10 +53,19 @@ fn alive(_: u32, _: u64) -> bool {
     true
 }
 
+/// A fleet session's launcher may exit while the session runs: the roster decides.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) enum Fleet {
+    Running,
+    Ended(Value),
+    Unknown,
+}
+
 pub(crate) fn scan(
     state: &Path,
     belongs: impl Fn(&Value) -> bool,
     alive: impl Fn(u32, u64) -> bool,
+    mut fleet: impl FnMut(&Value) -> Fleet,
 ) -> Inventory {
     let mut found = Inventory::default();
     for row in crate::records::list_runs(state) {
@@ -67,6 +76,23 @@ pub(crate) fn scan(
             continue;
         }
         let id = id.to_owned();
+        if row["run_kind"] == "fleet-session"
+            && matches!(row["status"].as_str(), Some("running" | "unknown"))
+        {
+            match fleet(&row) {
+                Fleet::Running => found.live.insert(id),
+                Fleet::Unknown => found.unverified.insert(id),
+                Fleet::Ended(done) => {
+                    found.terminal.insert(
+                        id,
+                        json!({"status": done["status"], "ended": done["ended"],
+                               "exit_code": done["exit_code"]}),
+                    );
+                    true
+                }
+            };
+            continue;
+        }
         match row["status"].as_str() {
             Some("queued") => {
                 found.queued.insert(id);
@@ -94,8 +120,28 @@ pub(crate) fn scan(
     found
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn scan_host(state: &Path, belongs: impl Fn(&Value) -> bool) -> Inventory {
-    scan(state, belongs, alive)
+    use pg_spawnd::external_run::{fleet_state, roster, FleetState};
+    // The roster is read once, and only when a fleet session is recorded.
+    let mut agents: Option<Option<Vec<Value>>> = None;
+    let fleet = |row: &Value| {
+        let Some(agents) = agents.get_or_insert_with(|| roster().ok()) else {
+            return Fleet::Unknown;
+        };
+        match fleet_state(row, agents, pg_worker_core::run::finalize::now()) {
+            FleetState::Running => Fleet::Running,
+            FleetState::Ended(done) => Fleet::Ended(done),
+            FleetState::Unknown => Fleet::Unknown,
+        }
+    };
+    scan(state, belongs, alive, fleet)
+}
+
+/// Fleet sessions are registered on Linux hosts only; elsewhere none can be proven.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn scan_host(state: &Path, belongs: impl Fn(&Value) -> bool) -> Inventory {
+    scan(state, belongs, alive, |_| Fleet::Unknown)
 }
 
 #[cfg(test)]
@@ -128,6 +174,19 @@ mod tests {
             json!({"status": "running", "attempts": [{"proc": {"pid": 8, "start_time": 80}}]}),
         );
         write(state, "run-unproven", json!({"status": "running"}));
+        // A fleet session whose launcher process is gone but whose roster entry runs, ended, or is unknown.
+        write(
+            state,
+            "run-fleetgone",
+            json!({"status": "running", "run_kind": "fleet-session", "fleet_session_name": "w-2",
+                   "external_owner": {"pid": 1, "start": 1}}),
+        );
+        write(
+            state,
+            "run-fleetlost",
+            json!({"status": "running", "run_kind": "fleet-session", "fleet_session_name": "w-3",
+                   "external_owner": {"pid": 1, "start": 1}}),
+        );
         write(
             state,
             "run-fleet",
@@ -153,7 +212,14 @@ mod tests {
         let found = scan(
             state,
             |_| true,
-            |pid, start| matches!((pid, start), (7, 70) | (9, 90) | (6, 60)),
+            |pid, start| matches!((pid, start), (7, 70) | (9, 90)),
+            |row| match row["fleet_session_name"].as_str() {
+                Some("w-1") => Fleet::Running,
+                Some("w-2") => {
+                    Fleet::Ended(json!({"status": "completed", "exit_code": 0, "ended": 9.0}))
+                }
+                _ => Fleet::Unknown,
+            },
         );
         assert_eq!(
             found.live,
@@ -166,7 +232,11 @@ mod tests {
             found.dead,
             ["run-gone", "run-nativegone"].map(String::from).into()
         );
-        assert_eq!(found.unverified, ["run-unproven"].map(String::from).into());
+        assert_eq!(
+            found.unverified,
+            ["run-fleetlost", "run-unproven"].map(String::from).into()
+        );
+        assert_eq!(found.terminal["run-fleetgone"]["status"], "completed");
         assert_eq!(found.terminal["run-done"]["exit_code"], 0);
     }
 }

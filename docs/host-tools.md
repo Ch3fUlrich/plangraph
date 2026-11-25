@@ -287,8 +287,10 @@ run's Keeper claim is released first, with the client in `PG_KEEPER_CLI` and the
 run's recorded `claim_epoch` (a spawn card's `claim_epoch` is kept beside its
 `item_key`; a missing epoch blocks). Only the release verb's own receipt counts,
 an offline Keeper or a reply without the item's key keeps the run unsettled for
-the next rejoin, and a claim already moved on is left alone. Fleet sessions are
-read from `external_child` or `external_owner`. It runs `pg-worktree-sweep --reap`
+the next rejoin, and a claim already moved on is left alone. A fleet session outlives its launcher, so its state comes from the fleet roster
+(running, ended with its result, or absent and uncertain), and fleet-launch keeps
+the `PG_EPOCH` of its environment as `claim_epoch`. A claim the Keeper reports
+replaced by a newer epoch is left alone; an older current epoch settles nothing. It runs `pg-worktree-sweep --reap`
 (with `PG_REJOIN_REAP_APPROVAL` and `PG_REJOIN_REAP_PLAN` when routing approved
 rows) and blocks while eligible stale worktrees remain, measures the work-disk
 floors (the state disk without mounts) and the RAM floor (Windows free memory

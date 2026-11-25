@@ -92,42 +92,35 @@ impl Ssh<'_> {
         })
     }
 
-    /// Every hook of the main build manifest (`PG_MAIN_HOOK_SHA256`, JSON of name to
-    /// sha256) must be installed at its path in the host's `PG_INSTALL_HOOKS` (JSON of
-    /// name to path) with the same hash; a hook with no path, no manifest entry or a
-    /// different hash is stale.
+    /// Hooks of the main build manifest (`PG_MAIN_HOOK_SHA256`) against the host's
+    /// `PG_INSTALL_HOOKS` (JSON of name to path); see `stale_hook_names`.
     fn stale_hooks(&self) -> io::Result<Vec<String>> {
-        let object = |value: Option<String>, what: &str| -> io::Result<BTreeMap<String, String>> {
-            value.map_or_else(
-                || Ok(BTreeMap::new()),
-                |raw| {
-                    serde_json::from_str(&raw)
-                        .map_err(|_| io::Error::other(format!("{what} is not a JSON object")))
-                },
-            )
-        };
+        let object =
+            |value: Option<String>, what: &str| -> io::Result<Option<BTreeMap<String, String>>> {
+                value
+                    .map(|raw| {
+                        serde_json::from_str(&raw)
+                            .map_err(|_| io::Error::other(format!("{what} is not a JSON object")))
+                    })
+                    .transpose()
+            };
         let paths = object(
             self.host.env.get("PG_INSTALL_HOOKS").cloned(),
             "PG_INSTALL_HOOKS",
-        )?;
-        let main = object(
+        )?
+        .unwrap_or_default();
+        let manifest = object(
             std::env::var("PG_MAIN_HOOK_SHA256").ok(),
             "PG_MAIN_HOOK_SHA256",
         )?;
-        let mut stale = Vec::new();
-        let names: std::collections::BTreeSet<_> = paths.keys().chain(main.keys()).collect();
-        for name in names {
-            let (Some(path), Some(want)) = (paths.get(name), main.get(name)) else {
-                stale.push(name.clone());
-                continue;
-            };
+        stale_hook_names(&paths, manifest.as_ref(), |path| {
             let out = self.ok(&["sha256sum", path], 60)?;
-            let sum = String::from_utf8_lossy(&out);
-            if !want.eq_ignore_ascii_case(sum.split_whitespace().next().unwrap_or_default()) {
-                stale.push(name.clone());
-            }
-        }
-        Ok(stale)
+            Ok(String::from_utf8_lossy(&out)
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned())
+        })
     }
 
     /// Run the host's approved reaper (`pg-worktree-sweep --reap`) with the service's
@@ -293,6 +286,30 @@ impl Ssh<'_> {
     }
 }
 
+/// The manifest is the authority: an unset one is a finding, `{}` declares no hooks. A hook
+/// with no installed path, no manifest entry or a different hash is stale.
+fn stale_hook_names(
+    paths: &BTreeMap<String, String>,
+    manifest: Option<&BTreeMap<String, String>>,
+    mut hash_of: impl FnMut(&str) -> io::Result<String>,
+) -> io::Result<Vec<String>> {
+    let Some(main) = manifest else {
+        return Ok(vec!["(main hook manifest not supplied)".into()]);
+    };
+    let mut stale = Vec::new();
+    let names: std::collections::BTreeSet<_> = paths.keys().chain(main.keys()).collect();
+    for name in names {
+        let (Some(path), Some(want)) = (paths.get(name), main.get(name)) else {
+            stale.push(name.clone());
+            continue;
+        };
+        if !want.eq_ignore_ascii_case(&hash_of(path)?) {
+            stale.push(name.clone());
+        }
+    }
+    Ok(stale)
+}
+
 /// Available kibibytes of the last line of `df -Pk`.
 fn df_available_kb(output: &str) -> Option<u64> {
     output
@@ -306,7 +323,34 @@ fn df_available_kb(output: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::df_available_kb;
+    use super::{df_available_kb, stale_hook_names};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn hook_inputs_unset_are_a_finding_and_an_empty_manifest_declares_no_hooks() {
+        let none = BTreeMap::new();
+        let hash = |_: &str| Ok("aa".to_owned());
+        assert_eq!(
+            stale_hook_names(&none, None, hash).unwrap(),
+            ["(main hook manifest not supplied)"]
+        );
+        assert!(stale_hook_names(&none, Some(&none), hash)
+            .unwrap()
+            .is_empty());
+        let manifest = BTreeMap::from([("turn".to_owned(), "aa".to_owned())]);
+        assert_eq!(
+            stale_hook_names(&none, Some(&manifest), hash).unwrap(),
+            ["turn"]
+        );
+        let paths = BTreeMap::from([("turn".to_owned(), "/opt/h".to_owned())]);
+        assert!(stale_hook_names(&paths, Some(&manifest), hash)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            stale_hook_names(&paths, Some(&manifest), |_| Ok("bb".into())).unwrap(),
+            ["turn"]
+        );
+    }
 
     #[test]
     fn df_reads_the_available_column_of_the_last_line() {

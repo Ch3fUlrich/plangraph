@@ -179,8 +179,10 @@ def configured_build_target(policy, free_gb, *, floors=True):
     for entry in drives:
         floor = float(entry.get('disk_floor_gb', 5))
         mount = entry.get('mount')
-        if not Path(entry['path']).is_dir() or (
-                mount and not (os.path.ismount(mount) and Path(entry['path']).is_relative_to(mount))):
+        # Compare resolved paths: `/proc/../tmp` is not under the `/proc` mount.
+        resolved = Path(entry['path']).resolve()
+        if not resolved.is_dir() or (
+                mount and not (os.path.ismount(mount) and resolved.is_relative_to(Path(mount).resolve()))):
             # An unmounted path would be measured through its parent's filesystem.
             shortfalls.append(f"{entry['path']}: not mounted")
             continue
@@ -196,7 +198,7 @@ def configured_build_target(policy, free_gb, *, floors=True):
             shortfalls.append(f"{entry['path']}: {free:.2f} GB < floor {floor:g} GB")
     if best is None:
         raise OSError('disk_low: no build drive meets its floor (' + '; '.join(shortfalls) + ')')
-    return Path(best[1]).expanduser().absolute() / 'cargo-target'
+    return Path(best[1]).expanduser().resolve() / 'cargo-target'
 
 
 def select_drive(drives, cleanup, free_gb, *, check=None):
