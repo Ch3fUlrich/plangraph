@@ -67,8 +67,7 @@ PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
 
 #: The deploy rule of a keeper schema rise, in the PR body and the GO-REQ: a plain restart leaves the keeper down.
-MIGRATION_DEPLOY = ("keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, "
-                    "never a plain restart")
+MIGRATION_DEPLOY = "keeper deploy: plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE, never a plain restart"
 
 
 def cell(text):
@@ -439,11 +438,10 @@ def require_migration_go(st, go_row):
         statement = _go_statement(decision)
         if statement and any(_go_binding(statement, name) == expected for name in (repo, project)):
             try:
-                found = migration_field(statement)
+                if migration_field(statement) == version:
+                    return
             except ValueError:
                 continue
-            if found == version:
-                return
     raise MergeBatchError(refusal)
 
 
