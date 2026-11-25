@@ -14,6 +14,10 @@ struct Options {
     facts: PathBuf,
     rules: PathBuf,
     repo: PathBuf,
+    /// Where `--live-facts` reads the kernel counters; tests point it at a fixture.
+    proc: PathBuf,
+    /// Opens `<proc>/pressure/cpu`; tests inject an error here.
+    open_psi: capacity::OpenPsi,
 }
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
@@ -23,6 +27,8 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
         facts: home.join(".config/plangraph/feeder-facts.json"),
         rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
+        proc: "/proc".into(),
+        open_psi: capacity::open_psi,
     };
     let mut once = false;
     let mut explicit_facts = false;
@@ -63,43 +69,75 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
     let running = sources::runs(env, &o.repo, &ready, state, o.dry)?;
-    let eligible = pick(&ready, &running, &policy).is_some();
+    decide(
+        home,
+        env,
+        o,
+        state,
+        policy,
+        local.as_deref(),
+        &ready,
+        &running,
+    )
+}
+
+/// The capacity line of a live decision: why this host admits or refuses. `load1` is null and
+/// `load_paced` false when the host reports no load; `writer_limit` is null for a host the
+/// policy does not list.
+fn capacity_line(
+    facts: &HostFacts,
+    free_ram_bytes: u64,
+    policy: &Policy,
+    cpu: capacity::Cpu,
+    budget: &capacity::Budget,
+) -> Value {
+    json!({
+        "host":facts.host, "cpus":cpu.cpus, "load1":cpu.load1, "running_writers":facts.running_writers,
+        "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+        "ram_per_writer_bytes":policy.ram_per_run_bytes,
+        "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
+        "load_paced":budget.load_paced, "writer_limit":budget.limit,
+        "free_disk_bytes":facts.free_disk_bytes,
+        "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
+    })
+}
+
+/// Everything after the keeper and run reads. `--live-facts` derives the writer limit from the
+/// RAM budget of a live sample; `--facts` keeps the limit the policy lists. Both refuse a host
+/// the policy does not list by name, in `admit`.
+#[allow(clippy::too_many_arguments)]
+fn decide(
+    home: &Path,
+    env: &Env,
+    o: &Options,
+    state: &Path,
+    mut policy: Policy,
+    local: Option<&str>,
+    ready: &Value,
+    running: &[Run],
+) -> Result<Value, String> {
+    let eligible = pick(ready, running, &policy).is_some();
     if !o.live && !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
     }
-    let host = env
-        .get("PLANGRAPH_HOST_NAME")
-        .map(String::as_str)
-        .or(local.as_deref());
-    let (sample, load) = if o.live {
+    let host = env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local);
+    let (sample, cpu) = if o.live {
         let host = host
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, cpus, load) = capacity::sample(host, disk_root, env)?;
-        (sample, Some((cpus, load)))
+        let (sample, cpu) = capacity::sample(host, disk_root, env, &o.proc, o.open_psi)?;
+        (sample, Some(cpu))
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let mut facts = sources::facts(
-        env,
-        &o.repo,
-        sample,
-        &running,
-        home,
-        &policy,
-        local.as_deref(),
-    )?;
-    let measurement = if let Some((cpus, load)) = load {
+    let mut facts = sources::facts(env, &o.repo, sample, running, home, &policy, local)?;
+    let measurement = if let Some(cpu) = cpu {
         let free_ram_bytes = facts.free_ram_bytes;
-        capacity::apply(&mut facts, &mut policy, cpus, load)?;
-        Some(json!({
-            "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
-            "free_ram_bytes":free_ram_bytes, "free_disk_bytes":facts.free_disk_bytes,
-            "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
-        }))
+        let budget = capacity::apply(&mut facts, &mut policy, cpu)?;
+        Some(capacity_line(&facts, free_ram_bytes, &policy, cpu, &budget))
     } else {
         None
     };
@@ -109,8 +147,8 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let rules = fs::read_to_string(&o.rules).map_err(|_| "house rules unreadable")?;
     let reviews = home.join(".local/share/plangraph/handoffs/plan-order/reviews");
     let mut row = tick(
-        &ready,
-        &running,
+        ready,
+        running,
         &facts,
         &policy,
         &rules,
@@ -206,29 +244,11 @@ pub fn run(home: &Path, env: &Env, args: &[String]) -> i32 {
 }
 
 #[cfg(test)]
+mod live_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn live_capacity_budget_changes_with_load_and_reserves_memory_floor() {
-        let mut facts: HostFacts = serde_json::from_value(json!({
-            "host":"worker", "free_ram_bytes":7000000000u64,
-            "free_disk_bytes":20000000000u64, "quota_remaining_percent":80,
-            "observed_at":1000, "now":1000, "running_writers":5
-        }))
-        .unwrap();
-        let mut policy = Policy::default();
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 0.5).unwrap();
-        assert_eq!(admit(&facts, &policy), Admission::Admit);
-        assert_eq!(facts.free_ram_bytes, 4_000_000_000);
-        facts.running_writers = 6;
-        assert_eq!(admit(&facts, &policy), Admission::Admit);
-        facts.free_ram_bytes = 7_000_000_000;
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 11.5).unwrap();
-        assert_eq!(
-            admit(&facts, &policy),
-            Admission::Refuse("max_writers".into())
-        );
-    }
     #[test]
     fn routine_admission_refusals_are_healthy_unit_exits() {
         for reason in [
@@ -248,11 +268,32 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn lock_excludes_concurrent_ticks_then_reopens() {
-        let d = tempfile::tempdir().unwrap();
-        let first = lock(d.path()).unwrap();
-        assert!(lock(d.path()).is_err());
-        drop(first);
-        assert!(lock(d.path()).is_ok());
+        const CHILD: &str = "PG_FEEDER_LOCK_TEST_CHILD";
+        const RAN: &str = "feeder lock checks ran";
+        if std::env::var_os(CHILD).is_some() {
+            let d = tempfile::tempdir().unwrap();
+            let first = lock(d.path()).unwrap();
+            assert!(lock(d.path()).is_err());
+            drop(first);
+            assert!(lock(d.path()).is_ok());
+            println!("{RAN}");
+            return;
+        }
+        // A child that another test forks while the lock file is open keeps its flock until it
+        // execs, so the reacquire check runs alone in a fresh single-threaded process of this
+        // test binary, where no other test can fork.
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "feeder::runtime::tests::lock_excludes_concurrent_ticks_then_reopens",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && stdout.contains(RAN), "{stdout}");
     }
     #[test]
     fn concurrent_events_remain_independent_json_lines() {
