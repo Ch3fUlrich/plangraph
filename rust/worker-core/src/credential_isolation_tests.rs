@@ -57,7 +57,7 @@ fn the_profile_denies_every_listed_path_and_keeps_the_writer_roots_and_network()
         "{joined}"
     );
     for path in fixture_deny() {
-        let entry = format!("\"{}\"=\"none\"", path.display());
+        let entry = deny_entry(&path).unwrap();
         assert!(joined.contains(&entry), "{entry} missing: {joined}");
     }
     assert!(!joined.contains("danger-full-access"), "{joined}");
@@ -206,4 +206,22 @@ fn a_non_utf8_deny_path_is_an_error_not_a_missing_entry() {
     ));
     assert!(profile_args(&[], std::slice::from_ref(&bad)).is_err());
     assert!(profile_args(&[bad], &[]).is_err());
+}
+
+/// The rendering of a Windows path is pinned on every platform: backslashes are escaped, so an
+/// expected entry built from `Path::display` can never match it.
+#[test]
+fn a_windows_path_is_rendered_with_escaped_backslashes() {
+    let path = Path::new(r"C:\Users\runner\.ssh");
+    assert_eq!(
+        deny_entry(path).unwrap(),
+        r#""C:\\Users\\runner\\.ssh"="none""#
+    );
+    assert_eq!(
+        write_entry(path).unwrap(),
+        r#""C:\\Users\\runner\\.ssh"="write""#
+    );
+    let line = &profile_args(&[], &[path.to_path_buf()]).unwrap()[3];
+    assert!(line.contains(&deny_entry(path).unwrap()), "{line}");
+    assert!(!line.contains(&format!("\"{}\"", path.display())), "{line}");
 }

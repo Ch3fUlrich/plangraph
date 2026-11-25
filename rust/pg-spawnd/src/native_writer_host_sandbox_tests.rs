@@ -125,12 +125,27 @@ fn writer_command_denies_reads_of_the_config_directory_and_the_ssh_directory() {
         .map(|a| a.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ");
-    for path in pg_worker_core::credential_isolation::host_deny_read_paths().unwrap() {
-        let entry = format!("\"{}\"=\"none\"", path.display());
+    use pg_worker_core::credential_isolation::{deny_entry, host_deny_read_paths};
+    let denied = host_deny_read_paths().unwrap();
+    for path in &denied {
+        let entry = deny_entry(path).unwrap();
         assert!(line.contains(&entry), "{entry} missing: {line}");
     }
-    assert!(line.contains("/.config/plangraph\"=\"none\""), "{line}");
-    assert!(line.contains("/.ssh\"=\"none\""), "{line}");
+    // The config directory and the ssh directory are in the list and in the command, whatever the
+    // platform's separator: the paths are matched by component and rendered by the one helper.
+    for tail in [
+        Path::new(".config").join("plangraph"),
+        PathBuf::from(".ssh"),
+    ] {
+        let path = denied
+            .iter()
+            .find(|path| path.ends_with(&tail))
+            .unwrap_or_else(|| panic!("{tail:?} is not denied: {denied:?}"));
+        assert!(
+            line.contains(&deny_entry(path).unwrap()),
+            "{tail:?} missing: {line}"
+        );
+    }
 }
 
 /// A fixture secret variable set in the parent never reaches the process `writer_command`
