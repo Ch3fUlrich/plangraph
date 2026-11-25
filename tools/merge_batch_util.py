@@ -23,6 +23,7 @@ TESTED_FF = "tested-ff"  # the landing mode that moves main to the tested head (
 EXIT_REFUSED, EXIT_USAGE, EXIT_CONFLICT = 1, 2, 3
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+TESTS_METADATA_JOB = "ci-pr-description"
 ITEM_RE = re.compile(r"^Plan-Item:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 #: gh --json fields of every PR lookup (all exist for `gh pr list` and `gh pr view`).
 PR_FIELDS = ("number,title,headRefName,headRefOid,baseRefName,state,isDraft,isCrossRepository,"
@@ -285,10 +286,11 @@ def worktrees():
 # --- PR records -------------------------------------------------------------------------------
 def ci_state(rollup):
     """red (any failed check) > pending (any unfinished) > green; none when nothing ran."""
-    if not rollup:
-        return "none"
     states = []
-    for chk in rollup:
+    for chk in rollup or []:
+        if (chk.get("__typename"), chk.get("workflowName"), chk.get("name")) == (
+                "CheckRun", "tests", TESTS_METADATA_JOB):
+            continue
         if chk.get("__typename") == "StatusContext":
             state = (chk.get("state") or "").upper()
             states.append("pass" if state == "SUCCESS" else "pending" if state in ("PENDING", "EXPECTED") else "fail")
@@ -297,7 +299,7 @@ def ci_state(rollup):
         else:
             ok = (chk.get("conclusion") or "").upper() in ("SUCCESS", "NEUTRAL", "SKIPPED")
             states.append("pass" if ok else "fail")
-    return "red" if "fail" in states else "pending" if "pending" in states else "green"
+    return "red" if "fail" in states else "pending" if "pending" in states else "green" if states else "none"
 
 
 def norm_pr(raw):
@@ -665,11 +667,29 @@ def iso_now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def metadata_tests_run(repo, run, api):
+    """Require the workflow marker and exact-attempt metadata job before ignoring a Tests run."""
+    run_id = run.get("id")
+    if (run.get("event") != "pull_request" or not isinstance(run_id, int)
+            or run.get("display_title") != f"PR metadata check {run_id}"):
+        return False
+    from merge_batch_plan import workflow_attempt_jobs
+
+    jobs = workflow_attempt_jobs(f"repos/{repo}/actions", run_id, run.get("run_attempt", 1), api)
+    names = [job.get("name") for job in jobs]
+    return names.count(TESTS_METADATA_JOB) == 1 and all(
+        name == TESTS_METADATA_JOB
+        or (isinstance(name, str) and name and name != "ci-gate" and job.get("conclusion") == "skipped")
+        for name, job in zip(names, jobs, strict=True)
+    )
+
+
 def ci_window(repo, head):
     """Run id and times of the full tests run on ``head`` (empty when GitHub does not say)."""
     try:
         runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}"
                               "&event=pull_request&per_page=100")["workflow_runs"]
+        runs = [run for run in runs if not metadata_tests_run(repo, run, gh_json)]
         run_ = max(runs, key=lambda r: r["id"])
         return {"ci_run_id": run_["id"], "ci_started_at": run_.get("run_started_at") or run_.get("created_at"),
                 "ci_ended_at": run_.get("updated_at"), "ci_reruns": len(runs) - 1 + run_.get("run_attempt", 1) - 1}

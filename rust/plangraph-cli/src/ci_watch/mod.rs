@@ -23,7 +23,7 @@ mod sweep_tests;
 #[cfg(test)]
 mod tests;
 
-use crate::atomic;
+use crate::{atomic, wait_ci::verified_metadata_run};
 use github::{Gh, Github};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -365,19 +365,43 @@ fn scan_with_owner(
         let sha = text(&run, "head_sha")?;
         let event = text(&run, "event")?;
         let targets = targets_of(&run, sha, event, &heads);
+        if targets.is_empty() {
+            continue;
+        }
+        let run_id = number(&run, "id")?;
         for (pr, owner_only) in targets {
             let head = match pr {
                 Some(pr) => format!("pr-{pr}"),
                 None => "main".to_owned(),
             };
-            let run_id = number(&run, "id")?;
             let selection = format!("{repo}/{head}/{event}");
             // Our rerun temporarily disappears from the completed-only response.
             // Never walk backwards into older failures while that attempt runs.
+            let observed = (head.clone(), event.to_owned());
             if reruns.newest.get(&selection).is_some_and(|id| *id > run_id)
-                || !seen.insert((head.clone(), event.to_owned()))
+                || seen.contains(&observed)
             {
                 continue;
+            }
+            match verified_metadata_run(
+                run_id,
+                run["run_attempt"].as_u64().unwrap_or(1),
+                &run["event"],
+                &run["display_title"],
+                |endpoint| gh.value(endpoint),
+            ) {
+                Ok(true) => break,
+                Ok(false) => {
+                    seen.insert(observed);
+                }
+                Err(error) => {
+                    // Hold this head's cursor without delaying checks for other refs.
+                    seen.insert(observed);
+                    output.push(format!(
+                        "ci-watch unconfirmed run={run_id} head={head}: {error}"
+                    ));
+                    continue;
+                }
             }
             if !dry && reruns.newest.get(&selection) != Some(&run_id) {
                 reruns.newest.insert(selection, run_id);

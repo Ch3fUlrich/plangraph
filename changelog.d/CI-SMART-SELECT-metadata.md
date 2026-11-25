@@ -1,0 +1,1 @@
+- **CI-SMART-SELECT:** Pull request title and description corrections run the base-pinned commit policy without restarting test suites. The isolated metadata check preserves exact-head CI evidence and in-flight runs. Base changes still run normal CI.

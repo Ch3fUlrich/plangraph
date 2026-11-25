@@ -21,7 +21,7 @@ from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, 
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
                               workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key,
-                              keeper_landing_configured, landing_receipt_inputs)
+                              keeper_landing_configured, landing_receipt_inputs, metadata_tests_run)
 
 
 def merge_trailers(st):
@@ -331,10 +331,11 @@ FLAKE_LABEL = "flake-dispositioned"
 
 
 def tests_runs(repo, pr, head, api):
-    """Tests runs explicitly associated with this pull request and commit."""
+    """CI Tests runs explicitly associated with this pull request and commit."""
     runs = api("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
     return [r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head
-            and any(p.get("number") == pr for p in r.get("pull_requests") or [])]
+            and any(p.get("number") == pr for p in r.get("pull_requests") or [])
+            and not metadata_tests_run(repo, r, api)]
 
 
 def ci_attempts(repo, pr, head):
