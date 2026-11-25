@@ -39,6 +39,7 @@ def test_a_merged_open_item_takes_deploy_evidence_without_a_claim_and_then_close
     with pytest.raises(Refused, match="already merged"):
         env.store.claim(env.p("l1main"), KEY)
     assert auto(env, require_seats=False)["closed"] == []
+    env.clock.t = int(git(env.repo.root, "show", "-s", "--format=%ct", "HEAD")) + 1
     out = env.store.add_evidence(env.p("l1main"), KEY, _epoch(env), "deploy", PROOF)
     assert out["verified"] is True
     assert env.store._item(KEY)["state"] == "open"
