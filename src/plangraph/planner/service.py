@@ -178,13 +178,14 @@ def pack_for_card(store: Any, principal: Any, key: str, *, repo_root: Path | str
     The budget comes from ``window_class`` or, failing that, the given ``route``'s class or the
     card's own (``ValueError`` when none is set), capped at ``max_request_tokens`` or, without
     it, at the first leg of ``route``: the route the gate admitted the card under
-    (:attr:`GateResult.route`).  A ``check_tail`` retry needs one of the two, because routing the
-    card again can pick a wider leg than admission did (an unavailable leg, a different leg
-    list) and pack past the admitted cap; without either, ``ValueError``.
+    (:attr:`GateResult.route`).  The first pack and every ``check_tail`` retry take the same
+    admission budget as :func:`gate_card`, so the retry prefix is the first pack; a pack with
+    neither raises ``ValueError``, because the class budget alone can exceed the admitted cap
+    and routing again can pick a wider leg than admission did.
     """
     card = store.get_card(principal, key)
-    if check_tail is not None and route is None and max_request_tokens is None:
-        raise ValueError("a check_tail retry needs the admission route or max_request_tokens")
+    if route is None and max_request_tokens is None:
+        raise ValueError("a pack needs the admission route or max_request_tokens")
     if route is not None and max_request_tokens is None:
         max_request_tokens = route.first_leg.max_request_tokens
     window = window_class or (route.window_class if route is not None else None) \

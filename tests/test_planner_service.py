@@ -241,7 +241,8 @@ def test_import_batch_default_project_for_bare_ids(w, tmp_path):
 def test_pack_includes_write_content_and_hides_heldout(w, repo):
     (key,) = seed(w, [("A", [])])
     put(w, key, heldout_check="HELDOUT_SECRET_CHECK")
-    pack = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
+    pack = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
+                                 max_request_tokens=200000)
     assert "WRITE_MARKER" in pack.text and "READ_MARKER" in pack.text
     assert "HELDOUT_SECRET_CHECK" not in pack.text
     assert [f.role for f in pack.files] == ["write", "read"]
@@ -375,3 +376,29 @@ def test_retry_packing_needs_the_admission_route_and_keeps_its_leg_cap(w, repo):
         service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
                               route=admitted.route, check_tail=tail)
     assert "limit 120000" in str(ei.value)
+
+
+SHIPPED_200K = Leg(id="shipped-200k", tier="free", harness="opencode", model="shipped-model",
+                   family="shipped", windows=("1m",), max_request_tokens=200000,
+                   trains_on_data=False)
+
+
+def test_default_first_pack_and_retry_share_the_admission_budget(w, repo):
+    """The first pack of an admitted card never exceeds the leg cap and is the retry prefix."""
+    key, = seed(w, [("A", [])])
+    (repo / "src" / "read.py").write_text("r" * 4 * 19000, encoding="utf-8")
+    put(w, key, window_class="1m", estimate_tokens=1000, read_set=["src/read.py"],
+        write_set=_big_write_set(repo, 195000))
+    admitted = gate(w, repo, key, legs=(SHIPPED_200K,))
+    assert admitted.ready and admitted.route.first_leg.max_request_tokens == 200000
+    # the first pack takes the admission route; without it no budget is guessed from the class
+    with pytest.raises(ValueError, match="admission route"):
+        service.pack_for_card(w.store, w.p("router"), key, repo_root=repo)
+    first = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
+                                  route=admitted.route)
+    retry = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
+                                  route=admitted.route, check_tail="boom\n" * 30)
+    assert first.tokens <= 200000 and retry.tokens <= 200000
+    assert retry.text[:retry.prefix_chars] == first.text
+    assert [f.path for f in first.files] == [f.path for f in retry.files]
+    assert first.skipped == retry.skipped
