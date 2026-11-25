@@ -208,7 +208,7 @@ configuration; unmapped code selects a bounded smoke set (tests naming its direc
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
 build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
-worktree and untracked changes; omit it to include checkout changes. The selector puts the tested checkout's `src/` before inherited `PYTHONPATH` entries for pytest.
+worktree and untracked changes; omit it to include checkout changes. The selector puts the tested checkout's `src/` before inherited `PYTHONPATH` entries for pytest. A changed Rust or Python test file always keeps `tests/test_spawner_import_guard.py` in the selection, also when the local cap of 39 files defers other tests to CI.
 Each affected pytest invocation gets a separate basetemp under the selector's
 private run directory. The selector removes that directory on exit. On Linux,
 disk hygiene can reclaim an abandoned run directory after its lease is idle.
@@ -231,7 +231,7 @@ Add an explicit test case in
 `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and
 `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
-Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+Files read or executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`, and `.claude/settings.json`, whose SendMessage hook entry `rust/pg-hook/tests/settings_registration.rs` runs) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
 The scheduled review probe test imports `src/plangraph/planner/__init__.py` and embeds
 `deploy/systemd/plangraph-review-probe.service` to exercise its `ExecStart` command.
 Both paths select Rust CI through `RUST_INPUTS`.
