@@ -381,18 +381,29 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
 
 
 def lane_cleanup_landed(repo, st, landed):
-    """Run `plangraph lane-cleanup` for the frozen refs and SHAs of the landed parts and every older
-    round of their lanes. Exit 3 (a delete was refused) raises, so a strict settlement resumes at
-    its cleanup step; moved and absent refs are done or re-evaluated by the daily timer."""
-    pairs = [(st["prs"][str(rec["pr"])]["ref"], rec["head"]) for rec in landed]
-    pairs = [(ref, sha) for ref, sha in pairs if ref.startswith("lane/")]
-    if not pairs or not st.get("repo"):
+    """Run `plangraph lane-cleanup` for exactly the frozen refs and SHAs of the landed parts whose
+    pull request head is a branch of this repository (never a fork's). Exit 3 (a delete was
+    refused) raises, so a strict settlement resumes at its cleanup step; moved and absent refs
+    are done or re-evaluated by the daily run, which also takes older rounds of the lane."""
+    pairs = []
+    for rec in landed:
+        ref = st["prs"][str(rec["pr"])]["ref"]
+        if not ref.startswith("lane/") or not st.get("repo"):
+            continue
+        try:
+            view = gh_json("pr", "view", str(rec["pr"]), "--repo", st["repo"],
+                           "--json", "isCrossRepository,headRefName")
+        except MergeBatchError:
+            continue  # Identity unproven: the ref is left to the daily run.
+        if view.get("isCrossRepository") is False and view.get("headRefName") == ref:
+            pairs.append((ref, rec["head"]))
+    if not pairs:
         return
     state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
     argv = ["plangraph", "lane-cleanup", "--repo", repo, "--state", state, "--gh-repo", st["repo"],
-            "--refs", ",".join(f"refs/heads/{ref}:{sha}" for ref, sha in pairs),
-            "--stems", ",".join(ref for ref, _ in pairs), "--apply"]
-    for flag, name in (("--claims-reader", "PG_SWEEP_CLAIMS_READER"), ("--remote", "PG_LANE_DELETE_REMOTE")):
+            "--refs", ",".join(f"refs/heads/{ref}:{sha}" for ref, sha in pairs), "--apply"]
+    for flag, name in (("--claims-reader", "PG_SWEEP_CLAIMS_READER"), ("--remote", "PG_LANE_DELETE_REMOTE"),
+                       ("--gh-host", "PG_LANE_GH_HOST")):
         if os.environ.get(name):
             argv.extend([flag, os.environ[name]])
     proc = run(argv, ok=(0, 3))

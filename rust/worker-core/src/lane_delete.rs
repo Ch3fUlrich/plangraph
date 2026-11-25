@@ -115,14 +115,69 @@ fn record(repo: &Path, file: &Path, reference: &str, sha: &str) -> io::Result<()
     handle.sync_all()
 }
 
-/// Delete `reference` on `remote` only while it still points at `sha`. `record_file` is the
-/// restore tsv (header already written); the row is synced before the push.
+/// One open pull request as the sweeps read it.
+#[derive(serde::Deserialize)]
+pub struct OpenPull {
+    #[serde(rename = "headRefName")]
+    pub head: String,
+    #[serde(rename = "baseRefName")]
+    pub base: String,
+    #[serde(rename = "headRefOid")]
+    pub sha: String,
+}
+
+/// Open pull requests of `gh_target` (`[HOST/]OWNER/NAME`, the checkout's repository when `None`),
+/// optionally only those with `--head`/`--base` equal to a name. A truncated or unreadable
+/// answer is an error: unresolved evidence never authorizes a delete.
+pub fn open_pulls(
+    repo: &Path,
+    gh_target: Option<&str>,
+    filter: Option<(&str, &str)>,
+) -> io::Result<Vec<OpenPull>> {
+    let mut command = Command::new("gh");
+    command
+        .current_dir(repo)
+        .args(["pr", "list", "--state", "open", "--limit", "1000"]);
+    if let Some(target) = gh_target {
+        command.args(["--repo", target]);
+    }
+    if let Some((flag, name)) = filter {
+        command.args([flag, name]);
+    }
+    command.args(["--json", "number,headRefName,baseRefName,headRefOid"]);
+    let text = host_command::output(&mut command, Duration::from_secs(120))?;
+    let rows: Vec<OpenPull> = serde_json::from_slice(&text).map_err(io::Error::other)?;
+    if rows.len() >= 1000 {
+        return Err(io::Error::other("open PR inventory truncated"));
+    }
+    Ok(rows)
+}
+
+/// The open pull request that uses `reference` as head or as base, if any (fresh, per ref).
+pub fn open_pr_use(
+    repo: &Path,
+    gh_target: Option<&str>,
+    reference: &str,
+) -> io::Result<Option<&'static str>> {
+    let short = reference.strip_prefix("refs/heads/").unwrap_or(reference);
+    for (flag, why) in [("--head", "open-pr-head"), ("--base", "open-pr-base")] {
+        if !open_pulls(repo, gh_target, Some((flag, short)))?.is_empty() {
+            return Ok(Some(why));
+        }
+    }
+    Ok(None)
+}
+
+/// Delete `reference` on `remote` only while it still points at `sha` and no open pull request
+/// uses it as head or base (read right before the push). `record_file` is the restore tsv
+/// (header already written); the row is synced before the push.
 pub fn delete(
     repo: &Path,
     remote: &str,
     reference: &str,
     sha: &str,
     record_file: &Path,
+    gh_target: Option<&str>,
 ) -> io::Result<Outcome> {
     if !is_lane_ref(reference) || !valid_sha(sha) {
         return Err(io::Error::other("not a lane ref or exact SHA"));
@@ -137,6 +192,9 @@ pub fn delete(
         None => return Ok(Outcome::Absent),
         Some(current) if current != sha => return Ok(Outcome::Moved(current)),
         Some(_) => {}
+    }
+    if let Some(why) = open_pr_use(repo, gh_target, reference)? {
+        return Err(io::Error::other(format!("protected: {why}")));
     }
     pin(repo, remote, reference, sha)?;
     record(repo, record_file, reference, sha)?;
@@ -172,7 +230,7 @@ pub fn delete_or_err(
     sha: &str,
     record_file: &Path,
 ) -> io::Result<()> {
-    match delete(repo, &remote_name(), reference, sha, record_file)? {
+    match delete(repo, &remote_name(), reference, sha, record_file, None)? {
         Outcome::Moved(_) => Err(io::Error::other("remote branch moved: lease refused")),
         Outcome::Deleted | Outcome::Absent => Ok(()),
     }

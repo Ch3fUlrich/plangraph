@@ -104,6 +104,7 @@ fn authority(options: &Options<'_>, _: &str) -> std::io::Result<(Protection, Vec
             claims: Claims {
                 paths: vec![],
                 branches: vec![],
+                unbound_runs: 0,
             },
             units: vec![],
             unit_refs: vec![],

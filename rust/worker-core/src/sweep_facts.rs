@@ -18,6 +18,9 @@ use std::{
 pub struct Claims {
     pub paths: Vec<PathBuf>,
     pub branches: Vec<String>,
+    /// Active runs of other hosts: no local record binds them to a publish ref.
+    #[serde(default)]
+    pub unbound_runs: u64,
 }
 #[derive(Deserialize)]
 pub struct Pull {

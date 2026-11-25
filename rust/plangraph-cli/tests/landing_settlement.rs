@@ -197,6 +197,9 @@ with TemporaryDirectory() as tmp:
         return Mock(returncode=0, stdout='', stderr='')
     def live_part(*args):
         return dict(state='MERGED', headRefOid='c'*40)
+    fork = []
+    def head_identity(*args):
+        return dict(isCrossRepository=bool(fork), headRefName='lane/landed-r3')
     def settle():
         with (patch.object(landing, 'landing_journal', journal),
               patch.object(build, 'landing_journal', journal),
@@ -205,6 +208,7 @@ with TemporaryDirectory() as tmp:
               patch.object(landing, 'write_landing', Mock()),
               patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
               patch.object(landing, 'run', effect),
+              patch.object(plan, 'gh_json', side_effect=head_identity),
               patch.object(plan, 'run', cleanup_run),
               patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')),
               patch.object(plan, 'worktrees', return_value=[])):
@@ -221,8 +225,15 @@ with TemporaryDirectory() as tmp:
     assert len(lane_calls) == 2 and lane_calls[0] == lane_calls[1], lane_calls
     argv = lane_calls[0]
     assert argv[argv.index('--refs') + 1] == 'refs/heads/lane/landed-r3:' + 'c'*40, argv
-    assert argv[argv.index('--stems') + 1] == 'lane/landed-r3' and '--apply' in argv, argv
+    assert '--stems' not in argv and '--apply' in argv, argv
     assert argv[argv.index('--gh-repo') + 1] == 'example/repo', argv
+    # A part whose head lives in a fork is never a deletion target.
+    fork.append(True)
+    lane_calls.clear()
+    with patch.object(plan, 'gh_json', side_effect=head_identity), patch.object(plan, 'run', cleanup_run):
+        plan.lane_cleanup_landed('/repo', dict(repo='example/repo', prs={'5': dict(ref='lane/landed-r3')}),
+                                 [dict(pr=5, head='c'*40)])
+    assert lane_calls == [], lane_calls
 "#,
     );
 }

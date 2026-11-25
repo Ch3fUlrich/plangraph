@@ -61,8 +61,19 @@ impl Fixture {
             r#"#!/bin/sh
 d="$FAKE_GH_DIR"
 case "$1 $2" in
-  "pr list") cat "$d/pulls.json" ;;
-  "pr view") cat "$d/pr-$3.json" ;;
+  "pr list")
+    shift 2; mode=all; name=""
+    while [ $# -gt 0 ]; do
+      case "$1" in --head) mode=head; name="$2"; shift ;; --base) mode=base; name="$2"; shift ;; esac
+      shift
+    done
+    if [ "$mode" = all ]; then cat "$d/pulls.json"; else
+      f="$d/$mode-$(echo "$name" | tr / _).json"
+      if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi
+    fi ;;
+  "pr view")
+    c="$d/count-pr-$3"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"
+    if [ "$n" -gt 1 ] && [ -f "$d/pr-$3.then.json" ]; then cat "$d/pr-$3.then.json"; else cat "$d/pr-$3.json"; fi ;;
   "run view") cat "$d/run-$3.json" ;;
   "pr close") echo "$3" >> "$d/closed.log" ;;
   *) echo "unexpected gh $*" >&2; exit 9 ;;
@@ -154,6 +165,32 @@ esac
         .collect()
     }
 
+    /// Open PRs as (number, head, base, head sha); `gh pr list --head/--base` serves the matching rows.
+    pub fn set_pulls(&self, rows: &[(u64, &str, &str, &str)]) {
+        let json = |r: &(u64, &str, &str, &str)| {
+            format!(
+                r#"{{"number":{},"headRefName":"{}","baseRefName":"{}","headRefOid":"{}"}}"#,
+                r.0, r.1, r.2, r.3
+            )
+        };
+        let all: Vec<String> = rows.iter().map(json).collect();
+        self.set("pulls.json", &format!("[{}]", all.join(",")));
+        for (mode, pick) in [("head", 1usize), ("base", 2usize)] {
+            for row in rows {
+                let name = if pick == 1 { row.1 } else { row.2 };
+                let same: Vec<String> = rows
+                    .iter()
+                    .filter(|r| (if pick == 1 { r.1 } else { r.2 }) == name)
+                    .map(json)
+                    .collect();
+                self.set(
+                    &format!("{mode}-{}.json", name.replace('/', "_")),
+                    &format!("[{}]", same.join(",")),
+                );
+            }
+        }
+    }
+
     pub fn set(&self, name: &str, text: &str) {
         fs::write(self.gh.join(name), text).unwrap();
     }
@@ -182,6 +219,8 @@ esac
             state,
             "--gh-repo",
             "fixture/origin",
+            "--gh-host",
+            "local",
             "--claims-reader",
             &reader,
         ];
@@ -209,6 +248,10 @@ esac
             old,
             "--new",
             new,
+            "--gh-repo",
+            "fixture/origin",
+            "--gh-host",
+            "local",
         ])
     }
 
