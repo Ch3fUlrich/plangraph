@@ -7,6 +7,11 @@ from pathlib import Path
 from plangraph.routing_support.private_io import atomic_write_private
 
 
+# A registry without a `public_repos` key lists this public repository; an explicit list,
+# even an empty one, replaces the default.
+DEFAULT_PUBLIC_REPOS = ('plangraph',)
+
+
 def config_dir():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'plangraph'
 
@@ -16,10 +21,21 @@ def work_mounts(host):
     return value.split(':') if value else []
 
 
+REMOTE_PLACEMENT_CLOSED = 'remote placement closed'
+
+
+def remote_open(config, local):
+    """Whether any host but `local` may take remote work (hand-written configs are always open)."""
+    return not config.get('registry') or any(
+        row.get('remote_placement') is True
+        for name, row in config.get('hosts', {}).items() if name != local)
+
+
 def generate(registry):
     ps, overflow = [], {}
     local_name = registry.get('self', '').lower()
-    public_ids = set(registry.get('public_repos', []))
+    public_ids = set(registry['public_repos'] if 'public_repos' in registry
+                     else DEFAULT_PUBLIC_REPOS)
     public = {}
     for host in registry['hosts']:
         name = host['id']
@@ -48,7 +64,10 @@ def generate(registry):
             raise ValueError('invalid WSL distribution')
         src = root.rstrip('/\\') + '/src'
         hop = {'wsl_distro': distro} if distro else {}
-        ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src}))
+        state = host.get('state_dir')  # `ps` reads the spawner state the host's runs are written to
+        # A malformed value is carried on so the consumer rejects the host, not the default store.
+        ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src},
+                       **({} if state in (None, '') else {'state_dir': state})))
         if not windows:
             overflow[name] = dict(ssh=target, repo=root, spawner_src=src,
                 floor_mb=host['caps']['mem_floor_mb'], **hop)
@@ -56,7 +75,8 @@ def generate(registry):
                 overflow[name].update(roles=host['roles'], state_dir=host['state_dir'],
                     placement_fallback=host.get('placement_fallback', False),
                     repos={key: entry['root'] for key, entry in repos.items() if key in public_ids},
-                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True)
+                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True,
+                    remote_placement=host.get('remote_placement') is True)
             if mounts := work_mounts(host):
                 overflow[name]['work_mounts'] = mounts
     return {'ps-hosts.json': {'hosts': ps}, 'overflow-hosts.json': {

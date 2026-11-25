@@ -12,7 +12,10 @@ Windows entries use `win_src`, for example `C:/source space/plangraph/src`;
 the command normalizes path separators for cmd.exe, groups the source guard
 so an existing directory reaches Python, and runs
 `python -m plangraph.spawner.remote_ps` with that PYTHONPATH.
-Queries run concurrently with a three-second subprocess timeout and no interactive
+A host's checkout path and optional `state_dir` come from the host registry when it has one
+(`hosts.json`, matched by id, alias or SSH target); the query runs with `PLANGRAPH_SPAWN_STATE` set to
+`state_dir`, so runs launched into a nondefault state directory are listed.
+Queries run concurrently with a three-second subprocess timeout (nine seconds for a WSL or Windows host) and no interactive
 authentication or retries. The remote endpoint reads only local records, preventing
 recursive fan-out. Only live remote records are included, labeled with the
 configured host name. Failures yield a named `unknown` row with the fixed reason
