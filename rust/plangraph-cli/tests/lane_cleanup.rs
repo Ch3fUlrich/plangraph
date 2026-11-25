@@ -464,3 +464,52 @@ fn probe_cleanup_keeps_a_pr_whose_head_moves_during_the_final_actions_lookup() {
     );
     assert!(!f.gh.join("closed.log").exists(), "{text}");
 }
+
+#[test]
+fn lane_cleanup_reads_claims_with_the_run_state_not_the_cleanup_state() {
+    let f = Fixture::new();
+    f.lane("lane/merged", "main", "m.txt", "m\n");
+    f.main_ff("lane/merged");
+    let seen = f.root.path().join("seen-state.txt");
+    let reader = format!(
+        "printf %s \"$PG_SWEEP_STATE\" > {}; cat {}",
+        seen.display(),
+        f.gh.join("claims.json").display()
+    );
+    let (work, state) = (f.work.to_str().unwrap(), f.state.to_str().unwrap());
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "lane-cleanup",
+            "--repo",
+            work,
+            "--state",
+            state,
+            "--gh-repo",
+            "fixture/origin",
+            "--gh-host",
+            "local",
+            "--claims-reader",
+            &reader,
+        ];
+        args.extend_from_slice(extra);
+        let out = f.cli(&args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        fs::read_to_string(&seen).unwrap()
+    };
+    // The reader binds writers from the spawner's run records, wherever the cleanup keeps its own state.
+    assert_eq!(run(&["--run-state", "/spawner/state"]), "/spawner/state");
+    let default = run(&[]);
+    assert_eq!(
+        default,
+        f.root
+            .path()
+            .join(".local/state/plangraph")
+            .to_str()
+            .unwrap()
+    );
+    assert_ne!(default, state);
+}

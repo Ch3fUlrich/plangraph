@@ -21,7 +21,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
                               close_merged_items, active_train, go_key_block, part_items, train_keys)
-from merge_batch_plan import cleanup_landed, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
+from merge_batch_plan import cleanup_landed, writers_stopped, windows_commands, windows_gate, windows_needed, windows_report, windows_script, workflow_attempt_jobs
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -502,14 +502,15 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
             sys.stderr.write(result.stdout)
             record_stage(repo, train["batch_key"], "host_sync", merge, started)
         elif step == "cleanup":
+            stopped = writers_stopped(landing_journal(repo, "show", pr=number)["train"].get("host_verification"))
             if st is not None:
-                cleanup_landed(st, landed, strict=True)
+                cleanup_landed(st, landed, strict=True, writers=stopped)
                 drop_state(st)
             else:
                 parts = [part for part in landed if part["ref"]]
                 state = {"repo": repo, "head": train["head"], "worktree": "", "branch": "",
                          "prs": {str(part["pr"]): part for part in parts}}
-                cleanup_landed(state, parts, strict=True)
+                cleanup_landed(state, parts, strict=True, writers=stopped)
         else:
             raise MergeBatchError(f"unknown keeper landing step {step}")
         landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)

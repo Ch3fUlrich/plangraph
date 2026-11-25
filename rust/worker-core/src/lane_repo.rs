@@ -3,25 +3,40 @@
 use crate::lane_delete::run_git;
 use std::path::Path;
 
-/// `host` is empty for a local path (offline fixtures); `path` is lower-case `owner/name`.
+/// `host` is empty for a local path, whose `path` is then the canonical absolute directory (two
+/// mirrors with the same `owner/name` tail are different repositories); a hosted repository's
+/// `path` is its full lower-case path without `.git`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RepoId {
     pub host: String,
     pub path: String,
 }
 
-fn tail_two(path: &str) -> Option<String> {
-    let parts: Vec<&str> = path
-        .trim_matches('/')
-        .trim_end_matches(".git")
-        .split('/')
-        .filter(|p| !p.is_empty())
-        .collect();
-    (parts.len() >= 2).then(|| parts[parts.len() - 2..].join("/").to_lowercase())
+fn hosted_path(path: &str) -> Option<String> {
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    (path.split('/').count() >= 2 && !path.split('/').any(str::is_empty))
+        .then(|| path.to_lowercase())
+}
+
+fn local(path: &str) -> Option<RepoId> {
+    let raw = std::path::Path::new(path);
+    let canonical = std::fs::canonicalize(raw).unwrap_or_else(|_| raw.to_path_buf());
+    let text = canonical
+        .to_string_lossy()
+        .trim_end_matches('/')
+        .to_string();
+    (text.starts_with('/') || text.contains(":\\")).then(|| RepoId {
+        host: String::new(),
+        path: text,
+    })
 }
 
 pub fn parse(url: &str) -> Option<RepoId> {
     let url = url.trim();
+    if let Some(rest) = url.strip_prefix("file://") {
+        return local(rest);
+    }
     if let Some((_, rest)) = url.split_once("://") {
         let (authority, path) = rest.split_once('/')?;
         let host = authority
@@ -30,18 +45,15 @@ pub fn parse(url: &str) -> Option<RepoId> {
             .split(':')
             .next()?
             .to_lowercase();
-        let path = tail_two(path)?;
+        let path = hosted_path(path)?;
         return (!host.is_empty()).then_some(RepoId { host, path });
     }
     if let Some((authority, path)) = url.split_once(':').filter(|(a, _)| !a.contains('/')) {
         let host = authority.rsplit('@').next()?.to_lowercase();
-        let path = tail_two(path)?;
+        let path = hosted_path(path)?;
         return (!host.is_empty()).then_some(RepoId { host, path });
     }
-    Some(RepoId {
-        host: String::new(),
-        path: tail_two(url)?,
-    })
+    local(url)
 }
 
 /// Every fetch URL and every push URL of `remote` (`pushurl`, `insteadOf` applied) must reduce to
@@ -81,7 +93,13 @@ impl RepoId {
     /// The `gh --repo` target of this repository (`HOST/OWNER/NAME`, or `OWNER/NAME` for a local path).
     pub fn gh_target(&self) -> String {
         if self.host.is_empty() {
-            self.path.clone()
+            let parts: Vec<&str> = self
+                .path
+                .trim_end_matches(".git")
+                .rsplit('/')
+                .take(2)
+                .collect();
+            format!("{}/{}", parts.get(1).unwrap_or(&""), parts[0])
         } else {
             format!("{}/{}", self.host, self.path)
         }
@@ -100,15 +118,18 @@ pub fn target(gh_host: &str, gh_repo: &str) -> String {
 /// `remote` is the repository `gh_host`/`gh_repo`; `gh_host` `local` names a local-path remote
 /// (offline fixtures only).
 pub fn verify(repo: &Path, remote: &str, gh_host: &str, gh_repo: &str) -> Result<(), String> {
-    let want = RepoId {
-        host: if gh_host == "local" {
-            String::new()
-        } else {
-            gh_host.to_lowercase()
-        },
-        path: gh_repo.to_lowercase(),
+    let id = destination(repo, remote)?;
+    let want = gh_repo.to_lowercase();
+    let same = if gh_host == "local" {
+        id.host.is_empty()
+            && id
+                .path
+                .trim_end_matches(".git")
+                .ends_with(&format!("/{want}"))
+    } else {
+        id.host == gh_host.to_lowercase() && id.path == want
     };
-    if destination(repo, remote)? == want {
+    if same {
         Ok(())
     } else {
         Err(format!("URLs of {remote} are not {gh_host}/{gh_repo}"))
@@ -142,7 +163,15 @@ mod tests {
             parse(&format!("ssh://{user}github.com:22/owner/name.git")),
             id("github.com", "owner/name")
         );
-        assert_eq!(parse("/tmp/x/owner/name.git"), id("", "owner/name"));
+        assert_eq!(
+            parse("/tmp/x/owner/name.git"),
+            id("", "/tmp/x/owner/name.git")
+        );
+        // Same tail, different directory: a different repository.
+        assert_ne!(
+            parse("/primary/owner/repo.git"),
+            parse("/mirror/owner/repo.git")
+        );
         // The same owner/name on another host is another repository.
         assert_ne!(
             parse("https://evil.example/owner/name"),
@@ -182,5 +211,16 @@ mod tests {
             "https://github.com/owner/other",
         ]);
         assert!(destination(tmp.path(), "origin").is_err());
+        // The same owner/repo tail in two directories is two repositories: a push to both refuses.
+        let primary = tmp.path().join("primary/owner/repo.git");
+        let mirror = tmp.path().join("mirror/owner/repo.git");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&mirror).unwrap();
+        let (primary, mirror) = (primary.to_str().unwrap(), mirror.to_str().unwrap());
+        git(&["remote", "add", "mix", primary]);
+        git(&["config", "--add", "remote.mix.pushurl", primary]);
+        assert!(destination(tmp.path(), "mix").is_ok());
+        git(&["config", "--add", "remote.mix.pushurl", mirror]);
+        assert!(destination(tmp.path(), "mix").is_err());
     }
 }

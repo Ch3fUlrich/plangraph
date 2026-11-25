@@ -568,10 +568,8 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
     assert unrelated.exists()
     remote = [args[i + 1] for i, arg in enumerate(args) if arg == "--remote-target"]
     assert remote == [f"{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
-    if not exit_code:  # the lane cleanup runs after the sweep, for the frozen refs and their lane stems
-        lane_args = json.loads(lane_log.read_text().splitlines()[0])
-        pairs = [f"refs/heads/{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
-        assert lane_args[lane_args.index("--refs") + 1] == ",".join(pairs) and "--apply" in lane_args
+    # The legacy landing has no host verification, hence no writer-stop evidence: no lane verb runs.
+    assert not lane_log.exists()
 
 
 def test_land_cleanup_metadata_failure_is_nonfatal(env):

@@ -18,7 +18,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const USAGE: &str = "usage:\n  plangraph lane-cleanup --repo DIR --state DIR --gh-repo OWNER/NAME [--gh-host HOST] [--remote NAME] [--claims-reader CMD] [--refs REF:SHA,...] [--stale-days N] [--apply]\n  plangraph lane-cleanup record-replacement --repo DIR --state DIR --batch-key KEY --old REF:SHA --new REF:SHA --gh-repo OWNER/NAME [--gh-host HOST] [--remote NAME]\n  plangraph lane-cleanup record-probe --state DIR --gh-repo OWNER/NAME --pr N --head SHA --run-id ID\n  plangraph lane-cleanup close-probes --state DIR --gh-repo OWNER/NAME [--apply]\nHOST defaults to github.com; `local` names a local-path remote (offline fixtures only).\nexit: 0 done or kept, 3 a delete was refused (retry), 2 usage or evidence error";
+const USAGE: &str = "usage:\n  plangraph lane-cleanup --repo DIR --state DIR --gh-repo OWNER/NAME [--gh-host HOST] [--remote NAME] [--claims-reader CMD] [--run-state DIR] [--refs REF:SHA,...] [--stale-days N] [--apply]\n  plangraph lane-cleanup record-replacement --repo DIR --state DIR --batch-key KEY --old REF:SHA --new REF:SHA --gh-repo OWNER/NAME [--gh-host HOST] [--remote NAME]\n  plangraph lane-cleanup record-probe --state DIR --gh-repo OWNER/NAME --pr N --head SHA --run-id ID\n  plangraph lane-cleanup close-probes --state DIR --gh-repo OWNER/NAME [--apply]\nHOST defaults to github.com; `local` names a local-path remote (offline fixtures only).\nexit: 0 done or kept, 3 a delete was refused (retry), 2 usage or evidence error";
 
 /// Protection data older than this is read again before the next delete.
 const FRESH: Duration = Duration::from_secs(120);
@@ -26,6 +26,8 @@ const FRESH: Duration = Duration::from_secs(120);
 struct Cfg {
     repo: PathBuf,
     state: PathBuf,
+    /// The spawner's state directory (run records) the claims reader binds writers from.
+    run_state: PathBuf,
     remote: String,
     gh_repo: String,
     gh_host: String,
@@ -77,6 +79,19 @@ pub(super) fn state_dir(args: &[String]) -> Result<PathBuf, String> {
     let state = PathBuf::from(flag(args, "--state").ok_or(USAGE)?);
     record_io::ensure_private_dir(&state).map_err(|e| e.to_string())?;
     Ok(state)
+}
+
+/// `--run-state`, else `PG_SWEEP_STATE`, else the reader's own default: never the cleanup state.
+fn run_state(args: &[String]) -> PathBuf {
+    flag(args, "--run-state")
+        .or_else(|| std::env::var("PG_SWEEP_STATE").ok())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            home.join(".local/state/plangraph")
+        })
 }
 
 fn gh_host(args: &[String]) -> String {
@@ -177,6 +192,7 @@ fn config(args: &[String]) -> Result<Cfg, String> {
     Ok(Cfg {
         repo: PathBuf::from(flag(args, "--repo").ok_or(USAGE)?),
         state: state_dir(args)?,
+        run_state: run_state(args),
         remote: flag(args, "--remote").unwrap_or_else(lane_delete::remote_name),
         gh_repo: flag(args, "--gh-repo").ok_or(USAGE)?,
         gh_host: gh_host(args),
@@ -239,7 +255,12 @@ fn sweep(args: &[String]) -> Result<i32, String> {
             scope.iter().filter(|p| all.contains(p)).cloned().collect()
         }
     };
-    let mut protection = load_protection(cfg.claims_reader.as_deref(), &cfg.state, &cfg.repo);
+    let mut protection = load_protection(
+        cfg.claims_reader.as_deref(),
+        &cfg.state,
+        &cfg.run_state,
+        &cfg.repo,
+    );
     let records = replacements(&cfg.state)?;
     let (mut tally, mut made) = (Tally::default(), None);
     for (reference, sha) in &heads {
@@ -272,7 +293,12 @@ fn sweep(args: &[String]) -> Result<i32, String> {
             .as_ref()
             .map_or(true, |p| p.loaded.elapsed() > FRESH)
         {
-            protection = load_protection(cfg.claims_reader.as_deref(), &cfg.state, &cfg.repo);
+            protection = load_protection(
+                cfg.claims_reader.as_deref(),
+                &cfg.state,
+                &cfg.run_state,
+                &cfg.repo,
+            );
         }
         let blocked = match &protection {
             Err(why) => Some(format!("protection unresolved: {why}")),

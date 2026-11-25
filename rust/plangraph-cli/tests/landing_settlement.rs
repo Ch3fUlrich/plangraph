@@ -4,6 +4,7 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
+use std::fs;
 use std::path::Path;
 
 #[test]
@@ -113,7 +114,7 @@ with TemporaryDirectory() as tmp:
         assert args[:2] == ('pr', 'view'), args
         return (dict(state='MERGED', headRefOid='c'*40) if args[2] == '5'
                 else dict(state='OPEN', headRefOid='f'*40))
-    def sweep(state, parts, *, strict):
+    def sweep(state, parts, *, strict, writers=None):
         assert strict
         assert [part['pr'] for part in parts] == [5]
         assert journal(identity['repo'], 'show', pr=17)['train']['included'] == [5]
@@ -185,7 +186,7 @@ with TemporaryDirectory() as tmp:
     def journal(repo, action, **fields):
         return store.land(principal, dict(fields, repo=repo, action=action))
     journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)
-    proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1)
+    proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1, writers=[])
              for i in range(3)]
     lane_calls, rcs = [], [3, 0]
     def effect(args, **kwargs):
@@ -238,14 +239,24 @@ with TemporaryDirectory() as tmp:
             lane_calls.append(argv)
         return Mock(returncode=0, stdout='', stderr='')
     forked = dict(repo='example/repo', worktree='', branch='', head='b'*40, prs={'5': dict(ref='lane/landed-r3')})
+    part = [dict(pr=5, head='c'*40)]
     with (patch.object(plan, 'gh_json', side_effect=head_identity), patch.object(plan, 'run', sweep_run),
           patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')), patch.object(plan, 'worktrees', return_value=[])):
-        plan.cleanup_landed(forked, [dict(pr=5, head='c'*40)], strict=True)
+        plan.cleanup_landed(forked, part, strict=True, writers=True)   # fork: local-only sweep, no verb
         fork.clear()
-        plan.cleanup_landed(forked, [dict(pr=5, head='c'*40)], strict=False)
-    assert len(sweeps) == 2 and '--remote-target' not in sweeps[0], sweeps
-    assert sweeps[1][sweeps[1].index('--remote-target') + 1] == 'lane/landed-r3:' + 'c'*40, sweeps[1]
+        plan.cleanup_landed(forked, part, strict=False, writers=True)  # same repo, writers stopped
+        plan.cleanup_landed(forked, part, strict=False, writers=False) # writer-stop not recorded: held
+        plan.cleanup_landed(forked, part, strict=False)                # no host verification: no verb
+    assert '--delete-remote' not in sweeps[0] and '--remote-target' not in sweeps[0], sweeps[0]
+    assert '--delete-remote' in sweeps[1] and sweeps[1][sweeps[1].index('--remote-target') + 1] == 'lane/landed-r3:' + 'c'*40, sweeps[1]
+    assert '--delete-remote' not in sweeps[2] and '--remote-target' not in sweeps[2], sweeps[2]
+    assert '--remote-target' in sweeps[3]
     assert len(lane_calls) == 1, lane_calls
+    # Only a host verification with a writers report and no kept writer counts as writer-stop evidence.
+    stop = plan.writers_stopped
+    assert stop([dict(writers=[])]) and stop([dict(writers=[dict(status='stopped')])])
+    assert not stop(None) and not stop([]) and not stop([dict(writers=None)]) and not stop([dict()])
+    assert not stop([dict(writers=[dict(status='kept')])]) and not stop([dict(writers=[]), dict()])
 "#,
     );
 }
@@ -253,7 +264,7 @@ with TemporaryDirectory() as tmp:
 #[path = "lane_support/mod.rs"]
 mod lane_support;
 
-/// The settlement step against a real hooked fixture remote: the hook refuses a remote that is not
+/// The settlement cleanup (`cleanup_landed`, the keeper settle's cleanup step) against a real hooked fixture remote: the hook refuses a remote that is not
 /// the App's, the step fails, and the retry sends the same frozen ref and SHA and deletes it.
 #[test]
 fn settle_retries_a_real_hook_refusal_with_the_same_frozen_sha() {
@@ -265,11 +276,20 @@ fn settle_retries_a_real_hook_refusal_with_the_same_frozen_sha() {
         r#"{"isCrossRepository":false,"headRefName":"lane/landed"}"#,
     );
     f.hook_on(false);
+    // The legacy sweeper is not under test here: a stub that succeeds stands in for it.
+    let sweeper = f.bin.join("pg-worktree-sweep");
+    fs::write(&sweeper, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        &sweeper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let binary = Path::new(env!("CARGO_BIN_EXE_plangraph"));
     let step = || {
         let script = r#"
 import json, os, sys
+sys.path.insert(0, os.environ['TOOLS'])
 import merge_batch_plan as plan
 calls = []
 real = plan.run
@@ -277,10 +297,9 @@ def recording(argv, **kwargs):
     calls.append(list(argv))
     return real(argv, **kwargs)
 plan.run = recording
-st = dict(repo='fixture/origin', prs={'9': dict(ref='lane/landed')})
-parts = plan.same_repo_parts(st, [dict(pr=9, head=os.environ['FROZEN'])])
+st = dict(repo='fixture/origin', worktree='', branch='', head='b'*40, prs={'9': dict(ref='lane/landed')})
 try:
-    plan.lane_cleanup_landed(os.environ['WORK'], st, parts)
+    plan.cleanup_landed(st, [dict(pr=9, head=os.environ['FROZEN'])], strict=True, writers=True)
     outcome = 'done'
 except plan.MergeBatchError as exc:
     outcome = 'deferred' if 'deferred' in str(exc) else 'other: ' + str(exc)
@@ -292,8 +311,9 @@ print(json.dumps([outcome, calls]))
             binary.parent().unwrap().display()
         );
         let output = test_python::command()
-            .current_dir(repo.join("tools"))
+            .current_dir(&f.work)
             .env("PYTHONPATH", repo.join("src"))
+            .env("TOOLS", repo.join("tools"))
             .env("PATH", path)
             .env("FAKE_GH_DIR", &f.gh)
             .env("FROZEN", &sha)

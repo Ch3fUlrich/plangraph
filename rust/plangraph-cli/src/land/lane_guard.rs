@@ -33,12 +33,13 @@ pub(super) struct Protection {
 pub(super) fn load_protection(
     claims_reader: Option<&str>,
     state: &Path,
+    run_state: &Path,
     repo: &Path,
 ) -> Result<Protection, String> {
     let reader = claims_reader.ok_or("claims reader unavailable")?;
     let text = pg_worker_core::host_command::output(
         Command::new("sh")
-            .env("PG_SWEEP_STATE", state)
+            .env("PG_SWEEP_STATE", run_state)
             .args(["-c", reader]),
         Duration::from_secs(120),
     )

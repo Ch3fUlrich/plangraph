@@ -151,8 +151,9 @@ pub(super) fn agent() -> Result<Value, String> {
 }
 
 fn stop_writers(request: &Request) -> Result<Value, String> {
+    // `null` (no inventory configured) is not "no writers": settlement cannot call it stopped.
     let Some(list) = &request.writer_records else {
-        return Ok(json!([]));
+        return Ok(Value::Null);
     };
     if !list.is_absolute() {
         return Err("landing writer inventory must be an absolute path".into());
@@ -260,7 +261,7 @@ fn converge(
             };
             if ok(&first) {
                 log_writers(&host.id, &first);
-                return Ok(false);
+                return Ok((false, first["writers"].clone()));
             }
             let reason = first["reason"]
                 .as_str()
@@ -274,16 +275,19 @@ fn converge(
             );
             let next = invoke(host, local, &body)?;
             log_writers(&host.id, &next);
-            ok(&next).then_some(true).ok_or_else(|| {
-                next["reason"]
-                    .as_str()
-                    .unwrap_or("host is still lagging")
-                    .to_owned()
-            })
+            ok(&next)
+                .then(|| (true, next["writers"].clone()))
+                .ok_or_else(|| {
+                    next["reason"]
+                        .as_str()
+                        .unwrap_or("host is still lagging")
+                        .to_owned()
+                })
         })();
         match result {
-            Ok(synced) => verified.push(json!({"host": host.id, "head": head, "synced": synced,
-                                               "checkout": head, "hooks": head, "build": head})),
+            Ok((synced, writers)) => verified.push(json!({"host": host.id, "head": head,
+                "synced": synced, "checkout": head, "hooks": head, "build": head,
+                "writers": writers})),
             Err(reason) => errors.push(format!("{}: {reason}", host.id)),
         }
     }

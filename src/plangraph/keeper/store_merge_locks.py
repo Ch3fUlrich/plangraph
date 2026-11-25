@@ -142,6 +142,13 @@ def _host_receipts(value, merge):
             raise Refused("validation", "duplicate or incomplete host verification")
         verified[host] = {"host": host, "head": merge, "checkout": merge,
                           "hooks": merge, "build": merge, "synced": row["synced"]}
+        writers = row.get("writers")  # the host's writer-stop report; absent when it keeps no inventory
+        if writers is not None:
+            if (not isinstance(writers, list) or len(writers) > 100
+                    or any(not isinstance(w, dict) or w.get("status") not in ("stopped", "kept") for w in writers)):
+                raise Refused("validation", "host writer report is malformed")
+            verified[host]["writers"] = [{"status": w["status"], "run_id": str(w.get("run_id") or "")[:128]}
+                                         for w in writers]
     return list(verified.values())
 
 
