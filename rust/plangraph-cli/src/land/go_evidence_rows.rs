@@ -9,12 +9,6 @@ use regex::Regex;
 use std::path::Path;
 use std::process::Command;
 
-/// The shape of a decision id, as a first filter of the rows: `go_verify::verify` judges the id again.
-fn decision_id(id: &str) -> bool {
-    id.strip_prefix("D-")
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-}
-
 fn strip_prefix(text: &str) -> &str {
     let prefix = Regex::new(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+").unwrap();
     prefix.find(text).map_or(text, |m| &text[m.end()..])
@@ -98,23 +92,93 @@ fn prose_lines(text: &str) -> Vec<&str> {
     out
 }
 
+/// The decision book of the Keeper (`evidence_decisions.decision_book`): the prose rows by decision number in
+/// document order, and the decisions a later row retires (`superseded_map`). A number with more than one row,
+/// or a retired one, authorizes nothing.
+struct Book {
+    rows: Vec<(u64, Vec<String>)>,
+    retired: std::collections::BTreeSet<u64>,
+}
+
+fn decision_cell(row: &str) -> &str {
+    row.split('|').nth(3).map_or("", str::trim)
+}
+
+fn book(text: &str) -> Book {
+    let line = Regex::new(r"^\| D-([0-9]+) \|").unwrap();
+    let mut rows: Vec<(u64, Vec<String>)> = Vec::new();
+    for raw in prose_lines(text) {
+        let Some(n) = line.captures(raw).and_then(|c| c[1].parse().ok()) else {
+            continue;
+        };
+        match rows.iter_mut().find(|(id, _)| *id == n) {
+            Some((_, found)) => found.push(raw.to_owned()),
+            None => rows.push((n, vec![raw.to_owned()])),
+        }
+    }
+    let own =
+        Regex::new(r"(?i)^\W{0,3}(?:superseded|withdrawn|replaced|corrected)\s+by\s+D-0*(\d+)\b")
+            .unwrap();
+    let retires =
+        Regex::new(r"(?i)\b(?:supersedes|corrects|withdraws|replaces)\s+D-0*(\d+)\b").unwrap();
+    let mut out: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    for (n, lines) in &rows {
+        for row in lines {
+            let cell = decision_cell(row);
+            if let Some(later) = own.captures(cell).and_then(|c| c[1].parse::<u64>().ok()) {
+                if later > *n {
+                    out.entry(*n).or_insert(later);
+                }
+            }
+            for found in retires.captures_iter(cell) {
+                let Ok(old) = found[1].parse::<u64>() else {
+                    continue;
+                };
+                let newest = out.get(&old).copied();
+                if old < *n && newest.is_none_or(|v| v < *n) {
+                    out.insert(old, *n);
+                }
+            }
+        }
+    }
+    Book {
+        rows,
+        retired: out.into_keys().collect(),
+    }
+}
+
+/// Whether the decisions log gives the operator authority on a row: the BY cell is a comma or plus separated
+/// list that holds `operator`.
+fn by_operator(by: &str) -> bool {
+    by.split([',', '+'])
+        .any(|t| t.trim().eq_ignore_ascii_case("operator"))
+}
+
 /// The approvals and Gate-Edit grants of the decisions log for this repository and pull request.
 pub(in crate::land) fn rows(text: &str, repo: &str, pr: u64) -> (Vec<Approval>, Vec<Grant>) {
     let name = repo.rsplit('/').next().unwrap_or(repo);
     let grant = Regex::new(r"^GATE-EDIT\s+(\S+)\s+GO-HEAD\s+([0-9a-fA-F]{40})\s*$").unwrap();
+    let book = book(text);
     let (mut approvals, mut grants) = (Vec::new(), Vec::new());
-    for line in prose_lines(text) {
-        let cells: Vec<&str> = line.trim().split('|').map(str::trim).collect();
-        let [_, d_id, project, decision, by, ..] = cells[..] else {
+    for (n, lines) in &book.rows {
+        let [row] = &lines[..] else {
             continue;
         };
-        if !decision_id(d_id) || (project != name && project != repo) {
+        if book.retired.contains(n) {
+            continue;
+        }
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let [_, _, project, decision, by, ..] = cells[..] else {
+            continue;
+        };
+        let d_id = format!("D-{n}");
+        if project != name && project != repo {
             continue;
         }
         if let Some(c) = grant.captures(strip_prefix(decision)) {
-            if by.eq_ignore_ascii_case("operator") {
+            if by_operator(by) {
                 grants.push(Grant {
-                    d_id: d_id.into(),
+                    d_id,
                     prefix: c[1].into(),
                     head: c[2].to_ascii_lowercase(),
                 });
@@ -127,7 +191,7 @@ pub(in crate::land) fn rows(text: &str, repo: &str, pr: u64) -> (Vec<Approval>, 
         if let Some((number, head)) = [repo, name].iter().find_map(|p| go_binding(&statement, p)) {
             if number == pr {
                 approvals.push(Approval {
-                    d_id: d_id.into(),
+                    d_id,
                     repo: repo.into(),
                     pr,
                     head,
@@ -149,6 +213,27 @@ fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         .args(args);
     pg_worker_core::host_command::output(&mut command, std::time::Duration::from_secs(60))
         .map_err(|_| format!("git {} failed", args[0]))
+}
+
+/// The largest decisions document the collector reads.
+const MAX_DECISIONS: u64 = 64 * 1024 * 1024;
+
+/// A blob read whole: the helper `git` returns at most 1 MiB, and the blob of a long decisions log is more.
+fn git_blob(dir: &Path, blob: &str) -> Result<Vec<u8>, String> {
+    let mut command = Command::new("git");
+    pg_worker_core::host_command::isolate_git(&mut command);
+    command
+        .arg("--no-replace-objects")
+        .arg("-C")
+        .arg(dir)
+        .args(["cat-file", "blob", blob]);
+    let out = command
+        .output()
+        .map_err(|_| "git cat-file failed".to_owned())?;
+    if !out.status.success() {
+        return Err("git cat-file failed".into());
+    }
+    Ok(out.stdout)
 }
 
 /// The decisions document as committed on `origin/main` of its repository: the branch is fetched into a ref
@@ -194,7 +279,16 @@ pub(in crate::land) fn read_decisions_origin(path: &Path) -> Result<String, Stri
         )?)
         .map_err(|_| unreadable())?;
         let blob = format!("{}:{}", commit.trim(), relative.to_string_lossy());
-        String::from_utf8(git(&root, &["cat-file", "blob", &blob])?).map_err(|_| unreadable())
+        let size =
+            String::from_utf8(git(&root, &["cat-file", "-s", &blob])?).map_err(|_| unreadable())?;
+        if size
+            .trim()
+            .parse::<u64>()
+            .map_or(true, |n| n > MAX_DECISIONS)
+        {
+            return Err("the decisions document is larger than the evidence reads".into());
+        }
+        String::from_utf8(git_blob(&root, &blob)?).map_err(|_| unreadable())
     })();
     let _ = git(&root, &["update-ref", "-d", &private]);
     read

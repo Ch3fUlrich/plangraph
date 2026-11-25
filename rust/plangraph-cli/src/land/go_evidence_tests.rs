@@ -11,7 +11,7 @@ const WORKFLOW_TEXT: &str = include_str!("../../../../.github/workflows/tests.ym
 pub(super) const REPO: &str = "owner/name";
 pub(super) const BASE: &str = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
 pub(super) const HEAD: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
-const TREE: &str = "7777777777777777777777777777777777777777";
+pub(super) const TREE: &str = "7777777777777777777777777777777777777777";
 const RUN: &str = "run-abababababababababababababababab";
 
 fn encode(bytes: &[u8]) -> String {
@@ -41,16 +41,18 @@ fn encode(bytes: &[u8]) -> String {
 }
 
 /// The `ci-full` status the CI publisher writes for an attempt that tested a tree.
-fn receipt(run: u64, attempt: u32, tree: &str, state: &str) -> Value {
+pub(super) fn receipt(run: u64, attempt: u32, tree: &str, state: &str) -> Value {
     json!({"context": "ci-full", "state": state, "creator": {"id": crate::land::main_gh::ci_publisher()},
            "description": format!("run {run} attempt {attempt} tree {tree}"), "updated_at": "2026-01-01T00:00:00Z"})
 }
 
 /// A GitHub that answers from a table; `pulls/9` may answer differently on its second read.
 pub(super) struct Fake {
-    table: BTreeMap<String, Value>,
+    pub(super) table: BTreeMap<String, Value>,
     pull_reads: u32,
     moved_on_second_read: bool,
+    /// (state, target branch) of the pull request on the first read and on every later one.
+    pub(super) pr: [(&'static str, &'static str); 2],
     run_attempt_on_second_read: u32,
 }
 
@@ -76,7 +78,7 @@ impl Fake {
         t.insert(
             format!("compare/{BASE}...{HEAD}"),
             json!({"merge_base_commit": {"sha": BASE},
-                   "files": [{"filename": "docs/x.md"}, {"filename": "rust/a.rs"}]}),
+                   "files": []}),
         );
         t.insert(
             format!("actions/workflows/tests.yml/runs?head_sha={HEAD}&event=pull_request&per_page=100"),
@@ -106,6 +108,7 @@ impl Fake {
             table: t,
             pull_reads: 0,
             moved_on_second_read: false,
+            pr: [("open", "main"); 2],
             run_attempt_on_second_read: 2,
         }
     }
@@ -141,8 +144,9 @@ impl Github for Fake {
             } else {
                 HEAD.to_owned()
             };
-            return Ok(json!({"number": 9, "head": {"sha": head},
-                             "base": {"ref": "main", "repo": {"full_name": REPO}}}));
+            let (state, target) = self.pr[usize::from(self.pull_reads > 1)];
+            return Ok(json!({"number": 9, "state": state, "head": {"sha": head},
+                             "base": {"ref": target, "repo": {"full_name": REPO}}}));
         }
         if endpoint == "actions/runs/5" {
             return Ok(json!({"id": 5, "run_attempt": self.run_attempt_on_second_read}));
@@ -189,6 +193,7 @@ pub(super) fn inputs<'a>(rows: &'a str, receipt: &'a AdmitReceipt, main: &'a Ans
         manifest: "m1",
         receipt,
         rows,
+        changed_paths: &[],
         main,
     }
 }
@@ -203,7 +208,12 @@ pub(super) fn codes(e: &super::go_verify::Evidence) -> Vec<&'static str> {
 #[test]
 fn a_fixture_source_yields_evidence_that_verify_accepts() {
     let (r, main) = (receipt_for_admit(), answer(BASE, State::Green));
-    let e = collect(&mut Fake::new(), &inputs(ROWS, &r, &main)).unwrap();
+    let paths = ["docs/x.md".to_owned(), "rust/a.rs".to_owned()];
+    let given = Inputs {
+        changed_paths: &paths,
+        ..inputs(ROWS, &r, &main)
+    };
+    let e = collect(&mut Fake::new(), &given).unwrap();
     assert_eq!(codes(&e), Vec::<&str>::new(), "{e:?}");
     assert_eq!((e.ci.run_id, e.ci.attempt, e.ci.latest_attempt), (5, 2, 2));
     assert_eq!(e.ci.tier, "self");
@@ -295,23 +305,18 @@ fn the_receipt_of_another_manifest_and_a_missing_approval_are_refused_by_verify(
 #[test]
 fn a_gate_edit_row_is_a_grant_for_its_head_only() {
     let (r, main) = (receipt_for_admit(), answer(BASE, State::Green));
-    let mut gh = Fake::new();
-    gh.table.insert(
-        format!("compare/{BASE}...{HEAD}"),
-        json!({"merge_base_commit": {"sha": BASE}, "files": [{"filename": ".github/workflows/tests.yml"}]}),
-    );
-    let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap();
+    let workflow = [".github/workflows/tests.yml".to_owned()];
+    let given = |rows| Inputs {
+        changed_paths: &workflow,
+        ..inputs(rows, &r, &main)
+    };
+    let e = collect(&mut Fake::new(), &given(ROWS)).unwrap();
     // Only the operator's row is a grant: D-107 is written by the router and does not count.
     assert_eq!(e.grants.len(), 1);
     assert_eq!(e.grants[0].d_id, "D-106");
     assert_eq!(codes(&e), Vec::<&str>::new());
     let no_grant = ROWS.replace("GATE-EDIT", "GATE-EDIT-NOT");
-    let mut gh = Fake::new();
-    gh.table.insert(
-        format!("compare/{BASE}...{HEAD}"),
-        json!({"merge_base_commit": {"sha": BASE}, "files": [{"filename": ".github/workflows/tests.yml"}]}),
-    );
-    let e = collect(&mut gh, &inputs(&no_grant, &r, &main)).unwrap();
+    let e = collect(&mut Fake::new(), &given(&no_grant)).unwrap();
     assert_eq!(codes(&e), ["operator_path_unauthorized"]);
 }
 
@@ -329,66 +334,4 @@ fn the_receipt_round_trips() {
     assert_eq!(back, r);
     assert_eq!(manifest_digest(b"x").len(), 64);
     assert_ne!(manifest_digest(b"x"), manifest_digest(b"y"));
-}
-
-#[test]
-fn a_rename_out_of_a_protected_path_keeps_the_old_path_in_the_evidence() {
-    let (r, main) = (receipt_for_admit(), answer(BASE, State::Green));
-    let mut gh = Fake::new();
-    gh.table.insert(
-        format!("compare/{BASE}...{HEAD}"),
-        json!({"merge_base_commit": {"sha": BASE}, "files": [
-            {"filename": "docs/gate.txt", "previous_filename": "tools/ci_commit_gate.py", "status": "renamed"}]}),
-    );
-    let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap();
-    assert_eq!(
-        e.changed_paths,
-        ["docs/gate.txt", "tools/ci_commit_gate.py"]
-    );
-    assert_eq!(codes(&e), ["operator_path_unauthorized"]);
-}
-
-#[test]
-fn only_a_run_of_the_requested_pull_request_counts() {
-    let (r, main) = (receipt_for_admit(), answer(BASE, State::Green));
-    let mut gh = Fake::new();
-    // Run 7 is the newest run of the head, but it belongs to pull request 8: run 5 is still the one judged.
-    let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap();
-    assert_eq!(e.ci.run_id, 5);
-    let only_other = json!({"workflow_runs": [{"id": 7, "head_sha": HEAD, "event": "pull_request", "run_attempt": 1,
-        "path": ".github/workflows/tests.yml", "pull_requests": [{"number": 8}]}]});
-    gh.table.insert(
-        format!("actions/workflows/tests.yml/runs?head_sha={HEAD}&event=pull_request&per_page=100"),
-        only_other,
-    );
-    let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap_err();
-    assert!(e.contains("no tests.yml pull_request run"), "{e}");
-}
-
-#[test]
-fn the_judged_attempt_needs_a_ci_full_receipt_for_the_tree_of_the_train() {
-    let (r, main) = (receipt_for_admit(), answer(BASE, State::Green));
-    let statuses = format!("commits/{HEAD}/statuses?per_page=100");
-    for (label, rows) in [
-        (
-            "another tree",
-            vec![receipt(5, 2, &"8".repeat(40), "success")],
-        ),
-        ("another attempt", vec![receipt(5, 1, TREE, "success")]),
-        ("a failed attempt", vec![receipt(5, 2, TREE, "failure")]),
-        ("no receipt", vec![]),
-    ] {
-        let mut gh = Fake::new();
-        gh.table.insert(statuses.clone(), Value::Array(rows));
-        let e = collect(&mut gh, &inputs(ROWS, &r, &main)).unwrap_err();
-        assert!(e.starts_with("ci_unbound"), "{label}: {e}");
-    }
-    // A receipt written by anyone but the CI publisher is no receipt.
-    let mut forged = receipt(5, 2, TREE, "success");
-    forged["creator"]["id"] = json!(1);
-    let mut gh = Fake::new();
-    gh.table.insert(statuses, json!([forged]));
-    assert!(collect(&mut gh, &inputs(ROWS, &r, &main))
-        .unwrap_err()
-        .starts_with("ci_unbound"));
 }

@@ -237,3 +237,123 @@ fn a_configured_symlink_is_followed_and_no_private_ref_is_left_behind() {
         String::from_utf8_lossy(&refs.stdout)
     );
 }
+
+#[test]
+fn duplicate_and_retired_decisions_authorize_nothing_and_the_operator_is_a_by_token() {
+    let h = HEAD;
+    let go = |id: u32| format!("| D-{id} | name | GO #9 GO-HEAD {h} | router | |\n");
+    let grant =
+        |id: u32, by: &str| format!("| D-{id} | name | GATE-EDIT tools/ GO-HEAD {h} | {by} | |\n");
+    let text = [
+        go(100),
+        go(101),
+        "| D-111 | name | corrects D-101 | router | |\n".to_owned(),
+        go(102),
+        go(102),
+        go(103),
+        "| D-104 | name | WITHDRAWN by D-120 | router | |\n".to_owned(),
+        "| D-5 | name | WITHDRAWN by D-3 | router | |\n".to_owned(),
+        grant(120, "router,operator"),
+        grant(121, "operator"),
+        grant(121, "operator"),
+        grant(122, "router"),
+        grant(123, "operator"),
+        "| D-124 | name | replaces D-123 | router | |\n".to_owned(),
+        grant(125, "operator + router"),
+        "| D-007 | name | supersedes D-1 | router | |\n".to_owned(),
+    ]
+    .concat();
+    let (approvals, grants) = super::go_evidence::rows_of(&text, "owner/name", 9);
+    let ids: Vec<_> = approvals.iter().map(|a| a.d_id.as_str()).collect();
+    assert_eq!(ids, ["D-100", "D-103"]);
+    let ids: Vec<_> = grants.iter().map(|g| g.d_id.as_str()).collect();
+    assert_eq!(ids, ["D-120", "D-125"]);
+}
+
+#[test]
+fn changed_paths_list_every_path_of_a_large_train_and_both_ends_of_a_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(repo.join("tools")).unwrap();
+    std::fs::write(repo.join("tools/ci_commit_gate.py"), "gate\n").unwrap();
+    std::fs::write(repo.join("keep.txt"), "keep\n").unwrap();
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    // More files than the compare API lists (300), and the protected file moved away at the end.
+    std::fs::create_dir_all(repo.join("many")).unwrap();
+    for n in 0..350 {
+        std::fs::write(repo.join(format!("many/f{n:03}.txt")), format!("{n}\n")).unwrap();
+    }
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    git(repo, &["mv", "tools/ci_commit_gate.py", "docs/gate.txt"]);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "train"]);
+    let head = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let paths = super::go_evidence::changed_paths(repo, &base, &head).unwrap();
+    assert_eq!(paths.len(), 352);
+    assert!(
+        paths.contains(&"tools/ci_commit_gate.py".to_owned()),
+        "the old end of the move"
+    );
+    assert!(paths.contains(&"docs/gate.txt".to_owned()));
+    assert!(paths.contains(&"many/f349.txt".to_owned()));
+    assert!(!paths.contains(&"keep.txt".to_owned()));
+}
+
+#[test]
+fn a_decisions_document_larger_than_a_mebibyte_is_read_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let (origin, clone) = (dir.path().join("origin.git"), dir.path().join("clone"));
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    let big: String = (0..30_000).map(|n| format!("| D-{n} | name | decision text of row {n} padded out to a longer line | router | |\n")).collect();
+    assert!(big.len() > 2 * 1024 * 1024);
+    std::fs::write(clone.join("DECISIONS.md"), &big).unwrap();
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", "decisions"]);
+    git(&clone, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    assert_eq!(
+        read_decisions_origin(&clone.join("DECISIONS.md")).unwrap(),
+        big
+    );
+}

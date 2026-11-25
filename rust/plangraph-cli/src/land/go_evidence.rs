@@ -60,6 +60,8 @@ pub struct Inputs<'a> {
     pub receipt: &'a AdmitReceipt,
     /// The decisions log (`| D-id | project | decision | by | why |` rows).
     pub rows: &'a str,
+    /// What the train changes against its base, from the commits (`changed_paths`).
+    pub changed_paths: &'a [String],
     /// The state of main as `main-state` read it.
     pub main: &'a Answer,
 }
@@ -97,9 +99,19 @@ fn text(v: &Value, what: &str) -> Result<String, String> {
         .ok_or_else(|| format!("the source gave no {what}"))
 }
 
-/// The repository and head the pull request shows now.
+/// The repository and head the pull request shows now. It must be open and aimed at `main`: a closed or
+/// retargeted pull request proves nothing about a landing.
 fn pull(gh: &mut impl Github, pr: u64) -> Result<(u64, String, String), String> {
     let v = gh.value(&format!("pulls/{pr}"))?;
+    if v["state"] != "open" {
+        return Err(format!("pr_not_open: pull request #{pr} is {}", v["state"]));
+    }
+    if v["base"]["ref"] != "main" {
+        return Err(format!(
+            "pr_wrong_target: pull request #{pr} targets {}, not main",
+            v["base"]["ref"]
+        ));
+    }
     Ok((
         v["number"]
             .as_u64()
@@ -109,21 +121,32 @@ fn pull(gh: &mut impl Github, pr: u64) -> Result<(u64, String, String), String> 
     ))
 }
 
-fn paths_between(gh: &mut impl Github, from: &str, to: &str) -> Result<Vec<String>, String> {
-    let rows = gh.pages(
-        &format!("compare/{from}...{to}?per_page=100"),
-        Some("files"),
+/// Every path the train changes against its base, from the commits themselves: the files list of a compare
+/// is paged and ends at 300 entries, which would hide a protected path. Renames are not detected, so both
+/// ends of a move are listed, as are deletions.
+pub fn changed_paths(
+    repo: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>, String> {
+    let out = super::git::bytes(
+        repo,
+        &[
+            "diff",
+            "--no-renames",
+            "--no-ext-diff",
+            "--name-only",
+            "-z",
+            base,
+            head,
+            "--",
+        ],
     )?;
-    // A rename names both ends: moving a protected file away is a change of the protected path.
-    let mut paths = Vec::new();
-    for file in &rows {
-        for field in ["filename", "previous_filename"] {
-            if let Some(path) = file[field].as_str() {
-                paths.push(path.to_owned());
-            }
-        }
-    }
-    Ok(paths)
+    Ok(out
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .collect())
 }
 
 fn ci(gh: &mut impl Github, repo: &str, pr: u64, head: &str, tree: &str) -> Result<Ci, String> {
@@ -224,7 +247,6 @@ pub fn collect(gh: &mut impl Github, i: &Inputs) -> Result<Evidence, String> {
         &gh.value(&format!("git/commits/{}", i.train_sha))?["tree"]["sha"],
         "tree",
     )?;
-    let changed_paths = paths_between(gh, i.base, i.train_sha)?;
     let ci = ci(gh, i.repo, i.pr, i.train_sha, &tree)?;
     let (approvals, grants) = rows_source::rows(i.rows, i.repo, i.pr);
     let (_, again_repo, again_head) = pull(gh, i.pr)?;
@@ -251,7 +273,7 @@ pub fn collect(gh: &mut impl Github, i: &Inputs) -> Result<Evidence, String> {
         ci,
         approvals,
         delta: i.receipt.delta.clone(),
-        changed_paths,
+        changed_paths: i.changed_paths.to_vec(),
         grants,
         main: i.main.state.clone(),
     })
@@ -309,6 +331,11 @@ pub(super) fn live<'a>(
         let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
         let main = main_gh::answer_for(repo.clone(), "main", ledger, &matrix);
         let receipt = admit_receipt(&manifest.base, &manifest.train_sha, digest, run_id);
+        let changed = changed_paths(
+            std::path::Path::new(need("repo")?),
+            &manifest.base,
+            &manifest.train_sha,
+        )?;
         collect(
             &mut crate::ci_watch::github::Gh { repo: repo.clone() },
             &Inputs {
@@ -319,6 +346,7 @@ pub(super) fn live<'a>(
                 manifest: digest,
                 receipt: &receipt,
                 rows: &rows,
+                changed_paths: &changed,
                 main: &main,
             },
         )
