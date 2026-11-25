@@ -207,7 +207,71 @@ def warnings(items):
     return sorted(out, key=lambda p: (p["code"], p["key"]))
 
 
-def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies_ready=None):
+def _effective(item, eff):
+    got = eff.get(item["key"])
+    return got["effective"] if got else _prio(item)
+
+
+def effective_priorities(items):
+    """``({key: {"effective", "via", "hops"}}, cycles)`` for every non-terminal item.
+
+    PRIORITY-INHERIT-FROM-BLOCKED: effective = max(own, effective of every
+    non-terminal item that depends on it), transitively.  ``via`` is the
+    item whose own priority gives the value (None when the item's own is the
+    maximum); among several such items the smallest key wins, whatever their
+    distance or whether an intermediate item has the same priority, and ``hops``
+    is the longest chain that carries the value to a source.  The stored
+    priority is never touched.  A dependency cycle is returned as a key list
+    and its back edge is ignored, so the walk always ends.
+    """
+    idx = index(items)
+    live = {k for k, it in idx.items() if _state(it) not in TERMINAL}
+    dependents = {k: [] for k in live}
+    for key in live:
+        for dep in _deps(idx[key]):
+            if dep in live:
+                dependents[dep].append(key)
+    eff, cycles, done, origin, reach = {}, [], set(), {}, {}
+    for root in sorted(live):
+        if root in done:
+            continue
+        stack, onstack = [(root, iter(sorted(dependents[root])))], {root}
+        while stack:
+            node, rest = stack[-1]
+            nxt = next((n for n in rest if n not in done), None)
+            if nxt is not None and nxt in onstack:
+                path = [k for k, _ in stack]
+                cycles.append(path[path.index(nxt):])
+                continue
+            if nxt is not None:
+                stack.append((nxt, iter(sorted(dependents[nxt]))))
+                onstack.add(nxt)
+                continue
+            own = _prio(idx[node])
+            value = max([own] + [eff[d]["effective"] for d in dependents[node] if d in eff])
+            # Every item whose own priority equals the value is a source; the smallest
+            # source key wins, even when this item is one itself.  The chain length is
+            # the longest path that carries the value, whichever source it ends at.
+            carry = [d for d in dependents[node] if d in eff and eff[d]["effective"] == value]
+            sources = ([node] if own == value else []) + [origin[d] for d in carry]
+            origin[node] = min(sources)
+            reach[node] = max((reach[d] + 1 for d in carry), default=0)
+            raised = own < value
+            eff[node] = {"effective": value, "via": origin[node] if raised else None,
+                         "hops": reach[node] if raised else 0}
+            done.add(node)
+            onstack.discard(node)
+            stack.pop()
+    return eff, cycles
+
+
+def inheritance_stats(eff):
+    """Items raised above their own priority and the longest inheritance chain."""
+    raised = [v for v in eff.values() if v["via"] is not None]
+    return {"raised": len(raised), "longest_chain": max((v["hops"] for v in raised), default=0)}
+
+
+def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies_ready=None, eff=None):
     """Open items whose dependencies are satisfied, best first.
 
     By default every dependency must be done. The keeper can supply its claim
@@ -218,10 +282,13 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
     that principal; *agent* drops what waits on the operator (``operator`` flag
     or an operator kind), so a heartbeat never picks a human step (D-953).
 
-    Sorted by ``(-priority, -unblocks, estimate_h, key)``.  Gates and goals are
-    included when open and unblocked: closing them is a valid action.
+    Sorted by ``(-effective priority, -unblocks, estimate_h, key)``; *eff* is a
+    precomputed :func:`effective_priorities` map, else it is built from *items*.
+    Gates and goals are included when open and unblocked: closing them is a
+    valid action.
     """
     idx = index(items)
+    eff = effective_priorities(items)[0] if eff is None else eff
     ub = unblocks(items) if ub is None else ub
     if dependencies_ready is None:
         def dependencies_ready(it):
@@ -232,7 +299,7 @@ def ready(items, project=None, ub=None, owner=None, agent=False, *, dependencies
            and (owner is None or it.get("owner") == owner)
            and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
            and dependencies_ready(it)]
-    out.sort(key=lambda it: (-_prio(it), -ub.get(it["key"], 0), _est(it), it["key"]))
+    out.sort(key=lambda it: (-_effective(it, eff), -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
 
 
@@ -365,17 +432,27 @@ def brief(items, project=None, n=10, ub=None, owner=None, agent=False):
     Format: ``key | title | est Nh | unblocks N | prio P``.
     """
     ub = unblocks(items) if ub is None else ub
-    rows = ready(items, project=project, ub=ub, owner=owner, agent=agent)
+    eff = effective_priorities(items)[0]
+    rows = ready(items, project=project, ub=ub, owner=owner, agent=agent, eff=eff)
     if n is not None:
         rows = rows[:max(0, int(n))]
-    return brief_rows(rows, ub)
+    return brief_rows([with_effective(it, eff) for it in rows], ub)
+
+
+def with_effective(item, eff):
+    """A copy of *item* carrying ``effective_priority`` and, when raised, ``priority_via``."""
+    got = eff.get(item["key"]) or {"effective": _prio(item), "via": None}
+    return {**item, "effective_priority": got["effective"],
+            **({"priority_via": got["via"]} if got["via"] else {})}
 
 
 def brief_rows(rows, ub):
     """The :func:`brief` lines for *rows* exactly as given (no filtering, no cap)."""
     return "\n".join(f"{it['key']} | {it.get('title', '')} | "
                      f"est {_est(it):g}h | unblocks {ub.get(it['key'], 0)} | "
-                     f"prio {_prio(it)}" for it in rows)
+                     f"prio {_prio(it)}"
+                     + (f"->{it['effective_priority']} via {it['priority_via']}"
+                        if it.get("priority_via") else "") for it in rows)
 
 
 #: MK-READS: kinds that always wait on the operator, whatever their ``operator`` flag.
