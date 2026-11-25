@@ -116,6 +116,19 @@ def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
     assert [(r['window_key'], r['remaining_percentage']) for r in rows] == [('daily', 30), ('weekly', 100)]
 
 
+def test_observed_mode_keeps_the_newest_observation_not_the_highest_id(tmp_path):
+    path = tmp_path / 'snapshots.sqlite'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id, '
+                   'window_key, remaining_percentage, is_exhausted, next_reset_at, created_at)')
+        for ident, pct, at in [(1, 90, '2026-11-13 10:00:00.1'), (2, 40, '2026-11-13 10:00:00.9'),
+                               (3, 70, '2026-11-13 10:00:00.5'), (4, 10, '2026-11-13 10:00:00.5')]:
+            db.execute('INSERT INTO quota_snapshots VALUES (?,?,?,?,?,?,?,?)', (ident, 'codex', 'a', 'weekly', pct, 0, None, at))
+    source = {'QUOTA_SNAPSHOT_DB': str(path)}
+    assert [r['remaining_percentage'] for r in fetch_snapshot_rows(source, latest='observed')] == [40]
+    assert [r['remaining_percentage'] for r in fetch_snapshot_rows(source)] == [10]  # default: highest id
+
+
 @pytest.mark.parametrize('with_sensitive_values', [False, True], ids=['quota', 'redacted-quota'])
 def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_stall(
         tmp_path, monkeypatch, with_sensitive_values):
