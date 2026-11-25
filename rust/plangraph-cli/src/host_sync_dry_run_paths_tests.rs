@@ -218,3 +218,29 @@ fn an_executable_with_a_specifier_is_resolved_per_instance_or_missing() {
     put(home.path(), "missing/one", "", 0o755);
     assert!(check(&instance).is_empty());
 }
+
+#[test]
+fn a_path_with_a_space_is_checked_when_its_key_says_it_is_a_path() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd");
+    let needs = plan("pg-disk-hygiene.service", &root, None).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path().display();
+    put(home.path(), ".local/bin/pg-disk-hygiene", "", 0o755);
+    fs::create_dir_all(home.path().join("repo")).unwrap();
+    fs::create_dir_all(home.path().join("trees")).unwrap();
+    let env = |pins: &str| {
+        put(
+            home.path(),
+            ".config/plangraph/disk-hygiene-service.env",
+            &format!("PG_REPO=repo\nPG_WORKTREES=trees\nPG_PINS=\"{pins}\"\n"),
+            0o600,
+        );
+    };
+    // An absolute and a relative file with a space in its name, both absent.
+    env(&format!("{h}/my pins/pins.json"));
+    assert_eq!(missing(&needs, home.path()), ["path ~/my%20pins/pins.json"]);
+    env("my pins/pins.json");
+    assert_eq!(missing(&needs, home.path()), ["path ~/my%20pins/pins.json"]);
+    put(home.path(), "my pins/pins.json", "{}", 0o600);
+    assert!(missing(&needs, home.path()).is_empty());
+}

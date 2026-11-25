@@ -158,9 +158,10 @@ fn path_like(key: &str, value: &str) -> bool {
         "_WORKTREES",
         "_CONFIG",
     ];
+    // A key that says it is a path keeps spaces in the value; prose with a slash in it is no path.
     !value.contains("://")
-        && !value.contains(char::is_whitespace)
-        && (value.contains('/') || SUFFIXES.iter().any(|s| key.ends_with(s)))
+        && (SUFFIXES.iter().any(|s| key.ends_with(s))
+            || (value.contains('/') && !value.contains(char::is_whitespace)))
 }
 
 /// Check `needs` against this host. `getenv` reads the host's process environment.
