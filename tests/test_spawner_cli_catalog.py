@@ -90,6 +90,51 @@ def test_route_leg_scores_reports_catalog_intelligence_per_routed_leg(monkeypatc
     assert out['leg_scores']['agy-sonnet-5.5'] != out['leg_scores']['mimo-v2.6-pro']
 
 
+def test_review_route_carries_the_seat_admission_policy_for_the_native_spawner(monkeypatch, capsys, tmp_path):
+    policy = tmp_path / 'policy.json'
+    policy.write_text(json.dumps({'review_seat_admission': {'legs': {'x': 2}}}))
+    monkeypatch.setenv('PLANGRAPH_ROUTE_POLICY', str(policy))
+    class Routed:
+        legs = ()
+
+        def to_dict(self):
+            return {'legs': []}
+
+    class Service:
+        def __init__(self, **kw):
+            pass
+
+        def route(self, *args, **kw):
+            return Routed()
+
+    monkeypatch.setattr(cli, 'SpawnService', Service)
+    monkeypatch.setattr('plangraph.spawner.bench_entry.benchmark_options', lambda *a: {})
+    card = json.dumps({'estimate_tokens': 1000})
+    for role, carried in (('review', True), ('implement', False)):
+        assert cli.main(['route', '--role', role, '--json', '--writer-family', 'gpt', '--card', card]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert ('seat_admission' in out) is carried
+    assert out.get('seat_admission') is None
+    from pathlib import Path
+    from plangraph.planner.route_policy import load_route_policy
+    live = load_route_policy(Path('src/plangraph/planner/route_policy.json')).review_seat_admission
+    assert live['legs']['agy-gemini-4-hydrogen-high'] >= 1
+
+
+def test_seat_admission_policy_is_validated(tmp_path):
+    import pytest
+    from plangraph.planner.route_policy import load_route_policy
+    good = tmp_path / 'good.json'
+    good.write_text(json.dumps({'review_seat_admission': {'legs': {'x': 2}, 'queue_wait_seconds': 5}}))
+    assert load_route_policy(good).review_seat_admission['legs'] == {'x': 2}
+    for bad in ({'legs': {'x': 0}}, {'legs': {'x': True}}, {'legs': []}, {'bogus': 1},
+                {'legs': {'x': 1}, 'queue_wait_seconds': -1}):
+        path = tmp_path / 'bad.json'
+        path.write_text(json.dumps({'review_seat_admission': bad}))
+        with pytest.raises(ValueError, match='review_seat_admission'):
+            load_route_policy(path)
+
+
 def test_research_route_refusal_preserves_per_leg_skips_in_json(tmp_path, capsys):
     card = json.dumps({'estimate_tokens': 950_000})
     assert cli.main(['--state', str(tmp_path), 'route', '--role', 'research',

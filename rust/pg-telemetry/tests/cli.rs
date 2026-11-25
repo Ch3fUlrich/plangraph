@@ -108,3 +108,14 @@ fn a_valid_request_reaches_the_connection_with_or_without_since() {
         );
     }
 }
+
+#[test]
+fn version_prints_the_name_and_succeeds_without_any_environment() {
+    let output = telemetry(&["--version"], &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("pg-telemetry {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(output.stderr.is_empty());
+}

@@ -31,6 +31,8 @@ pub(crate) fn eligible(leg: &Value) -> bool {
         ) | (Some("claude"), Some("claude-sonnet-5-5-high"))
     )
 }
+/// The refusal of `select` when the route has no leg of the selector's harness.
+pub(crate) const NO_LEG: &str = "no admitted CLI review leg";
 pub(crate) fn select(args: &Args, text: String) -> Result<String, ToolError> {
     let Some(kind) = kind(args) else {
         return Ok(text);
@@ -45,10 +47,7 @@ pub(crate) fn select(args: &Args, text: String) -> Result<String, ToolError> {
         .filter(|l| eligible(l) && l["harness"] == harness)
         .cloned()
         .collect();
-    plan["first_leg"] = legs
-        .first()
-        .cloned()
-        .ok_or_else(|| parameter("no admitted CLI review leg"))?;
+    plan["first_leg"] = legs.first().cloned().ok_or_else(|| parameter(NO_LEG))?;
     plan["legs"] = json!(legs);
     Ok(plan.to_string())
 }

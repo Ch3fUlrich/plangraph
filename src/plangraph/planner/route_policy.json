@@ -5,6 +5,12 @@
   "review_allowed_families": [],
   "_review_tools_denied_reason": "OpenCode review isolation denies repository and shell tools. Park MiMo Pro until a real PR review with file access is verified.",
   "review_tools_denied_legs": ["mimo-v2.6-pro"],
+  "_review_seat_admission_reason": "LE-SEAT-BURST-DRAINS-SMART-REVIEW-LEG: 15 parallel seats drained the hydrogen leg; the native spawner runs at most legs[leg] seats on a leg, queues the rest and moves on after queue_wait_seconds.",
+  "review_seat_admission": {
+    "legs": {"agy-gemini-4-hydrogen-high": 3},
+    "queue_wait_seconds": 900,
+    "poll_seconds": 15
+  },
   "paused_harnesses": {
     "qodercli": {"allowed_roles": []},
     "agy": {"allowed_roles": ["implement", "orchestrate", "review", "research"]}

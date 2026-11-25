@@ -56,6 +56,10 @@ fn rust_release_installs_train_cli_and_spawner_together() {
         &cargo,
         r#"#!/bin/sh
 set -eu
+if [ "$1" = metadata ]; then
+  cat "$FIXTURE_METADATA"
+  exit 0
+fi
 mkdir -p "$CARGO_TARGET_DIR/release"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --bin ]; then
@@ -66,6 +70,32 @@ while [ "$#" -gt 0 ]; do
 done
 "#,
     );
+    // The install plan comes from the workspace's cargo metadata: a crate that marks itself
+    // (pg-telemetry here) is installed with no change to the installer.
+    let metadata = home.join("metadata.json");
+    let package = |name: &str, bins: &[&str], mark: &str, list: &[&str]| {
+        let targets: Vec<_> = bins
+            .iter()
+            .map(|bin| serde_json::json!({"name": bin, "kind": ["bin"]}))
+            .collect();
+        serde_json::json!({
+            "name": name,
+            "targets": targets,
+            "metadata": {"plangraph": {mark: list}},
+        })
+    };
+    fs::write(
+        &metadata,
+        serde_json::json!({"packages": [
+            package("pg-spawnd", &["pg-spawnd", "ci-temporal"], "host-binaries", &["pg-spawnd"]),
+            package("plangraph-cli", &["plangraph", "host-sync"], "host-binaries", &["plangraph"]),
+            package("pg-worker-core", &["pg-disk-hygiene", "turn-budget-hook", "unit-breaker"], "host-binaries", &["pg-disk-hygiene", "turn-budget-hook"]),
+            package("pg-telemetry", &["pg-telemetry"], "host-binaries", &["pg-telemetry"]),
+            package("pg-keeper-backup", &["pg-keeper-backup"], "optional-host-binaries", &["pg-keeper-backup"]),
+        ]})
+        .to_string(),
+    )
+    .unwrap();
     let target = home.join("fixture-artifacts");
     let path = std::env::join_paths([
         bin.as_path(),
@@ -81,6 +111,7 @@ done
             .env("PATH", &path)
             .env("CARGO_TARGET_DIR", &target)
             .env("FIXTURE_BINARY", env!("CARGO_BIN_EXE_plangraph"))
+            .env("FIXTURE_METADATA", &metadata)
             .arg("--install-release")
             .arg(&repo)
             .args(options)
@@ -91,6 +122,9 @@ done
     assert!(output.status.success(), "{output:?}");
     assert!(bin.join("pg-spawnd").is_file());
     assert!(bin.join("pg-disk-hygiene").is_file());
+    assert!(bin.join("pg-telemetry").is_file());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("RELEASE INSTALLED"));
+    assert!(!bin.join("unit-breaker").exists());
     assert_eq!(
         fs::read_to_string(&stamp).unwrap().trim(),
         git(&["rev-parse", "HEAD:rust"])
@@ -135,4 +169,66 @@ done
         .output()
         .unwrap();
     assert!(check.status.success(), "{check:?}");
+}
+
+#[test]
+fn a_host_binaries_mark_of_the_wrong_type_fails_the_install_before_any_build() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path();
+    let repo = home.join("repo");
+    let tools = home.join("tools");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    fs::create_dir_all(repo.join("rust")).unwrap();
+    git(&["init", "-q"]);
+    fs::write(repo.join("rust/test.rs"), "// x\n").unwrap();
+    git(&["add", "rust"]);
+    git(&["commit", "-qm", "x"]);
+    fs::create_dir_all(&tools).unwrap();
+    // The fake cargo answers metadata only; a build would write this marker.
+    pg_worker_core::executable_test_support::write_executable(
+        tools.join("cargo"),
+        "#!/bin/sh\nif [ \"$1\" = metadata ]; then cat \"$FIXTURE_METADATA\"; exit 0; fi\ntouch \"$HOME/built\"\n",
+    );
+    let metadata = home.join("metadata.json");
+    fs::write(
+        &metadata,
+        serde_json::json!({"packages": [{
+            "name": "pg-telemetry",
+            "targets": [{"name": "pg-telemetry", "kind": ["bin"]}],
+            "metadata": {"plangraph": {"host-binaries": "pg-telemetry"}},
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let path =
+        std::env::join_paths([tools.as_path(), Path::new("/usr/bin"), Path::new("/bin")]).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_host-sync"))
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", &path)
+        .env("CARGO_TARGET_DIR", home.join("target"))
+        .env("FIXTURE_METADATA", &metadata)
+        .arg("--install-release")
+        .arg(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("host-binaries must be a list"), "{stderr}");
+    assert!(!home.join("built").exists());
+    assert!(!home.join(".local/bin/pg-telemetry").exists());
 }

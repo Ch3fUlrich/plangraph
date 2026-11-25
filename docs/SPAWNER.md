@@ -663,6 +663,6 @@ maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
 use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
 stress test. Windows CI and recorded reruns provide platform evidence.
 
-Native writer progress admission: [run contract](native-writer-progress-admission.md). Disk floor guards, allocated Cargo cap accounting and cleanup-before-refusal: [disk admission](operations/spawner-disk-admission.md).
+Native writer progress admission: [run contract](native-writer-progress-admission.md). Review seat admission per leg: [seat admission](checkpoints/LE-SEAT-BURST-DRAINS-SMART-REVIEW-LEG.md). Disk floor guards, allocated Cargo cap accounting and cleanup-before-refusal: [disk admission](operations/spawner-disk-admission.md).
 
 [Per-item checkpoint and status notes](checkpoints/), e.g. [keeper-refused completion deliveries](checkpoints/LE-KEEPER-REFUSED-CALL-LOOPS.md). Add new notes there, one file per item, rather than appending here.
