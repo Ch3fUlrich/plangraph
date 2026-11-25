@@ -553,7 +553,11 @@ def test_a_launched_claude_writer_cannot_read_a_denied_fixture_under_a_user_sand
         assert 'CONTROL-FIXTURE-TEXT' in control, 'the launched shell did not run the permitted control read'
         assert 'DENIED-FIXTURE-TEXT' not in denied
         assert 'has been denied' not in denied and 'Permission to use' not in denied, 'a permission refusal, not masking'
-        assert 'No such file' in denied or 'Permission denied' in denied, denied
+        import re
+        fixture = root / 'masked' / 'home' / '.config' / 'plangraph' / 'fixture-secret'
+        # The cat diagnostic for the exact fixture path: a sandbox setup error cannot produce this line.
+        assert re.search(rf'cat: {re.escape(str(fixture))}: (No such file or directory|Permission denied)',
+                         denied), denied
         with monkeypatch.context() as patch:
             job, (control, denied) = _check_two_results(
                 _launch_claude_writer_against_fake_api(patch, root / 'full', enforce=True))
