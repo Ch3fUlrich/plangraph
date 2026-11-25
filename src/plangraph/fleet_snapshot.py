@@ -1,8 +1,15 @@
-"""Snapshot-only fleet projection; no probing, sampling or transport."""
+"""Snapshot-only fleet projection; no probing, sampling or transport.
+
+It is also the one place that locates ``pg-spawnd``: the native launch and the duplicate-assignment
+guard (``lane_check``, the Python entry to ``pg-spawnd lane-check``) reach the binary here.
+"""
 from __future__ import annotations
 
+import json
+import logging
 import math
 import os
+import subprocess
 import threading
 from pathlib import Path
 
@@ -111,3 +118,74 @@ def load_fleet(store, samples=None, *, registry=None, projection=None):
     if registry is None:
         registry = store.list_bus_hosts()
     return (projection or FleetProjection()).load(state, registry, samples)
+
+
+#: What the Rust guard prints when it refuses a submission.
+_REFUSALS = ("lane_conflict:", "lane_override requires")
+
+
+class LaneRefused(ValueError):
+    """An item is held by another live lane, an override came without a reason, or (strict)
+    the guard could not give a decision."""
+
+
+def lane_state() -> Path:
+    return Path(os.environ.get("PLANGRAPH_SPAWN_STATE") or
+                Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph")
+
+
+def keeper_lanes(keys) -> list:
+    """The keeper's open lanes of ``keys`` (``work_exists.lanes`` of ``show``; a branch whose pull
+    request closed is not among them). Unreadable answers give no lanes: the roster still guards."""
+    keys = [key for key in dict.fromkeys(keys) if isinstance(key, str) and key]
+    if not keys or not os.environ.get("PG_URL"):
+        return []
+    try:
+        from plangraph.keeper.cli_verbs import Session
+        session = Session()
+        lanes = []
+        for key in keys[:50]:
+            found = (session.call("GET", "show", {"key": key}).get("work_exists") or {}).get("lanes")
+            lanes += [lane for lane in found or [] if isinstance(lane, str)]
+        return list(dict.fromkeys(lanes))
+    except Exception as exc:  # the keeper is optional input to the guard
+        logging.warning("keeper open lanes unavailable: %s", exc)
+        return []
+
+
+def lane_check(payload: dict, binary: str | None = None, *, strict: bool = False) -> None:
+    """Refuse (``LaneRefused``) a submission another live lane holds.
+
+    ``payload`` is the ``lane-check`` input (``state``, ``prompt``, ``card``, ``keys``,
+    ``reason``, ``reserve`` ...); the keeper's open lanes of its items are added. ``strict`` is
+    the dispatch boundary: no decision (no binary, a timeout, an unwritable override log, any
+    failure) refuses, so a run is published only after an admission, a reservation and an
+    override write succeeded. Otherwise a host that cannot answer is skipped with a warning.
+    """
+    def unanswered(message):
+        if strict:
+            raise LaneRefused(f"lane guard gave no decision: {message}")
+        logging.warning("lane guard skipped: %s", message)
+
+    if binary is None:
+        try:
+            binary = _projection_binary()
+        except RuntimeError:
+            return unanswered("pg-spawnd is not installed")
+    payload = {"state": str(lane_state()), **payload}
+    if "branches" not in payload:
+        card = payload.get("card") if isinstance(payload.get("card"), dict) else {}
+        listed = card.get("item_keys") if isinstance(card.get("item_keys"), list) else []
+        payload["branches"] = keeper_lanes([*(payload.get("keys") or []), card.get("item_key"),
+                                            card.get("item"), *listed])
+    try:
+        result = subprocess.run([binary, "lane-check"], input=json.dumps(payload), text=True,
+                                capture_output=True, timeout=90, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return unanswered(str(exc))
+    if result.returncode == 0:
+        return
+    message = (result.stderr or result.stdout).strip()
+    if message.startswith(_REFUSALS):
+        raise LaneRefused(message)
+    unanswered(message[:200])

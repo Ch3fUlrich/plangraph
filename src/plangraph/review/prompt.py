@@ -107,7 +107,7 @@ def _refuse_held_items(context: dict, rules: str) -> None:
     ``context["lane_override"]`` is the recorded reason that admits a second lane;
     ``context["lane"]`` names the lane being briefed, which is never its own conflict.
     """
-    from plangraph.spawner.item_key import LaneRefused, lane_check
+    from plangraph.fleet_snapshot import LaneRefused, lane_check
 
     keys = [context[name] for name in ("item_key", "item_keys") if name in context]
     flat = [k for key in keys for k in (key if isinstance(key, (list, tuple)) else [key])]

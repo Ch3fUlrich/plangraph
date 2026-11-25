@@ -596,9 +596,9 @@ async def native_spawn(self, card, options):
     annotate_native(record, card)
     # The dispatch boundary of every native submit (wrapper, feeder, remote): refuse an item a
     # live lane holds and reserve the items before the record exists, under one lock.
-    from .item_key import LaneRefused, lane_check
+    from plangraph.fleet_snapshot import LaneRefused, lane_check
     try:
-        await asyncio.to_thread(lane_check, dict(
+        await asyncio.to_thread(lambda payload: lane_check(payload, strict=True), dict(
             prompt=options.get('prompt', ''), card=card, repo=str(repo), context='dispatch',
             state=str(self.state), reason=card.get('lane_override'),
             reserve=dict(run_id=record['run_id'], name=None)))

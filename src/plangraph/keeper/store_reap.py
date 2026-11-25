@@ -64,10 +64,13 @@ class ReapMixin:
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
 
     def _merge_proven(self, key):
-        """Whether a verified merge proof (the ``merged`` flag's evidence) names ``key``."""
-        return self.conn.execute(
+        """Whether a merge proof names ``key``: verified commit evidence (the ``merged`` flag), or
+        the ``deploy_pending`` finding a close pass writes after it found the merge on the default
+        ref but before the deploy attribution lets it write commit evidence."""
+        return (self.conn.execute(
             "SELECT 1 FROM evidence WHERE key=? AND verified!=0"
             " AND kind IN ('commit+ci','commit') LIMIT 1", (key,)).fetchone() is not None
+            or self._has_finding(key, "deploy_pending"))
 
     def _check_gate_capacity(self, items, now):
         code = "gate_dependency_capacity"

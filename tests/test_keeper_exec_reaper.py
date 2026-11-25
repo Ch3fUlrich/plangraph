@@ -101,3 +101,18 @@ def test_reaper_keeps_the_claim_of_a_merged_item_waiting_for_its_close_pass(w):
 
     assert sorted(reaped["expired"]) == sorted([unmerged, unverified])
     assert snapshot(w, merged)[0] == "claimed"
+
+
+def test_reaper_keeps_the_claim_of_a_merge_awaiting_deploy_attribution(w):
+    pending, control = seed(w, [("pending", []), ("control", [])])
+    for key in (pending, control):
+        to_claimed(w, key)
+    # The close pass found the merge, then reported deploy_pending before any commit evidence.
+    with w.store._write():
+        w.store._finding(pending, "deploy_pending", "deploy_pending: unit", w.clock.advance(1))
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence WHERE key=?", (pending,)).fetchone()[0] == 0
+
+    reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
+
+    assert reaped["expired"] == [control]
+    assert snapshot(w, pending)[0] == "claimed"
