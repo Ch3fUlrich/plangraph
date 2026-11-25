@@ -175,7 +175,8 @@ pub(crate) fn spawn(
         return placement::native_spawn(state, args);
     }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
-    let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
+    let admitted = crate::card_sandbox::check(args)
+        .and_then(|()| crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args))
         .and_then(|a| validate(&a).map(|()| a))
         .and_then(|a| crate::empty_diff::check(&a).map(|()| a));
     let admitted = match admitted {

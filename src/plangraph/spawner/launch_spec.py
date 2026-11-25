@@ -89,8 +89,24 @@ def _sweep(service, current):
             pass  # A stale directory must never fail a launch request.
 
 
+def _refuse_sandbox(request):
+    """Refuse a wider sandbox before any client lookup, run tree or leg resolution."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        refuse_card_sandbox(request['card'])
+    except SpawnRefused as exc:
+        raise LaunchRefused('sandbox_refused', str(exc).partition(': ')[2]) from None
+
+
+def _refusal_line(exc):
+    line = f'{exc.kind}: {runner.redact(str(exc.reason))}'
+    return line.replace('\r', ' ').replace('\n', ' ')[:300] + '\n'
+
+
 def build(request: dict) -> dict:
     _validate(request)
+    _refuse_sandbox(request)
     from .prompt_guard import admit_prompt
     if request['role'] == 'implement':
         admit_prompt(request['prompt'], lambda reason: LaunchRefused('refused', reason))
@@ -263,9 +279,13 @@ def fresh_main():
         try: request = json.loads(raw)
         except (ValueError, UnicodeError): raise InvalidRequest('json') from None
         _validate(request)
+        _refuse_sandbox(request)
     except InvalidRequest as exc:
         sys.stderr.write(f'launch-spec failed: invalid request ({exc})\n')
         return 1
+    except LaunchRefused as exc:
+        sys.stderr.write(_refusal_line(exc))
+        return 2
     try:
         with run_tree(request['state']) as tree:
             env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(tree['tree_path']) / 'src'), os.environ.get('PYTHONPATH')])),
@@ -306,8 +326,7 @@ def main(stdin, stdout, stderr) -> int:
             from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING
             stderr.write(runner.redact(str(exc.reason)).replace('\r', ' ').replace('\n', ' ')[:300] + '\n')
             return CODEX_REVIEW_CLIENT_MISSING
-        line = f'{exc.kind}: {runner.redact(str(exc.reason))}'
-        stderr.write(line.replace('\r', ' ').replace('\n', ' ')[:300] + '\n')
+        stderr.write(_refusal_line(exc))
         return 2
     except WindowsEnvIncomplete as exc:
         stderr.write(f'launch-spec failed: windows env incomplete ({exc})\n')

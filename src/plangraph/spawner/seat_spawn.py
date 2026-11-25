@@ -233,6 +233,8 @@ def _close_queue(service, queued, **fields):
 
 def admit(service, options, *, card=None, preview=False):
     """Enforce disk and RAM admission even without overflow configuration."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # before the dry-run preview, placement or forwarding
     if options.get('dry_run'):
         if not preview and options.get('role') == 'review' and (card or {}).get('review_workspace') is True:
             options['_placement'] = admit(service, dict(options, dry_run=False), card=card, preview=True) or {}
@@ -395,9 +397,8 @@ def admit(service, options, *, card=None, preview=False):
                             return use_local()
                         continue
                     if target_refusal is None:
-                        elapsed = f'{decision.reason} (admission window {window:g}s elapsed)'
                         return _close_queue(service, queued, **placement_refusal(
-                            decision.reason, held, config.get('hosts'), elapsed=elapsed))
+                            decision.reason, held, config.get('hosts'), window=window))
                     if (settled := _close_queue(service, queued)) is not None:
                         return settled
                 if target_refusal is not None:
@@ -495,10 +496,11 @@ class SeatSpawnMixin:
     async def spawn(self, *args, **kwargs):
         options = {}
         try:
-            import inspect
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from plangraph.planner.route_policy import refuse_card_sandbox
+            refuse_card_sandbox(card)
             if (card or {}).get('run_kind') == 'native-codex':
                 from .overflow import native_repo
                 native_repo(card)
@@ -510,7 +512,6 @@ class SeatSpawnMixin:
             if cwd is not None:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
-            from plangraph.planner.routing import SpawnRefused
             if options.get('_plan') is None:
                 from .inline_diff import refuse_empty_diff  # one card error before admission, routing or any leg
                 await asyncio.to_thread(refuse_empty_diff, card, options.get('role'), dry_run=options.get('dry_run'))

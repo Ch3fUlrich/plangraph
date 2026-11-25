@@ -7,6 +7,7 @@ mod agent_view;
 mod agent_view_projection;
 mod attempt_coverage;
 mod attempt_outcome;
+mod card_sandbox;
 mod cli;
 mod cli_review;
 mod doctor_sources;

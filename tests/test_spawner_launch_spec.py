@@ -596,3 +596,34 @@ def test_review_launch_resolves_latest_nvm_harness_under_user_manager_path(
     assert str(node / 'v24.19.0/bin') in launch['env']['PATH'].split(os.pathsep)
     assert launch['argv'][0] == expected
     assert shutil.which(harness, path=launch['env']['PATH']) == expected
+
+
+def test_launch_spec_danger_full_access_precedes_client_lookup(request_data, monkeypatch):
+    from plangraph.routing_support import clients
+    def lookup(*args, **kwargs):
+        raise AssertionError('client looked up before the sandbox refusal')
+    monkeypatch.setattr(clients, 'codex_review_client', lookup)
+    monkeypatch.setattr(spec, 'quota_paused', lookup, raising=False)
+    request_data['card'] = {'sandbox': 'danger-full-access'}
+    code, out, err = invoke(request_data)
+    assert (code, out) == (2, '')
+    assert err.startswith('sandbox_refused: danger-full-access')
+
+
+def test_fresh_launch_spec_danger_full_access_precedes_run_tree(request_data, monkeypatch, capsys):
+    from plangraph.spawner import git_guard
+    def tree(*args, **kwargs):
+        raise AssertionError('run tree leased before the sandbox refusal')
+    monkeypatch.setattr(git_guard, 'run_tree', tree)
+    request_data['card'] = {'sandbox': 'danger-full-access'}
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(request_data)))
+    assert spec.fresh_main() == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith('sandbox_refused: danger-full-access') and captured.out == ''
+
+
+@pytest.mark.parametrize('card', [{'sandbox': 'unknown-sentinel-mode'}, {'sandbox': 7}])
+def test_launch_spec_unsupported_sandbox_is_named_without_echo(request_data, card):
+    request_data['card'] = card
+    code, _, err = invoke(request_data)
+    assert code == 2 and err.startswith('sandbox_refused: ') and 'sentinel' not in err

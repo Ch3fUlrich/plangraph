@@ -397,6 +397,12 @@ def main(argv=None):
                     unavailable_reason=skipped.get(leg.id) if leg.id not in served else None)
                     for leg in DEFAULT_LEGS if 'implement' in leg.roles]
         elif args.verb == 'spawn':
+            from plangraph.planner.route_policy import refuse_card_sandbox
+            try:
+                refuse_card_sandbox(args.card)   # before model resolution or any supervisor start
+            except SpawnRefused as exc:
+                service.save_refusal(exc, args.role)
+                raise
             if args.model is not None:
                 from plangraph.planner.routing import validate_model
                 try:

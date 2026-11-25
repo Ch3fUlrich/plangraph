@@ -255,7 +255,8 @@ class SpawnService(SeatSpawnMixin):
             raise
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
-        from plangraph.planner.route_policy import train_delta_document
+        from plangraph.planner.route_policy import refuse_card_sandbox, train_delta_document
+        refuse_card_sandbox(card)   # before review_of or writer-trailer reads
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)

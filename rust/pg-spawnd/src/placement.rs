@@ -135,6 +135,7 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
     Ok(argv)
 }
 pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
+    crate::card_sandbox::check(args)?;
     let args = &crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)?;
     let mut argv = route_args(args)?;
     let fallback = std::env::current_dir().map_err(|e| ToolError::Internal(e.to_string()))?;
@@ -205,6 +206,7 @@ pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
 
 /// Native cards share Python's existing RAM/SSH admission, then one Rust lifecycle.
 pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
+    crate::card_sandbox::check(args)?;
     crate::spawn::validate(args)?;
     if !args["card"]
         .get("repo")

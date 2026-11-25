@@ -98,11 +98,12 @@ def keep_lane(held, host, refusal):
     return refusal
 
 
-def placement_refusal(reason, held, hosts, *, elapsed=None):
+def placement_refusal(reason, held, hosts, *, window=None):
     """Build the origin-side refusal when there is no durable target receipt to retain."""
     fields = dict(status='refused', reason=reason, overflow_reason=reason, exit_code=2)
-    if held or elapsed is not None:
-        fields['error'] = '; '.join([*held.values(), elapsed if elapsed is not None else reason])
+    if held or window is not None:
+        fallback = reason if window is None else f'{reason} (admission window {window:g}s elapsed)'
+        fields['error'] = '; '.join([*held.values(), fallback])
     if not hosts:
         fields['hint'] = ('hosts.json has no eligible remote host. Check the registry, '
                           'then run fleet_sync genconfig write and host_ready.')
