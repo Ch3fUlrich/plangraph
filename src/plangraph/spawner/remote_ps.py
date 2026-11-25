@@ -1,11 +1,12 @@
 """Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import selectors
+import threading
 import secrets
 import shlex
 import time
@@ -16,6 +17,8 @@ MAX_OUTPUT = 1024 * 1024
 MAX_WORKERS = 16
 
 TIMEOUT = 3
+# A WSL guest or Windows host answers through wsl.exe or cmd.exe, which starts slower.
+SLOW_HOST_FACTOR = 3
 FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key', 'item_keys')
 FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    started=(int, float), ended=(int, float, type(None)),
@@ -48,6 +51,32 @@ def safe_reason(exc):
 
 
 SRC_MISSING = 44
+STATE_ENV = 'PLANGRAPH_SPAWN_STATE'
+
+
+def state_dir_ok(host):
+    """The optional spawner state directory of a host, as the registry accepts it.
+
+    Absolute for the host's own kind (a POSIX path, or a Windows drive or UNC path); an empty
+    value means none. Characters that cannot be passed on safely are refused: control characters,
+    and for cmd.exe the quote and percent sign.
+    """
+    state = host.get('state_dir')
+    if state is None or state == '':
+        return True
+    if not isinstance(state, str) or re.search(r'[\x00-\x1f\x7f]', state):
+        return False
+    if 'win_src' not in host:
+        return state.startswith('/')
+    if re.search(r'["%]', state):
+        return False
+    unc = re.fullmatch(r'(?:\\\\|//)[^\\/]+[\\/][^\\/]+.*', state)
+    return unc is not None or re.match(r'[A-Za-z]:[/\\]', state) is not None
+
+
+def state_env(host):
+    """Environment that points a remote spawner command at the host's state directory."""
+    return {STATE_ENV: host['state_dir']} if host.get('state_dir') else {}
 
 
 def source_check(host):
@@ -107,8 +136,9 @@ def host_invocation(host, *, query=False):
     if 'src' in host:
         steps.append({'argv': ['test', '-d', host['src']], 'fail_code': SRC_MISSING})
     if query:
-        steps.append({'argv': module, 'env': {'PYTHONPATH': host['src']}} if 'src' in host
-                     else {'argv': module})
+        steps.append({'argv': module, 'env': {**({'PYTHONPATH': host['src']} if 'src' in host else {}),
+                                              **state_env(host)}}
+                     if 'src' in host or host.get('state_dir') else {'argv': module})
     return invocation(host, host_command(host, query=query), steps)
 
 
@@ -120,12 +150,16 @@ def host_command(host, *, query=False):
         if query:
             command = f'({command})'
             src = host['win_src'].replace('/', '\\')
+            state = host.get('state_dir')
+            if state:
+                command += f' & set "{STATE_ENV}={state.replace("/", chr(92))}"'
             command += (f' & set "PYTHONPATH={src}"&& '
                         'python -m plangraph.spawner.remote_ps')
         return command
     command = source_check(host) if 'src' in host else ''
     if query:
-        command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
+        env = f'{STATE_ENV}={shlex.quote(host["state_dir"])} ' if host.get('state_dir') else ''
+        command += f'; {env}PYTHONPATH={source_path(host["src"])} {module}' if command else env + module
     return command
 
 
@@ -146,7 +180,13 @@ def query_host(host, timeout):
     if argv is None:
         command, plan = host_invocation(host, query=True)
     else:
-        command, plan = invocation(host, shlex.join(argv), [{'argv': argv}])
+        script = shlex.join(argv)
+        if state_env(host):
+            script = (f'set "{STATE_ENV}={host["state_dir"].replace("/", chr(92))}"&& {script}'
+                      if 'win_src' in host
+                      else f'{STATE_ENV}={shlex.quote(host["state_dir"])} {script}')
+        command, plan = invocation(host, script, [{'argv': argv, 'env': state_env(host)}
+                                                   if state_env(host) else {'argv': argv}])
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
@@ -201,6 +241,52 @@ def query_host(host, timeout):
             process.wait()
 
 
+def host_timeout(host):
+    """The query budget of one host; a WSL or Windows hop gets a longer one."""
+    slow = 'wsl_distro' in host or 'win_src' in host
+    return TIMEOUT * SLOW_HOST_FACTOR if slow else TIMEOUT
+
+
+def registry_sources(directory):
+    """Checkout paths from the host registry: (by id or alias, by SSH target), keys lower-cased.
+
+    The registry is the one source of a host's checkout path: a stale `ps-hosts.json` must not
+    make a healthy host report `host src missing`. An id or alias names one host. An SSH
+    target can be shared (a Windows host and its WSL guest), so it is kept as a list and used
+    only when it names exactly one host with the configured transport and WSL distribution. No readable, valid
+    registry gives empty maps and the configured paths stand.
+    """
+    from plangraph.fleet_sync import genconfig
+    names, targets = {}, {}
+    try:
+        registry = json.loads((directory / 'hosts.json').read_text())
+        derived = {entry['name']: entry
+                   for entry in genconfig.generate(registry)['ps-hosts.json']['hosts']}
+        for entry in registry['hosts']:
+            found = derived.get(entry['id'])
+            if found is None:
+                continue
+            for key in (entry['id'], *entry.get('aliases', [])):
+                if names.setdefault(key.lower(), found) is not found:
+                    names[key.lower()] = None  # two hosts claim the name: use neither
+            targets.setdefault((entry.get('ssh_target') or entry['id']).lower(), []).append(found)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}, {}
+    return names, targets
+
+
+def _registry_entry(host, sources):
+    names, targets = sources
+    if (found := names.get(str(host.get('name')).lower())) is not None:
+        return found
+    # A shared target hosts several guests: only the entry with the configured transport (direct,
+    # Windows, or the same WSL distribution) can stand in for the configured host.
+    same_transport = [entry for entry in targets.get(str(host.get('target')).lower(), [])
+                      if ('win_src' in entry, entry.get('wsl_distro')) ==
+                      ('win_src' in host, host.get('wsl_distro'))]
+    return same_transport[0] if len(same_transport) == 1 else None
+
+
 def configured_hosts():
     path = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
     try:
@@ -235,7 +321,101 @@ def configured_hosts():
             validated.append(dict(name='invalid-config', invalid=True))
         else:
             validated.append(host)
+    sources = registry_sources(path / 'plangraph')
+    for index, host in enumerate(validated):
+        if host.get('invalid'):
+            continue
+        entry = _registry_entry(host, sources)
+        if entry:
+            keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro', 'state_dir')}
+            host = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
+                               if k in entry}}
+        # The effective entry is validated, whichever file its values came from.
+        validated[index] = host if state_dir_ok(host) else dict(name='invalid-config', invalid=True)
     return validated
+
+
+# A query (host entry) has at most one transport at a time: a caller that finds one in flight shares its result
+# instead of starting another, and at most MAX_WORKERS transports are in flight across every
+# caller. A transport whose caller gave up is "stuck": it keeps running (a thread cannot be
+# cancelled) but frees its slot, so it cannot starve other hosts; its host is not queried again
+# until it ends, so threads never exceed the number of configured hosts.
+GRACE = 1  # seconds beyond a host's budget before its caller stops waiting
+_SLOTS = threading.Condition()
+_state = dict(in_flight=0, flights={}, stuck={})
+
+
+def _join_or_claim(key, budget):
+    """Under the lock: the flight to share, or a new one that holds a slot; None when refused."""
+    deadline = time.monotonic() + budget + GRACE
+    with _SLOTS:
+        while True:
+            stuck = _state['stuck']
+            for old in [old for old, thread in stuck.items() if not thread.is_alive()]:
+                del stuck[old]
+            if key in stuck:
+                return None
+            if key in _state['flights']:
+                return _state['flights'][key], False
+            if _state['in_flight'] < MAX_WORKERS:
+                flight = dict(outcome=[], done=threading.Event(), thread=None)
+                _state['flights'][key] = flight
+                _state['in_flight'] += 1
+                return flight, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not _SLOTS.wait(remaining):
+                return None
+
+
+def _bounded(host, transport):
+    """Run one host's transport in a daemon thread and give up after its budget.
+
+    A transport that never returns must not outlive the call: executor workers are joined at
+    interpreter exit, a daemon thread is not, so `ps` prints and exits while it stays blocked.
+    """
+    budget = host_timeout(host)
+    name = str(host.get('name'))
+    # Results are shared only between identical queries (target, paths, state directory, cursor),
+    # never by display label.
+    key = json.dumps(host, sort_keys=True, default=str)
+    claimed = _join_or_claim(key, budget)
+    if claimed is None:
+        raise TimeoutError('host query failed')
+    flight, owner = claimed
+    outcome = flight['outcome']
+    if owner:
+        def run():
+            try:
+                outcome.append((True, transport(host, budget)))
+            except BaseException as exc:  # handed to the caller, which classifies it
+                outcome.append((False, exc))
+            finally:
+                flight['done'].set()
+                with _SLOTS:
+                    if _state['stuck'].get(key) is threading.current_thread():
+                        del _state['stuck'][key]
+                    _SLOTS.notify_all()
+
+        thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
+        try:
+            thread.start()
+            thread.join(budget + GRACE)  # the transport's own deadline answers first when it holds
+        finally:
+            with _SLOTS:
+                _state['in_flight'] -= 1
+                _state['flights'].pop(key, None)
+                if thread.is_alive():
+                    _state['stuck'][key] = thread
+                    flight['done'].set()  # callers sharing this flight stop waiting with no result
+                _SLOTS.notify_all()
+    else:
+        flight['done'].wait(budget + GRACE)
+    if not outcome:
+        raise TimeoutError('host query failed')
+    done, value = outcome[0]
+    if not done:
+        raise value
+    return value
 
 
 def _fetch(host, transport):
@@ -243,7 +423,7 @@ def _fetch(host, transport):
         if host.get('invalid'):
             return [dict(host=host['name'], status='unknown', reason='host query failed')]
         try:
-            payload = transport(host, TIMEOUT)
+            payload = _bounded(host, transport)
         except Exception as exc:
             error = type(exc).__name__
             if isinstance(exc, HostQueryError) and type(exc.code) is int and 0 <= exc.code <= 255:
@@ -286,13 +466,24 @@ def list_runs(local, *, transport=query_host):
                                    reason='host query failed')]
     if not hosts:
         return local
+    pool = None
     try:
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(hosts))) as pool:
-            results = pool.map(lambda host: _fetch(host, transport), hosts)
-            return list(local) + [row for rows in results for row in rows]
+        pool = ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(hosts)))
+        futures = [pool.submit(_fetch, host, transport) for host in hosts]
+        # One hung host must not hold the others: past the longest budget it is listed as failed.
+        waves = -(-len(hosts) // pool._max_workers)
+        wait(futures, timeout=waves * (max(host_timeout(host) for host in hosts) + GRACE) + GRACE)
+        rows = [row for host, future in zip(hosts, futures)
+                for row in (future.result() if future.done() else [dict(
+                    host=host['name'], status='unknown', reason='host query failed',
+                    error='TimeoutError')])]
+        return list(local) + rows
     except RuntimeError:
         return list(local) + [dict(host=h['name'], status='unknown',
                                   reason='host query failed') for h in hosts]
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 _LIFECYCLE_PUBLISHER = 'PLANGRAPH_LIFECYCLE_PUBLISHER'
@@ -318,7 +509,7 @@ def attempt_coverage_inputs(state, day, *, transport=query_host):
     def fetch(host):
         if host.get('invalid'):
             raise ValueError('invalid attempt coverage host configuration')
-        return decode(transport(dict(host, coverage_day=day), TIMEOUT))
+        return decode(transport(dict(host, coverage_day=day), host_timeout(host)))
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         for remote in pool.map(fetch, configured_hosts()):
@@ -368,7 +559,7 @@ def changed_runs(state, bookmark, *, transport=query_host):
         try:
             if host.get('invalid'):
                 raise ValueError('invalid host')
-            return decode(transport(dict(host, lifecycle_cursor=cursor), TIMEOUT), cursor)
+            return decode(transport(dict(host, lifecycle_cursor=cursor), host_timeout(host)), cursor)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
             return {'error': 'host lifecycle query failed'}
 
