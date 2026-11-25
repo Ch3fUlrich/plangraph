@@ -268,6 +268,14 @@ def test_sweep_claims_reads_real_keeper_run_metadata(live, tmp_path, monkeypatch
     answer = out_json(capsys)
     assert answer["paths"] == [str(writer)]
     assert "lane/claimtwo" in answer["branches"]
+    # A run record's branch binds the claim to its lane; a run of another host stays unbound.
+    original = record.read_text()
+    record.write_text(json.dumps({"status": "completed", "run_worktree": {"path": str(writer), "branch": "refs/heads/lane/bound"}}))
+    assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 0
+    assert "lane/bound" in out_json(capsys)["branches"]
+    record.write_text(original)
+    w.store.record_run(spawner, "demo:A", {"run_id": "other-host-run", "phase": "started"})
+    assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 0 and out_json(capsys)["unbound_runs"] == 1
     for invalid in ("broken JSON", json.dumps({"status": "completed", "checkout": {"branch": "topic"}})):
         record.write_text(invalid)
         assert run(tokens["router"], "sweep-claims", "--state", str(state)) == 3

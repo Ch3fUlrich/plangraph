@@ -1,4 +1,6 @@
+#[cfg(unix)]
 mod lane_support;
+#[cfg(unix)]
 use lane_support::{git, Fixture};
 use std::fs;
 use std::process::{Command, Output};
@@ -359,10 +361,12 @@ fn the_usage_line_names_baseline() {
         .contains("baseline --keeper-only [--since RFC3339]"));
 }
 
+#[cfg(unix)]
 fn lane_ref(name: &str, sha: &str) -> String {
     format!("refs/heads/lane/{name}:{sha}")
 }
 
+#[cfg(unix)]
 #[test]
 fn lane_cleanup_deletes_finished_lanes_and_logs_shas() {
     let f = Fixture::new();
@@ -405,6 +409,7 @@ fn lane_cleanup_deletes_finished_lanes_and_logs_shas() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn lane_cleanup_preserves_live_and_unproven_heads() {
     let f = Fixture::new();
@@ -431,6 +436,19 @@ fn lane_cleanup_preserves_live_and_unproven_heads() {
         &f.work,
         &["push", "-q", "origin", "HEAD:refs/heads/lane/mergey2"],
     );
+    // Whitespace changes behaviour: a patch-id match ("git cherry") is not proof, an exact merge is.
+    let ws = f.lane("lane/ws", "main", "base.txt", "a b\n");
+    git(&f.work, &["checkout", "-q", "main"]);
+    std::fs::write(f.work.join("base.txt"), "ab\n").unwrap();
+    git(
+        &f.work,
+        &["commit", "-qam", "same patch id, other whitespace"],
+    );
+    git(&f.work, &["push", "-q", "origin", "main"]);
+    assert!(
+        git(&f.work, &["cherry", "main", &ws]).starts_with("- "),
+        "the fixture must be a patch-id twin"
+    );
     // Merged by ancestry, but a claim, an open PR head and an open child PR base protect them.
     let claimed = f.lane("lane/claimed", "main", "c.txt", "c\n");
     let opened = f.lane("lane/opened", "main", "o.txt", "o\n");
@@ -441,14 +459,10 @@ fn lane_cleanup_preserves_live_and_unproven_heads() {
     }
     git(&f.work, &["push", "-q", "origin", "main"]);
     f.set("claims.json", r#"{"paths":[],"branches":["lane/claimed"]}"#);
-    f.set(
-        "pulls.json",
-        &format!(
-            r#"[{{"number":5,"headRefName":"lane/opened","baseRefName":"main","headRefOid":"{opened}"}},
-               {{"number":6,"headRefName":"lane/child","baseRefName":"lane/parent","headRefOid":"{}"}}]"#,
-            "1".repeat(40)
-        ),
-    );
+    f.set_pulls(&[
+        (5, "lane/opened", "main", &opened),
+        (6, "lane/child", "lane/parent", &"1".repeat(40)),
+    ]);
     // A moved head: the scope names the old SHA after the remote advanced.
     let moved_old = f.lane("lane/moving", "main", "mv.txt", "mv\n");
     f.main_ff("lane/moving");
@@ -457,7 +471,7 @@ fn lane_cleanup_preserves_live_and_unproven_heads() {
     let (code, text) = f.cleanup(&["--apply"]);
     assert_eq!(code, 0, "{text}");
     for kept in [
-        "uniq-r1", "uniq-r2", "mergey", "mergey2", "claimed", "opened", "parent", "moving",
+        "uniq-r1", "uniq-r2", "mergey", "mergey2", "ws", "claimed", "opened", "parent", "moving",
     ] {
         assert!(
             f.heads().contains(&kept.to_string()),
@@ -468,7 +482,10 @@ fn lane_cleanup_preserves_live_and_unproven_heads() {
         text.contains(&format!("lane/claimed {claimed}")) && text.contains("(claimed)"),
         "{text}"
     );
-    assert!(text.contains("(open-pr)"), "{text}");
+    assert!(
+        text.contains("(open-pr-head)") && text.contains("(open-pr-base)"),
+        "{text}"
+    );
     let _ = parent;
     // The old SHA of the moved head is kept and reported; no restore row exists for it.
     let (_, scoped) = f.cleanup(&["--apply", "--refs", &lane_ref("moving", &moved_old)]);
@@ -477,6 +494,7 @@ fn lane_cleanup_preserves_live_and_unproven_heads() {
     assert!(!f.restore_text().contains(&moved_old));
 }
 
+#[cfg(unix)]
 #[test]
 fn lane_cleanup_delete_needs_the_app_remote_and_unresolved_authority_keeps_everything() {
     let f = Fixture::new();
@@ -507,6 +525,8 @@ fn lane_cleanup_delete_needs_the_app_remote_and_unresolved_authority_keeps_every
         f.state.to_str().unwrap(),
         "--gh-repo",
         "fixture/origin",
+        "--gh-host",
+        "local",
         "--apply",
     ]);
     let text = String::from_utf8_lossy(&out.stdout);
@@ -518,6 +538,7 @@ fn lane_cleanup_delete_needs_the_app_remote_and_unresolved_authority_keeps_every
     assert!(f.heads().is_empty() && text.contains(&merged), "{text}");
 }
 
+#[cfg(unix)]
 #[test]
 fn probe_cleanup_closes_only_bound_terminal_runs() {
     let f = Fixture::new();
@@ -584,4 +605,147 @@ fn probe_cleanup_closes_only_bound_terminal_runs() {
         "--apply",
     ]);
     assert_eq!(fs::read_to_string(f.gh.join("closed.log")).unwrap(), "1\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn lane_cleanup_defers_history_classes_while_active_runs_are_unbound_and_binds_claim_paths() {
+    let f = Fixture::new();
+    let merged = f.lane("lane/merged", "main", "m.txt", "m\n");
+    f.main_ff("lane/merged");
+    // In main with different history: only the exact in-main proof applies, not ancestry.
+    let twin = f.lane("lane/twin", "main", "t.txt", "t\n");
+    f.main_pick(&twin);
+    // A worktree of this host owns a claim path: its branch stays.
+    let owned = f.lane("lane/owned", "main", "o.txt", "o\n");
+    f.main_ff("lane/owned");
+    let tree = f.root.path().join("owned-tree");
+    git(
+        &f.work,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            tree.to_str().unwrap(),
+            "lane/owned",
+        ],
+    );
+    f.hook_on(true);
+    f.set(
+        "claims.json",
+        &format!(
+            r#"{{"paths":["{}"],"branches":[],"unbound_runs":2}}"#,
+            tree.display()
+        ),
+    );
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    // Merged goes; the in-main twin waits for its runs to be bound; the claimed tree stays.
+    assert_eq!(f.heads(), ["owned", "twin"], "{text}");
+    assert!(
+        text.contains("2 active runs have no bound publish ref"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&merged) && text.contains(&owned) && text.contains(&twin),
+        "{text}"
+    );
+    f.set("claims.json", r#"{"paths":[],"branches":[]}"#);
+    git(
+        &f.work,
+        &["worktree", "remove", "--force", tree.to_str().unwrap()],
+    );
+    git(&f.work, &["checkout", "-q", "--detach", "main"]);
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(f.heads().is_empty(), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn lane_cleanup_refuses_a_push_destination_or_host_other_than_the_checked_repository() {
+    let f = Fixture::new();
+    f.lane("lane/merged", "main", "m.txt", "m\n");
+    f.main_ff("lane/merged");
+    f.hook_on(true);
+    // The fetch URL names the repository, the effective push URL names another one.
+    git(
+        &f.work,
+        &["config", "remote.origin.pushurl", "/nowhere/else/other.git"],
+    );
+    let (code, text) = f.cleanup(&["--apply"]);
+    assert_eq!(code, 2, "{text}");
+    assert!(text.contains("push URL of origin is not"), "{text}");
+    assert_eq!(f.heads(), ["merged"]);
+    git(&f.work, &["config", "--unset", "remote.origin.pushurl"]);
+    // The same owner/name on another host is another repository.
+    let out = f.cli(&[
+        "lane-cleanup",
+        "--repo",
+        f.work.to_str().unwrap(),
+        "--state",
+        f.state.to_str().unwrap(),
+        "--gh-repo",
+        "fixture/origin",
+        "--claims-reader",
+        "echo '{}'",
+        "--apply",
+    ]);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("fetch URL of origin is not github.com/fixture/origin"),
+        "{text}"
+    );
+    assert_eq!(f.heads(), ["merged"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn probe_cleanup_keeps_a_pr_whose_head_changes_between_the_two_reads() {
+    let f = Fixture::new();
+    let state = f.state.to_str().unwrap();
+    let head = |c: &str| c.repeat(40);
+    let out = f.cli(&[
+        "lane-cleanup",
+        "record-probe",
+        "--state",
+        state,
+        "--gh-repo",
+        "fixture/origin",
+        "--pr",
+        "7",
+        "--head",
+        &head("a"),
+        "--run-id",
+        "17",
+    ]);
+    assert!(out.status.success());
+    f.set(
+        "pr-7.json",
+        &format!(r#"{{"state":"OPEN","headRefOid":"{}"}}"#, head("a")),
+    );
+    f.set(
+        "pr-7.then.json",
+        &format!(r#"{{"state":"OPEN","headRefOid":"{}"}}"#, head("b")),
+    );
+    f.set(
+        "run-17.json",
+        &format!(r#"{{"status":"completed","headSha":"{}"}}"#, head("a")),
+    );
+    let out = f.cli(&[
+        "lane-cleanup",
+        "close-probes",
+        "--state",
+        state,
+        "--gh-repo",
+        "fixture/origin",
+        "--apply",
+    ]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && text.contains("head-moved"),
+        "{text}"
+    );
+    assert!(!f.gh.join("closed.log").exists(), "{text}");
 }

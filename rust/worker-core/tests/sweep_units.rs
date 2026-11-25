@@ -141,6 +141,7 @@ fn sweep_refuses_a_worktree_a_user_unit_names_and_removes_an_unreferenced_one() 
                     claims: Claims {
                         paths: vec![],
                         branches: vec![],
+                        unbound_runs: 0,
                     },
                     units: vec![],
                     unit_refs: vec![UnitRef {
@@ -204,6 +205,7 @@ fn sweep_keeps_a_worktree_named_through_a_dangling_intermediate_link() {
                     claims: Claims {
                         paths: vec![],
                         branches: vec![],
+                        unbound_runs: 0,
                     },
                     units: vec![],
                     unit_refs: unit_refs.clone(),

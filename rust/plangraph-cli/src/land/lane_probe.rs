@@ -56,6 +56,47 @@ fn gh(args: &[&str]) -> io::Result<Vec<u8>> {
     host_command::output(Command::new("gh").args(args), Duration::from_secs(60))
 }
 
+/// `None` when the PR is open at the recorded head and the bound run (same head) has completed.
+fn evidence(probe: &Probe) -> Result<Option<&'static str>, String> {
+    let (pr, run) = (probe.pr.to_string(), probe.run_id.to_string());
+    let view: PrView = serde_json::from_slice(
+        &gh(&[
+            "pr",
+            "view",
+            &pr,
+            "--repo",
+            &probe.repo,
+            "--json",
+            "state,headRefOid",
+        ])
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if view.state != "OPEN" {
+        return Ok(Some("not-open"));
+    }
+    if view.head != probe.head {
+        return Ok(Some("head-moved"));
+    }
+    let run: RunView = serde_json::from_slice(
+        &gh(&[
+            "run",
+            "view",
+            &run,
+            "--repo",
+            &probe.repo,
+            "--json",
+            "status,headSha",
+        ])
+        .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if run.head != probe.head {
+        return Ok(Some("run-head-differs"));
+    }
+    Ok((run.status != "completed").then_some("run-active"))
+}
+
 fn closed_before(state: &std::path::Path, repo: &str, pr: u64) -> bool {
     fs::read_to_string(state.join(CLOSED)).is_ok_and(|text| {
         text.lines().any(|l| {
@@ -82,48 +123,11 @@ pub(super) fn close(args: &[String]) -> Result<i32, String> {
         }
         let pr = probe.pr.to_string();
         let run = probe.run_id.to_string();
-        let verdict = (|| -> Result<Option<&'static str>, String> {
-            let view: PrView = serde_json::from_slice(
-                &gh(&[
-                    "pr",
-                    "view",
-                    &pr,
-                    "--repo",
-                    &probe.repo,
-                    "--json",
-                    "state,headRefOid",
-                ])
-                .map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            if view.state != "OPEN" {
-                return Ok(Some("not-open"));
-            }
-            if view.head != probe.head {
-                return Ok(Some("head-moved"));
-            }
-            let run: RunView = serde_json::from_slice(
-                &gh(&[
-                    "run",
-                    "view",
-                    &run,
-                    "--repo",
-                    &probe.repo,
-                    "--json",
-                    "status,headSha",
-                ])
-                .map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            if run.head != probe.head {
-                return Ok(Some("run-head-differs"));
-            }
-            Ok(if run.status == "completed" {
-                None
-            } else {
-                Some("run-active")
-            })
-        })();
+        // Evidence is read again right before the close: a push or rerun in between keeps the PR.
+        let verdict = match evidence(&probe) {
+            Ok(None) if apply => evidence(&probe),
+            other => other,
+        };
         match verdict {
             Ok(None) if apply => {
                 let note = "Closed by lane-cleanup: the probe run ended and the head is unchanged.";
