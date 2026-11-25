@@ -53,8 +53,9 @@ fn a_cancelled_cargo_command_strands_neither_the_lease_nor_the_cargo_process() {
     assert!(try_exclusive_lease(&target).unwrap().is_none());
     child.kill().unwrap();
     child.wait().unwrap();
+    // The guardian releases the lease once the command's process group is empty.
     assert!(
-        try_exclusive_lease(&target).unwrap().is_some(),
+        wait_for(|| try_exclusive_lease(&target).unwrap().is_some()),
         "the lease survived the cancelled command"
     );
     let cargo: i32 = std::fs::read_to_string(&pidfile)
@@ -236,4 +237,53 @@ fn an_idle_writer_between_cargo_steps_releases_the_lease_so_trim_succeeds() {
     assert!(pg_worker_core::disk_measure::allocated_bytes(&target).unwrap() <= cap);
     std::fs::write(&trimmed_flag, "done").unwrap();
     assert!(supervisor.wait().unwrap().success());
+}
+
+#[test]
+fn a_killed_shim_keeps_the_lease_until_a_build_descendant_is_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target");
+    let pids = tmp.path().join("pids");
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    // Cargo starts a descendant (a compiler or build script) and waits for it.
+    script(
+        &real,
+        "cargo",
+        &format!("sleep 300 &\necho $! > {}\nwait", pids.display()),
+    );
+    let shim = tmp.path().join("shim");
+    let link = install_shim(&shim, Path::new(env!("CARGO_BIN_EXE_pg-spawnd"))).unwrap();
+    let mut child = Command::new(&link)
+        .arg("build")
+        .env("CARGO_TARGET_DIR", &target)
+        .env(
+            "PATH",
+            format!("{}:{}:/usr/bin:/bin", shim.display(), real.display()),
+        )
+        .env_remove("PLANGRAPH_CARGO_LEASE_HELD")
+        .spawn()
+        .unwrap();
+    assert!(wait_for(
+        || pids.exists() && !std::fs::read_to_string(&pids).unwrap().trim().is_empty()
+    ));
+    let descendant: i32 = std::fs::read_to_string(&pids)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only probes for existence.
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    assert!(alive(descendant));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    // The shim is gone; the lease must not be free while the descendant still runs.
+    assert!(
+        wait_for(|| try_exclusive_lease(&target).unwrap().is_some()),
+        "the lease was never released"
+    );
+    assert!(
+        !alive(descendant),
+        "the lease was free while a build descendant ran"
+    );
 }

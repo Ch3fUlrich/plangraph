@@ -35,8 +35,9 @@ pub fn reclaim_before_push_using(
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(fail(error)),
     };
+    // Preflight refuses a target AT the cap (`size >= cap`), so the reclaim does too.
     let before = size(target)?;
-    if before <= cap {
+    if before < cap {
         return Ok(Report::default());
     }
     let over = |bytes: u64| format!("{bytes} bytes against the cap of {cap} bytes");
@@ -49,10 +50,16 @@ pub fn reclaim_before_push_using(
             over(before)
         ));
     }
-    let report =
-        post_run_cargo_measured(checkout, target, cap, allocated_bytes, processes).map_err(fail)?;
+    let report = post_run_cargo_measured(
+        checkout,
+        target,
+        cap.saturating_sub(1),
+        allocated_bytes,
+        processes,
+    )
+    .map_err(fail)?;
     let after = size(target)?;
-    if after > cap {
+    if after >= cap {
         let blockers = crate::cargo_cache::describe_holders(target);
         return Err(format!(
             "cargo_target_not_reclaimed: {} still holds {}{blockers}; skipped: [{}]: wait for the \

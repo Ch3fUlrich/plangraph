@@ -23,7 +23,10 @@ fn builds_of(root: &Path, name: &str) -> io::Result<Vec<Build>> {
     let mut builds = vec![];
     for entry in fs::read_dir(&base)? {
         let path = entry?.path();
-        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) && cargo_output(&path) {
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+            && cargo_output(&path)
+            && !crate::shared_target::holds_git(&path)
+        {
             let (bytes, newest) = crate::disk_hygiene::scan(&path)?;
             builds.push((newest, path, bytes));
         }
@@ -80,5 +83,24 @@ mod tests {
         assert_eq!(all(tmp.path()).unwrap().len(), 5);
         fs::create_dir(tmp.path().join(".git")).unwrap();
         assert!(!recognized(tmp.path()));
+    }
+
+    #[test]
+    fn a_marked_build_that_holds_a_checkout_is_never_listed() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, git) in [("0000000000000001", false), ("0000000000000002", true)] {
+            let build = tmp.path().join("cli-tests").join(name);
+            fs::create_dir_all(&build).unwrap();
+            fs::write(
+                build.join("CACHEDIR.TAG"),
+                b"Signature: 8a477f597d28d172789f06886806bc55",
+            )
+            .unwrap();
+            if git {
+                fs::create_dir_all(build.join("work/.git")).unwrap();
+            }
+        }
+        let listed: Vec<_> = all(tmp.path()).unwrap().into_iter().map(|b| b.1).collect();
+        assert_eq!(listed, [tmp.path().join("cli-tests/0000000000000001")]);
     }
 }

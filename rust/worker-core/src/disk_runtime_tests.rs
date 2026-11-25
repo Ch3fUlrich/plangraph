@@ -747,3 +747,44 @@ fn a_policy_build_marker_never_authorizes_removing_a_sibling_checkout() {
     let _ = reclaim_before_push_using(&checkout, &target, 1, || Ok((vec![], false)));
     assert!(debug.join("work/source.rs").exists() && debug.join("work/.git").exists());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn push_reclaim_acts_on_a_target_exactly_at_the_cap_like_preflight() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, _) = over_cap_target(parent.path());
+    let at_cap = crate::disk_measure::allocated_bytes(&target).unwrap();
+    // Preflight refuses `size >= cap`; the host reclaim must not wave the same target through.
+    let report =
+        reclaim_before_push_using(&checkout, &target, at_cap, || Ok((vec![], false))).unwrap();
+    assert!(report.freed_bytes > 0);
+    assert!(crate::disk_measure::allocated_bytes(&target).unwrap() < at_cap);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_stale_unit_that_holds_a_checkout_is_never_evicted() {
+    let parent = tempfile::tempdir().unwrap();
+    let (checkout, target, units) = over_cap_target(parent.path());
+    let kept = &units[0];
+    fs::create_dir_all(kept.join("work/.git")).unwrap();
+    fs::write(kept.join("work/source.rs"), b"uncommitted").unwrap();
+    // The oldest unit, so only the Git guard keeps it out of the eviction list.
+    let oldest = std::time::SystemTime::now() - std::time::Duration::from_secs(9 * 3600);
+    for path in [
+        kept.join("work/source.rs"),
+        kept.join("work/.git"),
+        kept.join("work"),
+        kept.join("build-script-build"),
+        kept.clone(),
+    ] {
+        fs::File::open(path).unwrap().set_modified(oldest).unwrap();
+    }
+    let cap = crate::disk_measure::allocated_bytes(&target).unwrap() / 2;
+    let _ = reclaim_before_push_using(&checkout, &target, cap, || Ok((vec![], false)));
+    assert!(kept.join("work/source.rs").exists() && kept.join("work/.git").exists());
+    assert!(
+        !units[1].exists() || !units[2].exists(),
+        "the other stale units were evicted"
+    );
+}

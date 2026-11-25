@@ -130,3 +130,37 @@ fn a_child_whose_shim_already_exited_refuses_to_run_cargo() {
     let error = die_with_parent(libc::pid_t::MAX).unwrap_err();
     assert!(error.to_string().contains("shim exited"), "{error}");
 }
+
+#[test]
+fn a_finished_command_leaves_no_straggler_behind_the_released_lease() {
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target");
+    let pid = tmp.path().join("straggler.pid");
+    // Cargo exits at once, leaving a background process in its group.
+    let cargo = script(
+        tmp.path(),
+        "straggler-cargo",
+        &format!("sleep 300 &\necho $! > {}", pid.display()),
+    );
+    let started = Instant::now();
+    let code = run_command_in_group(
+        Some(&target),
+        None,
+        &cargo,
+        &[],
+        WAIT,
+        Duration::from_millis(300),
+    )
+    .unwrap();
+    assert_eq!(code, 0);
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    let straggler: i32 = std::fs::read_to_string(pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only probes for existence.
+    let alive = unsafe { libc::kill(straggler, 0) } == 0;
+    assert!(!alive, "the lease was released with a build process alive");
+    assert!(try_exclusive_lease(&target).unwrap().is_some());
+}

@@ -97,20 +97,37 @@ fn hook_git_environment_fixture_child() {
 
 #[test]
 fn native_writer_pushed_base_handshake_review_resume_and_record() {
-    native_writer_fixture(false, false, false);
+    native_writer_fixture(false, false, 0);
 }
 #[test]
 fn native_writer_holds_the_cargo_lease_per_command_and_reclaims_before_its_push() {
-    native_writer_fixture(false, false, true);
+    native_writer_fixture(false, false, 1);
+}
+#[test]
+fn native_writer_keeps_its_head_while_a_build_runs_and_a_retry_only_pushes() {
+    native_writer_fixture(false, false, 2);
 }
 #[test]
 fn native_writer_ignores_host_admission_policy() {
-    native_writer_fixture(true, false, false);
+    native_writer_fixture(true, false, 0);
 }
 #[test]
 fn native_writer_spawn_finds_nvm_codex_outside_systemd_path() {
-    native_writer_fixture(false, true, false);
+    native_writer_fixture(false, true, 0);
 }
+/// A pre-push hook that refuses a shared Cargo target at or over the cap, as the push preflight does.
+const HOOK_PRE_PUSH: &str = r#"#!/usr/bin/env python3
+import os, pathlib, sys
+home = pathlib.Path(os.environ['HOME'])
+(home / 'pre-push-ran').write_text('ran')
+cap = int(float(os.environ['PLANGRAPH_CARGO_TARGET_CAP_GB']) * 2**30)
+target = home / '.cache/plangraph/cargo-target'
+size = sum(f.lstat().st_blocks * 512 for f in target.rglob('*') if f.is_file() and not f.is_symlink())
+if size >= cap:
+    print(f'cargo_target_cap: measured {size} bytes in {target}, cap {cap} bytes', file=sys.stderr)
+    sys.exit(1)
+"#;
+
 /// A Cargo stand-in that reports whether the shared lease is held while it runs and, under the
 /// writer's lease, fills the shared target with old build units as a real build would.
 const LEASE_CARGO: &str = r#"#!/bin/sh
@@ -142,7 +159,9 @@ PY
 echo 'fixture cargo'
 "#;
 
-fn native_writer_fixture(hostile_policy: bool, systemd_path: bool, lease: bool) {
+/// `lease`: 0 is the plain run; 1 runs the writer's Cargo under the lease on a quiet host; 2 does
+/// the same while another build is running, then retries once it is gone.
+fn native_writer_fixture(hostile_policy: bool, systemd_path: bool, lease: u8) {
     let fixture = tempfile::Builder::new()
         .prefix("native-writer-e2e-")
         .tempdir()
@@ -270,7 +289,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     let cargo = bin.join("cargo");
     pg_worker_core::executable_test_support::write_executable(
         &cargo,
-        if lease {
+        if lease > 0 {
             LEASE_CARGO
         } else {
             "#!/bin/sh\necho 'fixture cargo'\n"
@@ -314,9 +333,23 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
     } else {
         std::env::var("PATH").unwrap()
     };
-    if lease {
+    if lease > 0 {
         // Over the cap once the writer's Cargo has filled the target: about 21 kB.
         python.env("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.00002");
+        // The process table the host reclaim reads: `init`, and a `cargo` while a build "runs".
+        let table = dir.join("proc");
+        fs::create_dir_all(table.join("1")).unwrap();
+        fs::write(table.join("1/comm"), "init\n").unwrap();
+        if lease == 2 {
+            fs::create_dir_all(table.join("2")).unwrap();
+            fs::write(table.join("2/comm"), "cargo\n").unwrap();
+        }
+        python.env("PG_PROC_ROOT", &table);
+        // The protected push refuses an over-cap shared target, as the push preflight does.
+        pg_worker_core::executable_test_support::write_executable(
+            repo.join(".git/hooks/pre-push"),
+            HOOK_PRE_PUSH,
+        );
     }
     let out = python.current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config"))
@@ -330,7 +363,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'f
         .env("FIXTURE_BATCH_RUN_VALUES", include_str!("fixtures/batch-writer-run-values.txt"))
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .env("FIXTURE_LEASE", if lease { "1" } else { "0" })
+        .env("FIXTURE_LEASE", lease.to_string())
         .env("NATIVE_BINARY", spawnd)
         .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base).env("PLANGRAPH_HOST_NAME", "fixture")
@@ -360,37 +393,49 @@ async def check():
     service = SpawnService(state=root/'state')
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
-    if os.environ['FIXTURE_LEASE'] == '1':
+    if os.environ['FIXTURE_LEASE'] != '0':
         card['push_ref'] = 'refs/heads/lane/lease'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else ('brief marker lease marker' if os.environ['FIXTURE_LEASE'] == '1' else 'brief marker')
+        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else ('brief marker lease marker' if os.environ['FIXTURE_LEASE'] != '0' else 'brief marker')
         run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
         assert run['run_id'] in service.tasks, run
         await service.tasks[run['run_id']]
     record = service.result(run['run_id'])
-    if os.environ['FIXTURE_LEASE'] == '1':
+    if os.environ['FIXTURE_LEASE'] != '0':
+        import shutil, subprocess
         run_dir = pathlib.Path(record['cwd']).parent
-        # The real supervisor ran the writer's Cargo under its own lease and left it free
-        # between commands.
-        assert (run_dir/'lease-states').read_text() == 'free free', (run_dir/'lease-states').read_text()
-        assert 'held' in (run_dir/'cargo-lease').read_text().split(), (run_dir/'cargo-lease').read_text()
+        marker = pathlib.Path(os.environ['FIXTURE_HOME'])/'pre-push-ran'
         target = pathlib.Path(os.environ['FIXTURE_HOME'])/'.cache/plangraph/cargo-target'
         cap = int(float('0.00002') * 2**30)
-        allocated = sum(f.lstat().st_blocks * 512 for f in target.rglob('*') if f.is_file() and not f.is_symlink())
-        build_names = {'cargo', 'rustc', 'rustdoc', 'cc', 'gcc', 'clang', 'ld', 'npm', 'make', 'cmake', 'ninja'}
-        busy = any((p/'comm').read_text().strip() in build_names for p in pathlib.Path('/proc').glob('[0-9]*') if (p/'comm').exists())
-        if record['status'] == 'completed':
-            # The host trimmed the over-cap target between commands and pushed the accepted head.
-            assert record['pushed'] == 'refs/heads/lane/lease' and 'push_pending' not in record, record
-            remote = pathlib.Path(os.environ['FIXTURE_DIR'])/'remote.git'
-            assert subprocess_run(['git', '-C', str(remote), 'rev-parse', 'refs/heads/lane/lease']) == record['final_head']
-            assert allocated <= cap, (allocated, cap)
-        else:
-            # Another build is running on this host: the active-build guard keeps the head for a push-only retry.
-            assert busy, record
-            assert record['push_pending']['head'] == record['final_head'], record
+        def allocated():
+            return sum(f.lstat().st_blocks * 512 for f in target.rglob('*') if f.is_file() and not f.is_symlink())
+        remote = pathlib.Path(os.environ['FIXTURE_DIR'])/'remote.git'
+        # The real supervisor ran the writer's Cargo under its own lease and left it free between commands.
+        assert (run_dir/'lease-states').read_text() == 'free free', (run_dir/'lease-states').read_text()
+        writer_cargo = (run_dir/'cargo-lease').read_text().split().count('held')
+        assert writer_cargo >= 1, (run_dir/'cargo-lease').read_text()
+        if os.environ['FIXTURE_LEASE'] == '2':
+            # Another build is running: the active-build guard keeps the accepted head, nothing is pushed.
+            assert record['status'] == 'failed' and record['push_pending']['head'] == record['final_head'], record
             assert 'cargo_target_not_reclaimed' in record['push_pending']['receipt'], record
+            assert not marker.exists() and allocated() >= cap and not (remote/'refs/heads/lane/lease').exists()
+            shutil.rmtree(pathlib.Path(os.environ['PG_PROC_ROOT'])/'2')
+            prompt_file = root/'retry.md'
+            prompt_file.write_text('retry')
+            resumed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume', run['run_id'],
+                '--state', str(root/'state'), '--prompt-file', str(prompt_file)], capture_output=True, text=True)
+            assert resumed.returncode == 0, resumed.stderr
+            after = service.result(run['run_id'])
+            # No writer turn and no review: the same accepted head, the same review, one push.
+            assert (run_dir/'cargo-lease').read_text().split().count('held') == writer_cargo
+            assert after['final_head'] == record['final_head'] and after['review']['run_id'] == record['review']['run_id'], after
+            assert after['resumes'] == record['resumes'] and 'push_pending' not in after, after
+            record = after
+        assert record['status'] == 'completed' and record['pushed'] == 'refs/heads/lane/lease', record
+        assert subprocess_run(['git', '-C', str(remote), 'rev-parse', 'refs/heads/lane/lease']) == record['final_head']
+        assert marker.exists(), 'the protected pre-push hook never ran'
+        assert allocated() < cap, (allocated(), cap)
         return
     assert record['status'] == 'completed', record
     assert record['base_sha'] == os.environ['FIXTURE_BASE'], record
@@ -557,8 +602,8 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    if lease {
-        // The lease variant asserts its own run in the script and takes no ledger rows.
+    if lease > 0 {
+        // The lease variants assert its own run in the script and takes no ledger rows.
         return fixture.close().unwrap();
     }
     let mut completed = Vec::new();

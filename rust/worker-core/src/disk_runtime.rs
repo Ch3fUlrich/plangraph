@@ -69,11 +69,16 @@ pub fn disk_space(_: &Path) -> io::Result<DiskSpace> {
 /// Fail closed for every visible process, regardless of proc inode owner.
 /// Non-dumpable processes can have root-owned proc inodes even for this user.
 pub fn processes_direct() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
-    scan_process_paths(Path::new("/proc"), false)
+    scan_process_paths(&proc_root(), false)
 }
 /// Includes files and executables even when a process has changed its working directory.
 pub fn process_references_direct() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
-    scan_process_paths(Path::new("/proc"), true)
+    scan_process_paths(&proc_root(), true)
+}
+
+/// The process table: `/proc`, or `PG_PROC_ROOT` for a fixture host that says what is running.
+fn proc_root() -> std::path::PathBuf {
+    std::env::var_os("PG_PROC_ROOT").map_or_else(|| "/proc".into(), Into::into)
 }
 
 fn scan_process_paths(

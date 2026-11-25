@@ -56,7 +56,7 @@ fn build_roots_only(root: &Path) -> bool {
 
 /// True when a Git entry sits anywhere inside `path`; a profile that holds a checkout is not Cargo output.
 #[cfg(target_os = "linux")]
-fn holds_git(path: &Path) -> bool {
+pub(crate) fn holds_git(path: &Path) -> bool {
     let mut pending = vec![path.to_path_buf()];
     while let Some(directory) = pending.pop() {
         let Ok(entries) = fs::read_dir(&directory) else {
@@ -210,6 +210,9 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
     }
     #[cfg(target_os = "linux")]
     candidates.extend(crate::shared_build_roots::stale(root)?);
+    // Whole-directory eviction never takes a directory that holds a Git entry.
+    #[cfg(target_os = "linux")]
+    candidates.retain(|(_, path, _)| !holds_git(path));
     candidates.retain(|(newest, _, _)| {
         now.duration_since(*newest).unwrap_or_default() > Duration::from_secs(6 * 3600)
     });
