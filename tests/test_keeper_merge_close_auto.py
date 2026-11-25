@@ -246,7 +246,7 @@ def test_the_router_verb_also_finds_the_merge_in_another_scanned_repository(env,
         with pytest.raises(Refused, match="merged_on_default_missing"):
             env.store.close_merged(router, "demo:C", "D-1", ["google"])
         assert state(env, "demo:C")["state"] == "in_review"
-        env.store.edit_definition(router, "demo:C", {"note": "Merge-Repo: data"})
+        env.store.edit_definition(router, "demo:C", {"note": "no deploy needed: test fixture\nMerge-Repo: data"})
     assert env.store.close_merged(env.p("router"), "demo:C", "D-1", ["google"])["state"] == "done"
 
 

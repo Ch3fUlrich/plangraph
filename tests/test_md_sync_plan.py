@@ -22,7 +22,7 @@ GOAL = {"project": "routing", "id": "GOAL", "key": "routing:GOAL", "state": "ope
 def live(project, ident, state="open", **kw):
     item = {"project": project, "id": ident, "key": f"{project}:{ident}",
             "state": state, "kind": "lane", "title": "", "note": None,
-            "description": None,
+            "description": "no deploy needed: fixture",
             "depends_on": [], "evidence": [], "evidence_kinds": ["any"],
             "review_tier": "standard", "source": None}
     item.update(kw)
@@ -65,7 +65,8 @@ def test_new_question_creates_lane_gate_and_goal_link():
         "project": "routing", "id": "Q-N1", "title": "Q: New thing", "kind": "question",
         "track": "QUESTIONS", "owner": "operator", "operator": True,
         "evidence_kinds": ["decision"], "review_tier": "none", "depends_on": [],
-        "description": "more words", "source": "md-sync", "wait": "answer"}
+        "description": "more words", "source": "md-sync", "wait": "answer",
+        "note": "no deploy needed: a question or step closed by a decision ships no code"}
     gate = creates[-1]
     assert gate["id"] == "PH-OPERATOR" and gate["kind"] == "gate"
     assert gate["depends_on"] == ["routing:Q-N1", "routing:Q-N2"]
@@ -119,7 +120,7 @@ def test_pre_model_names_item_is_quiet_on_its_folded_note_line():
     # No column yet: the ``description:`` line in note says the same thing,
     # so a re-run emits nothing (idempotence across MODEL-NAMES).
     folded = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                  note="description: x", wait="answer")
+                  note="description: x", wait="answer", description=None)
     assert build(q("- Q-N1 **New title** x\n"), items=[folded]).ops == []
     changed = live("routing", "Q-N1", title="Q: New title", source="md-sync",
                    note="description: stale", wait="answer")

@@ -35,7 +35,7 @@ def legacy(pid, *, state="in_review", owner="legacy@example.invalid",
            kind="lane", deps=(), review_tier=None):
     item = {"project": project, "id": pid, "title": pid, "kind": kind,
             "state": state, "owner": owner, "depends_on": list(deps),
-            "evidence_kinds": list(evidence_kinds)}
+            "evidence_kinds": list(evidence_kinds), "note": "no deploy needed: legacy fixture"}
     if owner_family is not None:
         item["owner_family"] = owner_family
     if review_tier is not None:

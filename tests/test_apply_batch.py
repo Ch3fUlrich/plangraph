@@ -29,7 +29,8 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 LANE_B = {"project": "demo", "id": "B", "title": "batched lane", "kind": "lane",
           "track": "T0", "owner": "tester", "estimate_h": 1, "depends_on": [],
           "done_criteria": "criteria", "evidence_kinds": ["decision"],
-          "review_tier": "none", "operator": False}
+          "review_tier": "none", "operator": False,
+          "note": "no deploy needed: test fixture"}
 GOAL = {"project": "demo", "id": "GOAL", "title": "goal", "kind": "goal",
         "track": "T0", "owner": "tester", "estimate_h": 1,
         "depends_on": ["demo:B"], "done_criteria": "criteria",

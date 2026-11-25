@@ -335,6 +335,7 @@ class CloseMixin:
                        if "commit" in (item.get("evidence_kinds") or [])
                        else [])
         sha = self._read_batch(batch_ref)
+        floor = self._landing_floor(item)   # inside a batch: the facts it pinned before its lock, plus the evidence rows
         decision_ids = sorted({e["ref"]["id"] for e in rows})
         seen = frozenset(e["id"] for e in rows)
         seen_commits = frozenset(e["id"] for e in commit_rows)
@@ -384,6 +385,7 @@ class CloseMixin:
                     raise Refused("conflict",
                                   "the commit evidence changed under the transaction")
                 self._check_commit_evidence(key, fresh, now, again_tok)
+            self._require_live_evidence(dict(fresh, _live_floor=floor))
             # The cache row goes first, exactly like ``_pass``: the event below
             # is what locks the key, and the triggers refuse a locked insert.
             cursor = self.conn.execute(
@@ -482,6 +484,10 @@ class CloseMixin:
             raise RuntimeError("commit history unreadable")
         tagged = frozenset(commit["sha"] for commit in commits)
         named = self._named_merge_proof(item)
+        # The close floor reads the named landing from here: the frozen close resolves nothing itself.
+        self._named_landings[(item["key"], head)] = named["landed"] if named else None
+        if named:
+            self._landing_for(project, named["landed"])   # a squash's forge record, asked outside the lock
         landed = tagged | {named["landed"]} if named else tagged
         changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
         per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])

@@ -70,7 +70,7 @@ def item(ident, state="open", tier="standard", kinds=("any",), note=None,
          evidence=(), project="demo"):
     return {"project": project, "id": ident, "key": f"{project}:{ident}",
             "state": state, "review_tier": tier, "evidence_kinds": list(kinds),
-            "note": note, "evidence": [dict(e) for e in evidence],
+            "note": note, "description": "no deploy needed: fixture", "evidence": [dict(e) for e in evidence],
             "depends_on": []}
 
 

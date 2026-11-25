@@ -101,6 +101,8 @@ def defn(pid, deps=(), project="demo", kind="lane", evidence_kinds=("any",),
         "depends_on": [d if ":" in d else f"{project}:{d}" for d in deps],
         "done_criteria": "criteria", "evidence_kinds": list(evidence_kinds),
         "operator": False,
+        # Every close needs live evidence or a reason (D-6790); the gate has its own tests.
+        "note": "no deploy needed: test fixture",
     }
     item.update(kw)
     return item

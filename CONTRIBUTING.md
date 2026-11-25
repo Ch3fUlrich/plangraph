@@ -14,7 +14,7 @@ Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
 `~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
 shared cleanup lease. It checks the host cache cap before and after each Cargo
 command; never override this with a private target. See [disk limits and
-cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
+cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty. md-sync reports a close the keeper's live-evidence gate would refuse as `held`, so an item needs a `no deploy needed: <reason>` line or a deploy row.
 
 On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
 finish and the build leases have been released. Older pg-spawnd installs
@@ -224,8 +224,8 @@ output for paths in `RUST_INPUTS`, including documentation under `docs/schemas/`
 The Claude writer launcher embeds `skills/batch-writer/SKILL.md`, so edits to that
 skill also select Rust CI. `src/plangraph/config/secret_paths.json` is a `RUST_WORKER_INPUTS` entry, so a change to it alone selects `rust` and `rust-worker`. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository inputs belong in `RUST_INPUTS`. For deployment tests, register each systemd unit
-and environment template they read. The merge-close test reads both the
-`pg-reconcile-merged.service` and `pg-reconcile-merged.timer` units.
+and environment template they read. The merge-close tests read the
+`pg-reconcile-merged` and `pg-merge-close` (with `-continue`) service and timer units.
 `deploy/manifest.toml` and every unit suffix of `DEPLOY_UNIT_SUFFIXES` (also as `.in` templates) are `RUST_INPUTS` entries: the `deploy_manifest` tests read them.
 Add an explicit test case in `tests/test_ci_select_rust_inputs.py` for inputs the scan misses, such as unit
 filenames joined to a deployment directory by a helper. `rust/pg-spawnd/` and

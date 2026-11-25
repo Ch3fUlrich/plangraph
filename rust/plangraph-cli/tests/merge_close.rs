@@ -5,8 +5,10 @@ use plangraph_cli::merge_close::{
 };
 use serde_json::{json, Value};
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::time::Duration;
+
+mod merge_close_support;
+use merge_close_support::Script;
 
 struct Fake(Value, RefCell<Vec<(String, Value)>>);
 
@@ -167,34 +169,6 @@ fn reports_unproven_deployments_with_their_merge_age() {
         .text
         .contains("deployment-pending\tdemo:B\t23h\tlive_evidence_missing"));
     assert!(outcome.text.contains("merged-not-live\t2\n"));
-}
-
-struct Script(RefCell<VecDeque<(Value, Value)>>);
-
-impl Script {
-    fn new<const N: usize>(steps: [(Value, Value); N]) -> Self {
-        Self(RefCell::new(steps.into()))
-    }
-
-    fn assert_finished(&self) {
-        assert!(self.0.borrow().is_empty(), "unconsumed keeper calls");
-    }
-}
-
-impl Transport for Script {
-    fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        let (expected, reply) = self
-            .0
-            .borrow_mut()
-            .pop_front()
-            .expect("unexpected keeper call");
-        assert_eq!(verb, "close_merged_auto");
-        assert_eq!(body, Some(expected));
-        match reply.as_str() {
-            Some(error) => Err(error.into()),
-            None => Ok(reply),
-        }
-    }
 }
 
 #[test]

@@ -542,6 +542,10 @@ class WaiverMixin:
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes, token)
+            # The latest landing of the item's work, not the GO head alone: another landing may be newer.
+            floor = self._landing_floor(item, shas=[] if waiver_only else [head])
+            if code := self._live_status(item, floor):
+                pending = [*pending, code]
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
             if pending:
@@ -559,6 +563,7 @@ class WaiverMixin:
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh.update({field: item[field] for field in ("_merge_project", "_close_head") if field in item})
+            fresh["_live_floor"] = floor
             if waiver_only:
                 current_head, current_prs, current_waiver, result = self._merged_waiver_only(
                     fresh, decision_id, now, all_work=from_open)
@@ -609,6 +614,7 @@ class WaiverMixin:
         automatic merge close, so both end an item the same way.
         """
         key = fresh["key"]
+        self._require_live_evidence(fresh)   # the rows read under this lock, against the floor pinned before it
         if witnessed:
             self._record_merged_seats(principal, fresh, label, witnessed, now)
             for family in seats:
@@ -640,8 +646,10 @@ class WaiverMixin:
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
         missing = list(pending)
-        if self._live_evidence_missing(item, proofs):
-            missing.append("live_evidence_missing")
+        # One floor for the preview and the transaction: the latest landing of the item's work.
+        floor = self._landing_floor(pinned, proofs=proofs)
+        if code := self._live_status(pinned, floor):
+            missing.append(code)
         result = {}
         if missing:
             landed = [(stamp, proof["merged_at"]) for proof in proofs
@@ -650,11 +658,9 @@ class WaiverMixin:
             result["deployment_pending"] = {
                 "missing": missing, "merged_at": earliest[1] if earliest else None,
                 "age_hours": int(max(0, now - earliest[0]) // 3600) if earliest else None}
-        if pending:
             if apply:
-                self._deploy_pending_result(item, pending, now)
+                self._deploy_pending_result(item, missing, now)
             return result
-        # Free-form Live criteria are reported alongside a close. Only shipped units gate it.
         witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
         landing = self._landing_evidence(pinned, proofs, now)
         gaps = {"landing_flags": landing["flags"]} if landing["flags"] else {}
@@ -669,6 +675,7 @@ class WaiverMixin:
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh.update({field: pinned[field] for field in ("_merge_project", "_close_head") if field in pinned})
+            fresh["_live_floor"] = floor
             if self._merged_auto_proofs(fresh) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
@@ -687,29 +694,23 @@ class WaiverMixin:
             return {**result, "key": key, "state": done["state"], "prs": proofs, "seats": seats,
                     **self._flags_of(flags), **gaps}
 
-    def _live_evidence_missing(self, item, proofs):
-        criteria = item.get("done_criteria") or ""
-        if not re.search(r"(?:^|[.!?;]\s+|\n\s*)Live:\s*\S", criteria):
-            return False
-        stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
-        if any(stamp is None for stamp in stamps):
-            return True
-        last_merge = max(stamps)
-        return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
-                       and (as_epoch(row["at"]) or 0) >= last_merge for row in self._evidence(item["key"]))
+    def _commit_landing(self, project, commit):
+        """``(pr, head, date, merge sha)`` of one Plan-Item commit on the default ref.
+
+        A squash merge has no merge commit: the forge names its PR, the head that was reviewed and the date."""
+        pr, head, date = self._merged_commit_proof(self._adapter("git"), project, commit)
+        merge = commit.get("merge") or {}
+        if pr is None and not merge and (squash := self._landing_for(project, commit.get("sha"))):
+            return squash["pr"], squash["head"], squash["merged_at"], commit["sha"]
+        return pr, head, date, merge.get("sha")
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
-        git, project = self._adapter("git"), self._merge_project(item)
+        project = self._merge_project(item)
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
         for commit in self._merged_work_commits(item):
-            pr, head, date = self._merged_commit_proof(git, project, commit)
-            merge = commit.get("merge") or {}
-            sha = merge.get("sha")
-            if pr is None and not merge and (squash := self._landing_for(project, commit.get("sha"))):
-                # A squash merge has no merge commit: the forge names its PR and the head that was reviewed.
-                pr, head, date, sha = squash["pr"], squash["head"], squash["merged_at"], commit["sha"]
+            pr, head, date, sha = self._commit_landing(project, commit)
             if pr is None or not valid_commit_ref(sha) or not valid_commit_ref(head):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):

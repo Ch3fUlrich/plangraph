@@ -86,6 +86,7 @@ class OpBatch:
         self.allow_new = set()   # codes an op is expected to introduce
         self.strict = set()      # keys of ops that may introduce NO new code
         self.pre = {}            # (key, kind, ref json) -> (result, state, epoch)
+        self.floors = {}         # key -> landing floor read before the lock (``_landing_floor``)
 
     def note(self, affected, allow_new):
         self.touched.setdefault(self.current, set()).update(affected or ())
@@ -233,6 +234,8 @@ class OpsMixin:
             try:
                 if name == "close_on_decision":
                     self._read_batch(batch_ref)
+                    if (item := self._item(op["key"])) is not None:
+                        batch.floors[item["key"]] = self._landing_floor(item)
                 elif name == "add_evidence" and op["key"] not in moved:
                     self._prelock_evidence(op, batch, now)
             except Refused as exc:

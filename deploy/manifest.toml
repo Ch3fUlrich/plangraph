@@ -157,6 +157,13 @@ env_files = ["plangraph.env"]
 first_run = "systemctl --user start pg-merge-close.service journals a merged-not-done line"
 
 [[unit]]
+name = "pg-merge-close-continue"
+files = ["pg-merge-close-continue.service", "pg-merge-close-continue.timer"]
+hosts = ["keeper"]
+env_files = ["plangraph.env"]
+first_run = "pg-merge-close-continue.timer is active and its service exits successfully when no scan is pending"
+
+[[unit]]
 name = "pg-reconcile-merged"
 files = ["pg-reconcile-merged.service", "pg-reconcile-merged.timer"]
 hosts = ["keeper"]
