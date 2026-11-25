@@ -28,6 +28,8 @@ pub mod round_types;
 pub mod round_wait;
 pub mod round_watch;
 #[cfg(test)]
+mod round_watch_crash_tests;
+#[cfg(test)]
 mod round_watch_tests;
 mod settings;
 mod storage;

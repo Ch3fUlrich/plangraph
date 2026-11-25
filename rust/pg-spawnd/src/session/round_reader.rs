@@ -13,6 +13,15 @@ use super::{
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Back-to-back blocking task-output calls on one task, with the first call's id.
+#[derive(Debug)]
+pub(super) struct Episode {
+    pub(super) first_call: String,
+    pub(super) start_ms: i64,
+    /// Another call or a new round came between: the next wait call starts a new episode.
+    pub(super) interrupted: bool,
+}
+
 #[derive(Debug)]
 pub(super) struct Background {
     pub(super) task: TaskRef,
@@ -62,6 +71,8 @@ pub struct Reader {
     pub(super) background: Vec<Background>,
     /// Exit codes the harness reported for finished tasks.
     pub(super) exits: HashMap<String, i64>,
+    /// Wait episodes by task id.
+    pub(super) episodes: HashMap<String, Episode>,
 }
 
 fn parse_ts(value: &Value) -> Option<i64> {
@@ -248,6 +259,7 @@ impl Reader {
             .or_else(|| value["uuid"].as_str())
             .unwrap_or("");
         // A round that ends closes every wait and forgets the commands of that round.
+        self.episodes.clear();
         self.open.clear();
         self.background.clear();
         self.rows.push(RoundRow {
@@ -290,6 +302,29 @@ impl Reader {
                 .find_map(|key| input[*key].as_str())
                 .map(str::to_owned);
             let structured = task_output && blocking && task_ref.is_some();
+            // An episode is a chain of back-to-back blocking calls on one task: a single
+            // call cannot block longer than the harness allows, so the writer that waits
+            // for a command keeps calling. Any other call ends every episode.
+            match (structured, &task_ref) {
+                (true, Some(task)) => {
+                    for (other, episode) in self.episodes.iter_mut() {
+                        episode.interrupted |= other != task;
+                    }
+                    let continues = self.episodes.get(task).is_some_and(|e| !e.interrupted);
+                    if !continues {
+                        let episode = Episode {
+                            first_call: id.clone(),
+                            start_ms: ts,
+                            interrupted: false,
+                        };
+                        self.episodes.insert(task.clone(), episode);
+                    }
+                }
+                _ => self
+                    .episodes
+                    .values_mut()
+                    .for_each(|e| e.interrupted = true),
+            }
             self.open.insert(
                 id,
                 OpenTool {
@@ -336,6 +371,8 @@ impl Reader {
                     }
                 }
             }
+            self.episodes
+                .retain(|task, _| !text.contains(&format!("<task-id>{task}</task-id>")));
             self.background
                 .retain(|bg| !text.contains(&format!("<task-id>{}</task-id>", bg.task.id)));
         }
