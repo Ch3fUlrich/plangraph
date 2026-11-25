@@ -581,12 +581,13 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
     bound; a malformed entry refuses the leg.  Declared policy ceilings apply last.
     """
     from plangraph.routing_support.opencode_overlay import ProviderView, RequestBoundError
-    view = ProviderView() if view is None else view
     kept, refused = [], []
     for leg in legs:
         if not isinstance(leg, Leg) or leg.harness != "opencode":
             kept.append(leg)
             continue
+        if view is None:
+            view = ProviderView()
         identity = leg
         if card is not None and role in ("implement", "review"):
             from plangraph.routing_errors import SpawnRefused
