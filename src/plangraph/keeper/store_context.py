@@ -85,71 +85,81 @@ def _graph(index):
     return dependents, corrected
 
 
-def _new_ids(after, before):
-    """Numbers of the D-ids *after* cites and *before* did not."""
-    old = set(src.decision_ids(before))
-    return [_num(did) for did in src.decision_ids(after) if did not in old]
-
-
 class _ClockReader:
     """Replays definition events into the shared decision clock's premise facts.
 
-    Per item it keeps the last recorded description and the anchor: the seq of its creation
-    or of its last *recorded* premise change.  A rehome copies both from ``rehomed_from``.
-    Evidence is read only where an event records a value: a creation's description, the
-    ``after`` side of an audit pair that differs from its ``before``, a top-level description
-    that differs from the last recorded one, and the criteria ledger row of the event's seq.
-    A ``fields`` entry alone, a note, a migrated description and metadata prove no change.
-    Only D-ids a changed value introduces count.
+    Per item it keeps the last recorded description, the D-ids a migrated description
+    carried over from its note, and the anchor: the seq of its creation or of its last
+    *recorded* premise change.  A rehome copies all three from ``rehomed_from``.  Evidence is
+    read only where an event records a value: a creation's description, the ``after`` side of
+    an audit pair that differs from its ``before``, a top-level description (a recorded null
+    clears it) that differs from the last recorded one, and the criteria ledger row of the
+    event's seq and key.  A ``fields`` entry alone, a note and metadata prove no change; a
+    migrated description moves neither anchor nor clock, and its carried ids stay out of a
+    later description edit until that edit drops them.
     """
 
     def __init__(self, amendments):
         self.amendments = amendments
-        self.description, self.anchor = {}, {}
+        self.description, self.anchor, self.carried = {}, {}, {}
 
     def read(self, kind, key, seq, payload):
-        """``(anchor_moved, new D-id numbers)`` of one event."""
+        """The D-id numbers one event's recorded premise changes publish."""
         if kind == "item_created":
             origin = payload.get("rehomed_from")
             text = payload.get("description")
             self.description[key] = text if isinstance(text, str) else ""
             if origin:
+                self.carried[key] = set(self.carried.get(origin, ()))
                 if origin in self.anchor:
                     self.anchor[key] = self.anchor[origin]
-                return False, []
+                return []
             self.anchor[key] = seq
-            return False, _new_ids(text, "")
+            return [_num(did) for did in src.decision_ids(text)]
         if payload.get("migrated"):
-            if isinstance(payload.get("description"), str):
-                self.description[key] = payload["description"]
-            return False, []
+            text = payload.get("description")
+            if isinstance(text, str):
+                self.description[key] = text
+                self.carried.setdefault(key, set()).update(src.decision_ids(text))
+            return []
         changes = self._changes(key, seq, payload)
-        for name, before, after in changes:
-            if name == "description":
-                self.description[key] = after
         if changes:
             self.anchor[key] = seq
-        return bool(changes), [n for _, before, after in changes for n in _new_ids(after, before)]
+        found = set()
+        for name, after in changes:
+            ids = set(src.decision_ids(after))
+            if name == "description":
+                self.description[key] = after
+                carried = self.carried.get(key, set())
+                found |= ids - carried
+                self.carried[key] = carried & ids
+            else:
+                found |= ids
+        return [_num(did) for did in found]
 
     def _changes(self, key, seq, payload):
+        """``[(field, new text)]`` the event records as an actual change."""
         before, after = payload.get("before"), payload.get("after")
         pair = isinstance(before, dict) and isinstance(after, dict)
-        out = [(name, before[name] or "", after[name] or "") for name in CLOCK_PREMISE_FIELDS
-               if pair and name in before and name in after
-               and isinstance(after[name] or "", str) and isinstance(before[name] or "", str)
-               and (before[name] or "") != (after[name] or "")]
-        names = {name for name, _, _ in out}
-        text = payload.get("description")
-        if "description" not in names and isinstance(text, str) and not (pair and "description" in after):
-            if key not in self.description:
-                self.description[key] = text          # no earlier value to compare with
-            elif self.description[key] != text:
-                out.append(("description", self.description[key], text))
-        if "done_criteria" not in names and payload.get("criteria_ledger"):
+        out = {}
+        for name in CLOCK_PREMISE_FIELDS:
+            if pair and name in before and name in after:
+                old, new = before[name] or "", after[name] or ""
+                if isinstance(old, str) and isinstance(new, str) and old != new:
+                    out[name] = new
+        covered = {name for name in CLOCK_PREMISE_FIELDS if pair and name in before and name in after}
+        if "description" in payload and "description" not in covered:
+            text = payload["description"] or ""
+            if isinstance(text, str):
+                if key not in self.description:
+                    self.description[key] = text          # no earlier value to compare with
+                elif self.description[key] != text:
+                    out["description"] = text
+        if "done_criteria" not in covered:
             row = self.amendments.get(seq)
-            if row and row[0] == key and row[1] != row[2]:
-                out.append(("done_criteria", row[1] or "", row[2] or ""))
-        return out
+            if row and row[0] == key and (row[1] or "") != (row[2] or ""):
+                out["done_criteria"] = row[2] or ""
+        return list(out.items())
 
 
 class ContextMixin:
@@ -217,7 +227,7 @@ class ContextMixin:
         for row in self.conn.execute(
                 f"SELECT seq, key, type, payload FROM events WHERE {DEFINITION_EVENTS}"
                 " ORDER BY seq"):
-            _, ids = reader.read(row["type"], row["key"], row["seq"], _payload(row["payload"]))
+            ids = reader.read(row["type"], row["key"], row["seq"], _payload(row["payload"]))
             if ids:
                 mark = max(mark, *ids)
             clock["seqs"].append(row["seq"])

@@ -355,9 +355,9 @@ def _newer(w, key):
     return w.store.show(w.p("router"), key)["newer_decisions"]
 
 
-def _refuses(w, key):
+def _refuses(w, key, who=None):
     with pytest.raises(Refused) as exc:
-        w.store.claim(w.p("l1main"), key)
+        w.store.claim(who or w.p("l1main"), key)
     assert "premise outdated" in exc.value.msg, exc.value.msg
     return exc.value.msg
 
@@ -392,11 +392,11 @@ def test_definition_event_uses_only_changed_after_premise_fields(w, decisions):
 
 
 def test_a_ledger_only_criteria_event_reads_the_amendment_row(w, decisions):
-    # the shape written before the audit pair: the event names the edit, the ledger the values
+    # the shape 6a588d61f wrote: the event names the field only, the ledger holds the values
     _mk(w, defn("A"))
     with w.store._write():
         seq, _ = w.store._append(w.p("router"), "demo:A", "item_defined",
-                                 {"fields": ["done_criteria"], "criteria_ledger": True}, time.time())
+                                 {"fields": ["done_criteria"]}, time.time())
         w.conn.execute(
             "INSERT INTO criteria_amendments(seq,key,original_text,new_text,reason,evidence,"
             "authority,ts) VALUES(?,?,?,?,?,?,?,?)",
@@ -428,7 +428,7 @@ def test_rehome_keeps_the_original_fallback_anchor(w, decisions):
     w.store.rehome(w.p("router"), "demo:U", "other", "box")
     assert _clock_top(w) == 6000                      # the rehome advanced nothing
     _decide(decisions, 5900, "other:U scope changed")
-    assert _newer(w, "other:U") == ["D-5900"]
+    assert "D-5900" in _refuses(w, "other:U", w.p("l1other"))
 
 
 def test_migrated_description_does_not_publish_carried_citations(w, decisions):
@@ -443,7 +443,8 @@ def test_migrated_description_does_not_publish_carried_citations(w, decisions):
     assert _clock_top(w) == 6000
     _decide(decisions, 5900, "demo:L first planned")
     _decide(decisions, 6100, "demo:L scope moved")
-    assert _newer(w, "demo:L") == ["D-6100"]
+    msg = _refuses(w, "demo:L")
+    assert "D-6100" in msg and "D-5900" not in msg
 
 
 def test_a_note_only_event_supplies_no_shared_clock_evidence(w, decisions):
@@ -455,3 +456,24 @@ def test_a_note_only_event_supplies_no_shared_clock_evidence(w, decisions):
     assert _clock_top(w) == -1
     _decide(decisions, 5900, "demo:L scope moved")
     assert w.store.claim(w.p("l1main"), "demo:L")["epoch"] == 1       # unknown watermark never refuses
+
+
+def test_a_cleared_description_moves_the_fallback_anchor(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U", description="plain words"))
+    _mk(w, defn("E", description="per D-6000"))
+    _decide(decisions, 5900, "demo:U scope changed")
+    assert "D-5900" in _refuses(w, "demo:U")
+    w.store.edit_definition(w.p("router"), "demo:U", {"description": None})
+    assert _newer(w, "demo:U") == []
+    assert w.store.claim(w.p("l1main"), "demo:U")["epoch"] == 1
+
+
+def test_a_changed_audit_value_publishes_the_citations_it_keeps(w, decisions):
+    _mk(w, defn("A", done_criteria="per D-5800"))
+    w.store.edit_definition(w.p("router"), "demo:A",
+                            {"done_criteria": "per D-5800 and the new scope", **_AMEND})
+    _mk(w, defn("B"))
+    assert _clock_top(w) == 5800
+    _decide(decisions, 5900, "demo:B scope moved")
+    assert "D-5900" in _refuses(w, "demo:B")
