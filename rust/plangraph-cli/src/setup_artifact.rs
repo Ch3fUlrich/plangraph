@@ -72,18 +72,7 @@ pub(super) fn install(
 }
 
 #[cfg(unix)]
-fn valid_hash(hash: &str) -> bool {
-    hash.len() == 64
-        && hash
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-#[cfg(unix)]
-fn hash(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
-}
+use crate::runner::download::{sha256_bytes as hash, valid_hash};
 
 #[cfg(unix)]
 fn download(url: &str) -> Result<Vec<u8>, String> {

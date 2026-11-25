@@ -3,6 +3,9 @@ name = "pg-telemetry"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.plangraph]
+host-binaries = ["pg-telemetry"]
+
 [dependencies]
 chrono = "0.4"
 postgres = "0.19"

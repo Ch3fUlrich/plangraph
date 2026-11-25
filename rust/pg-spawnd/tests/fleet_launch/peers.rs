@@ -62,6 +62,8 @@ pub fn invoke(name: &str, args: Vec<String>) -> bool {
                     "forwarded": env_value("FLEET_FORWARDED"),
                     "defer": env_value("FLEET_DEFER_RECORD"),
                     "path": env_value("PATH"),
+                    "cargo_target": env_value("CARGO_TARGET_DIR"),
+                    "plangraph_cargo_target": env_value("PLANGRAPH_CARGO_TARGET_DIR"),
                 }),
             );
             hold(&root, "background");

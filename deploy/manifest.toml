@@ -1,0 +1,476 @@
+# The deploy manifest: every systemd unit file under deploy/ (any depth) and every binary target of the
+# workspace crates is named here, with the host roles it belongs on and what proves it works.
+#
+# Roles, not host names: `keeper` (the keeper host), `worker` (a spawn worker host), `wsl` (a WSL
+# worker host) and `all`. A host lists its roles in PG_HOST_ROLES or in ~/.config/plangraph/host-roles.
+# env_family names the `host-sync --install-env` family that creates the env files from documented defaults;
+# without it a missing env file is reported by name for the operator (secrets are never created).
+# dir names the directory under deploy/ that holds the unit files when it is not deploy/systemd ("." is deploy/ itself).
+# installer names the script and step that render a template unit (*.in, or @ROOT@ placeholders) into the installed
+# units, the unit names it writes (renders) and the one it enables (enable); the files above are sources, not installed names.
+# install_paths on a binary lists every path a consumer runs it from, each with the roles it applies to;
+# no list means only ~/.local/bin/<bin>, and a binary used from two places lists both.
+# env_files are file names under ~/.config/plangraph (or /etc/plangraph for system units), never values;
+# %i stands for the instance of a template unit.
+# first_run is what an operator checks after the first start.
+# To leave a unit or binary out, give it an entry with not_deployed = "<reason>"; the coverage test
+# (rust/plangraph-cli/tests/deploy_manifest.rs) fails for anything this file does not name.
+# See deploy/systemd/README.md.
+
+# --- unit families -------------------------------------------------------------------------------
+
+[[unit]]
+name = "liveness-watchdog"
+dir = "liveness"
+files = ["liveness-watchdog@.service", "liveness-watchdog@.timer"]
+hosts = ["all"]
+first_run = "enable one instance per config under ~/.config/plangraph/liveness; its timer then drives one pass every 10 minutes"
+
+[[unit]]
+name = "pganchor"
+dir = "pganchor"
+files = ["pganchor.socket", "pganchor@.service"]
+enable = "pganchor.socket"
+scope = "system"
+hosts = ["keeper"]
+first_run = "the keeper appends an anchor record through /run/pganchor/anchor.sock (operator step: root installs both units)"
+
+[[unit]]
+name = "flow-watchdog"
+dir = "watchdog"
+files = ["flow-watchdog.service", "flow-watchdog.timer"]
+env_files = ["flow-watchdog.env"]
+not_deployed = "needs a host collector that refreshes ~/.local/state/plangraph/flow-snapshot.json (docs/flow-watchdog.md); none is deployed yet, the binary is installed on every host"
+
+[[unit]]
+name = "stall-watchdog"
+dir = "watchdog"
+files = ["watchdog.service", "watchdog.timer"]
+hosts = ["all"]
+env_files = ["watchdog.env"]
+first_run = "systemctl --user is-active plangraph-stall-watchdog.timer; the unit files carry @ROOT@ and @PYTHON@ placeholders, so the installer renders them and a verbatim copy would be wrong"
+
+[unit.installer]
+via = "deploy/bootstrap.sh"
+step = "python -m plangraph.spawner.stall_watchdog install --host linux"
+renders = ["plangraph-stall-watchdog.service", "plangraph-stall-watchdog.timer", "plangraph-remote-probe.service", "plangraph-remote-probe.timer"]
+enable = "plangraph-stall-watchdog.timer"
+
+[[unit]]
+name = "ctx-watchdog"
+dir = "ctx-watchdog"
+files = ["ctx-watchdog.service.in", "ctx-watchdog.timer.in"]
+enable = "ctx-watchdog.timer.in"
+hosts = ["all"]
+first_run = "systemctl --user is-enabled ctx-watchdog.timer after bootstrap with ctx-watchdog.json filled in (deploy/ctx-watchdog/config.example.json); the unit files carry @ROUTER_DIR@, so the installer renders them"
+
+[unit.installer]
+via = "deploy/bootstrap.sh"
+step = "install_ctx_watchdog renders ctx-watchdog.service and ctx-watchdog.timer into the user unit directory"
+renders = ["ctx-watchdog.service", "ctx-watchdog.timer"]
+enable = "ctx-watchdog.timer"
+
+[[unit]]
+name = "pg-feeder"
+files = ["pg-feeder.service", "pg-feeder.timer"]
+hosts = ["keeper"]
+env_files = ["plangraph.env"]
+first_run = "systemctl --user start pg-feeder.service exits 0; journalctl --user -u pg-feeder shows a feed pass"
+
+[[unit]]
+name = "pg-throughput"
+files = ["pg-throughput.service", "pg-throughput.timer"]
+hosts = ["keeper"]
+env_files = ["throughput.env"]
+env_family = "throughput"
+first_run = "systemctl --user start pg-throughput.service exits 0; the throughput snapshot file is written"
+
+[[unit]]
+name = "pg-disk-hygiene"
+files = ["pg-disk-hygiene.service", "pg-disk-hygiene.timer"]
+hosts = ["all"]
+env_files = ["disk-hygiene-service.env|disk-hygiene.env"]
+env_family = "disk-hygiene"
+first_run = "pg-disk-hygiene --repo REPO --root WORKTREES --pins PINS (dry run) lists candidates, then the service exits 0"
+
+[[unit]]
+name = "pg-worktree-sweep"
+files = ["pg-worktree-sweep.service", "pg-worktree-sweep.timer"]
+hosts = ["all"]
+env_files = ["disk-hygiene.env"]
+first_run = "systemctl --user start pg-worktree-sweep.service exits 0 and journals the swept count"
+
+[[unit]]
+name = "pg-live-probe"
+files = ["pg-live-probe.service", "pg-live-probe.timer", "pg-live-probe-alert.service"]
+enable = "pg-live-probe.timer"
+scope = "system"
+hosts = ["keeper"]
+first_run = "systemctl start pg-live-probe.service exits 0 and /var/lib/pg-live-probe/results.jsonl gains a row"
+
+[[unit]]
+name = "plangraph-prod-checkout"
+files = ["plangraph-prod-checkout.service", "plangraph-prod-checkout.timer"]
+hosts = ["all"]
+env_files = ["prod-checkout.env"]
+first_run = "systemctl --user start plangraph-prod-checkout.service exits 0 (the checkout is on the default branch, clean)"
+
+[[unit]]
+name = "plangraph-crit-path-stall"
+files = ["plangraph-crit-path-stall.service", "plangraph-crit-path-stall.timer"]
+hosts = ["keeper"]
+env_files = ["crit-path-stall.env"]
+first_run = "systemctl --user start plangraph-crit-path-stall.service exits 0 and journals the critical-path verdict"
+
+[[unit]]
+name = "plangraph-projector"
+files = ["plangraph-projector.service"]
+hosts = ["keeper"]
+env_files = ["projector.env"]
+first_run = "journalctl --user -u plangraph-projector shows a poll with attempts reaching the keeper"
+
+[[unit]]
+name = "plangraph-projector-reconcile"
+files = ["plangraph-projector-reconcile.service", "plangraph-projector-reconcile.timer"]
+hosts = ["keeper"]
+env_files = ["projector.env"]
+first_run = "systemctl --user start plangraph-projector-reconcile.service prints one JSON line with raised, cleared, open_alarms"
+
+[[unit]]
+name = "plangraph-keeper"
+files = ["plangraph-keeper.service"]
+hosts = ["keeper"]
+first_run = "plangraph keeper health answers, the daemon journals no restart loop"
+
+[[unit]]
+name = "pg-keeper-backup"
+files = ["pg-keeper-backup.service", "pg-keeper-backup.timer"]
+hosts = ["keeper"]
+env_files = ["keeper-backup.env"]
+first_run = "systemctl --user start pg-keeper-backup.service exits 0: dump written, verified, restore test passed"
+
+[[unit]]
+name = "pg-merge-close"
+files = ["pg-merge-close.service", "pg-merge-close.timer"]
+hosts = ["keeper"]
+env_files = ["plangraph.env"]
+first_run = "systemctl --user start pg-merge-close.service journals a merged-not-done line"
+
+[[unit]]
+name = "pg-reconcile-merged"
+files = ["pg-reconcile-merged.service", "pg-reconcile-merged.timer"]
+hosts = ["keeper"]
+env_files = ["plangraph.env"]
+first_run = "systemctl --user start pg-reconcile-merged.service writes watch.json in its state directory"
+
+[[unit]]
+name = "pg-ci-watch"
+files = ["pg-ci-watch.service", "pg-ci-watch.timer"]
+hosts = ["keeper"]
+first_run = "systemctl --user start pg-ci-watch.service exits 0 and journals the failure scan"
+
+[[unit]]
+name = "pg-snapshot-pull"
+files = ["pg-snapshot-pull.service", "pg-snapshot-pull.timer"]
+hosts = ["worker", "wsl"]
+first_run = "systemctl --user start pg-snapshot-pull.service exits 0 and the local plan copy is newer"
+
+[[unit]]
+name = "pg-worker-liveness"
+files = ["pg-worker-liveness.service", "pg-worker-liveness.timer"]
+hosts = ["keeper"]
+env_files = ["worker-liveness.env"]
+first_run = "systemctl --user start pg-worker-liveness.service exits 0 and journals one verdict per worker"
+
+[[unit]]
+name = "plangraph-agents-view"
+files = ["plangraph-agents-view.service", "plangraph-agents-view.timer"]
+hosts = ["keeper"]
+first_run = "systemctl --user start plangraph-agents-view.service exits 0 and the agents view file is rewritten"
+
+[[unit]]
+name = "plangraph-oversight-check"
+files = ["plangraph-oversight-check.service", "plangraph-oversight-check.timer"]
+hosts = ["keeper"]
+first_run = "systemctl --user start plangraph-oversight-check.service exits 0 and journals the digest check"
+
+[[unit]]
+name = "plangraph-quota-alarms"
+files = ["plangraph-quota-alarms.service", "plangraph-quota-alarms.timer"]
+hosts = ["keeper"]
+env_files = ["quota-alarms.env"]
+env_family = "quota-alarms"
+first_run = "systemctl --user start plangraph-quota-alarms.service exits 0 (QUOTA_SNAPSHOT_DB is set in the env file)"
+
+[[unit]]
+name = "plangraph-review-probe"
+files = ["plangraph-review-probe.service", "plangraph-review-probe.timer"]
+hosts = ["keeper"]
+env_files = ["watchdog.env"]
+first_run = "systemctl --user start plangraph-review-probe.service exits 0 and every review leg has a probe result"
+
+[[unit]]
+name = "plangraph-render"
+files = ["plangraph-render.service", "plangraph-render.timer"]
+hosts = ["keeper"]
+env_files = ["render.env"]
+first_run = "systemctl --user start plangraph-render.service exits 0 and the page stamp matches the gated head"
+
+[[unit]]
+name = "pg-host-link"
+files = ["pg-host-link.service", "pg-host-link.timer"]
+hosts = ["worker", "wsl"]
+env_files = ["host-link.env"]
+first_run = "systemctl --user start pg-host-link.service exits 0 and the link evidence file is updated"
+
+[[unit]]
+name = "pg-host-ssh-link"
+files = ["pg-host-ssh-link@.service", "pg-host-ssh-link@.timer"]
+enable = "pg-host-ssh-link@.timer"
+hosts = ["keeper"]
+env_files = ["host-links/%i.env"]
+first_run = "enable one instance per configured worker; its service exits 0 and writes outage evidence"
+
+[[unit]]
+name = "plangraph-state-shadow"
+files = ["plangraph-state-shadow@.service"]
+hosts = ["keeper"]
+env_files = ["plangraph.env", "state-shadow/%i.env"]
+first_run = "enable one instance per role; `plangraph state wait --role ROLE` journals its first wake"
+
+[[unit]]
+name = "pg-wsl-cache-guard"
+files = ["pg-wsl-cache-guard.service", "pg-wsl-cache-guard.timer"]
+scope = "system"
+hosts = ["wsl"]
+env_files = ["wsl-cache-guard.env"]
+first_run = "systemctl start pg-wsl-cache-guard.service exits 0 and journals the Windows free memory sample"
+
+[[unit]]
+name = "pg-session-resume"
+files = ["pg-session-resume.service", "pg-session-resume.timer"]
+not_deployed = "docs/SESSION-LIFECYCLE.md: the tick wiring is not enabled by its change; enabling the timer and registering the Stop hook need a routing D-id"
+
+[[unit]]
+name = "claude-daemon"
+files = ["claude-daemon.service"]
+not_deployed = "no fleet host is assigned the per-user Claude daemon yet; assign a role before enabling"
+
+# --- binaries (package = the Cargo package that builds it) -------------------------------------
+
+[[binary]]
+package = "pg-spawnd"
+bin = "pg-spawnd"
+install_paths = [
+  { path = "~/.local/bin/pg-spawnd", hosts = ["all"] },
+  { path = "/usr/local/bin/pg-spawnd", hosts = ["wsl"] },
+]
+hosts = ["all"]
+first_run = "pg-spawnd --version prints and `pg-spawnd host` answers"
+
+[[binary]]
+package = "pg-spawnd"
+bin = "ci-temporal"
+not_deployed = "CI helper: .github/workflows/tests.yml runs it with cargo run; no host runs it"
+
+[[binary]]
+package = "plangraph-cli"
+bin = "plangraph"
+hosts = ["all"]
+first_run = "plangraph env check prints the key count"
+
+[[binary]]
+package = "plangraph-cli"
+bin = "host-sync"
+hosts = ["all"]
+first_run = "host-sync with no arguments reports OK for each fleet tool"
+
+[[binary]]
+package = "plangraph-cli"
+bin = "pg-run-watch"
+hosts = ["all"]
+first_run = "pg-run-watch is on PATH and prints its usage"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-disk-hygiene"
+hosts = ["all"]
+first_run = "pg-disk-hygiene dry run lists candidates"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-worktree-sweep"
+hosts = ["all"]
+first_run = "pg-worktree-sweep dry run lists candidates"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-host-link"
+hosts = ["all"]
+first_run = "pg-host-link tick exits 0 against a fixture state"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-live-probe"
+install_paths = [{ path = "/usr/local/bin/pg-live-probe", hosts = ["keeper"] }]
+hosts = ["keeper"]
+first_run = "pg-live-probe run on the probe list exits 0 (the unit runs it from /usr/local/bin)"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "turn-budget-hook"
+hosts = ["all"]
+first_run = "turn-budget-hook answers a JSON status on stdin"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "unit-breaker"
+hosts = ["all"]
+first_run = "unit-breaker reports its breaker state"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "flow-watchdog"
+hosts = ["all"]
+first_run = "flow-watchdog prints a verdict for a fixture"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "host-idle-capacity"
+hosts = ["all"]
+first_run = "host-idle-capacity prints a capacity snapshot"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-fleet-foundation"
+hosts = ["all"]
+first_run = "pg-fleet-foundation prints its usage"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-host-readiness"
+hosts = ["all"]
+first_run = "pg-host-readiness prints the readiness of this host"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-package-host"
+hosts = ["all"]
+first_run = "pg-package-host prints its usage"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-placement-rules"
+hosts = ["all"]
+first_run = "pg-placement-rules prints the rules"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "pg-process-cwds"
+hosts = ["all"]
+first_run = "pg-process-cwds lists process working directories"
+
+[[binary]]
+package = "pg-keeper-backup"
+bin = "pg-keeper-backup"
+hosts = ["keeper"]
+first_run = "pg-keeper-backup dump --verify passes and the restore test passes"
+
+[[binary]]
+package = "pg-hook"
+bin = "pg-hook"
+hosts = ["all"]
+first_run = "pg-hook answers a policy request"
+
+[[binary]]
+package = "pg-hook"
+bin = "commit-msg"
+hosts = ["all"]
+first_run = "the commit-msg hook rejects a message without trailers"
+
+[[binary]]
+package = "pg-hook"
+bin = "checkpoint-size"
+hosts = ["all"]
+first_run = "checkpoint-size prints the budget for a fixture"
+
+[[binary]]
+package = "pg-hook"
+bin = "guard-hook"
+hosts = ["all"]
+first_run = "guard-hook denies on an infrastructure failure"
+
+[[binary]]
+package = "pg-ctx"
+bin = "pg-ctx"
+hosts = ["all"]
+first_run = "pg-ctx nav resolves a symbol"
+
+[[binary]]
+package = "pg-jail"
+bin = "pg-jail"
+hosts = ["all"]
+first_run = "pg-jail runs a trivial command"
+
+[[binary]]
+package = "pg-mainff"
+bin = "pg-mainff"
+hosts = ["all"]
+first_run = "pg-mainff prints its usage"
+
+[[binary]]
+package = "pg-policy"
+bin = "pg-policy"
+hosts = ["all"]
+first_run = "pg-policy checks the new-code policy for a fixture revision"
+
+[[binary]]
+package = "pg-reap"
+bin = "pg-reap"
+hosts = ["all"]
+first_run = "pg-reap lists nothing to reap on an idle host"
+
+[[binary]]
+package = "pg-repo-sync"
+bin = "pg-repo-sync"
+hosts = ["all"]
+first_run = "pg-repo-sync prints its usage"
+
+[[binary]]
+package = "pg-seat-evidence"
+bin = "pg-seat-evidence"
+hosts = ["keeper"]
+first_run = "pg-seat-evidence reads a local transcript fixture"
+
+[[binary]]
+package = "pg-telemetry"
+bin = "pg-telemetry"
+hosts = ["all"]
+first_run = "pg-telemetry prints its usage"
+
+[[binary]]
+package = "pg-usage"
+bin = "pg-usage"
+hosts = ["all"]
+first_run = "pg-usage prints the read-only census"
+
+[[binary]]
+package = "og-memory"
+bin = "og-memory"
+hosts = ["keeper"]
+first_run = "og-memory answers its health request"
+
+[[binary]]
+package = "pg-keeper-backup"
+bin = "fake-docker"
+not_deployed = "test helper of the keeper backup tests"
+
+[[binary]]
+package = "pg-worker-core"
+bin = "live_probe_child"
+not_deployed = "test helper of the live probe tests"
+
+[[binary]]
+package = "pg-session-resume"
+bin = "pg-session-resume"
+not_deployed = "docs/SESSION-LIFECYCLE.md: its timer and Stop hook are not enabled yet and need a routing D-id; the binary is installed once they are"

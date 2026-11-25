@@ -82,9 +82,25 @@ pub fn parse_loadavg(text: &str) -> Result<(f64, f64, f64), HostProbeError> {
 
 #[cfg(target_os = "linux")]
 fn capacity() -> Result<(MemInfo, [Option<f64>; 3]), HostProbeError> {
-    let mem = parse_meminfo(&std::fs::read_to_string("/proc/meminfo")?)?;
-    let (a, b, c) = parse_loadavg(&std::fs::read_to_string("/proc/loadavg")?)?;
-    Ok((mem, [Some(a), Some(b), Some(c)]))
+    capacity_at(std::path::Path::new("/proc"), true)
+}
+
+/// Linux counters under `proc_root`. Memory is required; the load average is required only
+/// when `load_required`, otherwise an unreadable or malformed `loadavg` reads as no load.
+#[cfg(target_os = "linux")]
+fn capacity_at(
+    proc_root: &std::path::Path,
+    load_required: bool,
+) -> Result<(MemInfo, [Option<f64>; 3]), HostProbeError> {
+    let mem = parse_meminfo(&std::fs::read_to_string(proc_root.join("meminfo"))?)?;
+    let load = std::fs::read_to_string(proc_root.join("loadavg"))
+        .map_err(HostProbeError::from)
+        .and_then(|text| parse_loadavg(&text));
+    match load {
+        Ok((a, b, c)) => Ok((mem, [Some(a), Some(b), Some(c)])),
+        Err(error) if load_required => Err(error),
+        Err(_) => Ok((mem, [None; 3])),
+    }
 }
 
 #[cfg(windows)]
@@ -117,7 +133,30 @@ fn capacity() -> Result<(MemInfo, [Option<f64>; 3]), HostProbeError> {
 }
 
 pub fn probe(host_id: &str) -> Result<HostProbe, HostProbeError> {
-    let (mem, [load1, load5, load15]) = capacity()?;
+    probe_with(host_id, capacity()?)
+}
+
+/// Like `probe`, but reads `proc_root` instead of `/proc` and reports `load1: None` when the
+/// load average cannot be read, so a caller that only paces on load still gets valid memory.
+/// Where there is no Linux `/proc` this is `probe`.
+pub fn probe_load_optional(
+    host_id: &str,
+    proc_root: &std::path::Path,
+) -> Result<HostProbe, HostProbeError> {
+    #[cfg(target_os = "linux")]
+    let capacity = capacity_at(proc_root, false)?;
+    #[cfg(not(target_os = "linux"))]
+    let capacity = {
+        let _ = proc_root;
+        capacity()?
+    };
+    probe_with(host_id, capacity)
+}
+
+fn probe_with(
+    host_id: &str,
+    (mem, [load1, load5, load15]): (MemInfo, [Option<f64>; 3]),
+) -> Result<HostProbe, HostProbeError> {
     let cpus = std::thread::available_parallelism()?.get();
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -222,6 +261,28 @@ mod tests {
         for text in ["garbage", "1 2", "NaN 1 2", "1 inf 2", "-1 0 0"] {
             assert!(parse_loadavg(text).is_err());
         }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn load_is_optional_only_for_the_optional_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("meminfo"), MEM).unwrap();
+        for loadavg in [None, Some("garbage")] {
+            if let Some(text) = loadavg {
+                std::fs::write(dir.path().join("loadavg"), text).unwrap();
+            }
+            assert!(capacity_at(dir.path(), true).is_err());
+            let p = probe_load_optional("h", dir.path()).unwrap();
+            assert_eq!((p.mem_available_mb, p.load1), (8000, None));
+        }
+        std::fs::write(dir.path().join("loadavg"), "1.5 1 1 1/2 3\n").unwrap();
+        assert_eq!(
+            probe_load_optional("h", dir.path()).unwrap().load1,
+            Some(1.5)
+        );
+        std::fs::remove_file(dir.path().join("meminfo")).unwrap();
+        assert!(probe_load_optional("h", dir.path()).is_err());
     }
 
     #[test]

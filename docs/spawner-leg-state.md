@@ -73,7 +73,9 @@ runs sequential tiny commit tasks in disposable local git repositories. Optional
 only when every probe passes. MCP exposes `plangraph_agent_probe` with `leg`
 (an array of IDs), `all_writers`, `timeout`, and `json` inputs.
 
-A pass requires a changed HEAD with `ok.txt` in its tree. Failure records
+A pass requires a changed HEAD with `ok.txt` in its tree and a writer job that
+ended `completed` with exit code zero; a commit from a nonzero, failed, cancelled or
+timed-out job is a failure, and a recognised usage-limit reply books the limit. Failure records
 a redacted reason and timestamp (source `liveness-probe`, status 503), including
 the scrubbed last 400 stderr characters on one line. The reason retains its
 existing 300-character bound; only an explicit stderr excerpt adds up to 400

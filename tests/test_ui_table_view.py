@@ -230,6 +230,7 @@ function main() {
   var PlanUI = require(WEB + "/page_model.js");
   require(WEB + "/page_store.js");
   require(WEB + "/page_search.js");
+  require(WEB + "/page_table_url.js");   /* production loads it before the view */
   require(WEB + "/page_table_view.js");
   win.PlanPage = global.PlanPage;
   win.localStorage = global.localStorage;
@@ -287,6 +288,27 @@ function main() {
   out.sortAfter = PlanUI.TablePage.view.sort;
   var firstAfter = qsa(doc.getElementById("list-content"), "tbody tr")[0];
   out.firstTitleAfter = firstAfter ? firstAfter.getAttribute("data-key") : null;
+
+  /* PRIORITY-INHERIT-EFFECTIVE: snapshot items through buildViewModel and the rendered Prio column. */
+  function snapItem(id, prio, extra) {
+    var it = { project: "eff", id: id, key: "eff:" + id, title: id, kind: "lane", track: "P0", phase: "P0",
+      owner: "o", state: "open", estimate_h: 1, depends_on: [], done_criteria: "d", operator: false,
+      priority: prio, evidence: [], updated_at: "2026-10-01T00:00:00Z" };
+    Object.keys(extra || {}).forEach(function (k) { it[k] = extra[k]; });
+    return it;
+  }
+  PlanUI.app.vm = PlanUI.buildViewModel({ items: [
+    snapItem("LOW", 8, { effective_priority: 10, priority_via: "eff:TOP" }),
+    snapItem("MID", 9), snapItem("ONE", 1)] });
+  PlanUI.TablePage.view.group = "project";
+  PlanUI.TablePage.view.sort = { col: "prio", dir: "desc" };
+  PlanUI.TablePage.view.collapsed = {};
+  PlanUI.TablePage.view.more = {};
+  PlanUI.TablePage.render();
+  out.prio = qsa(doc.getElementById("list-content"), "tbody tr").map(function (tr) {
+    var cell = tr.childNodes.filter(function (td) { return td.getAttribute("data-col") === "prio"; })[0];
+    return { key: tr.getAttribute("data-key"), text: cell.textContent, title: cell.title === undefined ? cell.getAttribute("title") : cell.title };
+  });
 
   /* Hover preview: HTML-looking title must arrive as text. */
   var anchor = doc.createElement("button");
@@ -390,6 +412,15 @@ def test_phone_cards_have_labels_and_a_sort_select(tmp_path):
     assert out["sortOptions"] == 2 * 12
     assert out["sortAfter"] == {"col": "task", "dir": "desc"}
     assert out["firstTitleAfter"] == "big:B-999"   # natural sort, descending
+
+
+@need_node
+def test_prio_column_renders_the_inherited_value_and_sorts_by_it(tmp_path):
+    """A snapshot item carrying effective_priority/priority_via reaches the rendered cell."""
+    rows = run_node(tmp_path)["prio"]
+    assert [r["key"] for r in rows] == ["eff:LOW", "eff:MID", "eff:ONE"]   # effective 10 > 9 > 1
+    assert [r["text"] for r in rows] == ["8 -> 10 via eff:TOP", "9", "1"]
+    assert rows[0]["title"] == "raised from 8 to 10 via eff:TOP"
 
 
 def test_phone_css_turns_rows_into_cards_below_600px():

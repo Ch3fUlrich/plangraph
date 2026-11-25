@@ -59,7 +59,8 @@ The shared target cap defaults to 32 GiB per root. A valid
 `~/.config/plangraph`). Both take a nonnegative GiB value. Under disk pressure
 or above the cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
-Candidates must be idle over six hours; recent, unknown and sole variants survive.
+Candidates must be idle over one hour; recent, unknown and sole variants survive.
+`pg-disk-hygiene --repo` also reports a main checkout's own `rust/target` and removes it once idle for an hour, identified by cargo's `CACHEDIR.TAG` or `.rustc_info.json`, with no cargo running.
 The cap is a reclamation trigger, not a hard size limit: protected/newest data may
 exceed it. Build dependencies and other cached artifacts remain rebuildable but
 are retained. Each removal rechecks processes and eligibility; a live Cargo
