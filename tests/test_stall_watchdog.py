@@ -486,7 +486,7 @@ def test_review_acceptance_digest_uses_the_json_health_report(tmp_path, monkeypa
     from plangraph.spawner import remote_ps
 
     lines = ["Review seat seat-a 1/20 accepts", "ALERT review seat seat-a below 15%"]
-    monkeypatch.setattr(w.time, "time", lambda: 1795534800)  # 2026-11-24 18:20 UTC
+    monkeypatch.setattr(w.time, "time", lambda: 1795534800)
     calls = []
 
     def report(state, *args, **kwargs):
@@ -503,6 +503,9 @@ def test_review_acceptance_digest_uses_the_json_health_report(tmp_path, monkeypa
     assert w.review_acceptance_digest(tmp_path) == expected
     (state, args, kwargs), = calls
     assert state == tmp_path
-    assert args[:4] == ("health", "report", "--fleet", "--json")
-    assert args[4::2] == ("--since", "--until")
+    assert args == (
+        "health", "report", "--fleet", "--json",
+        "--since", "2026-11-24T12:00:00Z",
+        "--until", "2026-11-24T15:40:00Z",
+    )
     assert kwargs == {"timeout": 35, "capture_output": True, "text": True}
