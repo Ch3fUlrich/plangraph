@@ -101,7 +101,7 @@ Malformed client input must never produce `500`.
 | `apply_ops` | router; `oversight` (only the narrow op grant below) |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
-| `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
+| `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only); `add_evidence` of kind `deploy` on an `open` item with a merged Plan-Item trailer commit: an l1 or worker scoped to the project (no run token) |
 | `release` | claimant or router |
 | `verdict` | reviewer scoped to the project |
 | `record_run` | spawner |
@@ -229,6 +229,7 @@ States: `open`, `claimed`, `in_review`, `done`, `cancelled`.
 | from | to | verb (who) | guard |
 | --- | --- | --- | --- |
 | open | claimed | `claim` (l1, worker) | all dependencies `done`; epoch +1; lease 60..86400 s (default 7200) |
+| open | open | `add_evidence` (kind `deploy`) | l1/worker scoped to the project, no run token; a Plan-Item trailer commit of the item is on the default branch; current epoch; writes one `evidence_added` event with `merged_open` |
 | claimed | claimed | `heartbeat`, `delegate`, `add_evidence` | claimant/delegate, current epoch; heartbeat only extends the lease |
 | claimed | open | `release` (claimant, router); lease expiry (system) | current epoch |
 | claimed | in_review | `submit` | claimant/delegate, evidence rules (section 4); round +1 |
