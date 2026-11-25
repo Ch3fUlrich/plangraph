@@ -478,8 +478,8 @@ def test_gateway_leg_never_borrows_an_unrelated_pool(tmp_path, model):
     assert gateway(tmp_path, (model,), only_go)(model)['reason'] == 'unreachable'
 
 
-def test_gateway_leg_without_a_named_pool_falls_back_only_to_an_explicit_gateway_row(tmp_path):
-    model = 'omniroute/spark-1.3-contributor'
+def test_a_model_declaring_no_pool_falls_back_only_to_an_explicit_gateway_row(tmp_path, launch_env):
+    model = 'omniroute/unknown-model-x'
     assert gateway(tmp_path, (model,), UPSTREAM)(model)['reason'] == 'unreachable'
     pools = dict(UPSTREAM, omniroute=SimpleNamespace(available=True, stale=False, reason='', until=''))
     assert gateway(tmp_path, (model,), pools)(model)['state'] == 'ok'
@@ -658,7 +658,7 @@ def test_claude_writer_route_serves_both_gateway_models_from_provider_json(tmp_p
     assert reasons.get('omniroute-deepseek-flash') == 'unreachable' and reasons.get('mimo-v2.6-flash') == 'unreachable'
 
 
-def test_gateway_leg_resolves_the_pool_the_deployed_combo_declares(tmp_path):
+def test_gateway_leg_resolves_the_pool_the_deployed_combo_declares(tmp_path, launch_env):
     spark = 'omniroute/spark-1.3-contributor'   # deploy/omniroute/live/server-combos.json: meta-api
     assert json_reader(tmp_path, (spark,), 'meta-api')(spark)['state'] == 'ok'
     assert json_reader(tmp_path, (spark,), 'meta-api', inactive=('meta-api',))(spark)['reason'] == 'provider_inactive'
@@ -668,10 +668,11 @@ def test_gateway_leg_resolves_the_pool_the_deployed_combo_declares(tmp_path):
 
 
 @pytest.mark.parametrize('model', ['omniroute/deepseek-v4.1-flash', 'omniroute/deepseek-direct-flash'])
-def test_the_models_own_pool_outranks_the_generic_gateway_row(tmp_path, model):
+def test_the_models_own_pool_outranks_the_generic_gateway_row(tmp_path, launch_env, model):
     reader = json_reader(tmp_path, (model,), 'omniroute', 'deepseek', inactive=('deepseek',))
     assert reader(model)['reason'] == 'provider_inactive'
-    assert json_reader(tmp_path, (model,), 'omniroute', 'opencode-go')(model)['state'] == 'ok'   # no own pool: the gateway row
+    # The declared pool has no row: the generic gateway row does not stand in for it.
+    assert json_reader(tmp_path, (model,), 'omniroute', 'opencode-go')(model)['reason'] == 'unreachable'
 
 
 @pytest.mark.parametrize('text', ['{"providers": {"mimo": 5}}', '{"providers": {"mimo": []}}'])
@@ -699,8 +700,8 @@ def test_an_inferred_pool_never_overrides_a_declared_pool(tmp_path):
     model = 'omniroute/deepseek-v4.1-flash'
     reader = json_reader(tmp_path, (model,), 'deepseek', 'deepseek-alt', inactive=('deepseek',))
     assert reader(model)['reason'] == 'provider_inactive'
-    # A renamed pool is still inferred when no declared pool is in the snapshot.
-    assert json_reader(tmp_path, (model,), 'deepseek-alt')(model)['state'] == 'ok'
+    # Provider matching is exact: a similarly named pool never stands in.
+    assert json_reader(tmp_path, (model,), 'deepseek-alt')(model)['reason'] == 'unreachable'
 
 
 @pytest.mark.parametrize('text', ['{"providers": {"omniroute": 5}}', '{"providers": {"omniroute": []}}',
@@ -764,3 +765,31 @@ def test_a_replacement_that_keeps_size_and_mtime_is_read_again(tmp_path, launch_
     reader._at = None
     # The replacement maps the model to a pool that has no row: the old active mapping must not linger.
     assert reader(model)['reason'] == 'unreachable'
+
+
+@pytest.mark.parametrize('other', ['proxy-deepseek', 'deepseek-alt'])
+def test_provider_match_is_exact_not_a_suffix_or_prefix(tmp_path, other):
+    model = 'omniroute/deepseek-v4.1-flash'
+    assert json_reader(tmp_path, (model,), 'deepseek', other, inactive=('deepseek',))(model)['reason'] == 'provider_inactive'
+    plan = review_plan(tmp_path, json_reader(tmp_path, (model,), other))
+    assert {s['leg']: s['reason'] for s in plan.skipped}.get('omniroute-deepseek-flash') == 'unreachable'
+
+
+@pytest.mark.parametrize(('pools', 'expected'), [(('omniroute',), 'unreachable'), (('omniroute', 'mimo'), 'ok'),
+                                                 (('omniroute', 'xiaomi-mimo'), 'ok')])
+def test_the_renderer_fallback_mimo_provider_decides_mimo_flash(tmp_path, launch_env, pools, expected):
+    use_providers(launch_env, tmp_path, '{"providers": {}}')   # the renderer adds the mimo provider
+    plan = review_plan(tmp_path, json_reader(tmp_path, ('omniroute/mimo-v2.6-flash',), *pools), writers=('gpt',))
+    served = 'mimo-v2.6-flash' in [leg.id for leg in plan.legs]
+    assert served == (expected == 'ok')
+    if not served:
+        assert {s['leg']: s['reason'] for s in plan.skipped}.get('mimo-v2.6-flash') == 'unreachable'
+
+
+def test_the_effective_model_id_names_the_combo(tmp_path, launch_env):
+    model = 'omniroute/deepseek-v4.1-flash'
+    use_providers(launch_env, tmp_path, '{"providers": {"omniroute": {"models": {"deepseek-v4.1-flash": '
+                  '{"modelID": "spark-1.3-contributor"}}}}}')   # the launch runs the Spark combo (meta-api)
+    reader = json_reader(tmp_path, (model,), 'deepseek', 'meta-api', inactive=('meta-api',))
+    assert reader(model)['reason'] == 'provider_inactive'
+    assert json_reader(tmp_path, (model,), 'deepseek')(model)['reason'] == 'unreachable'

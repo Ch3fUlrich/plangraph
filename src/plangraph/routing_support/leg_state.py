@@ -543,62 +543,51 @@ def tcp_gateway_probe(url, timeout=1.0):
 _COMBOS_PATH = Path(__file__).resolve().parents[3] / 'deploy/omniroute/live/server-combos.json'
 
 
-def declared_pools(leg):
-    """Pools a gateway leg is declared on, as (launch pool or None, server combo pools).
+#: Provider ids one pool answers to (the snapshot names the MiMo pool by vendor).
+POOL_ALIASES = (('mimo', 'xiaomi-mimo'),)
 
-    The launch pool is the ``modelID`` of the leg's model in the child config the runner builds
-    (child env, launch overlay), so a mapping supplied by ``OPENCODE_CONFIG_CONTENT``
-    counts. The server combo is ``deploy/omniroute/live/server-combos.json``. A malformed
-    block declares nothing. Read once per snapshot window by the adapter, never cached longer.
+
+def declared_pools(leg):
+    """The upstream pools a gateway leg runs on, as (direct pool or None, combo pools).
+
+    The effective ``modelID`` of the leg (``effective_model_id``: the child config after the
+    launch overlay and the renderer's defaults) decides. ``provider/model`` names its provider
+    directly; a bare id names the server combo, whose pools come from
+    ``deploy/omniroute/live/server-combos.json``. With no mapping the leg's own name is the
+    combo. Read once per snapshot window by the adapter, never cached longer.
     """
     import json
-    from .opencode_overlay import review_overlay_env
+    from .opencode_overlay import effective_model_id
     from .quota_snapshots import ALIASES
-    prefix, _, name = leg.partition('/')
-    launch = None
-    try:
-        providers = json.loads(review_overlay_env()['OPENCODE_CONFIG_CONTENT'])['providers']
-        model_id = providers[prefix]['models'][name]['modelID']
-        if isinstance(model_id, str) and '/' in model_id:
-            head = model_id.split('/')[0]
-            launch = ALIASES.get(head, head)
-    except Exception:   # no launch mapping: a refused render, a missing key or a malformed block
-        pass
-    combo = ()
+    target = effective_model_id(leg) or leg.partition('/')[2]
+    if '/' in target:
+        head = target.split('/')[0]
+        return ALIASES.get(head, head), ()
     try:
         combos = json.loads(_COMBOS_PATH.read_text(encoding='utf-8'))['combos']
-        combo = tuple(dict.fromkeys(u.split('/')[0] for u in combos.get(name, ()) if isinstance(u, str) and '/' in u))
+        return None, tuple(dict.fromkeys(u.split('/')[0] for u in combos.get(target, ()) if isinstance(u, str) and '/' in u))
     except (OSError, ValueError, KeyError, AttributeError, TypeError):
-        pass
-    return launch, combo
+        return None, ()
 
 
 def _gateway_pool(states, leg, declared):
     """State of the upstream pool serving a gateway-routed model.
 
-    The snapshot is keyed by upstream provider, not by the gateway prefix. The launch mapping is
-    authoritative: its pool decides, and a missing row is no state (never another pool's). Without
-    one, a server-combo pool present in the snapshot decides, then an inferred pool (a name that
-    starts the model name), and a model with no pool at all takes the gateway's own ``omniroute``
-    row. A vendor-prefixed row (``xiaomi-mimo`` for ``mimo``) is the same pool. Among one tier's
+    The snapshot is keyed by upstream provider, not by the gateway prefix. The declared pool
+    (direct provider, else the combo's pools) decides by exact provider id, with the explicit
+    ``POOL_ALIASES``; a declared pool with no row is no state, never another pool's. Only a
+    model that declares no pool takes the gateway's own ``omniroute`` row. Among a combo's
     rows an available one wins.
     """
     from .quota_snapshots import pool_of
     if (pool := pool_of(identity_model(leg))) is not None:
         return states.get(pool)   # a known alias pool never borrows another pool's state
-    name = identity_model(leg).split('/', 1)[-1]
-    launch, combo = declared
-    named = lambda pool: [key for key in states if key == pool or key.endswith('-' + pool)]
-    if launch is not None:
-        rows = [states[key] for key in named(launch)]
-    else:
-        inferred = tuple(key for key in states if any(len(tok) > 2 and name.startswith(tok) for tok in key.split('-')))
-        for tier in ([key for pool in combo for key in named(pool)], inferred):
-            rows = [states[key] for key in tier]
-            if rows:
-                break
-        else:
-            rows = [states['omniroute']] if 'omniroute' in states else []
+    direct, combo = declared
+    wanted = [direct] if direct is not None else list(combo)
+    if not wanted:
+        return states.get('omniroute')
+    group = lambda pool: next((names for names in POOL_ALIASES if pool in names), (pool,))
+    rows = [states[key] for pool in wanted for key in group(pool) if key in states]
     return next((row for row in rows if row.available and not row.stale), rows[0] if rows else None)
 
 

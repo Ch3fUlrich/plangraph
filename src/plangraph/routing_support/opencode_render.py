@@ -115,6 +115,12 @@ def configured_gateway_url(providers: dict, env) -> str | None:
     return None
 
 
+def apply_mimo_default(providers: dict[str, Any], model: str) -> None:
+    """Add the fallback ``mimo`` provider when the config declares none for an accepted MiMo model."""
+    if "mimo" not in providers and model in ACCEPTED_MIMO_IDS:
+        providers["mimo"] = _mimo_template()
+
+
 def _mimo_template() -> dict[str, Any]:
     return {
         "package": "@opencode/ai/providers/openai-compatible",
@@ -186,8 +192,7 @@ def render_gateway_providers(
     if provider_prefix not in ("mimo", "omniroute") and not has_gw_key:
         return None
 
-    if "mimo" not in providers and model_clean in ACCEPTED_MIMO_IDS:
-        providers["mimo"] = _mimo_template()
+    apply_mimo_default(providers, model_clean)
 
     # Step 4: Honour the already-configured child endpoint before env fallbacks.
     # Read the parsed config directly: no clients import or eager fallback call.

@@ -185,6 +185,26 @@ def review_overlay_env():
     return overlay_env(_review_base_env())
 
 
+def effective_model_id(leg):
+    """The ``modelID`` the launch gives a gateway leg, or None when its config declares none.
+
+    Read from the review child config after the launch overlay and the renderer's model
+    defaults (the fallback ``mimo`` provider, a cx effort variant), but without the gateway
+    endpoint the renderer also needs: an admission read must not depend on it.
+    """
+    from .opencode_render import _declare_cx_effort_model, apply_mimo_default
+    prefix, _, name = leg.partition('/')
+    try:
+        config = json.loads(review_overlay_env()['OPENCODE_CONFIG_CONTENT'])
+        providers = config['providers']
+        apply_mimo_default(providers, leg)
+        _declare_cx_effort_model(providers, leg)
+        model_id = providers[prefix]['models'][name]['modelID']
+    except Exception:   # no mapping: a missing key or a malformed block
+        return None
+    return model_id if isinstance(model_id, str) and model_id else None
+
+
 def review_child_env(model=None):
     """Mirror runner.spawn's review env (writer_launch returns no review extras).
 
