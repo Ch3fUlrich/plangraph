@@ -109,6 +109,7 @@ fn simultaneous_protections_have_stable_precedence() {
     f.in_use_by_unit = true;
     f.has_claim = true;
     f.live_run = true;
+    f.pinned = true;
     f.open_pr = true;
     for reason in [
         "clone-path",
@@ -116,6 +117,7 @@ fn simultaneous_protections_have_stable_precedence() {
         "unit-in-use",
         "claim",
         "live-run",
+        "pinned",
         "open-pr",
         "same-branch-worktree",
     ] {
@@ -126,6 +128,7 @@ fn simultaneous_protections_have_stable_precedence() {
             "unit-in-use" => f.in_use_by_unit = false,
             "claim" => f.has_claim = false,
             "live-run" => f.live_run = false,
+            "pinned" => f.pinned = false,
             "open-pr" => f.open_pr = false,
             _ => (),
         }
@@ -211,7 +214,7 @@ fn each_protection_beats_every_eligible_rule() {
     let trees = parse_porcelain("worktree /main\nbare\n\nworktree /a\nHEAD abc\nbranch refs/heads/lane/a\n\nworktree /b\nHEAD def\nbranch refs/heads/lane/a\n").unwrap();
     for (clean, merged) in [(true, true), (true, false), (false, true), (false, false)] {
         for reason in
-            "clone-path process-in-use unit-in-use claim live-run open-pr same-branch-worktree"
+            "clone-path process-in-use unit-in-use claim live-run pinned open-pr same-branch-worktree"
                 .split_whitespace()
         {
             let mut f = facts();
@@ -222,6 +225,7 @@ fn each_protection_beats_every_eligible_rule() {
                 "unit-in-use" => f.in_use_by_unit = true,
                 "claim" => f.has_claim = true,
                 "live-run" => f.live_run = true,
+                "pinned" => f.pinned = true,
                 "open-pr" => f.open_pr = true,
                 _ => (),
             }
@@ -256,4 +260,31 @@ fn porcelain_fixture_and_fail_closed_errors() {
     ] {
         assert!(parse_porcelain(bad).is_err(), "{bad}");
     }
+}
+
+#[test]
+fn older_facts_without_pinned_still_parse() {
+    let legacy = r#"{"idle_hours":25,"clean":true,"merged_into_main":true,"pushed":true,"failed":false,"has_claim":false,"live_run":false,"open_pr":false,"in_use_by_process":false,"in_use_by_unit":false,"is_clone_path":false}"#;
+    let pinned = legacy.replace(r#""live_run":false,"#, r#""live_run":false,"pinned":true,"#);
+    let porcelain = "worktree /main\nbare\n\nworktree /wt\nHEAD abc\nbranch refs/heads/lane/a\n";
+    let row = |facts: &str| {
+        let repo: pg_reap::Repository = serde_json::from_str(&format!(
+            r#"{{"repo":"r","porcelain":{},"facts":{{"/wt":{facts}}}}}"#,
+            serde_json::to_string(porcelain).unwrap()
+        ))
+        .unwrap();
+        pg_reap::report(&[repo])
+            .unwrap()
+            .lines()
+            .find(|l| l.contains("/wt"))
+            .unwrap()
+            .to_owned()
+    };
+    // The omitted field means not pinned; an explicit pin protects under its own reason.
+    assert!(row(legacy).contains("\teligible\t"), "{}", row(legacy));
+    assert!(
+        row(&pinned).contains("\tprotected\tpinned\t"),
+        "{}",
+        row(&pinned)
+    );
 }
