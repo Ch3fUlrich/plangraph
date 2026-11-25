@@ -14,9 +14,10 @@ fn roots() -> Vec<PathBuf> {
 
 #[test]
 fn command_line_is_workspace_write_with_network_and_named_roots() {
-    let args = sandbox_args(&roots()).unwrap();
+    let deny = [PathBuf::from("/fixture/user/.config/plangraph")];
+    let args = sandbox_args(&roots(), &deny).unwrap();
     assert_eq!(
-        args,
+        args[..6],
         [
             "-c",
             "sandbox_mode=\"workspace-write\"",
@@ -26,6 +27,16 @@ fn command_line_is_workspace_write_with_network_and_named_roots() {
             "sandbox_workspace_write.writable_roots=[\"/cache/target\",\"/run/reviews\",\"/run/dir\",\"/repo/.git\",\"/repo/.git/worktrees/w\"]",
         ]
     );
+    let profile = args[6..].join(" ");
+    assert!(
+        profile.contains("default_permissions=\"plangraph_isolated\""),
+        "{profile}"
+    );
+    assert!(
+        profile.contains("\"/fixture/user/.config/plangraph\"=\"none\""),
+        "{profile}"
+    );
+    assert!(profile.contains("\"/cache/target\"=\"write\""), "{profile}");
     assert!(!args.join(" ").contains("danger-full-access"));
 }
 
@@ -46,6 +57,7 @@ fn only_allowlisted_variables_survive() {
         var("CODEX_HOME"),
         var("LC_ALL"),
         var("HTTPS_PROXY"),
+        var("LC_FIXTURE_PASSWORD"),
         var("AWS_SECRET_ACCESS_KEY"),
         var("GITHUB_TOKEN"),
         var("OMNIROUTE_API_KEY"),
@@ -62,14 +74,14 @@ fn a_variable_outside_the_allowlist_does_not_reach_the_child_process() {
     apply_env(
         &mut command,
         [
-            (OsString::from("HOME"), OsString::from("/fixture/home")),
+            (OsString::from("HOME"), OsString::from("/fixture/user")),
             (OsString::from("FLEET_SECRET_TOKEN"), OsString::from("leak")),
         ],
         "/usr/bin:/bin",
     );
     let out = command.output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.lines().any(|l| l == "HOME=/fixture/home"), "{text}");
+    assert!(text.lines().any(|l| l == "HOME=/fixture/user"), "{text}");
     assert!(text.lines().any(|l| l == "PATH=/usr/bin:/bin"), "{text}");
     assert!(
         !text.contains("FLEET_SECRET_TOKEN") && !text.contains("leak"),
@@ -95,7 +107,7 @@ fn a_write_outside_the_named_roots_is_refused_in_a_fixture_run() {
     let script = "touch \"$1/in\" && echo named-ok; touch in && echo workspace-ok; touch \"$2/out\" || echo outside-refused";
     let out = Command::new("codex")
         .arg("sandbox")
-        .args(sandbox_args(std::slice::from_ref(&named)).unwrap())
+        .args(sandbox_args(std::slice::from_ref(&named), &[]).unwrap())
         .args(["--", "sh", "-c", script, "fixture"])
         .arg(&named)
         .arg(&outside)
@@ -169,7 +181,7 @@ fn a_writer_worktree_can_commit_with_the_named_git_directories() {
     let script = "echo x > f && git add f && git -c user.name=t -c user.email=t@example.invalid commit -qm c && echo commit-ok";
     let out = Command::new("codex")
         .arg("sandbox")
-        .args(sandbox_args(&roots).unwrap())
+        .args(sandbox_args(&roots, &[]).unwrap())
         .args(["--", "sh", "-c", script])
         .current_dir(&wt)
         .output()

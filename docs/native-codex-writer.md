@@ -116,6 +116,18 @@ and HEAD can be updated during a commit. The child's environment is an allowlist
 git identity, ssh agent, proxy and TLS settings, cargo and rustup homes); every other variable of
 the supervisor, including host secrets, is dropped. A canary run on a worker host comes first
 after a change to either list.
+Reads are denied too: the same command line carries the `plangraph_isolated` Codex permission
+profile (`credential_isolation.rs`), which reads everywhere except the paths of
+`src/plangraph/config/secret_paths.json` (the plangraph config directory under `~/.config` and
+`XDG_CONFIG_HOME`, the keeper daemon config file under `~/.local/share/plangraph`, the ssh, aws, gnupg and gcloud directories, and the git, netrc and docker files).
+Admission probes `pg-spawnd` itself, so its `--child-open` handler is the one the probe needs.
+Codex also drops `OPENAI_*` (the same data file) from the environment of the commands the agent
+runs; Codex itself keeps its harness auth. A card that names `sandbox: danger-full-access` is
+refused with `sandbox_refused:`. Readiness is only `sandbox_ok` when the effective writer policy
+also denies a fixture file (`credential isolation is not enforced` otherwise).
+`pg-host-readiness --credential-probe` runs that policy against every existing secret path and
+prints `denied <path>` lines, then `ISOLATED` only when the plangraph config directory itself was
+denied; run it on every host after a deploy (live hosts: plangraph:SANDBOX-CREDENTIAL-PROBE-LIVE-HOSTS; resume and ssh: plangraph:SANDBOX-RESUME-AND-SSH-LIVE-CHECK; keeper account: plangraph:KEEPER-SECRETS-SEPARATE-ACCOUNT).
 Package placement requires a fresh `workspace-write` record from `pg-host-readiness`.
 The probe starts Codex's sandbox and commits in a scratch linked worktree using the
 same sandbox overrides as the writer. On Linux, the writer account's AppArmor policy

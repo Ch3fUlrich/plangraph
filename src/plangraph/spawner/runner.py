@@ -26,7 +26,7 @@ from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regres
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import STDIN_PROMPT_HARNESSES, build_child_env, build_command, build_routing_envelope_headers
-from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
+from plangraph.spawner.claude_env import isolated_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
 from plangraph.spawner.gateway_models import record_served_witness
@@ -301,8 +301,7 @@ class SpawnerRunner:
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
-        if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
-            child_env = with_agent_shell(claude_child_env(child_env))
+        child_env = isolated_child_env(cmd, child_env, role)   # D-3605/D-3649 allowlisted env; claude and codex read no secret path
         child_env = cargo_child_env(child_env, pin_configured=True, target=review_target)
         render_reason = None
         tools_event = None
@@ -375,6 +374,7 @@ class SpawnerRunner:
                 tools_event = configure_review_tests(
                     cmd, child_env, leg, role, self._ocdata_dirs, job_id,
                     worktree=work_dir, review_target=review_target)
+                render_reason = (tools_event or {}).get('refusal') or render_reason
             if render_reason is None:
                 self._child_envs[job_id] = child_env
 

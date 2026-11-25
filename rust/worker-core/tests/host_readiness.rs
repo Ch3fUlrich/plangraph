@@ -162,8 +162,13 @@ case "$7" in
     sandbox_workspace_write.writable_roots=*'/repository/.git"'*'/repository/.git/worktrees/worktree"'*) ;;
     *) exit 2 ;;
 esac
+# The credential-isolation profile follows: the default permission profile and its map.
+case "$*" in
+    *'default_permissions="plangraph_isolated"'*'/.config/plangraph"="none"'*) ;;
+    *) exit 3 ;;
+esac
 shift 7
-[ "$1" = -- ]
+while [ "$1" != -- ]; do shift; done
 shift
 exec "$@"
 "#,
@@ -214,4 +219,39 @@ fn failed_bwrap_probe_is_persisted_and_refuses_placement() {
     let reason = refusal(&candidate, &Policy::default(), 100).unwrap();
     assert!(reason.starts_with("sandbox_unavailable: bwrap: setting up uid map: Permission denied"));
     assert!(reason.contains("AppArmor"));
+}
+
+/// Starting the sandbox is not enough for placement: the writer policy must also deny a fixture
+/// read. A fixture `codex` that starts the child but denies nothing is refused; one that denies
+/// the fixture file, through the real child, is accepted.
+#[cfg(unix)]
+#[test]
+fn writer_readiness_requires_a_denied_fixture_read() {
+    use pg_worker_core::host_readiness::Native;
+
+    let run = |body: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join("codex");
+        pg_worker_core::executable_test_support::write_executable(&codex, body);
+        let mut runner = Native {
+            codex,
+            executable: env!("CARGO_BIN_EXE_pg-host-readiness").into(),
+            tool_path: None,
+        };
+        runner.probe(Probe::Sandbox, tmp.path(), "workspace-write")
+    };
+    let skip = "while [ \"$1\" != -- ]; do shift; done\nshift\n";
+    let open = run(&format!("#!/bin/sh\n{skip}exec \"$@\"\n"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        open.contains("credential isolation is not enforced") && open.contains("readable"),
+        "{open}"
+    );
+    // A stand-in sandbox that denies the fixture by removing its permissions; the real child
+    // binary reports what its own open returned.
+    run(&format!(
+        "#!/bin/sh\n{skip}case \"$*\" in *credential-fixture*) for last; do :; done; /bin/chmod 000 \"$last\";; esac\nexec \"$@\"\n"
+    ))
+    .unwrap();
 }

@@ -216,6 +216,44 @@ def codex_review_client(harness, role, tag, *, env=None):
     return executable, None if executable else f"REVIEW {tag} FAIL client_missing {searched}"
 
 
+def toml_string(text):
+    """``text`` as a TOML basic string; None when it cannot be one (a lone surrogate)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return json.dumps(text, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+def codex_isolation_args(env=None, role="review"):
+    """``codex exec`` arguments that run a routed Codex under the shared policy: read everywhere
+    except the secret paths of ``secret_paths.json``. Implement and fix runs also write to the
+    project root and the temporary directories and keep the network (like the native writer
+    profile); review runs stay read-only with a tool environment cut to the core variables. The
+    Rust native writer builds the same profile from the same data file."""
+    from plangraph.routing_support.claude_seat import secret_data, secret_paths
+    writes = role in ("implement", "fix")
+    name = "plangraph_isolated" if writes else "plangraph_review"
+    entries = ['":root"="read"']
+    if writes:
+        entries += ['":project_roots"={"."="write"}', '":tmpdir"="write"', '"/tmp"="write"']
+    for path in secret_paths(env):
+        if (quoted := toml_string(path)) is None:
+            # A required deny entry that cannot be written must stop the launch, never vanish.
+            from plangraph.routing_errors import SpawnRefused
+            raise SpawnRefused("sandbox_refused: a secret path of the deny list is not valid UTF-8 and cannot "
+                               "be written into the Codex permission profile; launch refused")
+        entries.append(f"{quoted}=\"none\"")
+    exclude = ",".join(toml_string(pattern) for pattern in secret_data()["tool_env_exclude"])
+    values = [f'default_permissions="{name}"',
+              f"permissions.{name}.filesystem={{{','.join(entries)}}}",
+              f"permissions.{name}.network.enabled={'true' if writes else 'false'}",
+              f'shell_environment_policy.inherit="{"all" if writes else "core"}"',
+              "shell_environment_policy.ignore_default_excludes=false",
+              f"shell_environment_policy.exclude=[{exclude}]"]
+    return [arg for value in values for arg in ("-c", value)]
+
+
 def codex_model(model):
     """(name, effort) the Codex client takes for a registered gpt leg model: OmniRoute's
     ``omniroute/cx-`` alias is the plain id and a trailing effort suffix is the reasoning effort."""

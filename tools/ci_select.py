@@ -147,6 +147,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/fixtures/doctor_sources.json",
     "tests/fixtures/files_read.json",
     "src/plangraph/config/role_headers.json",
+    "src/plangraph/config/secret_paths.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
     "tests/fixtures/redact_parity.json",

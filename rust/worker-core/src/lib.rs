@@ -17,6 +17,7 @@ pub mod confine;
 pub mod cpu;
 #[cfg(target_os = "linux")]
 pub mod cpu_linux;
+pub mod credential_isolation;
 pub mod diffscan;
 pub mod disk_hygiene;
 pub mod disk_runtime;

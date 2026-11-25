@@ -1,6 +1,7 @@
 """Hermetic argv contracts for the lean Claude review harness."""
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -150,7 +151,11 @@ def test_sonnet_without_sandbox_is_read_only(tmp_path, monkeypatch):
         assert argv[argv.index(flag) + 1] == "Read,Grep,Glob"
     assert argv[argv.index("--disallowedTools") + 1] == "Write,Edit,Bash,mcp__*"
     assert argv[argv.index("--setting-sources") + 1] == ""
-    assert "--settings" not in argv
+    # No sandbox settings, only permission rules that deny the built-in read tools on secrets.
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert set(settings) == {"permissions"} and set(settings["permissions"]) == {"deny"}
+    assert {"Read(~/.ssh)", "Read(~/.ssh/**)", "Read(~/.config/plangraph/**)"} <= set(
+        settings["permissions"]["deny"])
     assert "--restricted" in argv
     assert "TESTS: none: sandbox unavailable on fixture-host" in argv[-1]
     assert event == {"event": "sandbox_unavailable", "host": "fixture-host", "python_job_id": "fixture"}
@@ -209,3 +214,94 @@ def test_review_pytest_paths_are_judged_by_text_not_platform_path_text(
 
     monkeypatch.setattr(claude_seat, "Path", BackslashPath)
     assert claude_seat._review_command(command, tmp_path) is allowed
+
+
+def test_review_sandbox_denies_the_shared_secret_list(tmp_path, monkeypatch):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv = claude_access_args("review")
+    claude_seat.configure_review_tests(argv, {}, leg, "review", {}, "fixture",
+                                       review_target=str(tmp_path / "target"))
+    deny = json.loads(argv[argv.index("--settings") + 1])["sandbox"]["filesystem"]["denyRead"]
+    assert {"~/.ssh", "~/.config/plangraph", "~/.netrc"} <= set(deny)
+    assert set(claude_seat.secret_paths()) <= set(deny)
+
+
+def test_a_relocated_config_home_is_denied_with_and_without_the_sandbox(tmp_path, monkeypatch):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    xdg = str(tmp_path / "xdg")
+    for available in (True, False):
+        monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: available, raising=False)
+        argv = claude_access_args("review")
+        claude_seat.configure_review_tests(argv, {"XDG_CONFIG_HOME": xdg}, leg, "review", {},
+                                           "fixture", review_target=str(tmp_path / "target"))
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert f"Read(/{xdg}/plangraph/**)" in settings["permissions"]["deny"]
+        if available:
+            assert f"{xdg}/plangraph" in settings["sandbox"]["filesystem"]["denyRead"]
+
+
+def test_a_sandbox_that_starts_but_does_not_hide_the_fixture_is_not_a_denial(tmp_path, monkeypatch):
+    """A fake bwrap that runs the command and ignores --tmpfs: it starts, and denies nothing."""
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat.sys, "platform", "linux")
+    fake = tmp_path / "bwrap"
+    fake.write_text('#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n')
+    fake.chmod(0o700)
+    assert claude_seat.sandbox_denies_reads({"PATH": str(tmp_path)}) is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="bwrap smoke check")
+def test_the_real_host_sandbox_hides_a_masked_fixture_file(monkeypatch):
+    """With a working bwrap the masked fixture is really gone: the smoke check says so."""
+    import shutil
+
+    bwrap = shutil.which("bwrap")
+    starts = bwrap and subprocess.run(
+        [bwrap, "--unshare-pid", "--ro-bind", "/", "/", "--proc", "/proc", "--", "/bin/true"],
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=10).returncode == 0
+    if not starts:
+        pytest.skip("this host cannot start bwrap")
+    assert claude_seat.sandbox_denies_reads({"PATH": os.defpath}) is True
+
+
+def test_an_unwritable_temporary_directory_refuses_writer_admission_with_sandbox_unavailable(tmp_path, monkeypatch):
+    """The probe fixture cannot be created: admission answers sandbox_unavailable instead of raising OSError.
+    bwrap discovery is stubbed, so the run does reach the fixture creation (asserted), on every host."""
+    import tempfile
+
+    unwritable = tmp_path / "ro"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)
+    if os.access(unwritable, os.W_OK):
+        pytest.skip("this user can write to a mode 0500 directory")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "bwrap").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "bwrap").chmod(0o700)
+    attempts = []
+    real_mkdtemp = claude_seat.mkdtemp
+
+    def spy(*args, **kwargs):
+        attempts.append(kwargs.get("prefix"))
+        return real_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setattr(claude_seat.sys, "platform", "linux")
+    monkeypatch.setattr(tempfile, "tempdir", str(unwritable))
+    monkeypatch.setattr(claude_seat, "mkdtemp", spy)
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
+    env = {"PATH": str(bin_dir)}
+    argv = ["claude", "-p", "--tools", "Read,Bash"]
+    event = claude_seat.confine_writer_shell(argv, env, "implement", "job")
+    assert attempts == ["plangraph-deny-smoke-"], "the fixture directory was never attempted"
+    assert event["refusal"].startswith("sandbox_unavailable:")
+    assert "--settings" not in argv      # nothing was configured for a route that is refused
+    assert claude_seat.sandbox_denies_reads(env) is False
+    assert len(attempts) == 2

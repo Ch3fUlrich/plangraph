@@ -29,6 +29,40 @@ _FAST_CHECKS = "plangraph fast-checks --base"
 _SANDBOX_CACHE_SECONDS = 600
 
 
+def secret_data():
+    """The one data file of secret paths and tool-environment exclusions."""
+    return json.loads(files("plangraph").joinpath("config/secret_paths.json").read_text())
+
+
+def secret_paths(env=None):
+    """Secret paths of the one deny list the Rust sandbox also reads, resolved against the
+    effective config home: the default ``~/.config`` and a relocated ``XDG_CONFIG_HOME``."""
+    data = secret_data()
+    paths = [f"~/{rel}" for rel in data["home_relative"]]
+    paths += [f"~/.config/{rel}" for rel in data["config_home_relative"]]
+    xdg = (env or {}).get("XDG_CONFIG_HOME") or os.environ.get("XDG_CONFIG_HOME")
+    if xdg and os.path.isabs(xdg):
+        paths += [str(Path(xdg) / rel) for rel in data["config_home_relative"]]
+    return paths
+
+
+def _credential_paths(env):
+    paths = [*secret_paths(env), "~/.config", "~/.claude"]
+    if config := (env or {}).get("CLAUDE_CONFIG_DIR"):
+        paths.append(str(Path(config).resolve()))
+    return paths
+
+
+def read_deny_rules(paths):
+    """Permission rules that stop the built-in Read, Grep and Glob tools on ``paths``; they
+    hold whether or not the Bash sandbox starts. An absolute path needs the ``//`` prefix."""
+    rules = []
+    for path in paths:
+        rule = "/" + path if path.startswith("/") else path
+        rules += [f"Read({rule})", f"Read({rule}/**)"]
+    return rules
+
+
 def _review_command(command, worktree):
     if not re.fullmatch(r"[A-Za-z0-9_./: =+-]+", command):
         return False
@@ -150,13 +184,110 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
+def merge_settings(argv, patch):
+    """Merge ``patch`` into the JSON of the argv's ``--settings`` flag, or add the flag: lists
+    are concatenated without duplicates, so a second caller never creates a second flag."""
+    def merge(base, extra):
+        for key, value in extra.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge(base[key], value)
+            elif isinstance(value, list) and isinstance(base.get(key), list):
+                base[key] = base[key] + [item for item in value if item not in base[key]]
+            else:
+                base[key] = value
+        return base
+    if "--settings" in argv:
+        index = argv.index("--settings") + 1
+        try:
+            current = json.loads(argv[index])
+        except ValueError:
+            current = None
+        if isinstance(current, dict):
+            argv[index] = json.dumps(merge(current, patch))
+            return
+    argv.extend(["--settings", json.dumps(patch)])
+
+
+def deny_secret_reads(argv, env):
+    """Deny the built-in read tools on the secret paths for every Claude run, whatever its role:
+    permission rules hold without the Bash sandbox and for the writer route."""
+    merge_settings(argv, {"permissions": {"deny": read_deny_rules(_credential_paths(env))}})
+
+
+def sandbox_denies_reads(env):
+    """Smoke check that this host's sandbox really hides a file it is told to hide: ``/bin/true``
+    starting proves nothing about denial. A fixture file is readable in a control run and gone
+    in a run that masks its directory, the way Claude's sandbox masks a ``denyRead`` path."""
+    if sys.platform == "linux":
+        search = os.pathsep.join(part for part in env.get("PATH", os.defpath).split(os.pathsep)
+                                 if os.path.isabs(part))
+        bwrap = shutil.which("bwrap", path=search) if search else None
+        if not bwrap:
+            return False
+    elif sys.platform != "darwin":
+        return False
+    directory = None
+    try:
+        directory = mkdtemp(prefix="plangraph-deny-smoke-")
+        fixture = str(Path(directory) / "fixture-secret")
+        Path(fixture).write_text("fixture")
+        if sys.platform == "linux":
+            base = [bwrap, "--unshare-pid", "--ro-bind", "/", "/", "--proc", "/proc"]
+            visible = base + ["--", "/bin/sh", "-c", 'test -e "$1"', "sh", fixture]
+            masked = base + ["--tmpfs", directory, "--", "/bin/sh", "-c", 'test ! -e "$1"', "sh", fixture]
+        else:
+            sandbox = "/usr/bin/sandbox-exec"
+            read = ["/bin/sh", "-c", 'cat "$1" >/dev/null', "sh", fixture]
+            refuse = ["/bin/sh", "-c", 'cat "$1" >/dev/null 2>&1 && exit 1; exit 0', "sh", fixture]
+            visible = [sandbox, "-p", "(version 1) (allow default)", *read]
+            masked = [sandbox, "-p", f'(version 1) (allow default) (deny file-read* (subpath "{directory}"))', *refuse]
+        # The inversion lives in the shell, so a sandbox that fails to start is not a denial.
+        return _smoke_sandbox(visible) and _smoke_sandbox(masked)
+    except OSError:
+        # No writable temporary directory is not a verified denial: the route is refused.
+        return False
+    finally:
+        if directory:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def confine_writer_shell(argv, env, role, job_id):
+    """A routed Claude writer runs shell commands, which the Read deny rules do not reach: run
+    them in Claude's filesystem sandbox with the secret paths unreadable, or refuse the route
+    (the returned event carries ``refusal``) when this host cannot start that sandbox."""
+    tools = argv[argv.index("--tools") + 1] if "--tools" in argv else "Bash"
+    if role not in ("implement", "fix") or "Bash" not in tools.split(","):
+        return None
+    if not sandbox_available(env) or not sandbox_denies_reads(env):
+        host = socket.gethostname()
+        return {"event": "sandbox_unavailable", "host": host, "python_job_id": job_id,
+                "refusal": f"sandbox_unavailable: claude shell commands cannot be confined on {host}; "
+                           "the secret paths would stay readable"}
+    # Only the settings built here apply: user, project and local settings could name sandbox
+    # exclusions that run a command outside the sandbox.
+    if "--setting-sources" in argv:
+        argv[argv.index("--setting-sources") + 1] = ""
+    else:
+        argv.extend(["--setting-sources", ""])
+    merge_settings(argv, {"sandbox": {
+        "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "autoAllowBashIfSandboxed": False,
+        "filesystem": {"denyRead": _credential_paths(env)}}})
+    # An exclusion list already in an earlier --settings value is replaced, not merged.
+    index = argv.index("--settings") + 1
+    settings = json.loads(argv[index])
+    settings["sandbox"]["excludedCommands"] = []
+    argv[index] = json.dumps(settings)
+    return None
+
+
 def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
                            worktree=None, review_target=None):
     """Apply Sonnet's review profile and return the read-only fallback event, if any."""
     from plangraph.planner.legs import REVIEW_SONNET
 
     if role != "review" or leg is None or leg.id != REVIEW_SONNET or leg.tool_mode != "tools":
-        return
+        return confine_writer_shell(argv, env, role, job_id)
     argv[argv.index("--permission-mode") + 1] = "dontAsk"
     argv[argv.index("--setting-sources") + 1] = ""
     if not sandbox_available(env):
@@ -166,6 +297,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
             ("--tools", READ_TOOLS),
         ]:
             argv[argv.index(flag) + 1] = value
+        # Read, Grep and Glob stay, so the secret paths are denied by permission rule.
+        deny_secret_reads(argv, env)
         argv.extend(["--restricted", "--append-system-prompt",
                      "Review with Read, Grep and Glob. Skip requests to run commands or tests. "
                      f"Write this exact standalone line: TESTS: none: sandbox unavailable on {host}"])
@@ -189,10 +322,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     checkout = Path(worktree or Path.cwd()).resolve()
     hook = shlex.join([sys.executable, "-I", str(Path(__file__).resolve()),
                        "--review-bash", str(checkout)])
-    credentials = ["~/.aws", "~/.ssh", "~/.gnupg", "~/.config", "~/.claude",
-                   "~/.claude.json", "~/.git-credentials", "~/.netrc"]
-    if config := env.get("CLAUDE_CONFIG_DIR"):
-        credentials.append(str(Path(config).resolve()))
+    credentials = _credential_paths(env)
     writable = [str(scratch)]
     if review_target:
         # The service's private build directory also holds the fast-checks pool lease.
@@ -204,7 +334,7 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
             "allow": READ_TOOLS.split(",") + [
                 f"Bash({prefix} *)" for prefix in (*_PYTEST, *_CARGO_TEST, _FAST_CHECKS)
             ],
-            "deny": ["Write", "Edit"],
+            "deny": ["Write", "Edit", *read_deny_rules(credentials)],
         },
         "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command", "command": hook, "onFailure": "block"},
@@ -218,7 +348,8 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *,
     for flag in ("--allowedTools", "--disallowedTools"):
         index = argv.index(flag)
         del argv[index:index + 2]
-    argv.extend(["--restricted", "--settings", json.dumps(settings), "--append-system-prompt",
+    merge_settings(argv, settings)
+    argv.extend(["--restricted", "--append-system-prompt",
                  "Use Read, Grep and Glob to inspect the repository. Run scoped tests from the "
                  "review checkout, for example pytest -q tests/test_example.py or "
                  "cargo test --manifest-path rust/Cargo.toml -p CRATE TEST_FILTER. "

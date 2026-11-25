@@ -1,4 +1,5 @@
 use pg_worker_core::{
+    credential_isolation,
     host_readiness::{self, Native, Record, Report, WRITER_SANDBOX},
     hosts::HostRegistry,
 };
@@ -12,6 +13,32 @@ fn run() -> io::Result<bool> {
     let first = args.next();
     if first.as_deref() == Some("--child-start") {
         return Ok(true);
+    }
+    if first.as_deref() == Some("--child-open") {
+        let path = args
+            .next()
+            .ok_or_else(|| io::Error::other("--child-open needs a path"))?;
+        println!("{}", credential_isolation::child_open(path.as_ref()));
+        return Ok(true);
+    }
+    if first.as_deref() == Some("--credential-probe") {
+        // Optional `--codex PATH`; prints one `<verdict> <path>` line per probed secret path.
+        let codex = match (args.next().as_deref(), args.next()) {
+            (Some("--codex"), Some(path)) => PathBuf::from(path),
+            (None, _) => PathBuf::from("codex"),
+            _ => return Err(io::Error::other("usage: --credential-probe [--codex PATH]")),
+        };
+        let scratch = tempfile::tempdir()?;
+        let (lines, ok) = credential_isolation::probe(
+            &codex,
+            &env::current_exe()?,
+            scratch.path(),
+            &credential_isolation::host_deny_read_paths()?,
+            &credential_isolation::host_plangraph_config_dirs()?,
+        )?;
+        lines.iter().for_each(|line| println!("{line}"));
+        println!("{}", if ok { "ISOLATED" } else { "NOT ISOLATED" });
+        return Ok(ok);
     }
     if first.as_deref() == Some("--child-commit") {
         host_readiness::commit_child(&env::current_dir()?)?;
