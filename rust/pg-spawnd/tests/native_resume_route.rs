@@ -378,19 +378,28 @@ run_id = 'run-fixture3'
 (state / 'runs' / run_id / 'record.json').write_text(json.dumps(dict(
     run_id=run_id, run_kind='native-codex', role='implement', host='local',
     status='completed', ended=1.0, started=0.5)))
-waits = []
+waits, answer = [], [None]
 def run(argv, *, timeout, **kwargs):
     # The owner takes 25 s to reopen: a shorter bound would lose the acknowledgement.
     waits.append(timeout)
     if timeout < 25:
         raise subprocess.TimeoutExpired(argv, timeout)
-    return SimpleNamespace(returncode=0, stdout=json.dumps(dict(run_id=run_id, ok=True, resumed=True)).encode())
+    sent = argv[argv.index('--request-id') + 1]
+    echoed = answer[0] or sent
+    return SimpleNamespace(returncode=0, stdout=json.dumps(dict(run_id=run_id, ok=True, resumed=True, request_id=echoed)).encode())
 with patch('plangraph.fleet_snapshot._projection_binary', return_value='pg-spawnd'), \
      patch.object(remote_ps.subprocess, 'run', side_effect=run):
     out = io.StringIO()
     with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
         cli.main(['--state', str(state), 'resume', run_id])
     assert json.loads(out.getvalue())['resumed'] is True and waits == [remote_ps.RESUME_TIMEOUT], waits
+    # An owner that confirms another request's id is not accepted.
+    answer[0] = 'f' * 32
+    out = io.StringIO()
+    with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
+        cli.main(['--state', str(state), 'resume', run_id])
+    reply = json.loads(out.getvalue())
+    assert reply['ok'] is False and 'does not confirm' in reply['error'], reply
 "#,
         )
         .arg(state.path())

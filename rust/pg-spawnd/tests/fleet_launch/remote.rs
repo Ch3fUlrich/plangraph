@@ -488,7 +488,14 @@ fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
     // A target without `pg-spawnd` refuses every launch, fresh or respawn, and never falls back
     // to a launcher that would start a fresh session.
     let bare = format!("{}:/usr/bin:/bin", s.path("no-pg-spawnd").display());
-    for request in [&payload, &live] {
+    // `payload` arrives carrying `--respawn`; the fresh launch is the same request without it.
+    let mut fresh = payload.clone();
+    fresh["argv"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|arg| arg != "--respawn");
+    assert!(!fresh["argv"].to_string().contains("--respawn"));
+    for request in [&fresh, &live] {
         let output = deliver_with(s, encoded, request, &[("PATH", bare.clone())]);
         assert_eq!(output.status.code(), Some(2));
         assert!(s

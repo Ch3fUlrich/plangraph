@@ -509,9 +509,10 @@ def _route_native(service, run_id, message, host, verb):
         if reply.returncode:
             return refused(f'local {verb} command failed')
         try:
-            return json.loads(reply.stdout)
+            receipt = json.loads(reply.stdout)
         except ValueError:
             return refused(f'local {verb} command returned no receipt')
+        return _confirmed(receipt, verb, request_id, refused)
     if host is None and record:
         host = record.get('host')
     if host is None:
@@ -521,13 +522,19 @@ def _route_native(service, run_id, message, host, verb):
         host = hosts.pop()
     receipt = native_result(dict(run_id=run_id, host=host), verb=verb, message=message,
                             request_id=request_id)
-    if verb == 'resume' and receipt.get('ok') and receipt.get('request_id') != request_id:
-        # Success counts only when the target confirms this exact request.
-        receipt = refused('resume receipt does not confirm this request')
-    elif verb == 'resume' and not receipt.get('ok') and record and record.get('overflow_remote'):
+    receipt = _confirmed(receipt, verb, request_id, refused)
+    if verb == 'resume' and not receipt.get('ok') and record and record.get('overflow_remote'):
         receipt = _reconcile_resume(record, receipt, request_id)
     if verb == 'resume' and receipt.get('resumed') and record and record.get('overflow_remote'):
         _track_resume(service, record, receipt)
+    return receipt
+
+
+def _confirmed(receipt, verb, request_id, refused):
+    """Local and ssh resumes alike count as success only when the owner echoes this request's id."""
+    if (verb == 'resume' and isinstance(receipt, dict) and receipt.get('ok')
+            and receipt.get('request_id') != request_id):
+        return refused('resume receipt does not confirm this request')
     return receipt
 
 

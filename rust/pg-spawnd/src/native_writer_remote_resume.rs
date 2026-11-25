@@ -98,9 +98,8 @@ fn start(state: &Path, id: &str, prompt: &str, request_id: Option<&str>) -> Resu
         spawn_detached(state, id, &directory, &file, round, request_id).and_then(|mut child| {
             let deadline = std::time::Instant::now() + REOPEN_WAIT;
             loop {
-                let reopened = read().is_ok_and(|r| r["resume_number"].as_u64() >= Some(round));
-                if reopened {
-                    return Ok(());
+                if let Some(outcome) = read().ok().and_then(|r| reopened(&r, round, request_id)) {
+                    return outcome;
                 }
                 if child
                     .try_wait()
@@ -115,16 +114,31 @@ fn start(state: &Path, id: &str, prompt: &str, request_id: Option<&str>) -> Resu
                 std::thread::sleep(Duration::from_millis(50));
             }
         });
-    if let Err(reason) = started {
-        let _ = std::fs::remove_file(&file);
-        return Err(reason);
-    }
+    let observed = match started {
+        Ok(observed) => observed,
+        Err(reason) => {
+            let _ = std::fs::remove_file(&file);
+            return Err(reason);
+        }
+    };
     let mut receipt = json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,
-                             "queued":true,"resume_number":round});
+                             "queued":true,"resume_number":observed});
     if let Some(request_id) = request_id {
         receipt["request_id"] = json!(request_id);
     }
     Ok(receipt)
+}
+
+/// Whether the run record shows round `round` (or later) opened, and by which request: only this
+/// request's id confirms it, and the round reported is the one observed.
+fn reopened(record: &Value, round: u64, request_id: Option<&str>) -> Option<Result<u64, String>> {
+    let observed = record["resume_number"].as_u64().filter(|n| *n >= round)?;
+    Some(match request_id {
+        Some(wanted) if record["resume_request_id"] != wanted => {
+            Err("another resume request reopened the run".into())
+        }
+        _ => Ok(observed),
+    })
 }
 
 /// The last line the failed resume child logged.
@@ -250,6 +264,39 @@ pub(crate) fn local_cli(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_round_carrying_this_requests_id_confirms_it() {
+        let seen = |n: u64, id: Option<&str>| {
+            let mut record = json!({"resume_number": n});
+            if let Some(id) = id {
+                record["resume_request_id"] = json!(id);
+            }
+            record
+        };
+        // Not reopened yet.
+        assert_eq!(reopened(&seen(0, None), 1, Some("aaaaaaaa")), None);
+        // The round names this request: its observed round is reported.
+        assert_eq!(
+            reopened(&seen(1, Some("aaaaaaaa")), 1, Some("aaaaaaaa")),
+            Some(Ok(1))
+        );
+        assert_eq!(
+            reopened(&seen(3, Some("aaaaaaaa")), 1, Some("aaaaaaaa")),
+            Some(Ok(3))
+        );
+        // The round was opened by request B: request A is never acknowledged.
+        assert!(matches!(
+            reopened(&seen(1, Some("bbbbbbbb")), 1, Some("aaaaaaaa")),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            reopened(&seen(1, None), 1, Some("aaaaaaaa")),
+            Some(Err(_))
+        ));
+        // A caller without an id keeps the round check alone.
+        assert_eq!(reopened(&seen(1, Some("bbbbbbbb")), 1, None), Some(Ok(1)));
+    }
 
     #[test]
     fn a_failed_prompt_write_releases_the_round_for_a_retry() {
