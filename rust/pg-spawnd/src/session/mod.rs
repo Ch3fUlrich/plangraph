@@ -13,6 +13,8 @@ mod restart;
 pub mod round_cli;
 #[cfg(test)]
 mod round_cli_tests;
+#[cfg(test)]
+mod round_episode_tests;
 mod round_host;
 #[cfg(test)]
 mod round_host_tests;

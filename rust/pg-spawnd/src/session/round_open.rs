@@ -92,9 +92,14 @@ impl Reader {
             .filter(|(_, tool)| tool.class == Class::Wait)
             .collect();
         calls.sort_by_key(|(id, _)| id.as_str());
-        let (call_id, index) = calls
-            .into_iter()
-            .find_map(|(id, tool)| Some((id.clone(), self.authorized_task(tool)?)))?;
+        // Only a call of the task's current episode can authorise its stop: an open call that
+        // an interruption left behind belongs to an episode that is over.
+        let (call_id, index) = calls.into_iter().find_map(|(id, tool)| {
+            let index = self.authorized_task(tool)?;
+            let current = self.episodes.get(&self.background[index].task.id)?;
+            (tool.episode.as_deref() == Some(current.first_call.as_str()))
+                .then(|| (id.clone(), index))
+        })?;
         let bg = &self.background[index];
         // The wait is the episode this call belongs to, named by its first call.
         let episode = self.episodes.get(&bg.task.id);
