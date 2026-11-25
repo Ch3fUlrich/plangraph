@@ -4,7 +4,7 @@
 //! The streak lives in one private file (`{"pending":N,"at":EPOCH}`). Missing or unreadable
 //! means zero. It is committed right after the first refresh outcome, before any page is read:
 //! a run killed earlier neither counts nor resets. Any outcome that is not pending resets it.
-//! Both services take the lock beside the file (`pending.lock`) for the whole run; a run that
+//! Both services take the lock beside the file (`<state file name>.lock`) for the whole run; a run that
 //! finds it held ends at once with `merge_close_busy` and exit 0.
 use crate::feeder::Env;
 use crate::merge_close::{
@@ -59,12 +59,20 @@ fn refresh_wait(env: &Env) -> Result<Duration, String> {
     }
 }
 
+/// The lock file beside the state: `<state file name>.lock`, never the state file itself, whose
+/// inode a streak write replaces.
+pub fn lock_path(state: &Path) -> std::path::PathBuf {
+    let mut name = state.file_name().unwrap_or_default().to_owned();
+    name.push(".lock");
+    state.with_file_name(name)
+}
+
 fn lock_runs(state: &Path) -> Result<Option<pg_worker_core::lockfile::LockGuard>, String> {
     if let Some(parent) = state.parent().filter(|p| !p.as_os_str().is_empty()) {
         pg_worker_core::run::record_io::ensure_private_dir(parent)
             .map_err(|err| format!("create merge-close state dir {}: {err}", parent.display()))?;
     }
-    pg_worker_core::lockfile::try_lock(&state.with_extension("lock"))
+    pg_worker_core::lockfile::try_lock(&lock_path(state))
         .map_err(|err| format!("lock merge-close state {}: {err}", state.display()))
 }
 
