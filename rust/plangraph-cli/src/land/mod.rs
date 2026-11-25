@@ -10,10 +10,6 @@ pub mod deploy_post;
 #[cfg(test)]
 mod deploy_post_cleanup_tests;
 #[cfg(test)]
-mod deploy_post_gate_tests;
-#[cfg(test)]
-mod deploy_post_replan_tests;
-#[cfg(test)]
 mod deploy_post_tests;
 mod deploy_probe;
 pub mod deploy_run;

@@ -149,9 +149,9 @@ fn switch_off(
     }
 }
 
-/// The identity of a plan: a digest of its targets and their items. A state belongs to the plan that first
+/// The identity of a plan on a landed revision: a digest of the revision, the targets and their items. A state belongs to the plan that first
 /// used it, so a checkpoint of another plan never decides what this plan switches off or skips.
-pub fn plan_id(targets: &[RunTarget]) -> String {
+pub fn plan_id(targets: &[RunTarget], revision: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut lines: Vec<String> = targets
         .iter()
@@ -161,6 +161,7 @@ pub fn plan_id(targets: &[RunTarget]) -> String {
         })
         .collect();
     lines.sort();
+    lines.insert(0, format!("revision {revision}"));
     format!("{:x}", Sha256::digest(lines.join("\n")))
 }
 
@@ -205,7 +206,10 @@ pub fn apply(
 ) -> Result<PostReport, String> {
     let mut report = PostReport::default();
     // The state belongs to one plan: a checkpoint of another plan (or of an unknown one) decides nothing.
-    let pid = plan_id(targets);
+    if gate.revision.trim().is_empty() {
+        return Err("the gate names no landed revision to bind the state to".into());
+    }
+    let pid = plan_id(targets, &gate.revision);
     if state.plan.is_empty() {
         if !state.done.is_empty() || !state.cleanup.is_empty() || state.failed.is_some() {
             return Err("the state names no plan; fix or clear it".into());
@@ -352,6 +356,11 @@ pub fn apply(
                 // Only what the GO names and this attempt installed is switched off: the timers held for
                 // their service, and the failed unit itself when it triggers itself (a timer, socket, path).
                 // A failure before the install changed nothing, so it leaves the rerun open.
+                // The first-run failure is set before the cleanup is saved, so one checkpoint carries both and a
+                // lost write can never leave the cleanup without the failure.
+                if changed {
+                    state.failed = Some(id.clone());
+                }
                 abort(
                     installer,
                     state,
@@ -360,8 +369,7 @@ pub fn apply(
                     changed.then_some(t),
                     checkpoint,
                 )?;
-                if changed {
-                    state.failed = Some(id.clone());
+                if changed && state.cleanup.is_empty() {
                     checkpoint(state)?;
                 }
                 report.not_attempted = ordered[i + 1..]

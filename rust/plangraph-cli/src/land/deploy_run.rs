@@ -33,10 +33,11 @@ pub struct RunRead {
     pub invocation: Option<String>,
 }
 
-/// What the step verifies a first run against: the commit time of the verified landed head and the clock
-/// (read after a target's first run is read), both in microseconds.
+/// What the step verifies a first run against: the landed revision, its commit time and the clock (read after
+/// a target's first run is read), both in microseconds. The state is bound to the revision.
 #[derive(Clone, Debug)]
 pub struct Gate {
+    pub revision: String,
     pub fresh_after: i64,
     pub clock: fn() -> i64,
 }
@@ -164,7 +165,7 @@ pub struct PostState {
     /// to go on until they are off.
     #[serde(default)]
     pub cleanup: BTreeSet<(String, String)>,
-    /// The plan this state belongs to (`plan_id`): another plan's state is refused.
+    /// The plan and landed revision this state belongs to (`plan_id`): another one's state is refused.
     #[serde(default)]
     pub plan: String,
 }
