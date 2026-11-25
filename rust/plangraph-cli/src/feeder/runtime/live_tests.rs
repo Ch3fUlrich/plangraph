@@ -128,6 +128,7 @@ mod proc_fixture {
                 rules: at("rules.md"),
                 repo: dir.path().to_path_buf(),
                 proc: at("proc"),
+                open_psi: capacity::open_psi,
             };
             let ready = json!({"items":[{"key":"plangraph:X","title":"x","priority":5,
                 "created_at":"2026-01-01T00:00:00Z","state":"open","files":[]}]});
@@ -161,16 +162,26 @@ mod proc_fixture {
 
     #[test]
     fn live_decision_reports_ram_budget_and_psi_pacing() {
-        let live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        fn permission_denied(_: &Path) -> std::io::Result<fs::File> {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+        let mut live = Live::new("dell", "[max_writers]\ndell = 5\n");
         fs::write(live.proc("loadavg"), SATURATED).unwrap();
         // (pressure/cpu state, expected pacing): only a missing file paces by load. "not_a_dir"
-        // makes the open fail with an error that is not NotFound, as an unreadable file does.
+        // makes the open fail with an error that is not NotFound; "permission_denied" injects
+        // that error at the PSI open, whatever the file system or user (root included).
         for (state, paced) in [
             ("missing", true),
             ("valid", false),
             ("malformed", false),
             ("not_a_dir", false),
+            ("permission_denied", false),
         ] {
+            live.options.open_psi = if state == "permission_denied" {
+                permission_denied
+            } else {
+                capacity::open_psi
+            };
             let dir = live.proc("pressure");
             let _ = fs::remove_dir_all(&dir);
             let _ = fs::remove_file(&dir);
