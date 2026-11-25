@@ -148,7 +148,7 @@ saved SHAs, worktree paths and branches for landed parts. The same pass checks
 other idle worktrees under the scanned roots for local removal. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
-for idle thresholds, run records, restore TSVs and remote SHA leases.
+and [lane lifetime](docs/lane-lifetime.md) (`plangraph lane-cleanup`, restore, retry).
 
 CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge queue
 event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).

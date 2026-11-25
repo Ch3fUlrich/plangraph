@@ -8,10 +8,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
-                              pr_labels, save_state)
+                              pr_labels, run, save_state, worktrees)
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -378,3 +379,146 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+def same_repo_parts(st, landed):
+    """(ref, head) of the landed parts whose pull request head is a branch of this repository, by the
+    PR's own fields. A fork's part, or one whose identity cannot be read, is left out of every delete."""
+    parts = []
+    for rec in landed:
+        ref = st["prs"][str(rec["pr"])]["ref"]
+        if not st.get("repo"):
+            continue
+        try:
+            view = gh_json("pr", "view", str(rec["pr"]), "--repo", st["repo"],
+                           "--json", "isCrossRepository,headRefName")
+        except MergeBatchError:
+            continue
+        if view.get("isCrossRepository") is False and view.get("headRefName") == ref:
+            parts.append((ref, rec["head"]))
+    return parts
+
+
+def lane_cleanup_landed(repo, st, parts):
+    """Run `plangraph lane-cleanup` for exactly the frozen (ref, head) pairs of `same_repo_parts`.
+    Exit 3 (a delete was refused) raises, so a strict settlement resumes at its cleanup step; moved
+    and absent refs are done or re-evaluated by the daily run, which also takes older rounds."""
+    pairs = [(ref, sha) for ref, sha in parts if ref.startswith("lane/")]
+    if not pairs:
+        return
+    state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
+    argv = ["plangraph", "lane-cleanup", "--repo", repo, "--state", state, "--gh-repo", st["repo"],
+            "--refs", ",".join(f"refs/heads/{ref}:{sha}" for ref, sha in pairs), "--apply"]
+    for flag, name in (("--claims-reader", "PG_SWEEP_CLAIMS_READER"), ("--remote", "PG_LANE_DELETE_REMOTE"),
+                       ("--gh-host", "PG_LANE_GH_HOST")):
+        if os.environ.get(name):
+            argv.extend([flag, os.environ[name]])
+    proc = run(argv, ok=(0, 3))
+    sys.stderr.write(proc.stdout + proc.stderr)
+    if proc.returncode == 3:
+        raise MergeBatchError("lane cleanup deferred: a delete was refused; settle again or wait for the daily run")
+
+
+try:
+    import fcntl
+except ImportError:  # no flock on Windows: the append stays atomic, a release can race an append
+    fcntl = None
+
+
+@contextmanager
+def _locked(path):
+    """One writer at a time over the holds file (check plus rewrite is one step under the lock)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "a") as lock:
+        if fcntl:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _hold_file():
+    state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
+    return Path(state) / "lane-holds.txt"
+
+
+def hold_lane_refs(refs):
+    """Publish a hold (`refs/heads/<ref>` and the time) for each lane ref before its train can merge:
+    the daily cleanup keeps a held ref until settlement releases it after a recorded writer-stop
+    or the hold expires (lane_guard.rs, 14 days), so no ref is eligible before writer-stop can use it."""
+    rows = [f"refs/heads/{ref}\t{int(time.time())}\n" for ref in refs if ref and ref.startswith("lane/")]
+    if rows:
+        path = _hold_file()
+        with _locked(path):
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, "".join(rows).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
+
+def release_lane_refs(refs):
+    """Drop the holds of `refs` after settlement recorded the writer-stop and ran the lane cleanup."""
+    path = _hold_file()
+    drop = {f"refs/heads/{ref}" for ref in refs}
+    if not drop or not path.is_file():
+        return
+    with _locked(path):
+        keep = [row for row in path.read_text().splitlines() if row.split("\t")[0] not in drop]
+        temp = path.with_suffix(".tmp")
+        temp.write_text("".join(row + "\n" for row in keep))
+        os.replace(temp, path)
+
+
+def writers_stopped(verification):
+    """True when the recorded host verification names a writer-stop report for every host and none of
+    its writers was kept: only then may settlement delete the landed lane refs the writers push to."""
+    return bool(verification) and all(
+        isinstance(host, dict) and isinstance(host.get("writers"), list)
+        and all(row.get("status") != "kept" for row in host["writers"]) for host in verification)
+
+
+def cleanup_landed(st, landed, *, strict=False, writers=None):
+    """Best effort cleanup with exact state SHAs; all sweep protections still apply.
+
+    `writers` is the writer-stop evidence of settlement: True (every host stopped its writers);
+    anything else (not established, or a landing without host verification) keeps the lane refs
+    out of both delete paths, held until the evidence is recorded or the hold expires. Remote deletes go only to identity-checked refs;
+    the worktree targets are local-only (no --delete-remote without a verified remote target)."""
+    try:
+        repo = git("rev-parse", "--show-toplevel").stdout.strip()
+        trees = worktrees()
+        targets = [(st["worktree"], st["branch"], st["head"])] if st["worktree"] and Path(st["worktree"]).is_dir() else []
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            for path, name in trees:
+                if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
+                    targets.append((path, name, rec["head"]))
+        pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
+        verified = same_repo_parts(st, landed)  # a fork's ref never reaches a remote delete
+        if not writers:  # no positive writer-stop evidence (also a landing without host verification)
+            held = [ref for ref, _ in verified if ref.startswith("lane/")]
+            verified = [pair for pair in verified if pair[0] not in held]
+            if held:
+                print(f"lane refs held until writer-stop is recorded: {', '.join(held)}", file=sys.stderr)
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--include-merged"]
+        if verified:
+            argv.append("--delete-remote")
+        roots = dict.fromkeys(Path(path).parent for path, _, _ in targets)
+        for key in ("PG_WORKTREES", "PG_CLAUDE_WORKTREES", "PG_RUNS", "PG_RUN_WORKTREES"):
+            if os.environ.get(key):
+                roots[Path(os.environ[key])] = None
+        for root in roots or (repo,):
+            argv.extend(["--root", str(root)])
+        for path, branch, sha in targets:
+            argv.extend(["--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+        for branch, head in verified:
+            argv.extend(["--remote-target", f"{branch}:{head}"])
+        result = run(argv)
+        print(result.stdout, end="", file=sys.stderr)
+        if writers:
+            lane_cleanup_landed(repo, st, verified)
+            release_lane_refs([ref for ref, _ in verified])
+    except MergeBatchError as exc:
+        if strict:
+            raise
+        print(f"cleanup sweep failed: {exc}", file=sys.stderr)

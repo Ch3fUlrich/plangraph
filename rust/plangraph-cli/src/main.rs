@@ -61,6 +61,9 @@ fn run() -> i32 {
             .unwrap_or_default();
         return plangraph_cli::land::cli::run(&home, &args[1..]);
     }
+    if args.first().map(String::as_str) == Some("lane-cleanup") {
+        return plangraph_cli::land::lane_cleanup::run(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("main-state") {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
@@ -195,7 +198,7 @@ fn run() -> i32 {
         ["setup", "check", "--component", name] => (setup::Mode::Check, Some(*name)),
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | baseline --keeper-only [--since RFC3339] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | evidence <check|index> [EVIDENCE_DIR] | --version"
+                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | baseline --keeper-only [--since RFC3339] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | lane-cleanup | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | evidence <check|index> [EVIDENCE_DIR] | --version"
             );
             return 2;
         }

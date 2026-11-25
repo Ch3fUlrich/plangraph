@@ -62,6 +62,8 @@ pub mod host_readiness;
 pub mod hosts;
 pub mod idle_targets;
 pub mod janitor;
+pub mod lane_delete;
+pub mod lane_repo;
 pub mod live_probe;
 pub mod lockfile;
 pub mod main_target;

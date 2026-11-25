@@ -703,3 +703,5 @@ HTTP response remains a project-scoped array of terminal spawn rows.
 
 Spawn delivery retries through the watchdog, and the keeper deduplicates by
 spawn ID. An unwitnessed serving model and unknown usage remain explicit.
+
+`keeper sweep-claims` reports `unbound_runs` for active runs without a local record and binds local runs to their recorded branch; see [keeper operations](keeper-operations.md) and [lane lifetime](lane-lifetime.md).

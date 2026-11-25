@@ -1,6 +1,7 @@
 //! Applying adapter for pg-reap's pure policy; all authority is collected live.
 use crate::{
     disk_hygiene::git,
+    lane_delete,
     run::record_io,
     sweep_facts::{self, Protection},
 };
@@ -151,6 +152,7 @@ fn run_using(
     }
     let trees = inventory(options.repo)?;
     let mut restore = None;
+    let mut restore_path = PathBuf::new();
     let mut blocked = std::collections::BTreeSet::new();
     if options.apply {
         let dir = options.state.join("sweep");
@@ -162,7 +164,8 @@ fn run_using(
         let path: PathBuf = dir.join(format!("{ts}.tsv"));
         record_io::atomic_write_private(&path, b"repo\tpath\tbranch\tsha\tPR\n")?;
         fs::File::open(&dir)?.sync_all()?;
-        restore = Some(fs::OpenOptions::new().append(true).open(path)?);
+        restore = Some(fs::OpenOptions::new().append(true).open(&path)?);
+        restore_path = path;
     }
     for tree in &trees {
         let path = Path::new(&tree.path);
@@ -252,12 +255,22 @@ fn run_using(
                 {
                     // Lease guards a remote branch that advanced after the PR merged.
                     let remote_ref = branch.to_string();
-                    remote_restore(options.repo, &remote_ref, &tree.head, file)?;
-                    let lease = format!("--force-with-lease={remote_ref}:{}", tree.head);
-                    git(
-                        options.repo,
-                        &["push", &lease, "origin", &format!(":{remote_ref}")],
-                    )?;
+                    if lane_delete::is_lane_ref(&remote_ref) {
+                        // Lane branches go through the one authorized, hook-checked delete.
+                        lane_delete::delete_or_err(
+                            options.repo,
+                            &remote_ref,
+                            &tree.head,
+                            &restore_path,
+                        )?;
+                    } else {
+                        remote_restore(options.repo, &remote_ref, &tree.head, file)?;
+                        let lease = format!("--force-with-lease={remote_ref}:{}", tree.head);
+                        git(
+                            options.repo,
+                            &["push", &lease, "origin", &format!(":{remote_ref}")],
+                        )?;
+                    }
                 }
             }
             report.push_str(&format!(
@@ -346,7 +359,10 @@ fn run_using(
             }
             // Explicit landed targets allow batch-closed PRs; containment and lease remain mandatory.
             if let Some(file) = &mut restore {
-                remote_restore(options.repo, &reference, sha, file)?;
+                let lane = lane_delete::is_lane_ref(&reference);
+                if !lane {
+                    remote_restore(options.repo, &reference, sha, file)?;
+                }
                 // Only delete a local ref without a checkout, with the same SHA lease.
                 if !inventory(options.repo)?
                     .iter()
@@ -360,15 +376,19 @@ fn run_using(
                         git(options.repo, &["update-ref", "-d", &reference, sha])?;
                     }
                 }
-                git(
-                    options.repo,
-                    &[
-                        "push",
-                        &format!("--force-with-lease={reference}:{sha}"),
-                        "origin",
-                        &format!(":{reference}"),
-                    ],
-                )?;
+                if lane {
+                    lane_delete::delete_or_err(options.repo, &reference, sha, &restore_path)?;
+                } else {
+                    git(
+                        options.repo,
+                        &[
+                            "push",
+                            &format!("--force-with-lease={reference}:{sha}"),
+                            "origin",
+                            &format!(":{reference}"),
+                        ],
+                    )?;
+                }
             }
             report.push_str(&format!(
                 "{} remote {branch}\n",

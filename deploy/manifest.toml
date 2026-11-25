@@ -164,6 +164,12 @@ env_files = ["plangraph.env"]
 first_run = "pg-merge-close-continue.timer is active and its service exits successfully when no scan is pending"
 
 [[unit]]
+name = "pg-lane-cleanup"
+files = ["pg-lane-cleanup.service", "pg-lane-cleanup.timer"]
+env_files = ["disk-hygiene.env", "lane-cleanup.env"]
+not_deployed = "docs/lane-lifetime.md: activation requires the land App installation and lane deletion ruleset"
+
+[[unit]]
 name = "pg-reconcile-merged"
 files = ["pg-reconcile-merged.service", "pg-reconcile-merged.timer"]
 hosts = ["keeper"]
