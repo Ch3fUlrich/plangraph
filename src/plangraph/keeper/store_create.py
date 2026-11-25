@@ -149,10 +149,14 @@ class CreateMixin:
                          lambda now: self._create(principal, items, now, True))
 
     @staticmethod
-    def _folded_note(raw, key):
+    def _unknown_fields(raw):
+        """The fields of *raw* that no one reads: they fold into ``note``."""
+        return {name: raw[name] for name in raw if name not in KNOWN_ITEM_FIELDS}
+
+    @classmethod
+    def _folded_note(cls, raw, key):
         """B3: unknown fields fold into ``note`` exactly as the importer does."""
-        unknown = {name: raw[name] for name in raw
-                   if name not in KNOWN_ITEM_FIELDS}
+        unknown = cls._unknown_fields(raw)
         for name, value in unknown.items():
             guard(name, value, key)
         return fold_checked(raw.get("note"), unknown, key) if unknown \

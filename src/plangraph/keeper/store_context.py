@@ -43,6 +43,7 @@ from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .item_fields import PREMISE_FIELDS, premise_texts
+from .note_fold import split_legacy_metadata
 from .schema import DEFINITION_EVENTS
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -187,7 +188,8 @@ class ContextMixin:
         clock = getattr(self, "_ctx_clock", None)
         if clock is not None and clock["stamp"] == stamp:
             return clock
-        clock = {"seqs": [], "marks": [], "last": {}, "reconfirmed": {}, "stamp": stamp}
+        clock = {"seqs": [], "marks": [], "last": {}, "reconfirmed": {}, "authored": set(),
+                 "stamp": stamp}
         mark = -1
         for row in self.conn.execute(
                 "SELECT seq, key, type, payload FROM events"
@@ -204,6 +206,8 @@ class ContextMixin:
                 mark = max(mark, _num(ids[-1]))
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
+            if ("note" in payload and row["type"] == "item_created") or payload.get("premise_cites"):
+                clock["authored"].add(row["key"])    # a note this Keeper recorded is authored text
             if _changes_premise(row["type"], payload):
                 clock["last"][row["key"]] = row["seq"]
                 clock["reconfirmed"].pop(row["key"], None)     # the router read an earlier premise
@@ -217,7 +221,7 @@ class ContextMixin:
         clock at its last definition (the highest D-id any definition had
         cited by then).  ``None`` = unknown, which never refuses.
         """
-        cited = src.decision_ids(*self._texts(item)) if cited is None else cited
+        cited = src.decision_ids(*self._texts(item, clock)) if cited is None else cited
         if cited:
             return _num(cited[-1])
         seq = clock["last"].get(item["key"])
@@ -227,7 +231,12 @@ class ContextMixin:
         return mark if mark >= 0 else None
 
     @staticmethod
-    def _texts(item):
+    def _texts(item, clock=None):
+        """The premise texts of *item*.  A note whose creation event this Keeper did not write
+        with the note (an older Keeper's) ends in the metadata lines it folded: those are not
+        premise text."""
+        if clock is not None and item["key"] not in clock["authored"]:
+            item = {**item, "note": split_legacy_metadata(item.get("note"), whole=True)[0]}
         return premise_texts(item)
 
     def _work(self, item, fetch, fresh_lanes=False):
@@ -286,12 +295,14 @@ class ContextMixin:
         ``source`` is a premise field, so a source decision is cited, never newer.
         """
         key = item["key"]
-        cited = src.decision_ids(*self._texts(item))
+        cited = src.decision_ids(*self._texts(item, clock))
         naming = src.decisions_naming(book, key)
         mark = self._watermark(item, clock, cited)
         confirmed = clock["reconfirmed"].get(key, -1)
-        newer = [d for d in naming if d not in cited
-                 and mark is not None and mark < _num(d) and confirmed < _num(d)]
+        # A reconfirmation is itself a watermark: an item with no citation reads decisions from
+        # the one the router confirmed.
+        floor = max(-1 if mark is None else mark, confirmed)
+        newer = [d for d in naming if d not in cited and floor >= 0 and _num(d) > floor]
         superseded = {old: new for old, new in book["superseded"].items()
                       if confirmed < _num(new)}
         return cited, naming, newer, superseded

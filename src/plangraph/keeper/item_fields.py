@@ -25,7 +25,7 @@ import re
 
 from .credential_guard import guard
 from .errors import Refused
-from .note_fold import METADATA_FIELDS, NOTE_CAP, render
+from .note_fold import METADATA_FIELDS, NOTE_CAP, fold_note, render, split_legacy_metadata
 
 _HOW = re.compile(r"^[ \t]*How:[ \t]*(.*?)(?=^[ \t]*(?:Why|Done when|Checked against):|\Z)",
                   re.M | re.S)
@@ -122,14 +122,14 @@ SESSION_CAP = 200
 _LINE_SEPARATOR = re.compile("[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
 
-def check_metadata(raw, key):
+def check_metadata(raw, key, extra=None):
     """The ``METADATA_FIELDS`` of *raw*, validated, as ``{name: value}``.
 
     Metadata is carried on the creation event and never folded into ``note``: a
     decision id in it is not a citation of the premise.  ``session`` is one line of
-    at most ``SESSION_CAP`` characters.  The credential check reads the note and every
-    metadata value together, as the fold into the note did, so a label in the note or in
-    a sibling field covers a value.
+    at most ``SESSION_CAP`` characters.  The credential check reads the view the fold into
+    the note gave (the note, the *extra* fields that are still folded, and every metadata
+    value, sorted by name), so a label in the note or in any sibling field covers a value.
     """
     out = {}
     for name in METADATA_FIELDS:
@@ -145,9 +145,38 @@ def check_metadata(raw, key):
             raise Refused("validation", f"{key}: {name} exceeds {NOTE_CAP} characters")
         out[name] = value
     if out:
-        note = raw.get("note") if isinstance(raw.get("note"), str) else ""
-        guard("/".join(sorted(out)), "\n".join([note, *(f"{n}: {render(out[n])}" for n in sorted(out))]), key)
+        view = fold_note(raw.get("note"), {**(extra or {}), **out}, key)
+        guard("/".join(sorted(out)), view, key)
     return out
+
+
+def move_legacy_metadata(raw, key):
+    """*raw* with the metadata lines an older Keeper's export folded at the end of its note
+    moved to their own fields: ``note`` keeps the authored part, the fields travel on the
+    creation event.  A line whose value does not validate stays in the note."""
+    authored, found = split_legacy_metadata(raw.get("note"))
+    found = {name: value for name, value in found.items() if raw.get(name) is None}
+    if not found:
+        return raw
+    try:
+        check_metadata({**raw, **found}, key)
+    except Refused:
+        return raw
+    return {**raw, "note": authored, **found}
+
+
+def creation_payloads(conn, key=None):
+    """``(key, payload)`` of the creation events (of one *key*, or all), oldest first."""
+    sql = "SELECT key, payload FROM events WHERE type='item_created'"
+    for row in conn.execute(sql + (" AND key=?" if key else "") + " ORDER BY seq", (key,) if key else ()):
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                continue
+        if isinstance(payload, dict):
+            yield row["key"], payload
 
 
 def creation_metadata(conn, key=None):
@@ -155,20 +184,11 @@ def creation_metadata(conn, key=None):
 
     Create and import keep the metadata on the creation event; export and rehome carry it on.
     """
-    sql = "SELECT key, payload FROM events WHERE type='item_created'"
-    rows = conn.execute(sql + (" AND key=?" if key else "") + " ORDER BY seq", (key,) if key else ())
     out = {}
-    for row in rows:
-        payload = row["payload"]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                continue
-        found = {name: payload[name] for name in METADATA_FIELDS
-                 if isinstance(payload, dict) and payload.get(name) is not None}
+    for item_key, payload in creation_payloads(conn, key):
+        found = {name: payload[name] for name in METADATA_FIELDS if payload.get(name) is not None}
         if found:
-            out[row["key"]] = found
+            out[item_key] = found
     return out
 
 
