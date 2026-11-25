@@ -188,10 +188,9 @@ def check_approval(path, head):
     except OSError as exc:
         raise MergeBatchError(f"approval file {path} cannot be read: {exc.strerror or exc}") from None
     lines = [line.rstrip() for line in text.split("\n") if line.strip()]  # only \n ends a line (not U+2028 ...)
-    held = Path(path).with_name("process.json")  # written by tools/seat_verdict.py for a held seat run
-    if held.is_file() and head.lower() in held.read_text(encoding="utf-8", errors="replace").lower():
-        raise MergeBatchError(f"approval file {path}: its seat run is held by process findings ({held}); "
-                              f"land needs a fresh passing review of {head} from another seat run")
+    from plangraph.review.verdict import approval_hold_error  # the registry seat_verdict writes
+    if error := approval_hold_error(text, head, os.getcwd()):
+        raise MergeBatchError(f"approval file {path}: {error}")
     for line in lines:
         if BAD_VERDICT.search(line):
             raise MergeBatchError(f"approval file {path} has a FAIL/CHANGES verdict line: {line.strip()[:80]!r}")

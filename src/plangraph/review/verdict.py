@@ -8,6 +8,7 @@ gating here are stricter.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import subprocess
 from dataclasses import dataclass
@@ -27,6 +28,10 @@ __all__ = [
     "diff_paths",
     "diff_binding",
     "bound_diff_paths",
+    "classify_run",
+    "record_hold",
+    "record_pass",
+    "approval_hold_error",
 ]
 
 VERDICTS = ("pass", "fix", "halt")
@@ -331,18 +336,23 @@ def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
 #   PROCESS <review_brief.md|skills/review/SKILL.md>[:line] field=<context field> - <what is missing>
 # No HIGH or MED line is ever read as one by its wording.
 _TYPED_PROCESS = re.compile(
-    r"^(?P<path>\S+?)(?::\d+)?\s+field=(?P<field>public_symbols|callers|test_output_paths)\b")
+    r"^(?P<path>[^\s:]+)(?::\d+)?\s+field=(?P<field>public_symbols|callers|test_output_paths)\s+-\s+\S")
+# The files a diagnostic may cite, by their repository path (the short brief name is an alias).
+_CANONICAL = {"review_brief.md": "src/plangraph/review/review_brief.md",
+              "src/plangraph/review/review_brief.md": "src/plangraph/review/review_brief.md",
+              "skills/review/SKILL.md": "skills/review/SKILL.md"}
+
+
+def _repo_path(path: str) -> str:
+    """Repository-relative form of a cited or changed path (no ./, no doubled or dot parts)."""
+    return posixpath.normpath(path.strip().strip("`'\",;)").removeprefix("./"))
 
 
 def _typed_process(rest: str) -> tuple[str, str] | None:
-    """(path, field) of a well-formed PROCESS line whose path is the review brief or skill."""
+    """(canonical path, field) of a complete PROCESS line citing the review brief or skill."""
     found = _TYPED_PROCESS.match(rest.strip().lstrip("`'\"("))
-    if not found:
-        return None
-    path = found.group("path").strip("`'\",;)")
-    if any(path == name or path.endswith("/" + name) for name in PROCESS_PATHS):
-        return path, found.group("field")
-    return None
+    canonical = _CANONICAL.get(_repo_path(found.group("path"))) if found else None
+    return (canonical, found.group("field")) if found and canonical else None
 
 
 def diff_binding(base: str, head: str, cwd: str) -> tuple[str, set[str]] | None:
@@ -400,10 +410,99 @@ def classify_findings(text: str, *, prompt: str = "",
         if kind == "process":
             typed = _typed_process(found.group(2))
             if (typed is not None and typed[1] in defects and changed_paths is not None
-                    and not any(c == typed[0] or c.endswith("/" + typed[0]) or typed[0].endswith("/" + c)
-                                for c in changed_paths)):
+                    and typed[0] not in {_repo_path(c) for c in changed_paths}):
                 process.append(raw.strip())
                 continue
             kind = "med"
         counts[kind] += 1
     return Findings(counts["high"], counts["med"], counts["low"], tuple(process))
+
+
+def classify_run(text: str, *, prompt: str, prompt_sha256: object, binding: object,
+                 cwd: str | None) -> Findings:
+    """Findings of one seat reply against its serving attempt: the saved final `prompt` counts
+    only when its digest is the attempt's `prompt_sha256`, and the scope is the attempt's
+    recorded `binding` re-verified in `cwd` (a binding that fails leaves the scope unknown,
+    never the prompt's diff text); an attempt with no binding uses the diff in its prompt."""
+    import hashlib
+
+    if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(prompt_sha256 or "").lower():
+        prompt = ""
+    if binding is not None:
+        scope = bound_diff_paths(binding, cwd)
+    else:
+        scope = diff_paths(prompt, cwd) if prompt else None
+    return classify_findings(text, prompt=prompt, changed_paths=scope)
+
+
+def _holds_dir(cwd: str | None):
+    from pathlib import Path
+
+    try:
+        common = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], capture_output=True, text=True,
+                                timeout=30, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(common) / "merge-batch" / "process-holds" if common and cwd else None
+
+
+def _hold_path(cwd: str | None, head: str):
+    folder = _holds_dir(cwd)
+    return folder / f"{head.lower()}.json" if folder and re.fullmatch(r"[0-9a-fA-F]{40}", head) else None
+
+
+def _write_json(path, doc: dict) -> None:
+    import json
+    import os
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def record_hold(cwd: str | None, head: str, run_id: str) -> None:
+    """Register a PROCESS hold of `head` (seat run `run_id`) where landing reads it: the git
+    common directory of the seat's checkout. A later passing run must be registered with
+    `record_pass` before an approval of this head can land."""
+    import json
+    import time
+
+    path = _hold_path(cwd, head)
+    if path is not None:
+        old = json.loads(path.read_text("utf-8")) if path.is_file() else {}
+        _write_json(path, {"head_sha": head.lower(), "held_runs": [*old.get("held_runs", []), run_id],
+                           "held_at": time.time(), "passes": []})
+
+
+def record_pass(cwd: str | None, head: str, run_id: str) -> None:
+    """A passing seat verdict of `head` was posted: when the head is held, it is registered."""
+    import json
+    import time
+
+    path = _hold_path(cwd, head)
+    if path is not None and path.is_file():
+        doc = json.loads(path.read_text("utf-8"))
+        doc["passes"] = [*doc.get("passes", []), {"run_id": run_id, "at": time.time()}]
+        _write_json(path, doc)
+
+
+def approval_hold_error(approval: str, head: str, repo: str | None) -> str | None:
+    """Why an approval of `head` cannot land while a PROCESS hold of it is registered: it must
+    carry a `RUN: <run id>` line naming a passing seat run posted after the hold. No hold
+    registered, no restriction. The registry is the repository's, so a copy of an approval
+    in another directory is judged by the same rule."""
+    import json
+
+    path = _hold_path(repo, head)
+    if path is None or not path.is_file():
+        return None
+    doc = json.loads(path.read_text("utf-8"))
+    runs = {entry.get("run_id") for entry in doc.get("passes", []) if entry.get("at", 0) > doc.get("held_at", 0)}
+    named = {m.group(1) for m in re.finditer(r"^RUN: (\S+)\s*$", approval, re.M)}
+    if named & runs:
+        return None
+    return (f"head {head} is held by process findings about the review prompt (runs "
+            f"{', '.join(doc.get('held_runs', []))}); land needs an approval with a 'RUN: <run id>' line "
+            "of a passing seat run posted after the hold")

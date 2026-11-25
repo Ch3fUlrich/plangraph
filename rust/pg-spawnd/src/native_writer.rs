@@ -458,6 +458,9 @@ fn writer_attempt(
     let mut fixes = 0;
     let mut idle = 0;
     let mut base_retries = 0;
+    // The review-only continuation reviews the held head as it is: its first pass does not
+    // rebase it through `prepare_review`.
+    let mut pinned = review_only;
     loop {
         let mut head = driver.head().map_err(|e| (6, e))?;
         // A first check can use commits already on the worktree at the start of the turn.
@@ -467,7 +470,7 @@ fn writer_attempt(
             && driver
                 .has_commits_beyond(&base, &head)
                 .map_err(|e| (7, e))?;
-        if has_commits {
+        if has_commits && !std::mem::take(&mut pinned) {
             let preparation = driver
                 .prepare_review(&head)
                 .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
@@ -552,8 +555,6 @@ fn writer_attempt(
             record["status_line"] = json!("DEFERRED");
             return Ok(0);
         }
-        // A fresh review of the held head releases the hold; a new one may be set below.
-        record.as_object_mut().unwrap().remove("process_hold");
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
             "host":review["host"], "leg":review["leg"], "harness":review["harness"],
@@ -563,26 +564,43 @@ fn writer_attempt(
             record["reviews"] = json!([]);
         }
         record["reviews"].as_array_mut().unwrap().push(summary);
+        // The classified finding count decides, immediate and late-completed reviews alike:
+        // an ACCEPT is always classified, any other reply when it names a PROCESS diagnostic.
+        let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
+        let accept = record["review"]["verdict"] == "ACCEPT";
+        let class = if accept || text.lines().any(|line| line.contains("PROCESS")) {
+            Some(
+                driver
+                    .classify_review(&record["review"])
+                    .map_err(|e| (7, e))?,
+            )
+        } else {
+            None
+        };
+        let blocking = class
+            .as_ref()
+            .map_or_else(|| high_med(&text), |c| c.blocking);
         // Diagnostics about the review prompt itself hold the run, whatever the verdict: the
         // round does not count, the writer gets no fix turn and nothing is pushed. The hold
-        // stays, by seat run and head, until a fresh review of this head returns
+        // stays, by seat run and head, until a fresh passing review of that head returns
         // (review-only `pg-spawnd resume`).
-        if record["review"]["text"]
-            .as_str()
-            .is_some_and(|text| text.lines().any(|line| line.contains("PROCESS")))
+        if let Some(class) = class
+            .as_ref()
+            .filter(|c| c.blocking == 0 && !c.process.is_empty())
         {
-            let class = driver
-                .classify_review(&record["review"])
-                .map_err(|e| (7, e))?;
-            if class.blocking == 0 && !class.process.is_empty() {
-                record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(1) - 1);
-                record["process_hold"] = json!({"head": head, "review_run": record["review"]["run_id"],
-                    "lines": class.process});
-                record["round_stop"] = json!("process_hold");
-                return Ok(3);
-            }
+            record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(1) - 1);
+            record["process_hold"] = json!({"head": head, "review_run": record["review"]["run_id"],
+                "lines": class.process});
+            record["round_stop"] = json!("process_hold");
+            return Ok(3);
+        }
+        if accept && blocking > 0 {
+            // An ACCEPT that still carries a counted HIGH or MED finding is not a pass.
+            record["review"]["reported_verdict"] = json!("ACCEPT");
+            record["review"]["verdict"] = json!("REQUEST_CHANGES");
         }
         if record["review"]["verdict"] == "ACCEPT" {
+            record.as_object_mut().unwrap().remove("process_hold");
             if !driver.pending_steer(record).map_err(|e| (7, e))?.is_empty() {
                 if round_cap(record) || session.is_empty() {
                     return Err((7, "steer pending after the final review round".into()));
@@ -622,14 +640,13 @@ fn writer_attempt(
                 }
             }
         }
-        let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
         if record["round_counts"].as_array().is_none() {
             record["round_counts"] = json!([]);
         }
         record["round_counts"]
             .as_array_mut()
             .unwrap()
-            .push(json!(high_med(&text)));
+            .push(json!(blocking));
         let counts: Vec<u64> = record["round_counts"]
             .as_array()
             .unwrap()

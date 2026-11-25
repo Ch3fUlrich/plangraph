@@ -486,3 +486,10 @@ def test_finding_citing_the_brief_only_in_its_advice_stays_a_real_finding(tmp_pa
     assert sv.main(argv + ["--dry-run"]) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
     assert not (seat_dir / "process.json").exists()
+
+
+def test_accept_with_a_counted_process_citation_is_not_posted_as_a_pass(tmp_path, capsys):
+    changed = "diff --git a/src/plangraph/review/review_brief.md b/src/plangraph/review/review_brief.md\n+x\n"
+    argv, _ = _process_seat(tmp_path, f"{BRIEF_MED}\nTESTS: none: x\nVERDICT: ACCEPT\n", PROCESS_PROMPT + changed)
+    assert sv.main(argv + ["--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False

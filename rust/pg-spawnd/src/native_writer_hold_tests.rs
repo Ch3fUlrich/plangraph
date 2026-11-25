@@ -33,22 +33,23 @@ fn a_process_only_review_holds_the_run_without_a_writer_round_or_fix_turn() {
 }
 
 #[test]
-fn a_held_run_continues_review_only_and_a_fresh_review_releases_it() {
+fn a_held_run_continues_review_only_on_the_pinned_head_and_a_fresh_pass_releases_it() {
     let mut driver = Fake {
         process_only: true,
         head_script: vec!["final-head"],
         ..fake()
     };
-    let held = run(&mut driver, json!({"host":"h"}), "brief");
-    let reviews = driver.reviews.len();
-    // The orchestrator repaired the prompt: resume reviews the same head, with no writer turn.
+    let held = run(&mut driver, json!({"host": "h"}), "brief");
+    let (reviews, prepares) = (driver.reviews.len(), driver.prepares);
+    // The orchestrator repaired the prompt: resume reviews the same head, with no writer turn
+    // and without rebasing the head through prepare_review.
     let mut record = held.clone();
     record.as_object_mut().unwrap().remove("exit_code");
     let resumed = run_resume(
         &mut driver,
         record,
         "same-session",
-        "ignored by a review-only continuation",
+        "ignored by the continuation",
     );
     assert_eq!(
         driver.calls,
@@ -60,9 +61,50 @@ fn a_held_run_continues_review_only_and_a_fresh_review_releases_it() {
         reviews + 1,
         "one fresh review of the same head"
     );
-    assert!(resumed["process_hold"].is_null());
+    assert_eq!(driver.prepares, prepares, "the held head is not rebased");
+    assert!(
+        resumed["process_hold"].is_null(),
+        "a passing review releases the hold"
+    );
     assert_eq!(resumed["exit_code"], 0);
     assert_eq!(resumed["review"]["verdict"], "ACCEPT");
+}
+
+#[test]
+fn a_fresh_review_with_findings_keeps_the_hold_until_a_pass() {
+    let mut driver = Fake {
+        process_only: true,
+        head_script: vec!["final-head"],
+        ..fake()
+    };
+    let held = run(&mut driver, json!({"host": "h"}), "brief");
+    assert_eq!(held["process_hold"]["head"], "final-head");
+    driver.verdicts = vec![("REQUEST_CHANGES", 1)];
+    let mut record = held.clone();
+    record.as_object_mut().unwrap().remove("exit_code");
+    // The fresh review of the held head requests real changes: the writer is resumed (no new
+    // commit follows here) and the hold stays on the record, because the head did not pass.
+    let resumed = run_resume(&mut driver, record, "same-session", "x");
+    assert_eq!(resumed["round_counts"], json!([1]));
+    assert_eq!(resumed["process_hold"]["head"], "final-head");
+    assert_ne!(resumed["exit_code"], 0);
+}
+
+#[test]
+fn an_accept_that_still_counts_a_blocker_is_not_pushed() {
+    let mut driver = Fake {
+        verdicts: vec![("ACCEPT", 1)],
+        ..fake()
+    };
+    let record = run(&mut driver, json!({"host": "h"}), "brief");
+    assert_eq!(
+        driver.calls.len(),
+        2,
+        "the counted finding resumes the writer"
+    );
+    assert_eq!(driver.pushed.len(), 1, "only the later clean ACCEPT pushes");
+    assert_eq!(record["round_counts"], json!([1]));
+    assert_eq!(record["reviews"][0]["verdict"], "ACCEPT");
 }
 
 #[test]

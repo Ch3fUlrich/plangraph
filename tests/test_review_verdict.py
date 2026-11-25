@@ -461,3 +461,40 @@ def test_bound_diff_paths_needs_the_recorded_digest(tmp_path):
     assert v.bound_diff_paths(binding, str(tmp_path)) == paths
     assert v.bound_diff_paths(dict(binding, diff_sha256="0" * 64), str(tmp_path)) is None
     assert v.bound_diff_paths(binding, None) is None and v.bound_diff_paths(None, str(tmp_path)) is None
+
+
+@pytest.mark.parametrize("line", [
+    "PROCESS docs/review_brief.md field=public_symbols - not the brief",
+    "PROCESS review_brief.md field=public_symbols-extra - malformed field",
+    "PROCESS review_brief.md field=public_symbols",
+    "PROCESS ../review_brief.md field=public_symbols - outside the repository",
+    "PROCESS other/skills/review/SKILL.md field=public_symbols - another SKILL.md"])
+def test_only_the_complete_typed_form_citing_a_canonical_repository_path_is_process(line):
+    found = v.classify_findings(line, prompt=EMPTY_PROMPT, changed_paths={"src/a.py"})
+    assert (found.med, found.process) == (1, ())
+    for ok in ("PROCESS review_brief.md field=public_symbols - x",
+               "PROCESS ./src/plangraph/review/review_brief.md:9 field=public_symbols - x",
+               "PROCESS skills/review/SKILL.md field=public_symbols - x"):
+        assert v.classify_findings(ok, prompt=EMPTY_PROMPT, changed_paths={"src/a.py"}).process == (ok,)
+
+
+def test_a_brief_changed_by_the_head_is_compared_by_its_canonical_path():
+    line = "PROCESS review_brief.md field=public_symbols - x"
+    for changed in ({"src/plangraph/review/review_brief.md"}, {"./src/plangraph/review/review_brief.md"}):
+        assert v.classify_findings(line, prompt=EMPTY_PROMPT, changed_paths=changed).med == 1
+    assert v.classify_findings(line, prompt=EMPTY_PROMPT, changed_paths={"docs/review_brief.md"}).process
+
+
+def test_hold_registry_lets_only_a_pass_posted_after_the_hold_approve(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    head, approval = "a" * 40, f"HEAD: {'a' * 40}\nVERDICT: PASS\n"
+    assert v.approval_hold_error(approval, head, str(tmp_path)) is None  # nothing held
+    v.record_hold(str(tmp_path), head, "run-held")
+    assert "held by process findings" in v.approval_hold_error(approval, head, str(tmp_path))
+    assert v.approval_hold_error("RUN: run-held\n" + approval, head, str(tmp_path))  # the held run itself
+    v.record_pass(str(tmp_path), head, "run-fresh")
+    assert v.approval_hold_error("RUN: run-fresh\n" + approval, head, str(tmp_path)) is None
+    assert v.approval_hold_error(approval, head, str(tmp_path))  # a copy with no RUN line is not enough
+    assert v.approval_hold_error(approval.replace("a", "b"), "b" * 40, str(tmp_path)) is None  # other head

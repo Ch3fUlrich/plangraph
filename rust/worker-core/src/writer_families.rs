@@ -92,15 +92,20 @@ pub struct ReviewClass {
 
 pub fn classify_review(
     text: &str,
-    prompt: &str,
-    paths: &[String],
+    attempt: &Value,
     python: &dyn Fn() -> Command,
 ) -> Result<ReviewClass, String> {
-    const CODE: &str = "import json, sys; from plangraph.review.verdict import classify_findings; a = json.load(sys.stdin); f = classify_findings(a['text'], prompt=a['prompt'], changed_paths=set(a['paths'])); print(json.dumps({'blocking': f.blocking, 'process': list(f.process)}))";
-    let payload =
-        serde_json::to_vec(&serde_json::json!({"text": text, "prompt": prompt, "paths": paths}))
-            .map_err(|e| format!("serialize review: {e}"))?;
-    let out = run_python(python, CODE, payload, "review classifier")?;
+    // `attempt` is the serving attempt: its saved final `prompt`, `prompt_sha256`, recorded
+    // `binding` and the checkout `cwd` the binding is re-verified in.
+    const CODE: &str = "import json, sys; from plangraph.review.verdict import classify_run; a = json.load(sys.stdin); f = classify_run(a['text'], prompt=a['prompt'], prompt_sha256=a['prompt_sha256'], binding=a['binding'], cwd=a['cwd']); print(json.dumps({'blocking': f.blocking, 'process': list(f.process)}))";
+    let mut payload = attempt.clone();
+    payload["text"] = serde_json::json!(text);
+    let out = run_python(
+        python,
+        CODE,
+        serde_json::to_vec(&payload).map_err(|e| format!("serialize review: {e}"))?,
+        "review classifier",
+    )?;
     let parsed: Value = serde_json::from_slice(&out)
         .map_err(|e| format!("refused: review classifier output: {e}"))?;
     Ok(ReviewClass {
