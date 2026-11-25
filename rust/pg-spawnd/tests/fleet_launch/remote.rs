@@ -349,7 +349,16 @@ fn check_destination(launcher: &Launcher) {
             .unwrap(),
         "{}\n"
     );
-    assert_eq!(s.json("child.json")["forwarded"], Value::Null);
+    let child = s.json("child.json");
+    assert_eq!(child["forwarded"], Value::Null);
+    super::dry_run::assert_fixed_permission_mode(
+        "forwarded writer",
+        child["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap()),
+    );
 
     payload["argv"]
         .as_array_mut()

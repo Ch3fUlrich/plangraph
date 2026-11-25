@@ -189,3 +189,113 @@ fn a_locale_lookalike_in_parent_is_absent_in_the_native_child() {
         ]
     );
 }
+
+#[cfg(unix)]
+fn wide_request(dir: &Path, run_id: &str, sandbox: Value) -> (PathBuf, PathBuf) {
+    let record_path = dir.join(format!("state/runs/{run_id}/record.json"));
+    fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    let request = record_path.with_file_name("native-request.json");
+    let record = json!({"run_id":run_id, "repo":dir, "base_ref":"refs/heads/main",
+        "tool_path":"/nonexistent", "status":"stopped", "session_id":"saved"});
+    fs::write(
+        &request,
+        json!({"record":record, "record_path":record_path,
+            "card":{"sandbox":sandbox}, "prompt":"brief"})
+        .to_string(),
+    )
+    .unwrap();
+    (record_path, request)
+}
+
+/// `Host::configure` refuses a card that asks for `danger-full-access` before Codex starts.
+#[cfg(unix)]
+#[test]
+fn host_configure_refuses_danger_full_access_with_a_named_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let (record_path, request) = wide_request(dir.path(), "run-card", json!("danger-full-access"));
+    let mut host = Host::from_request(
+        &read_record(&request).unwrap(),
+        &json!({"cwd":dir.path(), "run_id":"run-card", "repo":dir.path(), "tool_path":"x"}),
+        record_path,
+    )
+    .unwrap();
+    let reason = host.configure(&read_record(&request).unwrap()).unwrap_err();
+    assert!(
+        reason.starts_with("sandbox_refused: danger-full-access"),
+        "{reason}"
+    );
+}
+
+/// The saved request is checked under the supervisor guard before `take_resume` persists the
+/// landing resume and releases the stop marker.
+#[cfg(unix)]
+#[test]
+fn saved_native_request_refuses_danger_full_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let (record_path, _) = wide_request(dir.path(), "run-saved", json!("danger-full-access"));
+    fs::write(
+        &record_path,
+        json!({"run_id":"run-saved","status":"stopped","session_id":"s"}).to_string(),
+    )
+    .unwrap();
+    let marker = record_path.with_file_name("landing-stop.json");
+    fs::write(
+        &marker,
+        json!({"status":"stopped","session_id":"s","run_id":"run-saved"}).to_string(),
+    )
+    .unwrap();
+    let (record_before, marker_before) =
+        (fs::read(&record_path).unwrap(), fs::read(&marker).unwrap());
+    let reason = resume_saved(vec![record_path.to_string_lossy().into_owned()]).unwrap_err();
+    assert!(
+        reason.starts_with("sandbox_refused: danger-full-access"),
+        "{reason}"
+    );
+    assert_eq!(fs::read(&record_path).unwrap(), record_before);
+    assert_eq!(fs::read(&marker).unwrap(), marker_before);
+}
+
+/// With an unusable work mount the disk selection would record `disk_low`; the card is refused first
+/// and the terminal record, written through the lifecycle journal, names the sandbox.
+#[cfg(unix)]
+#[test]
+fn direct_native_writer_danger_full_access_precedes_disk_selection() {
+    const CHILD: &str = "PG_CARD_SANDBOX_DIRECT";
+    if let Some(request) = std::env::var_os(CHILD) {
+        execute(vec![request.to_string_lossy().into_owned()]).unwrap();
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (record_path, request) =
+        wide_request(dir.path(), "run-direct", json!("danger-full-access"));
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "native_writer_host::sandbox_tests::direct_native_writer_danger_full_access_precedes_disk_selection",
+            "--nocapture",
+        ])
+        .env(CHILD, &request)
+        .env("PLANGRAPH_WORKTREE_MOUNTS", dir.path().join("no-such-mount"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    assert_eq!(record["status"], "refused", "{record}");
+    assert_eq!(record["exit_code"], 5, "{record}");
+    assert!(
+        record["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("sandbox_refused: danger-full-access"),
+        "{record}"
+    );
+    assert!(record["ended"].is_number(), "{record}");
+    assert!(
+        dir.path().join("state/run-lifecycle").is_dir(),
+        "lifecycle journal not written"
+    );
+}

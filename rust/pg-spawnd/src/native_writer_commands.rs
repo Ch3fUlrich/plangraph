@@ -73,6 +73,7 @@ impl Host {
     }
 
     pub(super) fn configure(&mut self, request: &Value) -> Result<(), String> {
+        crate::card_sandbox::refuse(&request["card"])?;
         if self
             .push_ref
             .as_ref()
@@ -108,6 +109,10 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     let _owner = crate::writer_control::supervisor_guard(&record_path)?;
     let mut record = request["record"].clone();
     let directory = record_path.parent().ok_or("record directory missing")?;
+    if let Err(reason) = crate::card_sandbox::refuse(&request["card"]) {
+        // No disk is selected for a card that is refused: the terminal record names the sandbox.
+        return refuse_card(record, &record_path, reason);
+    }
     let id = record["run_id"]
         .as_str()
         .filter(|id| valid_run_id(id))
@@ -132,6 +137,27 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     execute_request(&request, record)
 }
 
+fn refuse_card(mut record: Value, record_path: &Path, reason: String) -> Result<(), String> {
+    let state = record_path
+        .ancestors()
+        .nth(3)
+        .ok_or("record_path has no state root")?;
+    record["cwd"] = json!(record_path
+        .parent()
+        .ok_or("record directory missing")?
+        .join("worktree"));
+    record["status"] = json!("refused");
+    record["exit_code"] = json!(5);
+    record["reason"] = json!(reason);
+    record["requested_model"] = json!(super::WRITER_MODEL);
+    record["ended"] = json!(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64());
+    pg_worker_core::run::lifecycle::publish(state, record_path, &record)
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
     let [record] = args.as_slice() else {
         return Err("usage: pg-spawnd writer-resume RECORD".into());
@@ -154,6 +180,8 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
         return Err("saved writer request names another record".into());
     }
     let _supervisor = crate::writer_control::supervisor_guard(record)?;
+    // Before `take_resume` persists the landing resume and removes landing-stop.json.
+    crate::card_sandbox::refuse(&request["card"])?;
     let mut resumed = crate::writer_control::take_resume(record)?;
     resumed.as_object().ok_or("invalid saved writer record")?;
     native_writer::clear_ended(&mut resumed, native_writer::SAVED_REOPEN_FIELDS);

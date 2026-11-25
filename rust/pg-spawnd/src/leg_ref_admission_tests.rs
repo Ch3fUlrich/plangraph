@@ -377,3 +377,69 @@ fn warn_catalog_failure_logs_once() {
         1
     );
 }
+
+/// An explicit leg reference with a wider sandbox is refused before the catalog adapter is asked.
+#[cfg(unix)]
+#[test]
+fn explicit_leg_danger_full_access_precedes_catalog() {
+    const CHILD: &str = "PG_LEG_REF_SANDBOX";
+    if std::env::var_os(CHILD).is_some() {
+        use pg_worker_core::run::{
+            group::Confinement,
+            supervise::Config,
+            supervisor::{Supervisor, SupervisorCfg},
+        };
+        let state = std::path::PathBuf::from(std::env::var_os("PG_LEG_REF_STATE").unwrap());
+        let a = args(
+            json!({"card":{"task":"test","sandbox":"danger-full-access"}, "prompt":"test",
+                   "model":"provider/model", "dry_run":true}),
+        );
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        for error in [
+            crate::placement::route(&state, &a).unwrap_err(),
+            crate::spawn::spawn(&state, &a, "local", &runs).unwrap_err(),
+        ] {
+            assert!(error
+                .into_error_data()
+                .message
+                .starts_with("sandbox_refused: danger-full-access"));
+        }
+        return;
+    }
+    let temp = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir(&temp).unwrap();
+    let script = temp.join("adapter.sh");
+    pg_worker_core::executable_test_support::write_private_executable(
+        &script,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PG_LEG_REF_STATE/calls\"\nexit 9\n",
+    );
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "leg_ref::admission_tests::explicit_leg_danger_full_access_precedes_catalog",
+        ])
+        .env(CHILD, "1")
+        .env("PG_LEG_REF_STATE", &temp)
+        .env("PLANGRAPH_RELIABILITY_LEG_REF", "on")
+        .env("PG_SPAWND_ADAPTER", &script)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !temp.join("calls").exists(),
+        "the catalog adapter was invoked"
+    );
+    std::fs::remove_dir_all(temp).unwrap();
+}
