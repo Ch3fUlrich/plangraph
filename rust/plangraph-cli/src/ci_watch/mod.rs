@@ -234,7 +234,8 @@ struct Head {
 /// The pull requests (or main) a run belongs to. A push to main is main's alone, whatever pull requests
 /// share its commit. Any other run belongs to the pull requests it names (`pull_requests`); a run that
 /// names none belongs to the one pull request on its commit whose head branch and head repository it ran
-/// on, and to none when that is not exactly one (two forks can share a branch name and a commit).
+/// on (both repositories known and equal), and to none when that is not exactly one (two forks can share a
+/// branch name and a commit).
 fn targets_of(
     run: &Value,
     sha: &str,
@@ -260,10 +261,9 @@ fn targets_of(
             .iter()
             .filter(|head| {
                 run["head_branch"].as_str() == Some(head.branch.as_str())
-                    && match (ran_in, head.source.as_deref()) {
-                        (Some(ran), Some(source)) => ran == source,
-                        _ => true,
-                    }
+                    // Both repositories must be known and equal: a run or a pull request that does not
+                    // say where its branch lives cannot be matched to a branch name alone.
+                    && matches!((ran_in, head.source.as_deref()), (Some(ran), Some(source)) if ran == source)
             })
             .collect();
         if same.len() == 1 {

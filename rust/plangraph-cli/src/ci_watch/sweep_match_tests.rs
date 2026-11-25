@@ -136,21 +136,19 @@ fn a_push_to_main_is_never_routed_to_a_train_that_shares_its_commit() {
     assert_eq!(tasks(temp.path())[0].head, "main");
 }
 
-/// Without a pull request list on the run, the branch it ran on picks the pull request.
+/// Without a pull request list on the run, the branch and repository it ran in pick the pull request.
 #[test]
-fn a_run_without_a_pull_request_list_is_matched_by_its_branch() {
+fn a_run_without_a_pull_request_list_is_matched_by_its_branch_and_repository() {
     let temp = tempfile::tempdir().unwrap();
     owned(temp.path(), json!({"5": "batch-a"}));
+    let mut unnamed = run(10, "shared", "lane/thing", "pull_request", None, "failure");
+    unnamed["head_repository"] = json!({"full_name": "o/r"});
     let mut world = Listed {
-        prs: vec![train(5, "shared"), live(6, "shared")],
-        runs: vec![run(
-            10,
-            "shared",
-            "lane/thing",
-            "pull_request",
-            None,
-            "failure",
-        )],
+        prs: vec![
+            fork_pr(5, "shared", "land/train-33", "o/r"),
+            fork_pr(6, "shared", "lane/thing", "o/r"),
+        ],
+        runs: vec![unnamed],
     };
     let (defined, _) = watch(&mut world, temp.path());
     assert_eq!(defined, [Some(6)]);
@@ -208,4 +206,41 @@ fn the_only_pull_request_on_a_commit_does_not_take_a_run_of_another_branch() {
     };
     let (defined, rows) = watch(&mut world, temp.path());
     assert!(defined.is_empty(), "{rows:?}");
+}
+
+/// A single candidate is not enough: both the run and the pull request must say where the branch lives.
+#[test]
+fn a_single_candidate_is_assigned_only_when_both_repositories_are_known_and_equal() {
+    let outcome = |pr_repo: Option<&str>, run_repo: Option<&str>| {
+        let mut candidate = fork_pr(6, "tip", "fix", "o/r");
+        match pr_repo {
+            Some(repo) => candidate["head"]["repo"] = json!({"full_name": repo}),
+            None => {
+                candidate["head"].as_object_mut().unwrap().remove("repo");
+            }
+        }
+        let mut unnamed = run(10, "tip", "fix", "pull_request", None, "failure");
+        if let Some(repo) = run_repo {
+            unnamed["head_repository"] = json!({"full_name": repo});
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let mut world = Listed {
+            prs: vec![candidate],
+            runs: vec![unnamed],
+        };
+        watch(&mut world, temp.path()).0
+    };
+    assert_eq!(outcome(Some("o/r"), Some("o/r")), [Some(6)]);
+    assert!(
+        outcome(None, Some("o/r")).is_empty(),
+        "the pull request names no repository"
+    );
+    assert!(
+        outcome(Some("o/r"), None).is_empty(),
+        "the run names no repository"
+    );
+    assert!(
+        outcome(Some("o/r"), Some("fork/r")).is_empty(),
+        "another repository"
+    );
 }

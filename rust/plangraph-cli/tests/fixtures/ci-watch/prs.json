@@ -1,1 +1,1 @@
-[{"number":42,"head":{"sha":"abc123","ref":"fix"}}]
+[{"number":42,"head":{"sha":"abc123","ref":"fix","repo":{"full_name":"o/r"}}}]
