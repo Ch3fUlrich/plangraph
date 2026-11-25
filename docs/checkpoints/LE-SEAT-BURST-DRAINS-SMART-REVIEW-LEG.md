@@ -31,3 +31,8 @@ and the fallback runs stay in one seat group. A fallback seat that itself leaves
 group (`seat_fallback_incomplete`), and a group that cannot start the pair at all fails with every started
 run id, so a partial review never reads as a pass. The budget is read after the slot lock and occupancy
 scan, and a retry's slot stays held until its record is saved.
+
+A fallback seat is marked on its request (`seat_fallback`, set only by the spawner and stripped from every
+outside request) and gets no second fallback: when it cannot start its own groups it fails its group with the
+run ids it started. Every failed seat group carries `incomplete: true`, which the outer group reads whatever
+the unstarted count says. The wait budget is checked before the route is asked again and after it answers.

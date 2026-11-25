@@ -616,3 +616,54 @@ fn short_polls() -> Value {
     bounded["seat_admission"]["poll_seconds"] = json!(0.5);
     bounded
 }
+
+/// A route answer that leaves the leg uncapped after the budget is spent is not an admission.
+#[test]
+fn a_route_answer_after_the_budget_is_spent_does_not_admit_the_expired_seat() {
+    use std::cell::Cell;
+    struct Timed {
+        mono: Cell<f64>,
+        route_takes: f64,
+    }
+    impl Ports for Timed {
+        fn route(&mut self) -> Result<Value, ToolError> {
+            self.mono.set(self.mono.get() + self.route_takes);
+            // The route moved to a leg with no bound.
+            Ok(json!({"first_leg": leg("opencode-go-deepseek-v4-flash"),
+                "legs": [leg("opencode-go-deepseek-v4-flash")]}))
+        }
+        fn now(&self) -> f64 {
+            1000.0
+        }
+        fn monotonic(&self) -> f64 {
+            self.mono.get()
+        }
+        fn sleep(&mut self, d: Duration) {
+            self.mono.set(self.mono.get() + d.as_secs_f64());
+        }
+    }
+    let refused_for = |wait: f64, poll: f64, route_takes: f64| {
+        let state = tempfile::tempdir().unwrap();
+        let mut full = plan(&[HYDROGEN], 1, wait);
+        full["seat_admission"]["poll_seconds"] = json!(poll);
+        let _held = ok(admit(state.path(), full.clone(), &mut quiet())).1;
+        let mut ports = Timed {
+            mono: Cell::new(0.0),
+            route_takes,
+        };
+        match admit(state.path(), full, &mut ports) {
+            Err(ToolError::Refused { message, .. }) => message,
+            Ok((p, _)) => format!("admitted on {}", first(&p)),
+            Err(_) => "error".into(),
+        }
+    };
+    // The last sleep is the whole budget: the route is not asked, the seat is refused.
+    assert!(refused_for(1.0, 5.0, 0.0).starts_with("seat_queue_timeout:"));
+    // The route call itself spends the budget.
+    assert!(refused_for(3.0, 0.5, 3.0).starts_with("seat_queue_timeout:"));
+    // Within budget the route's uncapped leg is the fallback and is taken.
+    assert_eq!(
+        refused_for(3.0, 0.5, 0.5),
+        "admitted on opencode-go-deepseek-v4-flash"
+    );
+}

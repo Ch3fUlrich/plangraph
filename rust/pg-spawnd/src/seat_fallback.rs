@@ -4,6 +4,10 @@ use crate::errors::{RefusalKind, ToolError};
 use crate::placement::Args;
 use serde_json::{json, Value};
 
+/// Set on the request of a fallback seat. Only the spawner sets it, once: a fallback seat that cannot
+/// start its own groups fails its group and never starts the fallback pair again.
+pub(crate) const FLAG: &str = "seat_fallback";
+
 /// DeepSeek and GLM, the two weak seats; both must start or none does.
 pub(crate) const LEGS: [&str; 2] = ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"];
 
@@ -52,13 +56,16 @@ fn run_ids(answer: &Value) -> Result<Vec<String>, ToolError> {
 /// A seat group answer that did not start every group leaves paths unreviewed: that is a failure of
 /// the seat, whatever the runs it did start say.
 fn uncovered(answer: &Value) -> Result<(), ToolError> {
-    match answer["unstarted_groups"].as_u64() {
-        Some(n) if n > 0 => Err(refused(format!(
-            "seat_fallback_incomplete: a fallback seat left {n} group(s) unstarted: {}",
+    // `incomplete` is set by every failed seat group; the count alone can read zero when the run ids
+    // outnumber the planned groups.
+    let left = answer["unstarted_groups"].as_u64().unwrap_or(0);
+    if left > 0 || answer["incomplete"] == json!(true) {
+        return Err(refused(format!(
+            "seat_fallback_incomplete: a fallback seat did not cover its paths ({left} group(s) unstarted): {}",
             answer["reason"].as_str().unwrap_or("no reason")
-        ))),
-        _ => Ok(()),
+        )));
     }
+    Ok(())
 }
 
 /// What a fallback start left running: every started run id, and the failure that stopped the rest.
@@ -108,6 +115,7 @@ pub(crate) fn seat_args(args: &Args, paths: Option<&[String]>) -> Args {
     let mut open = args.clone();
     open.remove("leg");
     open.remove(crate::seat_admission::TOKEN_FIELD);
+    open.insert(FLAG.into(), json!(true));
     if let Some(paths) = paths {
         if let Some(diff_ref) = open
             .get_mut("card")

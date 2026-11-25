@@ -185,9 +185,10 @@ pub(crate) fn spawn(
             return Err(error);
         }
     };
-    // Only admission may name a seat reservation; a request cannot claim one.
+    // Only admission may name a seat reservation, and only the spawner marks a fallback seat; a request cannot claim one.
     let mut admitted = admitted;
     admitted.remove(crate::seat_admission::TOKEN_FIELD);
+    admitted.remove(crate::seat_fallback::FLAG);
     let args = &admitted;
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;

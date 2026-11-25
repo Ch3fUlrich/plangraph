@@ -247,10 +247,10 @@ pub(crate) fn reserve_now(
 /// of the queued leg's harness: past the wait bound it is refused `seat_queue_timeout`, and a route
 /// that drops the leg for a sibling of the same harness is refused `seat_leg_limited`, so the caller
 /// applies its fallback seats. A route that moves to another harness is that fallback and is taken.
-pub(crate) fn admit(
+pub(crate) fn admit<P: Ports>(
     state: &Path,
     mut plan: Value,
-    ports: &mut impl Ports,
+    ports: &mut P,
 ) -> Result<(Value, Option<Reservation>), ToolError> {
     let began = ports.monotonic();
     let mut queued: Option<(String, Value)> = None;
@@ -288,14 +288,18 @@ pub(crate) fn admit(
         }
         drop(lock);
         if waited >= policy.wait.as_secs_f64() {
-            return Err(refused(format!(
-                "seat_queue_timeout: {id} runs {count} of {limit} seats after {waited:.0}s; use the fallback seats"
-            )));
+            return Err(queue_timeout(&id, count, limit, waited));
         }
         queued = Some((id.clone(), leg["harness"].clone()));
         // Never sleep past the budget: the last poll is the time left.
         let left = Duration::from_secs_f64((policy.wait.as_secs_f64() - waited).max(0.0));
         ports.sleep(policy.poll.min(left));
+        // The budget is checked before the route is asked again and after it answers: a seat whose
+        // last sleep or whose route call spent the budget is refused, never admitted on what it found.
+        let spent = |ports: &mut P| ports.monotonic() - began >= policy.wait.as_secs_f64();
+        if spent(ports) {
+            return Err(queue_timeout(&id, count, limit, ports.monotonic() - began));
+        }
         plan = match ports.route() {
             Ok(plan) => plan,
             // The `agy-cli` selector found no agy leg left: the queued leg was limited and nothing of
@@ -311,7 +315,16 @@ pub(crate) fn admit(
             }
             Err(error) => return Err(error),
         };
+        if spent(ports) {
+            return Err(queue_timeout(&id, count, limit, ports.monotonic() - began));
+        }
     }
+}
+
+fn queue_timeout(id: &str, count: usize, limit: usize, waited: f64) -> ToolError {
+    refused(format!(
+        "seat_queue_timeout: {id} runs {count} of {limit} seats after {waited:.0}s; use the fallback seats"
+    ))
 }
 
 /// Unique within the process: two seats admitted in the same instant never share a slot file.

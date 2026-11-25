@@ -271,6 +271,8 @@ pub(crate) fn unstarted_groups(
     }
     envelope["reason"] = json!(error.into_error_data().message);
     envelope["unstarted_groups"] = json!(total.saturating_sub(run_ids.len()));
+    // The group did not cover its paths, whatever the count says.
+    envelope["incomplete"] = json!(true);
     save_seat_group(state, &envelope)?;
     Ok(envelope)
 }
@@ -351,6 +353,10 @@ pub(crate) fn spawn_rust_split_groups(
         match started {
             Ok(run_id) => run_ids.push(run_id),
             Err(error) if dry => return Err(error),
+            // A fallback seat gets no second fallback: it fails its group with the ids it started.
+            Err(error) if args.get(crate::seat_fallback::FLAG) == Some(&json!(true)) => {
+                return unstarted_groups(state, &seat_group_id, &run_ids, total, error)
+            }
             // The group could not start: this and every later group's paths go to both fallback
             // seats, and the runs already started keep their ids in the same seat group.
             Err(_) => {
@@ -494,6 +500,10 @@ pub(crate) fn spawn_adapter_split_groups(
         match started {
             Ok(run_id) => run_ids.push(run_id),
             Err(error) if dry => return Err(error),
+            // A fallback seat gets no second fallback: it fails its group with the ids it started.
+            Err(error) if args.get(crate::seat_fallback::FLAG) == Some(&json!(true)) => {
+                return unstarted_groups(state, &seat_group_id, &run_ids, total, error)
+            }
             Err(_) => {
                 return crate::spawn::cover_with_fallback(
                     state,

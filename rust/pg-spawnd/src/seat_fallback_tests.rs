@@ -306,3 +306,43 @@ fn a_fallback_seat_that_left_groups_unstarted_fails_the_group() {
         .starts_with("seat_fallback_incomplete:"));
     assert_eq!(answer["seats"][0]["run_id"], "run-s1");
 }
+
+/// A failed seat group is incomplete whatever its count says: run ids can outnumber the planned groups.
+#[test]
+fn a_failed_seat_group_with_a_zero_unstarted_count_is_still_a_failure() {
+    let state = tempfile::tempdir().unwrap();
+    record(state.path(), "run-a", "completed");
+    record(state.path(), "run-b", "completed");
+    record(state.path(), "run-c", "completed");
+    // Three run ids for two planned groups: the count reads zero.
+    let child = crate::review_split::unstarted_groups(
+        state.path(),
+        "seats-cc",
+        &["run-a".to_owned(), "run-b".to_owned(), "run-c".to_owned()],
+        2,
+        refused("seat_queue_timeout: x".into()),
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(child["unstarted_groups"], 0);
+    assert!(uncovered(&child).is_err());
+    // Through the fallback pair: the child's failure fails the outer group, whatever its runs say.
+    let mut n = 0;
+    let answer = cover(
+        state.path(),
+        &split_request(),
+        &[],
+        2,
+        None,
+        |_| Ok(route(&[LEGS[0], LEGS[1]])),
+        |_, _| {
+            n += 1;
+            Ok(child.clone())
+        },
+    )
+    .ok()
+    .unwrap();
+    assert_ne!(answer["verdict"], "PASS");
+    assert_eq!(answer["passed"], false);
+    assert_eq!(answer["status"], "failed");
+}
