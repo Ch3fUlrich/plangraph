@@ -14,7 +14,9 @@ pub fn known(status: &str) -> bool {
         || matches!(status, "starting" | "claimed" | "unknown" | "cancelling")
 }
 
-pub(crate) fn finished(row: &Value) -> io::Result<bool> {
+/// Whether a run row has ended and left no surviving process; an unknown or missing status or a
+/// malformed survivor list is an error, never a guess.
+pub fn finished(row: &Value) -> io::Result<bool> {
     let status = row["status"]
         .as_str()
         .ok_or_else(|| io::Error::other("run status unavailable"))?;
