@@ -1,7 +1,7 @@
 use super::*;
 use std::fs;
 
-fn units(files: &[(&str, &str)]) -> tempfile::TempDir {
+pub(super) fn units(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     for (name, text) in files {
         fs::write(dir.path().join(name), text).unwrap();
@@ -9,14 +9,14 @@ fn units(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
-fn missing(needs: &Needs, home: &Path) -> Vec<String> {
+pub(super) fn missing(needs: &Needs, home: &Path) -> Vec<String> {
     evaluate(needs, home, &|_| None)
         .into_iter()
         .map(|(k, n)| format!("{k} {n}"))
         .collect()
 }
 
-fn put(home: &Path, rel: &str, text: &str, mode: u32) {
+pub(super) fn put(home: &Path, rel: &str, text: &str, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     let path = home.join(rel);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -270,181 +270,9 @@ fn a_bare_exec_name_is_found_in_the_manager_search_path_or_the_unit_path() {
     assert_eq!(check("d.service"), ["binary ./relative"]);
 }
 
-fn shadow_host(home: &Path, env: &str, config: Option<&str>) {
-    put(home, ".local/bin/plangraph", "", 0o755);
-    put(
-        home,
-        ".config/plangraph/state-shadow/routing.env",
-        env,
-        0o600,
-    );
-    if let Some(config) = config {
-        put(
-            home,
-            ".config/plangraph/state-shadow/routing.json",
-            config,
-            0o600,
-        );
-    }
-}
-
-#[test]
-fn the_checked_in_state_shadow_unit_needs_its_token_config_and_read_paths() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/systemd");
-    let instance = format!("plangraph-state-shadow{}routing.service", '@');
-    let needs = plan(&instance, &root, None).unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let h = home.path().display();
-    // Nothing configured: the unit file names its env file, and the program's own settings are required too.
-    shadow_host(home.path(), "OTHER=1\n", None);
-    let found = missing(&needs, home.path());
-    for want in [
-        "env PG_TOKEN_FILE",
-        "env PG_URL",
-        "file ~/.config/plangraph/state-shadow/routing.json",
-    ] {
-        assert!(found.contains(&want.to_owned()), "{found:?}");
-    }
-    // Everything named, but the token, the transcript and the data repository are absent.
-    let env = format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\n");
-    let config = format!(
-        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
-         \"transcript\":\"{h}/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"{h}/data\",\
-         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
-         \"quota\":\"{h}/quota.json\"}}",
-        "a".repeat(40)
-    );
-    shadow_host(home.path(), &env, Some(&config));
-    assert_eq!(
-        missing(&needs, home.path()),
-        ["path ~/data", "path ~/session.jsonl", "path ~/token"]
-    );
-    put(home.path(), "token", "x", 0o600);
-    put(home.path(), "session.jsonl", "", 0o600);
-    fs::create_dir_all(home.path().join("data")).unwrap();
-    assert!(missing(&needs, home.path()).is_empty());
-    // A configuration `state wait` would refuse (here: only the two read paths) is a missing file.
-    let partial = format!("{{\"transcript\": \"{h}/session.jsonl\", \"data_repo\": \"{h}/data\"}}");
-    put(
-        home.path(),
-        ".config/plangraph/state-shadow/routing.json",
-        &partial,
-        0o600,
-    );
-    assert_eq!(
-        missing(&needs, home.path()),
-        ["file ~/.config/plangraph/state-shadow/routing.json"]
-    );
-    put(
-        home.path(),
-        ".config/plangraph/state-shadow/routing.json",
-        &config,
-        0o600,
-    );
-    // A configuration that is not JSON is a missing file, and PLANGRAPH_STATE_CONFIG moves it.
-    put(
-        home.path(),
-        ".config/plangraph/state-shadow/routing.json",
-        "not json",
-        0o600,
-    );
-    assert_eq!(
-        missing(&needs, home.path()),
-        ["file ~/.config/plangraph/state-shadow/routing.json"]
-    );
-    let moved = format!("{env}PLANGRAPH_STATE_CONFIG={h}/other.json\n");
-    shadow_host(home.path(), &moved, None);
-    put(home.path(), "other.json", &config, 0o600);
-    assert!(missing(&needs, home.path()).is_empty());
-}
-
 #[test]
 fn a_plain_state_wait_unit_name_is_not_needed_for_other_units() {
     let dir = units(&[("a.service", "[Service]\nExecStart=/bin/true\n")]);
     let needs = plan("a.service", dir.path(), None).unwrap();
     assert!(needs.programs.is_empty());
-}
-
-#[test]
-fn relative_paths_of_the_state_shadow_configuration_start_at_the_working_directory_of_the_service()
-{
-    let unit = "[Service]\nWorkingDirectory=%h/work\nEnvironmentFile=%h/.config/p/e.env\nExecStart=%h/.local/bin/plangraph state wait --role routing\n";
-    let dir = units(&[("sh.service", unit)]);
-    let home = tempfile::tempdir().unwrap();
-    let h = home.path().display();
-    put(home.path(), ".local/bin/plangraph", "", 0o755);
-    put(
-        home.path(),
-        ".config/p/e.env",
-        &format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\nPLANGRAPH_STATE_CONFIG={h}/c.json\n"),
-        0o600,
-    );
-    put(home.path(), "token", "x", 0o600);
-    let config = format!(
-        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
-         \"transcript\":\"rel/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"rel/data\",\
-         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
-         \"quota\":\"{h}/quota.json\"}}",
-        "a".repeat(40)
-    );
-    put(home.path(), "c.json", &config, 0o600);
-    fs::create_dir_all(home.path().join("work")).unwrap();
-    let needs = plan("sh.service", dir.path(), None).unwrap();
-    // Files that exist in the home directory, not in the service's working directory, do not count.
-    put(home.path(), "rel/session.jsonl", "", 0o600);
-    fs::create_dir_all(home.path().join("rel/data")).unwrap();
-    assert_eq!(
-        missing(&needs, home.path()),
-        ["path ~/work/rel/data", "path ~/work/rel/session.jsonl"]
-    );
-    put(home.path(), "work/rel/session.jsonl", "", 0o600);
-    fs::create_dir_all(home.path().join("work/rel/data")).unwrap();
-    assert!(missing(&needs, home.path()).is_empty());
-}
-
-#[test]
-fn the_service_directory_decides_a_relative_config_and_is_per_instance_for_a_template() {
-    // A relative PLANGRAPH_STATE_CONFIG and the paths in it start at the instance's WorkingDirectory.
-    let unit = "[Service]\nWorkingDirectory=%h/work/%i\nEnvironmentFile=%h/.config/p/%i.env\nExecStart=%h/.local/bin/plangraph state wait --role %i\n";
-    let dir = units(&[("sh@.service", unit)]);
-    let home = tempfile::tempdir().unwrap();
-    let h = home.path().display();
-    put(home.path(), ".local/bin/plangraph", "", 0o755);
-    put(home.path(), "token", "x", 0o600);
-    put(
-        home.path(),
-        ".config/p/routing.env",
-        &format!("PG_URL=http://k\nPG_TOKEN_FILE={h}/token\nPLANGRAPH_STATE_CONFIG=conf/c.json\n"),
-        0o600,
-    );
-    let config = format!(
-        "{{\"role\":\"routing\",\"principal\":\"p\",\"directory\":\"{h}/state\",\"inbox\":\"{h}/inbox\",\
-         \"transcript\":\"t/session.jsonl\",\"session_id\":\"session\",\"data_repo\":\"data\",\
-         \"decision_base\":\"{}\",\"github_repo\":\"example/demo\",\"github_since\":\"2026-01-01T00:00:00Z\",\
-         \"quota\":\"{h}/quota.json\"}}",
-        "a".repeat(40)
-    );
-    let needs = plan("sh@.service", dir.path(), None).unwrap();
-    // The configuration exists at the caller-relative place (the home directory), not in the service's one.
-    put(home.path(), "conf/c.json", &config, 0o600);
-    assert_eq!(
-        missing(&needs, home.path()),
-        ["file ~/work/routing/conf/c.json"]
-    );
-    put(home.path(), "work/routing/conf/c.json", &config, 0o600);
-    assert_eq!(
-        missing(&needs, home.path()),
-        [
-            "path ~/work/routing/data",
-            "path ~/work/routing/t/session.jsonl"
-        ]
-    );
-    put(home.path(), "work/routing/t/session.jsonl", "", 0o600);
-    fs::create_dir_all(home.path().join("work/routing/data")).unwrap();
-    assert!(missing(&needs, home.path()).is_empty());
-    // A directory the dry run cannot expand (here a specifier it does not know) leaves the config unverified.
-    let odd = unit.replace("%h/work/%i", "%t/work");
-    let dir = units(&[("sh@.service", &odd)]);
-    let needs = plan("sh@.service", dir.path(), None).unwrap();
-    assert_eq!(missing(&needs, home.path()), ["file conf/c.json"]);
 }

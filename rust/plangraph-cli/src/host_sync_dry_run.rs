@@ -211,5 +211,8 @@ pub(super) fn run(args: &[OsString]) -> i32 {
 }
 
 #[cfg(all(test, unix))]
+#[path = "host_sync_dry_run_paths_tests.rs"]
+mod paths_tests;
+#[cfg(all(test, unix))]
 #[path = "host_sync_dry_run_tests.rs"]
 mod tests;

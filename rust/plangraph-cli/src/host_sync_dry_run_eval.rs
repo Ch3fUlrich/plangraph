@@ -145,6 +145,24 @@ fn load_env(needs: &Needs, home: &Path, instance: Option<&str>) -> EnvLoad {
     load
 }
 
+/// Whether an environment value names a file or directory: it holds a `/` (and is no URL), or its key says
+/// what it is. A bare word is a name, not a path.
+fn path_like(key: &str, value: &str) -> bool {
+    const SUFFIXES: [&str; 8] = [
+        "_FILE",
+        "_DIR",
+        "_PATH",
+        "_ROOT",
+        "_REPO",
+        "_PINS",
+        "_WORKTREES",
+        "_CONFIG",
+    ];
+    !value.contains("://")
+        && !value.contains(char::is_whitespace)
+        && (value.contains('/') || SUFFIXES.iter().any(|s| key.ends_with(s)))
+}
+
 /// Check `needs` against this host. `getenv` reads the host's process environment.
 pub(super) fn evaluate(
     needs: &Needs,
@@ -158,32 +176,6 @@ pub(super) fn evaluate(
     let base = load_env(needs, home, None);
     for (kind, name) in &base.missing {
         add(kind, name.clone());
-    }
-    for binary in &needs.binaries {
-        if binary.starts_with('$') {
-            continue;
-        }
-        let Some(path) = expand(binary, home) else {
-            continue;
-        };
-        if path.contains('/') {
-            if !path.starts_with('/') {
-                add("binary", binary.clone());
-            } else if !is_executable(Path::new(&path)) {
-                add("binary", shown(Path::new(&path), home));
-            }
-        } else {
-            // A simple name is searched in the manager's directories and in the unit's own PATH.
-            let own = base.vars.get("PATH").and_then(|p| expand(p, home));
-            let mut dirs: Vec<String> = MANAGER_PATH.iter().map(|d| (*d).to_owned()).collect();
-            dirs.extend(own.iter().flat_map(|p| p.split(':').map(str::to_owned)));
-            if !dirs
-                .iter()
-                .any(|d| d.starts_with('/') && is_executable(&Path::new(d).join(&path)))
-            {
-                add("binary", binary.clone());
-            }
-        }
     }
     // A template's environment files are read for every instance present on the host.
     let mut names = BTreeSet::new();
@@ -218,6 +210,55 @@ pub(super) fn evaluate(
         for (kind, name) in &load.missing {
             add(kind, name.clone());
         }
+        // The service starts in its WorkingDirectory (the instance's, for a template), else in the home
+        // directory: relative paths are read from there, never from the caller's directory.
+        let start = match needs.workdir.as_deref() {
+            None => Some(home.to_path_buf()),
+            Some(dir) => {
+                let dir =
+                    run.map_or_else(|| dir.to_owned(), |i| dir.replace("%i", i).replace("%I", i));
+                expand(&dir, home).map(PathBuf::from)
+            }
+        };
+        let from_start = |p: &Path| -> Option<PathBuf> {
+            if p.is_absolute() {
+                Some(p.to_path_buf())
+            } else {
+                start.as_ref().map(|s| s.join(p))
+            }
+        };
+        for binary in &needs.binaries {
+            // An executable is resolved for the instance too: an unexpandable one is missing, not skipped.
+            let raw = run.map_or_else(
+                || binary.clone(),
+                |i| binary.replace("%i", i).replace("%I", i),
+            );
+            if raw.starts_with('$') {
+                continue;
+            }
+            let Some(path) = expand(&raw, home) else {
+                add("binary", raw.replace("%h", "~"));
+                continue;
+            };
+            if path.contains('/') {
+                if !path.starts_with('/') {
+                    add("binary", raw.clone());
+                } else if !is_executable(Path::new(&path)) {
+                    add("binary", shown(Path::new(&path), home));
+                }
+            } else {
+                // A simple name is searched in the manager's directories and in the unit's own PATH.
+                let own = load.vars.get("PATH").and_then(|p| expand(p, home));
+                let mut dirs: Vec<String> = MANAGER_PATH.iter().map(|d| (*d).to_owned()).collect();
+                dirs.extend(own.iter().flat_map(|p| p.split(':').map(str::to_owned)));
+                if !dirs
+                    .iter()
+                    .any(|d| d.starts_with('/') && is_executable(&Path::new(d).join(&path)))
+                {
+                    add("binary", raw.clone());
+                }
+            }
+        }
         let mut wanted: BTreeSet<&String> = needs
             .keys
             .iter()
@@ -249,9 +290,16 @@ pub(super) fn evaluate(
                 }
                 continue;
             };
-            if let Some(path) = expand(value, home).filter(|p| p.starts_with('/')) {
-                if !Path::new(&path).exists() {
-                    add("path", shown(Path::new(&path), home));
+            // A value that names a path is checked where the service would look: relative ones start at its
+            // directory.
+            if path_like(key, value) {
+                match expand(value, home)
+                    .map(PathBuf::from)
+                    .and_then(|p| from_start(&p))
+                {
+                    Some(path) if !path.exists() => add("path", shown(&path, home)),
+                    Some(_) => {}
+                    None => add("path", value.clone()),
                 }
             }
         }
@@ -260,23 +308,6 @@ pub(super) fn evaluate(
                 ("%i", Some(instance)) => instance,
                 ("%i", None) => continue,
                 (role, _) => role,
-            };
-            // The service starts in its WorkingDirectory (the instance's, for a template), else in the home
-            // directory: relative paths are read from there, never from the caller's directory.
-            let start = match needs.workdir.as_deref() {
-                None => Some(home.to_path_buf()),
-                Some(dir) => {
-                    let dir = run
-                        .map_or_else(|| dir.to_owned(), |i| dir.replace("%i", i).replace("%I", i));
-                    expand(&dir, home).map(PathBuf::from)
-                }
-            };
-            let from_start = |p: &Path| -> Option<PathBuf> {
-                if p.is_absolute() {
-                    Some(p.to_path_buf())
-                } else {
-                    start.as_ref().map(|s| s.join(p))
-                }
             };
             let configured = load
                 .vars
