@@ -133,6 +133,7 @@ pub fn bind(
         fresh_after,
         clock: wall_clock,
         excluded,
+        oneshot: BTreeSet::new(),
     };
     Ok((named_targets(plan, go_row)?, gate))
 }

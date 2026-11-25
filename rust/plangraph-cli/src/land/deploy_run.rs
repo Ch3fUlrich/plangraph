@@ -28,6 +28,9 @@ pub struct Gate {
     pub fresh_after: i64,
     pub clock: fn() -> i64,
     pub excluded: BTreeSet<(String, String)>,
+    /// Service families whose unit file is `Type=oneshot`: the services that really depend on their timer
+    /// (the keeper wants it active beside them). A service not listed here does not wait on a refused timer.
+    pub oneshot: BTreeSet<String>,
 }
 
 /// `is_active` a read reports for a unit that is not installed yet: the baseline before an install.
@@ -70,9 +73,12 @@ impl RunRead {
         now: i64,
         started: Option<&str>,
     ) -> bool {
+        // A restart is proved by a new invocation id; an already-running unit whose id we could not read
+        // before the install leaves nothing to compare with.
         let fresh = started.is_some()
             && self.invocation.as_deref() == started
-            && self.invocation != base.invocation;
+            && self.invocation != base.invocation
+            && !(base.active && base.invocation.is_none());
         if self.oneshot {
             let exited = self
                 .exec_main_exit_timestamp
@@ -103,6 +109,8 @@ impl RunRead {
 pub struct Baseline {
     pub exit: Option<i64>,
     pub invocation: Option<String>,
+    /// The unit was already running before the install.
+    pub active: bool,
 }
 
 /// The keeper `deploy` evidence of one (family, host) for one item.
@@ -131,4 +139,64 @@ pub trait Installer {
 /// Where the deploy rows go (the keeper).
 pub trait RowSink {
     fn write(&self, row: &DeployRow) -> Result<(), String>;
+}
+
+/// Progress of the step, saved after each target: `family@host` of every finished target.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostState {
+    #[serde(default)]
+    pub done: BTreeSet<String>,
+    /// The first failed target: the step stopped there and does not run again until it is cleared.
+    #[serde(default)]
+    pub failed: Option<String>,
+    /// Units a failed attempt could not switch off (`(host, unit)`): the next run retries them and refuses
+    /// to go on until they are off.
+    #[serde(default)]
+    pub cleanup: BTreeSet<(String, String)>,
+    /// The train this progress belongs to (`DeployPlan::train_sha`); another train's state is refused.
+    #[serde(default)]
+    pub train: String,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PostReport {
+    pub deployed: Vec<String>,
+    pub skipped_done: Vec<String>,
+    /// The failed target and why, when the step stopped.
+    pub failed: Option<(String, String)>,
+    /// Targets behind the failure, not touched.
+    pub not_attempted: Vec<String>,
+    /// Services left out because the timer they depend on was refused at preflight, and why.
+    pub blocked: Vec<(String, String)>,
+    pub notes: Vec<String>,
+}
+
+impl PostReport {
+    pub fn lines(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .deployed
+            .iter()
+            .map(|d| format!("deployed {d}"))
+            .collect();
+        out.extend(
+            self.skipped_done
+                .iter()
+                .map(|d| format!("already done {d}")),
+        );
+        if let Some((t, why)) = &self.failed {
+            out.push(format!("failed {t}: {why}"));
+        }
+        out.extend(
+            self.not_attempted
+                .iter()
+                .map(|d| format!("not attempted {d}")),
+        );
+        out.extend(
+            self.blocked
+                .iter()
+                .map(|(t, why)| format!("blocked {t}: {why}")),
+        );
+        out.extend(self.notes.iter().cloned());
+        out
+    }
 }

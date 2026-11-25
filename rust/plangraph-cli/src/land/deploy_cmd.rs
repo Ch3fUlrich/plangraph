@@ -1,10 +1,11 @@
 //! The command boundary of the post-merge deploy step: the host and keeper commands it runs, and
 //! `land-train deploy-apply`, which binds the step to the approved GO and the verified landed head.
-use super::deploy::DeployPlan;
+use super::deploy::{DeployPlan, Target};
 use super::deploy_bind::{bind, Approved};
 use super::deploy_post::{apply, DeployRow, Installer, PostState, RowSink, RunRead};
+use super::git;
 use super::go_verify::{verify, Evidence, Pins};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -77,6 +78,34 @@ impl RowSink for CommandRows {
     }
 }
 
+/// The service targets whose unit file in the landed tree says `Type=oneshot`: the ones that really depend on
+/// their timer. A unit file that cannot be read counts as no oneshot (the bind check has refused a unit the
+/// landed tree lacks).
+pub(super) fn oneshot_services(
+    repo: &Path,
+    landed_head: &str,
+    targets: &[Target],
+) -> BTreeSet<String> {
+    targets
+        .iter()
+        .filter(|t| t.family.ends_with(".service"))
+        .filter(|t| {
+            git::out(
+                repo,
+                &[
+                    "show",
+                    &format!("{landed_head}:deploy/systemd/{}", t.family),
+                ],
+            )
+            .is_ok_and(|text| {
+                text.lines()
+                    .any(|l| l.trim().eq_ignore_ascii_case("Type=oneshot"))
+            })
+        })
+        .map(|t| t.family.clone())
+        .collect()
+}
+
 /// The train the protected GO evidence approved: the evidence must verify with no refusal, and its head
 /// is the train.
 fn approved_train(path: &Path) -> Result<Approved, String> {
@@ -114,7 +143,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
             .map_err(|e| format!("{plan_path}: {e}"))?;
     let main_ref = flags.get("main-ref").map_or("origin/main", String::as_str);
     let approved = approved_train(Path::new(need("evidence")?))?;
-    let (targets, gate) = bind(
+    let (targets, mut gate) = bind(
         &plan,
         &approved,
         need("go")?,
@@ -123,6 +152,7 @@ pub(super) fn run_cli(flags: &BTreeMap<String, String>) -> Result<Vec<String>, S
         main_ref,
         need("plan-digest")?,
     )?;
+    gate.oneshot = oneshot_services(Path::new(need("repo")?), need("landed-head")?, &targets);
     let state_path = Path::new(need("state")?);
     let mut state: PostState = match std::fs::read(state_path) {
         Ok(b) => {

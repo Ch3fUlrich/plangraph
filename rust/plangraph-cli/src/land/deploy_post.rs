@@ -7,7 +7,6 @@
 //! (the resumable hook of LAND-RESUMABLE-AFTER-MERGE) skips what is done and never redoes an install.
 use super::deploy::{DeployPlan, Target};
 pub use super::deploy_run::*;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The timer the keeper's deploy gate wants active beside a oneshot service.
@@ -17,57 +16,8 @@ fn paired_timer(family: &str) -> Option<String> {
         .map(|b| format!("{b}.timer"))
 }
 
-/// Progress of the step, saved after each target: `family@host` of every finished target.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostState {
-    #[serde(default)]
-    pub done: BTreeSet<String>,
-    /// The first failed target: the step stopped there and does not run again until it is cleared.
-    #[serde(default)]
-    pub failed: Option<String>,
-    /// The train this progress belongs to (`DeployPlan::train_sha`); another train's state is refused.
-    #[serde(default)]
-    pub train: String,
-}
-
 fn name(t: &Target) -> String {
     format!("{}@{}", t.family, t.host)
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct PostReport {
-    pub deployed: Vec<String>,
-    pub skipped_done: Vec<String>,
-    /// The failed target and why, when the step stopped.
-    pub failed: Option<(String, String)>,
-    /// Targets behind the failure, not touched.
-    pub not_attempted: Vec<String>,
-    pub notes: Vec<String>,
-}
-
-impl PostReport {
-    pub fn lines(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .deployed
-            .iter()
-            .map(|d| format!("deployed {d}"))
-            .collect();
-        out.extend(
-            self.skipped_done
-                .iter()
-                .map(|d| format!("already done {d}")),
-        );
-        if let Some((t, why)) = &self.failed {
-            out.push(format!("failed {t}: {why}"));
-        }
-        out.extend(
-            self.not_attempted
-                .iter()
-                .map(|d| format!("not attempted {d}")),
-        );
-        out.extend(self.notes.iter().cloned());
-        out
-    }
 }
 
 /// The plan targets a GO row's `deploy: unit@host, ...` line names. A name that is not a passing target of
@@ -188,6 +138,10 @@ fn baseline(installer: &dyn Installer, t: &Target) -> Result<Baseline, String> {
     if run.is_active == ABSENT {
         return Ok(Baseline::default());
     }
+    let active = matches!(
+        run.is_active.as_str(),
+        "active" | "activating" | "reloading"
+    );
     let exit = match run.exec_main_exit_timestamp.as_deref() {
         None => None,
         Some(text) => Some(
@@ -198,17 +152,37 @@ fn baseline(installer: &dyn Installer, t: &Target) -> Result<Baseline, String> {
     Ok(Baseline {
         exit,
         invocation: run.invocation,
+        active,
     })
 }
 
-/// A service whose paired timer the preflight refused is not deployed: found before any host is touched.
-fn refused_timer<'a>(targets: &'a [Target], gate: &Gate) -> Option<(&'a Target, String)> {
-    targets.iter().find_map(|t| {
-        let timer = paired_timer(&t.family)?;
-        gate.excluded
-            .contains(&(timer.clone(), t.host.clone()))
-            .then_some((t, timer))
+/// The refusal of a service that really depends on a timer the preflight refused: a oneshot (by its unit
+/// file, or by its read), whose timer the keeper wants active. A service that is no oneshot does not wait on
+/// a same-name timer.
+fn blocked_by_timer(t: &Target, gate: &Gate, oneshot: bool) -> Option<String> {
+    let timer = paired_timer(&t.family)?;
+    (oneshot && gate.excluded.contains(&(timer.clone(), t.host.clone()))).then(|| {
+        format!(
+            "paired timer {timer} on {} was refused at preflight and is not in the GO",
+            t.host
+        )
     })
+}
+
+/// Switches off one unit; a failure is kept in the state, so the next run retries it first.
+fn switch_off(
+    installer: &dyn Installer,
+    state: &mut PostState,
+    report: &mut PostReport,
+    host: &str,
+    unit: &str,
+) {
+    if let Err(e) = installer.disable(host, unit) {
+        report
+            .notes
+            .push(format!("could not disable {unit} on {host}: {e}"));
+        state.cleanup.insert((host.to_owned(), unit.to_owned()));
+    }
 }
 
 /// Installs `targets` (timers first). A timer whose service the train also ships is held: its rows and its
@@ -222,26 +196,32 @@ pub fn apply(
     state: &mut PostState,
     checkpoint: &mut dyn FnMut(&PostState) -> Result<(), String>,
 ) -> Result<PostReport, String> {
+    let mut report = PostReport::default();
+    // A unit an earlier attempt could not switch off is retried before anything else, and the step goes on
+    // only when it is off.
+    let pending = std::mem::take(&mut state.cleanup);
+    let had_pending = !pending.is_empty();
+    for (host, unit) in pending {
+        switch_off(installer, state, &mut report, &host, &unit);
+    }
+    if had_pending {
+        checkpoint(state)?;
+    }
+    if !state.cleanup.is_empty() {
+        let left: Vec<String> = state
+            .cleanup
+            .iter()
+            .map(|(h, u)| format!("{u}@{h}"))
+            .collect();
+        return Err(format!(
+            "an earlier attempt could not switch off {}; fix the host and rerun",
+            left.join(", ")
+        ));
+    }
     if let Some(f) = &state.failed {
         return Err(format!(
             "an earlier first run failed ({f}); clear it before a rerun"
         ));
-    }
-    let mut report = PostReport::default();
-    if let Some((t, timer)) = refused_timer(targets, gate) {
-        report.failed = Some((
-            name(t),
-            format!(
-                "paired timer {timer} on {} was refused at preflight and is not in the GO",
-                t.host
-            ),
-        ));
-        report.not_attempted = targets
-            .iter()
-            .filter(|o| name(o) != name(t))
-            .map(name)
-            .collect();
-        return Ok(report);
     }
     let mut ordered: Vec<&Target> = targets.iter().collect();
     ordered.sort_by_key(|t| !t.family.ends_with(".timer"));
@@ -275,6 +255,11 @@ pub fn apply(
             release(&mut held, &id, rows, state, &mut report, checkpoint)?;
             continue;
         }
+        // A oneshot service whose timer was refused is left out; the other targets go on.
+        if let Some(why) = blocked_by_timer(t, gate, gate.oneshot.contains(&t.family)) {
+            report.blocked.push((id, why));
+            continue;
+        }
         // `changed`: the target's install was started, so it may have changed the host.
         let mut changed = false;
         let outcome = baseline(installer, t)
@@ -291,7 +276,11 @@ pub fn apply(
             .and_then(|(base, started, run)| {
                 let now = (gate.clock)();
                 if run.good(&t.family, gate, &base, now, started.as_deref()) {
-                    paired_timer_row(installer, t, &run, targets).map(|timer| (run, timer))
+                    if let Some(why) = blocked_by_timer(t, gate, run.oneshot) {
+                        return Ok(Err(why));
+                    }
+                    paired_timer_row(installer, t, &run, targets)
+                        .map(|timer| Ok((run, timer)))
                 } else {
                     Err(format!(
                         "first run of {} on {} is not good (is_active={}, result={}, exited={}, invocation={}, started={})",
@@ -306,11 +295,15 @@ pub fn apply(
                 }
             });
         match outcome {
-            Ok((run, _)) if service_of(t, targets).is_some() => {
+            Ok(Err(why)) => {
+                // Found only after the read (its unit file was not known as a oneshot): no rows, no failure.
+                report.blocked.push((id, why));
+            }
+            Ok(Ok((run, _))) if service_of(t, targets).is_some() => {
                 let service = service_of(t, targets).map(name).unwrap_or_default();
                 held.insert(service, (t.clone(), run));
             }
-            Ok((run, paired)) => {
+            Ok(Ok((run, paired))) => {
                 write_rows(rows, t, &run, &paired)?;
                 if t.items.is_empty() {
                     report
@@ -334,14 +327,12 @@ pub fn apply(
                     off.push((t.host.clone(), t.family.clone()));
                 }
                 for (host, unit) in off {
-                    if let Err(e) = installer.disable(&host, &unit) {
-                        report
-                            .notes
-                            .push(format!("could not disable {unit} on {host}: {e}"));
-                    }
+                    switch_off(installer, state, &mut report, &host, &unit);
                 }
-                if changed {
-                    state.failed = Some(id.clone());
+                if changed || !state.cleanup.is_empty() {
+                    if changed {
+                        state.failed = Some(id.clone());
+                    }
                     checkpoint(state)?;
                 }
                 report.not_attempted = ordered[i + 1..]

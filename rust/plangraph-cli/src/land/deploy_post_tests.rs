@@ -64,6 +64,8 @@ pub(super) struct Host {
     pub(super) started: BTreeMap<String, String>,
     /// Installs that print no invocation.
     pub(super) silent_install: BTreeSet<String>,
+    /// Units whose disable fails (the test heals them by removing the entry).
+    pub(super) disable_fails: RefCell<BTreeSet<String>>,
 }
 
 impl Installer for Host {
@@ -114,6 +116,9 @@ impl Installer for Host {
         self.calls
             .borrow_mut()
             .push(format!("disable {unit}@{host}"));
+        if self.disable_fails.borrow().contains(unit) {
+            return Err("host unreachable".into());
+        }
         Ok(())
     }
 }
@@ -135,6 +140,7 @@ pub(super) fn gate() -> Gate {
         fresh_after: 1_000_000_000_000_000,
         clock,
         excluded: BTreeSet::new(),
+        oneshot: BTreeSet::new(),
     }
 }
 

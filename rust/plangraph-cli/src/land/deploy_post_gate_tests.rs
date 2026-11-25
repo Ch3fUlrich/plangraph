@@ -1,6 +1,6 @@
 use super::deploy::{deploy_plan, DeployPlan, Finding, PartDeploy, Probe};
 use super::deploy_post::*;
-use super::deploy_post_tests::{active, gate, oneshot_ok, run, set, target, Host, Rows, T0};
+use super::deploy_post_tests::{active, oneshot_ok, run, set, target, Host, Rows, T0};
 use std::collections::BTreeMap;
 
 fn ran_at(timestamp: &str) -> Host {
@@ -67,28 +67,6 @@ fn exit_micros_reads_both_systemd_forms() {
         Some(T0 + 500_000)
     );
     assert_eq!(exit_micros("t"), None);
-}
-
-#[test]
-fn a_service_gets_no_row_when_its_shipped_timer_was_refused_at_preflight() {
-    let mut host = Host::default();
-    host.runs.insert("a.service".into(), oneshot_ok());
-    host.runs.insert("a.timer".into(), active()); // an older, still active timer on the host
-    let rows = Rows::default();
-    let mut state = PostState::default();
-    let mut g = gate();
-    g.excluded.insert(("a.timer".into(), "alpha".into()));
-    let r = apply(
-        &[target("a.service", "alpha", &["demo:A"])],
-        &g,
-        &host,
-        &rows,
-        &mut state,
-        &mut |_| Ok(()),
-    )
-    .unwrap();
-    assert!(r.failed.unwrap().1.contains("refused at preflight"));
-    assert!(rows.0.borrow().is_empty());
 }
 
 #[test]

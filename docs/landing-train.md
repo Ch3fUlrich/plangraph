@@ -91,16 +91,20 @@ showed before the install (a new run, not the last deploy's) and not after the c
 (the keeper rejects later times), and its `.timer` must be active, with a row for each item of the service
 that the timer's own target does not cover. Rows go to the items that ship the family: the items of the commits
 that touch one of its paths (whatever the per-commit status), and for a commit without `Plan-Item` every item of
-its part (the keeper's rule), not every item of a shared part. A service whose paired timer failed the
-preflight is refused before any host is touched (the timer is not in the GO). A service that is not a oneshot
-counts only when it is `active` with `result=success` and shows the invocation the install started, not the one
-it showed before; its read JSON carries `result` and `invocation` like a oneshot's. A shipped timer is
+its part (the keeper's rule), not every item of a shared part. A oneshot service (its unit file in the landed
+tree says `Type=oneshot`, or its read says so) whose paired timer failed the preflight is left out and reported
+as `blocked`: before any host is touched when the unit file says oneshot, otherwise right after its read with no
+row. A service that is no oneshot does not wait on a same-name timer, and the other targets go on. A service that
+is not a oneshot counts only when it is `active` with `result=success` and shows the invocation the install
+started, not the one it showed before; an already-active service whose invocation before the install could not
+be read proves no restart. Its read JSON carries `result` and `invocation` like a oneshot's. A shipped timer is
 installed first but recorded (rows, checkpoint) only after the service it triggers has passed. A failed first
 run writes no row, saves the failure in the state and stops the step; later targets are listed as not
 attempted. Cleanup switches off only what the GO names and this attempt installed: the timers held for their
 service and a failed timer, socket or path itself, never a unit the train does not ship. A failure before the
-install (a refused timer, a failed read before the install) changes nothing on the host and saves no failure,
-so the rerun stays open. `--state` records finished targets, so a rerun after an interruption skips
+install (a failed read before the install) changes nothing on the host and saves no failure, so the rerun stays
+open; when a cleanup cannot switch a unit off, the unit is saved in the state and the next run retries it first and
+goes on only when it is off. `--state` records finished targets, so a rerun after an interruption skips
 them (the hook LAND-RESUMABLE-AFTER-MERGE builds on); a recorded failure refuses the rerun until the state
 file is cleared. Train settlement does not call this step yet, and the plan digest is not in the GO evidence
 yet (keeper item `plangraph:TRAIN-SETTLE-RUNS-DEPLOY-APPLY`).

@@ -188,3 +188,34 @@ fn an_untagged_commit_counts_for_its_own_part_and_never_for_another_part() {
     .unwrap_err();
     assert!(e.contains("does not ship u.service@alpha"), "{e}");
 }
+
+/// The services that really depend on a timer are read from the landed unit files.
+#[test]
+fn oneshot_services_are_read_from_the_landed_unit_files() {
+    let fx = Fx::new();
+    commit_at(
+        &fx,
+        1_700_000_000,
+        &[
+            (
+                "deploy/systemd/job.service",
+                "[Service]\nType=oneshot\nExecStart=/bin/true\n",
+            ),
+            (
+                "deploy/systemd/daemon.service",
+                "[Service]\nType=simple\nExecStart=/bin/true\n",
+            ),
+            ("deploy/systemd/job.timer", "[Timer]\nOnCalendar=daily\n"),
+        ],
+        "units",
+    );
+    let head = g(fx.path(), &["rev-parse", "HEAD"]);
+    let targets = [
+        target("job.service", "alpha", &[]),
+        target("daemon.service", "alpha", &[]),
+        target("job.timer", "alpha", &[]),
+        target("missing.service", "alpha", &[]),
+    ];
+    let set = super::deploy_cmd::oneshot_services(fx.path(), &head, &targets);
+    assert_eq!(set, BTreeSet::from(["job.service".to_string()]));
+}

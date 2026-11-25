@@ -21,28 +21,6 @@ fn service_run(invocation: &str, result: &str) -> RunRead {
 }
 
 #[test]
-fn a_refused_paired_timer_is_checked_before_any_host_change() {
-    let mut host = Host::default();
-    host.runs
-        .insert("b.service".into(), service_run("inv-1", "success"));
-    host.runs.insert("a.service".into(), oneshot_ok());
-    host.runs.insert("a.timer".into(), active());
-    let (rows, mut state) = (Rows::default(), PostState::default());
-    let mut g = gate();
-    g.excluded.insert(("a.timer".into(), "alpha".into()));
-    let targets = [
-        target("b.service", "alpha", &["demo:B"]),
-        target("a.service", "alpha", &["demo:A"]),
-    ];
-    let r = apply(&targets, &g, &host, &rows, &mut state, &mut |_| Ok(())).unwrap();
-    assert_eq!(r.failed.as_ref().unwrap().0, "a.service@alpha");
-    assert!(r.failed.unwrap().1.contains("refused at preflight"));
-    assert!(host.calls.borrow().is_empty(), "{:?}", host.calls.borrow());
-    assert!(rows.0.borrow().is_empty());
-    assert!(state.done.is_empty() && state.failed.is_none());
-}
-
-#[test]
 fn a_failed_service_disables_no_timer_the_go_does_not_name() {
     // The timer exists on the host but is not a target: this attempt did not touch it.
     let mut host = Host::default();
