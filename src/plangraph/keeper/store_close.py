@@ -625,12 +625,20 @@ class CloseMixin:
                 return pinned, token, changes
         raise Refused("conflict", "merged_on_default_changed")
 
+    def _deploy_pending_since_claim(self, key):
+        """A ``deploy_pending`` finding exists since the current claim began: the reaper's and the
+        heartbeat's merge proof binds to that claim, so a re-claim gets one fresh row."""
+        return self.conn.execute(
+            "SELECT 1 FROM audit_findings f WHERE f.key=? AND f.code='deploy_pending' AND f.ts >"
+            " COALESCE((SELECT MAX(v.ts) FROM events v WHERE v.key=f.key AND v.type='claimed'), '')"
+            " LIMIT 1", (key,)).fetchone() is not None
+
     def _deploy_pending_result(self, item, pending, now, *, record=True):
         """Leave the item open: record the reason as an alert and report it."""
         msg = "deploy_pending: " + ", ".join(pending)
         if record:
             with self._write():
-                if self._has_finding(item["key"], "deploy_pending"):
+                if self._deploy_pending_since_claim(item["key"]):
                     self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
                 else:
                     self._finding(item["key"], "deploy_pending", msg, now)

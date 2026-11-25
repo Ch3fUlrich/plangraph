@@ -40,8 +40,12 @@ pub fn claims_from_snapshot(snapshot: &Value) -> Vec<Claim> {
                 epoch: item["epoch"].as_i64().unwrap_or(0),
                 state: item["state"].as_str()?.to_owned(),
                 claimed_by: item["claimed_by"].as_str().unwrap_or("").to_owned(),
-                merged: item["merge_proven"].as_bool().unwrap_or(false)
-                    || item["merged"].as_bool().unwrap_or(false),
+                // The current claim's proof when the snapshot gives it; historical commit evidence
+                // (`merged`) says nothing about this claim.
+                merged: item["merge_proven"]
+                    .as_bool()
+                    .or_else(|| item["merged"].as_bool())
+                    .unwrap_or(false),
             })
         })
         .collect()

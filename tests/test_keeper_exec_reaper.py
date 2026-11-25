@@ -137,3 +137,27 @@ def test_a_merge_proof_protects_only_the_claim_it_proves_and_the_snapshot_agrees
 
     assert reaped["expired"] == [later]
     assert snapshot(w, current)[0] == "claimed"
+
+
+def test_a_fresh_deploy_pending_result_binds_the_proof_to_the_reclaimed_epoch(w):
+    key, = seed(w, [("again", [])])
+    first = to_claimed(w, key)
+    with w.store._write():
+        w.store._finding(key, "deploy_pending", "deploy_pending: unit", w.clock.advance(1))
+    w.store.release(w.p("l1main"), key, first)
+    w.clock.advance(1)
+    to_claimed(w, key)
+    snap = lambda: {r["key"]: r for r in w.store.snapshot(
+        w.p("router"), fields="merge_proven")["items"]}[key]
+    assert snap()["merge_proven"] is False        # the old finding proves the old claim only
+    # The close pass finds the merge again and reports deploy_pending for the item as it is now.
+    item = w.store.show(w.p("router"), key)
+    w.store._deploy_pending_result({"key": key, "state": item["state"]}, ["unit"], w.clock.advance(1))
+    assert snap()["merge_proven"] is True
+    count = lambda: w.conn.execute("SELECT COUNT(*) FROM audit_findings WHERE key=? AND code='deploy_pending'",
+                                   (key,)).fetchone()[0]
+    assert count() == 2                         # one row per claim that was proven
+    w.store._deploy_pending_result({"key": key, "state": item["state"]}, ["unit"], w.clock.advance(1))
+    assert count() == 2                         # a later pass of the same claim adds none
+    reaped = w.store.reap(w.p("system"), w.clock.advance(365 * 24 * 3600))
+    assert key not in reaped["expired"] and snapshot(w, key)[0] == "claimed"

@@ -122,10 +122,12 @@ fn batch_payload(text: &str) -> Option<Value> {
     serde_json::from_str(rest).ok()
 }
 
-/// The delivered items of a batch pull request body as `tools/merge_batch_land.py` renders it:
-/// the `GO-KEYS [a,b]` block when there is one (authoritative: it leaves deferred keys out even
-/// when the table lists them), else the Plan-Item cells of the table rows (`| #12 | a, b | ... |`).
-fn batch_pull_request_keys(text: &str) -> BTreeSet<String> {
+/// The items a pull request body names. A generated batch body carries one metadata line that
+/// *starts* with `GO-KEYS [a,b]` (`tools/merge_batch_land.py`): it is authoritative and leaves
+/// deferred keys out even when the table lists them; a mention inside other text is nothing.
+/// Without that line: the Plan-Item cells of the table rows (`| #12 | a, b | ... |`) and the
+/// ordinary item lines of `item_keys`.
+fn pull_request_body_keys(body: &str) -> BTreeSet<String> {
     let split = |cell: &str| -> Vec<String> {
         cell.split(',')
             .map(str::trim)
@@ -133,9 +135,9 @@ fn batch_pull_request_keys(text: &str) -> BTreeSet<String> {
             .map(str::to_owned)
             .collect()
     };
-    let go_keys = text
+    let go_keys: Option<Vec<String>> = body
         .lines()
-        .filter_map(|line| line.split_once("GO-KEYS [").map(|(_, rest)| rest))
+        .filter_map(|line| line.strip_prefix("GO-KEYS ["))
         .map(|rest| split(rest.split(']').next().unwrap_or("")))
         .reduce(|mut all, more| {
             all.extend(more);
@@ -144,16 +146,20 @@ fn batch_pull_request_keys(text: &str) -> BTreeSet<String> {
     if let Some(go_keys) = go_keys {
         return go_keys.into_iter().collect();
     }
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("| #"))
-        .flat_map(|line| split(line.split('|').nth(2).unwrap_or("")))
-        .collect()
+    let mut keys = item_keys(body);
+    keys.extend(
+        body.lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("| #"))
+            .flat_map(|line| split(line.split('|').nth(2).unwrap_or(""))),
+    );
+    keys
 }
 
 /// The item keys a brief, trailer block or pull request description names.
 pub fn item_keys(text: &str) -> BTreeSet<String> {
-    let mut keys = batch_pull_request_keys(text);
+    let mut keys = BTreeSet::new();
+    // A versioned assignment is its structured keys; its body text names nothing else.
     if let Some(input) = batch_payload(text) {
         for item in input["items"].as_array().into_iter().flatten() {
             keys.extend(
@@ -273,36 +279,61 @@ pub fn local_host() -> String {
     }
 }
 
-/// The fleet launcher's one host alias: the policy name of a machine whose own name starts
-/// with the alias's first label or its first four letters.
+/// The fleet launcher's one host alias.
 pub fn local_alias() -> String {
     ["coding", "vm"].join(".")
 }
 
-/// Whether the fleet host `host` is this machine (`local`): the same name, or the launcher's
-/// one alias (`local_alias`) on a machine of the matching own name.
-pub fn is_local_host(host: &str, local: &str) -> bool {
+/// The first labels of a machine's own name that make it the alias host: the alias's own first
+/// label and its short name.
+pub fn local_alias_labels() -> [String; 2] {
     let alias = local_alias();
-    let label = alias.split('.').next().unwrap_or_default();
+    let first = alias.split('.').next().unwrap_or_default().to_owned();
+    [first, ["co", "de"].concat()]
+}
+
+/// Whether the fleet host `host` is this machine (`local`): the same name, or the launcher's
+/// one alias on a machine whose own name starts with either of its two labels.
+pub fn is_local_host(host: &str, local: &str) -> bool {
     host == local
-        || (host == alias
+        || (host == local_alias()
             && local
                 .split('.')
                 .next()
-                .is_some_and(|own| own == label || own == &label[..4]))
+                .is_some_and(|own| local_alias_labels().iter().any(|label| label == own)))
+}
+
+/// The ssh destination the fleet policy (`<ops>/fleet-launch-policy.json`, `hosts[].ssh`) names
+/// for `host`; the ops directory is `PLANGRAPH_FLEET_OPS` or `$ROUTER_HOME/ops`.
+pub fn fleet_ssh(host: &str) -> Option<String> {
+    let ops = std::env::var_os("PLANGRAPH_FLEET_OPS")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("ROUTER_HOME").map(|home| std::path::PathBuf::from(home).join("ops"))
+        })?;
+    let policy = read_json(&ops.join("fleet-launch-policy.json"))?;
+    policy["hosts"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["name"].as_str() == Some(host))
+        .and_then(|entry| entry["ssh"].as_str())
+        .filter(|ssh| !ssh.is_empty())
+        .map(str::to_owned)
 }
 
 /// Claude writer sessions the fleet launcher recorded and has not stopped.
 ///
 /// A record joins the fleet lifecycle by its session id: `live(None)` lists the session ids
 /// `claude agents` shows as not finished on this host, `live(Some(ssh))` the same on the host a
-/// remote record names in `ssh` (the sender mirrors it into the record). An exited session
+/// remote record names in `ssh` (the sender mirrors it into the record; an older record's host
+/// resolves through `ssh_of`). An exited session
 /// drops out at once and a writer that runs for days stays. A lifecycle that cannot be read
 /// (`None`), or a remote record without an `ssh` destination, keeps every unstopped record.
 pub fn claude_lanes(
     sessions: &Path,
     live: &dyn Fn(Option<&str>) -> Option<BTreeSet<String>>,
     local_host: &str,
+    ssh_of: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<Lane> {
     let mut lanes = Vec::new();
     let mut polled: std::collections::BTreeMap<Option<String>, Option<BTreeSet<String>>> =
@@ -325,9 +356,14 @@ pub fn claude_lanes(
         let remote = record["host"]
             .as_str()
             .is_some_and(|host| !host.is_empty() && !is_local_host(host, local_host));
-        let destination = record["ssh"].as_str().filter(|ssh| !ssh.is_empty());
+        // A record written before the sender mirrored `ssh` resolves it from the fleet policy.
+        let destination = record["ssh"]
+            .as_str()
+            .filter(|ssh| !ssh.is_empty())
+            .map(str::to_owned)
+            .or_else(|| record["host"].as_str().and_then(ssh_of).filter(|_| remote));
         if !remote || destination.is_some() {
-            let target = destination.filter(|_| remote).map(str::to_owned);
+            let target = destination.filter(|_| remote);
             let listed = polled
                 .entry(target.clone())
                 .or_insert_with(|| live(target.as_deref()));
@@ -443,17 +479,14 @@ pub fn pull_request_lanes(json: &str) -> Vec<Lane> {
     let rows: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
     rows.iter()
         .map(|row| {
-            let text = format!(
-                "{}\n{}",
-                row["title"].as_str().unwrap_or(""),
-                row["body"].as_str().unwrap_or("")
-            );
+            let mut keys = item_keys(row["title"].as_str().unwrap_or(""));
+            keys.extend(pull_request_body_keys(row["body"].as_str().unwrap_or("")));
             let branch = row["headRefName"].as_str().unwrap_or("").to_owned();
             Lane {
                 name: branch.clone(),
                 kind: LaneKind::PullRequest,
                 detail: format!("#{}", row["number"]),
-                keys: item_keys(&text),
+                keys,
                 branch: Some(branch).filter(|b| !b.is_empty()),
             }
         })
@@ -561,7 +594,7 @@ pub fn local_lanes_between(
     let mut lanes = reserved_lanes(state, now);
     between();
     lanes.extend(native_lanes(state));
-    lanes.extend(claude_lanes(sessions, live, &local_host()));
+    lanes.extend(claude_lanes(sessions, live, &local_host(), &fleet_ssh));
     lanes
 }
 

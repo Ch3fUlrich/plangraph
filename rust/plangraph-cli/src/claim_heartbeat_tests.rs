@@ -60,7 +60,7 @@ fn the_roster_decides_what_is_renewed_and_failures_carry_their_keys() {
     let record = json!({"name":"writer","session_name":"writer-0001","prompt_file":brief});
     fs::write(sessions.join("writer-0001.json"), record.to_string()).unwrap();
     let mut lanes = native_lanes(&dir.path().join("state"));
-    lanes.extend(claude_lanes(&sessions, &|_| None, "here"));
+    lanes.extend(claude_lanes(&sessions, &|_| None, "here", &|_| None));
     lanes.extend(pull_request_lanes(
         r#"[{"number":9,"headRefName":"lane/x","title":"x","body":"Plan-Item: p:PR\nPlan-Item: p:REFUSED"},
             {"number":10,"headRefName":"lane/branchonly","title":"x","body":""}]"#,
@@ -177,4 +177,28 @@ fn a_claim_whose_close_pass_found_the_merge_is_not_renewed_even_with_a_live_lane
         "{:#?}",
         report.lines
     );
+}
+
+#[test]
+fn historical_merge_evidence_does_not_stop_the_renewal_of_a_current_claim() {
+    let mut keeper = Fake {
+        items: json!([{"key":"p:AGAIN","state":"claimed","epoch":3,"claimed_by":"plan-order",
+            "merged":true,"merge_proven":false}]),
+        refuse: vec![],
+        sent: vec![],
+        fail_batch: false,
+    };
+    let lane = Lane {
+        name: "lane".into(),
+        kind: pg_worker_core::lane_roster::LaneKind::Native,
+        detail: "run-y".into(),
+        keys: ["p:AGAIN".to_owned()].into(),
+        branch: None,
+    };
+    pass(&mut keeper, &[lane]).unwrap();
+    assert_eq!(keeper.sent, [("p:AGAIN".to_owned(), 3)]);
+    // An older keeper without the field falls back to the historical flag.
+    let old = claims_from_snapshot(&json!({"items":[{"key":"p:OLD","state":"claimed",
+        "epoch":1,"claimed_by":"x","merged":true}]}));
+    assert!(old[0].merged);
 }

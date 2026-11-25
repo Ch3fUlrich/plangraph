@@ -100,12 +100,15 @@ fn a_claude_lane_joins_the_fleet_lifecycle_by_session_id() {
     write(&dir.path().join("writer-0001.ready.json"), "{}");
     let live: BTreeSet<String> = ["sid-live".to_owned()].into();
     // The record is a day and more old (ts 1): a running writer stays, an exited one drops.
-    let lanes = claude_lanes(dir.path(), &|_| Some(live.clone()), "here");
+    let lanes = claude_lanes(dir.path(), &|_| Some(live.clone()), "here", &|_| None);
     assert_eq!(lanes.len(), 1);
     assert_eq!(lanes[0].detail, "writer-0001");
     assert_eq!(lanes[0].keys.len(), 2, "the versioned prompt is decoded");
     // With the lifecycle unknown every unstopped writer record counts; never a non-writer.
-    assert_eq!(claude_lanes(dir.path(), &|_| None, "here").len(), 2);
+    assert_eq!(
+        claude_lanes(dir.path(), &|_| None, "here", &|_| None).len(),
+        2
+    );
 }
 
 #[test]
@@ -182,7 +185,7 @@ fn a_remote_writer_joins_its_own_hosts_lifecycle_and_a_crashed_session_does_not_
         // `claude agents` here lists nothing; the far host lists sid-far only.
         Some(ssh.map_or_else(BTreeSet::new, |_| ["sid-far".to_owned()].into()))
     };
-    let lanes = claude_lanes(dir.path(), &lifecycle, "here");
+    let lanes = claude_lanes(dir.path(), &lifecycle, "here", &|_| None);
     let sessions: Vec<_> = lanes.iter().map(|l| l.detail.as_str()).collect();
     // sid-gone is over on its own host; sid-nossh has no destination to ask, so it stays.
     assert_eq!(sessions, ["writer-0001", "writer-0003"]);
@@ -192,7 +195,10 @@ fn a_remote_writer_joins_its_own_hosts_lifecycle_and_a_crashed_session_does_not_
         "one poll per host"
     );
     // A lifecycle that cannot be read keeps every unstopped record.
-    assert_eq!(claude_lanes(dir.path(), &|_| None, "here").len(), 3);
+    assert_eq!(
+        claude_lanes(dir.path(), &|_| None, "here", &|_| None).len(),
+        3
+    );
     assert!(FINISHED.contains(&"crashed") && FINISHED.contains(&"cancelled"));
 }
 
@@ -201,7 +207,7 @@ fn a_writer_recorded_under_the_fleet_alias_of_this_host_is_local() {
     let dir = tempfile::tempdir().unwrap();
     // The launcher records the policy alias; the OS hostname differs.
     let alias = local_alias();
-    let own = format!("{}.lan", &alias[..4]);
+    let own = format!("{}{}.lan", "co", "ding");
     writer_on(
         dir.path(),
         "writer-0001",
@@ -213,7 +219,7 @@ fn a_writer_recorded_under_the_fleet_alias_of_this_host_is_local() {
         assert!(ssh.is_none(), "a local record is polled locally");
         Some(BTreeSet::new())
     };
-    assert!(claude_lanes(dir.path(), &lifecycle, &own).is_empty());
+    assert!(claude_lanes(dir.path(), &lifecycle, &own, &|_| None).is_empty());
     assert!(is_local_host(&alias, &alias));
     assert!(is_local_host(&alias, &own));
     assert!(!is_local_host(&alias, "other"));
@@ -271,14 +277,19 @@ fn a_reservation_dropped_for_a_complete_record_cannot_open_a_gap_between_the_two
 
 #[test]
 fn a_deferred_key_the_table_lists_is_not_held_when_go_keys_leaves_it_out() {
+    let lanes_of = |body: &str| {
+        pull_request_lanes(
+            &serde_json::json!([{"number":1,"headRefName":"merge/t","title":"t","body":body}])
+                .to_string(),
+        )
+    };
     let body =
         "| PR | Plan-Item | Head |\n|---|---|---|\n| #1 | demo:DONE, demo:DEFERRED | `a` |\n\n\
                 GO-KEYS [demo:DONE]; GO-DEFERRED [demo:DEFERRED]\n";
-    let keys: Vec<_> = item_keys(body).into_iter().collect();
+    let keys: Vec<_> = lanes_of(body)[0].keys.iter().cloned().collect();
     assert_eq!(keys, ["demo:DONE"]);
     // Without a GO-KEYS block the table is the list.
-    let table = "| #1 | demo:A, demo:B | `a` |\n";
-    assert_eq!(item_keys(table).len(), 2);
+    assert_eq!(lanes_of("| #1 | demo:A, demo:B | `a` |\n")[0].keys.len(), 2);
 }
 
 #[test]
@@ -344,5 +355,94 @@ fn a_generated_batch_pull_request_body_names_every_item() {
     assert!(
         !lanes[0].holds("demo:DEFERRED"),
         "a deferred key is not delivered by this pull request"
+    );
+}
+
+#[test]
+fn both_short_names_of_the_alias_host_match_independently_of_the_matcher() {
+    // Spelled out here, not derived from the matcher under test.
+    let alias = format!("{}{}{}", "co", "ding", ".vm");
+    for own in [
+        format!("{}{}.lan", "co", "ding"),
+        format!("{}{}.lan", "co", "de"),
+        format!("{}{}", "co", "de"),
+    ] {
+        assert!(is_local_host(&alias, &own), "{own}");
+    }
+    assert!(!is_local_host(&alias, &format!("{}{}.lan", "co", "d")));
+    assert!(!is_local_host(&alias, "elsewhere"));
+    assert_eq!(local_alias(), alias);
+}
+
+#[test]
+fn a_legacy_remote_record_resolves_its_destination_from_the_fleet_host() {
+    let dir = tempfile::tempdir().unwrap();
+    // Written before the sender mirrored `ssh`: the record names only the fleet host.
+    writer_on(dir.path(), "writer-0001", "sid-gone", "elsewhere", None);
+    writer_on(dir.path(), "writer-0002", "sid-live", "elsewhere", None);
+    let polled = std::cell::RefCell::new(Vec::new());
+    let lifecycle = |ssh: Option<&str>| {
+        polled.borrow_mut().push(ssh.map(str::to_owned));
+        Some(["sid-live".to_owned()].into())
+    };
+    let ssh_of = |host: &str| (host == "elsewhere").then(|| "far-alias".to_owned());
+    let lanes = claude_lanes(dir.path(), &lifecycle, "here", &ssh_of);
+    let sessions: Vec<_> = lanes.iter().map(|l| l.detail.as_str()).collect();
+    assert_eq!(
+        sessions,
+        ["writer-0002"],
+        "the stopped legacy session is gone"
+    );
+    assert_eq!(*polled.borrow(), [Some("far-alias".to_owned())]);
+    // A host the policy does not know cannot be asked: its record stays.
+    assert_eq!(
+        claude_lanes(dir.path(), &lifecycle, "here", &|_| None).len(),
+        2
+    );
+}
+
+#[test]
+fn the_fleet_policy_names_the_ssh_destination_of_a_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let policy =
+        serde_json::json!({"hosts":[{"name":"elsewhere","ssh":"far-alias"},{"name":"bare"}]});
+    write(
+        &dir.path().join("fleet-launch-policy.json"),
+        &policy.to_string(),
+    );
+    // The ops directory comes from the environment; one test owns it.
+    std::env::set_var("PLANGRAPH_FLEET_OPS", dir.path());
+    assert_eq!(fleet_ssh("elsewhere").as_deref(), Some("far-alias"));
+    assert_eq!(fleet_ssh("bare"), None);
+    assert_eq!(fleet_ssh("unknown"), None);
+    std::env::remove_var("PLANGRAPH_FLEET_OPS");
+}
+
+#[test]
+fn go_keys_counts_only_as_the_generated_metadata_line() {
+    // A title or a versioned brief's text that mentions GO-KEYS adds nothing.
+    let lanes = pull_request_lanes(
+        &serde_json::json!([{"number":1,"headRefName":"merge/x","title":"fix GO-KEYS [demo:DEFERRED] parser",
+            "body":"| #1 | demo:DONE | `a` |\n\nGO-KEYS [demo:DONE]; GO-DEFERRED [demo:DEFERRED]\n"}])
+        .to_string(),
+    );
+    assert!(lanes[0].holds("demo:DONE"));
+    assert!(
+        !lanes[0].holds("demo:DEFERRED"),
+        "free text in the title is not metadata"
+    );
+    let body = "see the note GO-KEYS [demo:MENTIONED] in the docs\n";
+    let lanes = pull_request_lanes(
+        &serde_json::json!([{"number":2,"headRefName":"b","title":"t","body":body}]).to_string(),
+    );
+    assert!(!lanes[0].holds("demo:MENTIONED"));
+    let input = serde_json::json!({"items":[{"key":"demo:A","title":"t",
+        "brief":"GO-KEYS [demo:OUTSIDE]\nPlan-Item: demo:OTHER"}],"run":{"name":"lane"}});
+    let versioned = format!("PLANGRAPH-BATCH-INPUT-V1\n{input}");
+    let keys: Vec<_> = item_keys(&versioned).into_iter().collect();
+    assert_eq!(
+        keys,
+        ["demo:A"],
+        "only the structured keys of a versioned assignment"
     );
 }
