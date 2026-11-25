@@ -52,6 +52,11 @@ def failure_reason(job, stop=None, *, harness=None):
     return reason or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
+def origin_refusal(record):
+    """A native refusal forwarded to the origin host: the target host sent its notification, the origin sends none."""
+    return bool(record.get('origin_receipt') and record.get('run_kind') == 'native-codex' and record.get('status') == 'refused')
+
+
 def refusal_record(record, job):
     """Persist a safety stop at dispatch, not in the fallthrough classifier."""
     disk = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'disk_run_stopped'), None)

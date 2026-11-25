@@ -857,3 +857,208 @@ tests/test_spawner_remote_ps.py::test_wsl_query_deadline_holds_when_the_reader_n
         f'Unexpected sub-five-second wall-clock assertions: {unexpected}\n'
         f'Stale wall-clock allowlist entries: {stale}'
     )
+
+
+from unittest.mock import Mock
+
+REASON = 'cargo_target_cap: measured 68.42 GB in /x, cap 64 GB; busy'
+
+
+def _supervise_with(monkeypatch, tmp_path, service, admitted):
+    from plangraph.spawner import cli
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, 'admitted_spawn', admitted)
+    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps({'state': str(tmp_path)})))
+    out = _Out()
+    monkeypatch.setattr(cli.sys, 'stdout', out)
+    return cli.main(['--supervise']), out
+
+
+def test_supervisor_reports_a_refusal_after_admission_as_refused(tmp_path, monkeypatch, capsys):
+    """A cap refusal at launch follows the 'running' admission snapshot; it is not EXIT 0."""
+    from types import SimpleNamespace
+    final = dict(run_id='run-one', status='refused', exit_code=2, reason=REASON, ended=1.0)
+
+    async def admitted(service, payload):
+        async def launch():
+            return None
+        service.tasks = {'run-one': asyncio.ensure_future(launch())}
+        return dict(run_id='run-one', status='running')
+    service = SimpleNamespace(state=tmp_path, result=lambda run_id: final, tasks={})
+    code, _ = _supervise_with(monkeypatch, tmp_path, service, admitted)
+    assert code == 2
+    assert f'ALERT SPAWN run-one REFUSED: {REASON}' in capsys.readouterr().err
+
+
+def test_supervisor_alerts_on_refusals_that_never_had_a_task(tmp_path, monkeypatch, capsys):
+    """Taskless refusals alert from the saved record; two refusals with one error text stay apart."""
+    from plangraph.spawner import cli
+    from plangraph.planner.routing import SpawnRefused
+    sink, keeper = Mock(), Mock()
+    service = cli.SpawnService(state=tmp_path, completion_sink=sink, keeper_sink=keeper)
+    other = service.save_refusal(SpawnRefused(REASON), 'implement')
+    saved = service.save_refusal(SpawnRefused(REASON), 'implement')
+    assert other['error'] == saved['error'] and other['run_id'] != saved['run_id']
+    delivered = sink.deliver.call_count
+
+    async def returned(service, payload):
+        return dict(saved, exit_code=0)   # a stale snapshot: the saved record decides
+    code, _ = _supervise_with(monkeypatch, tmp_path, service, returned)
+    err = capsys.readouterr().err
+    assert code == 2 and f"ALERT SPAWN {saved['run_id']} REFUSED: {REASON}" in err
+
+    async def raising(service, payload):
+        exc = SpawnRefused(REASON)
+        exc.run_id = saved['run_id']   # what SeatSpawnMixin.spawn attaches after save_refusal
+        raise exc
+    code, out = _supervise_with(monkeypatch, tmp_path, service, raising)
+    printed = json.loads(out.getvalue())
+    assert code == 2 and printed['run_id'] == saved['run_id']
+    assert f"ALERT SPAWN {saved['run_id']} REFUSED" in capsys.readouterr().err
+    assert len(service.ps()['runs']) == 2   # no third refusal was minted
+    assert sink.deliver.call_count == delivered   # reads never deliver again
+
+    async def lost(service, payload):
+        exc = SpawnRefused(REASON)
+        exc.run_id = 'run-' + 'f' * 32   # the record never reached the disk
+        raise exc
+    code, out = _supervise_with(monkeypatch, tmp_path, service, lost)
+    printed = json.loads(out.getvalue())
+    assert code != 0 and printed['run_id'] == 'run-' + 'f' * 32 and printed['status'] == 'failed'
+    assert len(service.ps()['runs']) == 2
+
+
+def test_spawn_attaches_the_saved_refusal_run_id_to_the_exception(tmp_path, monkeypatch):
+    from plangraph.spawner import cli
+    from plangraph.planner.routing import SpawnRefused
+    service = cli.SpawnService(state=tmp_path)
+
+    async def refuse(*args, **kwargs):
+        raise SpawnRefused(REASON)
+    monkeypatch.setattr(service, '_spawn', refuse)
+    with pytest.raises(SpawnRefused) as raised:
+        asyncio.run(service.spawn(card={'estimate_tokens': 1}, prompt='x', role='implement', wait_seconds=0))
+    assert service.result(raised.value.run_id)['status'] == 'refused'
+
+
+def _native_cap_refusal(tmp_path, monkeypatch, state_name='state'):
+    """The real native cargo-cap admission refusal: no task and no run directory work happened."""
+    from plangraph.spawner import host_ready, overflow, seat_spawn
+    keeper, parent = Mock(), Mock()
+    service = overflow.cli.SpawnService(state=tmp_path / state_name, keeper_sink=keeper, completion_sink=parent)
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs: (None, REASON))
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A', parent_session='fixture-parent')
+    return service, service.admit_spawn({'role': 'implement'}, card=card), keeper, parent
+
+
+@pytest.mark.parametrize('saved_code', ['absent', 0, None, '2', 2])
+def test_native_spawn_wait_reports_persisted_cargo_cap_refusal(tmp_path, monkeypatch, capsys, saved_code):
+    from plangraph.spawner import cli
+    service, refusal, keeper, parent = _native_cap_refusal(tmp_path, monkeypatch)
+    assert refusal['status'] == 'refused' and refusal['run_id'] not in service.tasks
+    if saved_code != 'absent':
+        refusal['exit_code'] = saved_code
+    else:
+        refusal.pop('exit_code', None)
+    service._save(refusal)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    for _ in range(2):   # repeated reads never deliver again
+        assert cli.main(['--state', str(tmp_path / 'state'), 'wait', refusal['run_id']]) not in (0, None)
+    out = capsys.readouterr().out
+    assert REASON in out
+    assert keeper.deliver.call_count == 1 and parent.deliver.call_count == 1
+    # The origin host's receipt of the same run is a forwarded read: it sends nothing of its own.
+    origin_keeper, origin_parent = Mock(), Mock()
+    from plangraph.spawner.runner import spawn_service
+    origin = spawn_service(state=tmp_path / 'origin', keeper_sink=origin_keeper, completion_sink=origin_parent)
+    origin._save(dict(service.result(refusal['run_id']), overflow_remote=True, host='target-host'))
+    assert origin.result(refusal['run_id'])['origin_receipt'] is True
+    origin.retry_completions()
+    assert origin_keeper.deliver.call_count == 0 and origin_parent.deliver.call_count == 0
+
+
+class _Supervisor:
+    """A supervisor double that acknowledges the admission and ends the run later."""
+    def __init__(self, service, ack, steps):
+        import threading
+        self.stdin, self.stdout = io.StringIO(), io.StringIO(json.dumps(ack) + '\n')
+        service._save(dict(ack, started=time.time(), ended=None))
+        def play():
+            for delay, change in steps:
+                time.sleep(delay)
+                service._save(dict(service.result(ack['run_id']), **change))
+        self.thread = threading.Thread(target=play, daemon=True)
+        self.thread.start()
+    def wait(self): return 0
+
+
+@pytest.mark.parametrize('steps,code,status', [
+    ([(.05, dict(status='completed', exit_code=0, ended=1.0))], 0, 'completed'),
+    ([(.05, dict(status='failed', exit_code=0, ended=1.0))], 1, 'failed'),          # a saved failure when the worker exits zero
+    ([(.05, dict(status='failed', exit_code=3, ended=1.0))], 3, 'failed'),
+    ([(.05, dict(status='refused', exit_code=0, ended=1.0, reason=REASON))], 1, 'refused'),
+    ([(.05, dict(status='stopped', exit_code=130, ended=1.0))], 130, 'stopped'),
+    ([(.05, dict(status='cancelled', exit_code=None, ended=1.0))], 1, 'cancelled'),
+    # status before `ended`: the first poll must not reply from the provisional status
+    ([(.05, dict(status='refused', exit_code=2, reason=REASON)), (.3, dict(ended=1.0))], 2, 'refused'),
+])
+def test_native_spawn_wait_preserves_failed_and_completed_status(tmp_path, monkeypatch, capsys, steps, code, status):
+    from plangraph.spawner import cli
+    service = cli.SpawnService(state=tmp_path, completion_sink=Mock(), keeper_sink=Mock())
+    ack = dict(run_id='run-' + 'a' * 32, run_kind='native-codex', role='implement', status='running')
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: _Supervisor(service, ack, steps))
+    card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path), estimate_tokens=1))
+    assert cli.main(['--state', str(tmp_path), 'spawn', '--card', card, '--wait', '5', 'prompt']) == code
+    final = json.loads(capsys.readouterr().out)
+    assert final['status'] == status and final['ended'] is not None   # settled, never the provisional read
+    assert cli.main(['--state', str(tmp_path), 'wait', ack['run_id']]) == code   # one rule on both paths
+
+
+def test_wait_runs_does_not_reply_from_a_status_before_ended(tmp_path):
+    from plangraph.spawner import cli
+    service = cli.SpawnService(state=tmp_path, completion_sink=Mock(), keeper_sink=Mock())
+    run_id = 'run-' + 'b' * 32
+    service._save(dict(run_id=run_id, status='refused', exit_code=2, reason=REASON, started=time.time(), ended=None))
+    result = dict(run_id=run_id, status='running')
+    cli._wait_runs(service, result, .1)
+    assert result.get('ended') is None   # still unsettled when the bound ended: not reported as final
+    service._save(dict(service.result(run_id), ended=1.0))
+    cli._wait_runs(service, result, 2)
+    assert result['ended'] == 1.0
+
+
+def test_a_forwarded_receipt_without_ended_keeps_refreshing():
+    from plangraph.spawner.service import remote_native_running
+    receipt = dict(run_kind='native-codex', overflow_remote=True, status='refused', exit_code=2, ended=None)
+    assert remote_native_running(receipt)
+    assert not remote_native_running(dict(receipt, ended=1.0))
+    assert not remote_native_running(dict(receipt, status='queued'))
+
+
+def test_mcp_native_spawn_with_a_positive_wait_returns_the_settled_refusal(tmp_path, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    server = MCPSpawnerServer(state=tmp_path)
+    service = server.service
+    run_id = 'run-' + 'c' * 32
+    ack = dict(run_id=run_id, run_kind='native-codex', role='implement', status='running', started=time.time())
+
+    async def spawn(**kwargs):
+        service._save(dict(ack))
+        def finish():
+            time.sleep(.1)
+            service._save(dict(ack, status='refused', exit_code=2, reason=REASON, ended=time.time()))
+        import threading
+        threading.Thread(target=finish, daemon=True).start()
+        return dict(ack)
+    monkeypatch.setattr(service, 'spawn', spawn)
+    card = dict(run_kind='native-codex', repo=str(tmp_path))
+    settled = asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card=card, prompt='p', wait_seconds=5)))
+    assert settled['run_id'] == run_id and settled['status'] == 'refused' and settled['ended'] is not None
+    ack_only = asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card=card, prompt='p')))
+    assert ack_only['status'] == 'running'   # no wait requested: the admission acknowledgement

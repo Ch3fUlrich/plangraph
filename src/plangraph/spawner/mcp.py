@@ -225,13 +225,20 @@ class MCPSpawnerServer:
                 exc = ParameterRefused('spawn by card; card required')
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
-            return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
+            native = arguments['card'].get('run_kind') == 'native-codex'
+            record = await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), leg=arguments.get('leg'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
                 review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False),
                 dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
                 no_fallthrough=arguments.get('no_fallthrough', False), **options)
+            wait = arguments.get('wait_seconds') or 0
+            # A native spawn acknowledges admission; a positive wait is a bounded wait for its saved outcome.
+            if native and wait > 0 and not arguments.get('dry_run'):
+                from plangraph.spawner.base_fresh import settle_runs
+                await settle_runs(self.service, record, wait)
+            return record
 
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")
