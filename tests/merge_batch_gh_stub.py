@@ -79,7 +79,7 @@ if cmd == ["repo", "view"]:
     print(json.dumps({"nameWithOwner": S["repo"], "defaultBranchRef": {"name": S["default_branch"]}}))
 elif cmd == ["run", "view"]:
     run = S.get("runs", {}).get(ARGV[2]) or die("no CI run")
-    print(json.dumps({name: run.get(name) for name in fields(set("databaseId headSha status conclusion".split()))}))
+    print(json.dumps({name: run.get(name) for name in fields(set("databaseId headSha status conclusion displayTitle event attempt workflowName".split()))}))
 elif cmd == ["pr", "list"]:
     label, head = opt("--label"), opt("--head")
     print(json.dumps([show(p) for p in S["prs"].values() if p["state"] == "OPEN"
@@ -148,6 +148,9 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
             names += [f"Python tests, SQLite keeper (shard {i} of 3)" for i in (1, 2, 3)]
             names += [f"Python tests, Postgres keeper: contract and storage (shard {i} of 3)" for i in (1, 2, 3)]
             jobs = [{"name": n, "status": "completed", "conclusion": "success"} for n in names]
+            run_match = re.search(r"/runs/(\d+)/", endpoint_get)
+            if run_match:
+                jobs = S.get("run_jobs", {}).get(run_match[1], jobs)
             print(json.dumps({"jobs": jobs, "total_count": len(jobs)}))
         else:
             print(json.dumps({"workflow_runs": [run], "total_count": 1}))

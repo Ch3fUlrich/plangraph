@@ -16,7 +16,7 @@ import uuid
 from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
-from plangraph.fleet_sync.genconfig import config_dir, generate
+from plangraph.fleet_sync.genconfig import REMOTE_PLACEMENT_CLOSED, config_dir, generate, remote_open
 from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
@@ -288,6 +288,8 @@ def ready_records(config, role='implement'):
                 row['work_drives'] = data['work_drives']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
+        if config.get('registry') and row.get('remote_placement') is not True:
+            row.setdefault('refusal', REMOTE_PLACEMENT_CLOSED)  # the host's switch is off
         caps = host_caps(registry, name, role)
         if caps is None:
             row.setdefault('refusal', 'missing or malformed registry caps')

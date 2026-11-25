@@ -159,9 +159,55 @@ fn skipped_and_neutral_conclusions_are_green() {
 fn gh_run_rows_are_read_by_database_id() {
     let text = r#"[{"databaseId":45370719249,"status":"completed","conclusion":"success","headSha":"abc"},{"status":"queued"}]"#;
     assert_eq!(
-        runs_from_json(text).unwrap(),
-        vec![run(45370719249, "completed", "success", "abc")]
+        newest_workflow_run(text, "abc", |_| panic!("ordinary run requested jobs")).unwrap(),
+        Some(run(45370719249, "completed", "success", "abc"))
     );
+}
+
+#[test]
+fn a_metadata_run_cannot_convert_a_newer_pending_or_failed_full_run_to_green() {
+    use serde_json::json;
+
+    let mut rows = [
+        json!({"databaseId": 101, "headSha": "abc", "status": "completed", "conclusion": "failure"}),
+        json!({"databaseId": 100, "headSha": "abc", "status": "completed", "conclusion": "success"}),
+        json!({"databaseId": 102, "headSha": "abc", "status": "completed", "conclusion": "success",
+               "displayTitle": "PR metadata check 102", "attempt": 2, "event": "pull_request", "workflowName": "tests"}),
+    ];
+    for status in ["completed", "in_progress"] {
+        rows[0]["status"] = json!(status);
+        let latest =
+            newest_workflow_run(&serde_json::to_string(&rows).unwrap(), "abc", |endpoint| {
+                assert_eq!(endpoint, "actions/runs/102/attempts/2/jobs?per_page=100");
+                Ok(json!({"total_count": 2, "jobs": [
+                    {"name": "ci-pr-description", "conclusion": "success"},
+                    {"name": "Select suites for this change", "conclusion": "skipped"}
+                ]}))
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!((latest.id, latest.status.as_str()), (101, status));
+    }
+
+    let text = serde_json::to_string(&rows).unwrap();
+    let unknown = newest_workflow_run(&text, "abc", |_| {
+        Ok(json!({"total_count": 2, "jobs": [
+            {"name": "ci-pr-description", "conclusion": "success"},
+            {"name": "ci-gate", "conclusion": "skipped"}
+        ]}))
+    })
+    .unwrap_err();
+    assert!(unknown.contains("marker's job is unconfirmed"));
+    let legacy = newest_workflow_run(&text, "abc", |_| {
+        Ok(json!({"total_count": 1, "jobs": [{"name": "ci-gate", "conclusion": "success"}]}))
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(legacy.id, 102, "legacy full runs remain eligible");
+    assert!(newest_workflow_run(&text, "abc", |_| {
+        Ok(json!({"total_count": 2, "jobs": [{"name": "ci-pr-description"}]}))
+    })
+    .is_err());
 }
 
 #[test]

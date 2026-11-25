@@ -217,6 +217,7 @@ fn schema_fields_required_and_patterns_match_rust() {
     let mut example: Value = serde_json::from_str(EXAMPLE).unwrap();
     example["public_repos"] = json!(["plangraph"]);
     example["hosts"][0]["placement_fallback"] = json!(true);
+    example["hosts"][0]["remote_placement"] = json!(true);
     example["hosts"][0]["wsl_distro"] = json!("Ubuntu");
     let doc =
         serde_json::to_value(HostRegistry::from_json_str(&example.to_string()).unwrap()).unwrap();
@@ -268,6 +269,7 @@ fn schema_fields_required_and_patterns_match_rust() {
                         "env",
                         "wsl_distro",
                         "placement_fallback",
+                        "remote_placement",
                     ]
                     .contains(key)
             })

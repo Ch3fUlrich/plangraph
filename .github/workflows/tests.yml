@@ -1,6 +1,6 @@
-# Only ci-gate required; full tier requires every job. Part PRs (draft lane/*) run no job; other draft/sub-PRs select affected suites.
-
 name: tests
+run-name: >-
+  ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title) && format('PR metadata check {0}', github.run_id) || format('Tests: {0}', github.event.pull_request.title || github.ref_name) }}
 
 on:
   pull_request:
@@ -22,11 +22,11 @@ on:
 # check stays pending (part admission is review, fast gates and affected tests on the writer host; D-6773).
 # Marking a draft ready starts no run: the head already has its required ci-gate from the run its last push
 # started, and a second run would leave the required check pending for an hour (landing a draft part).
-# A newer push to the PR cancels the stale run, but never a workflow_dispatch run (timing measurements
-# must finish) and never a run a label started.
+# Title/body edits keep the base-pinned policy check under its own name and never share a full run's
+# concurrency group. Dispatches also get a unique group. A label event never cancels the active run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title))) && github.run_id || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' && !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title)) }}
 
 permissions:
   contents: read
@@ -34,7 +34,7 @@ permissions:
 jobs:
   select:
     name: 'Select suites for this change'
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
+    if: &run-suites ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) && !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title)) }}
     runs-on: ubuntu-24.04
     outputs:
       pytest: ${{ steps.sel.outputs.pytest }}
@@ -80,7 +80,7 @@ jobs:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
   scrub:
     name: 'Public scrub: no private names or secrets'
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
+    if: *run-suites
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -95,7 +95,7 @@ jobs:
   # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
     name: 'File size limit (400 lines)'
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
+    if: *run-suites
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -108,7 +108,7 @@ jobs:
   # D-4691: added production source must be Rust unless explicitly allowlisted.
   new-code-lang:
     name: 'New code is Rust'
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
+    if: *run-suites
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -122,7 +122,7 @@ jobs:
   # D-653: every change -> CHANGELOG.md + docs (.docs-map)
   changelog-docs:
     name: 'Changelog fragment and docs'
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
+    if: *run-suites
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -723,7 +723,7 @@ jobs:
         run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
 
   ci-gate:
-    name: ci-gate
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title) && 'ci-pr-description' || 'ci-gate' }}
     runs-on: ubuntu-24.04
     needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
     if: ${{ always() && !(github.event_name == 'pull_request' && github.event.pull_request.draft && startsWith(github.head_ref, 'lane/')) }}
@@ -732,8 +732,9 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
+        with: {fetch-depth: 0, persist-credentials: false}
       - name: Gate
+        if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title)) }}
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           EVENT: ${{ github.event_name }}

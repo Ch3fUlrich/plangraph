@@ -118,6 +118,22 @@ done
             .output()
             .unwrap()
     };
+    let check_release = |head: &str, options: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .arg("host-sync")
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .arg("--check-release")
+            .arg(&repo)
+            .arg(head)
+            .args(options)
+            .output()
+            .unwrap()
+    };
+    let head = git(&["rev-parse", "HEAD"]);
+    assert_eq!(check_release(&head, &[]).status.code(), Some(1));
+
     let output = run(&[]);
     assert!(output.status.success(), "{output:?}");
     assert!(bin.join("pg-spawnd").is_file());
@@ -131,12 +147,53 @@ done
     );
     assert!(String::from_utf8_lossy(&run(&[]).stdout).contains("SAME"));
 
+    let checked = check_release(&head, &[]);
+    assert!(checked.status.success(), "{checked:?}");
+    let receipt: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(receipt["status"], "current");
+    assert_eq!(receipt["head"], head);
+    assert_eq!(receipt["rust_tree"], git(&["rev-parse", "HEAD:rust"]));
+    assert_eq!(receipt["binaries"].as_object().unwrap().len(), 5);
+    assert_eq!(receipt["binaries"]["pg-spawnd"].as_str().unwrap().len(), 64);
+
+    let artifact = bin.join("pg-telemetry");
+    fs::write(&artifact, "replacement").unwrap();
+    let mismatch = check_release(&head, &[]);
+    assert_eq!(mismatch.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("pg-telemetry"));
+    let repaired = run(&[]);
+    assert!(repaired.status.success(), "{repaired:?}");
+    assert!(String::from_utf8_lossy(&repaired.stdout).contains("RELEASE INSTALLED"));
+    assert!(check_release(&head, &[]).status.success());
+    assert_eq!(check_release(&base, &[]).status.code(), Some(1));
+
+    // A legacy stamp with the right tree does not attest existing destination bytes.
+    fs::remove_file(stamp.with_extension("json")).unwrap();
+    fs::write(&artifact, "unverified legacy executable").unwrap();
+    assert_eq!(check_release(&head, &[]).status.code(), Some(1));
+    let migrated = run(&[]);
+    assert!(migrated.status.success(), "{migrated:?}");
+    assert!(String::from_utf8_lossy(&migrated.stdout).contains("RELEASE INSTALLED"));
+    assert!(check_release(&head, &[]).status.success());
+
+    let lock = pg_worker_core::lockfile::try_lock(&stamp.with_file_name("release-install.lock"))
+        .unwrap()
+        .unwrap();
+    let busy = check_release(&head, &[]);
+    assert_eq!(busy.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("release install"));
+    drop(lock);
+
     let backup = bin.join("pg-keeper-backup");
     assert!(!backup.exists());
     let output = run(&["--with-keeper-backup"]);
     assert!(output.status.success(), "{output:?}");
     assert!(backup.is_file());
     assert!(String::from_utf8_lossy(&run(&["--with-keeper-backup"]).stdout).contains("SAME"));
+    let checked = check_release(&head, &["--with-keeper-backup"]);
+    assert!(checked.status.success(), "{checked:?}");
+    let receipt: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert!(receipt["binaries"]["pg-keeper-backup"].is_string());
 
     let heads = home.join("heads");
     let part = git(&["rev-parse", "HEAD"]);
@@ -169,6 +226,26 @@ done
         .output()
         .unwrap();
     assert!(check.status.success(), "{check:?}");
+
+    // The timer can advance Git without rebuilding when the Rust tree is unchanged.
+    fs::write(repo.join("README.md"), "Documentation").unwrap();
+    git(&["add", "README.md"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "docs only",
+    ]);
+    let current = git(&["rev-parse", "HEAD"]);
+    let checked = check_release(&current, &[]);
+    assert!(checked.status.success(), "{checked:?}");
+    let receipt: serde_json::Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(receipt["head"], current);
+    assert_eq!(receipt["build_head"], head);
+    assert_eq!(check_release(&head, &[]).status.code(), Some(1));
 }
 
 #[test]

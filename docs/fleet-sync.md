@@ -87,7 +87,10 @@ Windows entries appear in the ps projection. Local entries stay local.
 
 The spawner derives overflow routes from the registry at admission. Set the
 top-level `public_repos` list to repository IDs approved for SSH transport.
-An empty list keeps those repositories local. The generated overflow
+An absent key lists `plangraph` (this public repository); an empty list keeps
+every repository local. A host takes remote work only when its registry entry
+sets `remote_placement: true`; the default is off and the host refuses with
+"remote placement closed". The generated overflow
 projection retains `floor_mb` from the registry for status consumers.
 Regenerate the projections after changing the registry. See
 [post-merge verification](host-tools.md#three-host-writer-and-review-rollout).

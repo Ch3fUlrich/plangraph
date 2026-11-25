@@ -82,6 +82,9 @@ pub fn run_cli(args: &[OsString]) -> i32 {
     if matches!(args.first(), Some(flag) if flag == "--install-release") {
         return release::run(&args[1..]);
     }
+    if matches!(args.first(), Some(flag) if flag == "--check-release") {
+        return release::check(&args[1..]);
+    }
     if matches!(args, [flag] if flag == "--check-protoc") {
         return protoc::run();
     }
@@ -92,7 +95,7 @@ pub fn run_cli(args: &[OsString]) -> i32 {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
-            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --install-release REPO | --install-env FAMILY | --check-protoc | --install-wsl-guard POLICY HOST");
+            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --install-release REPO | --check-release REPO HEAD [--with-keeper-backup] | --install-env FAMILY | --check-protoc | --install-wsl-guard POLICY HOST");
             return 2;
         }
     };

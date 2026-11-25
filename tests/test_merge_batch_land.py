@@ -357,6 +357,24 @@ def go_ready(env, *, seats=True, first_files=None, third=False, second_follow_up
     return json.loads(env.state_file("g1").read_text())
 
 
+def test_push_rejects_description_policy_as_explicit_ci_evidence(env):
+    st = go_ready(env)
+    env.load()["runs"]["43"] = {
+        "databaseId": 43, "headSha": st["head"], "status": "completed", "conclusion": "success",
+        "workflowName": "tests", "event": "pull_request", "displayTitle": "PR metadata check 43", "attempt": 2,
+    }
+    env.state["run_jobs"] = {"43": [{"name": "ci-pr-description", "conclusion": "success"}]}
+    env.save()
+
+    result = env.run("push", "--name", "g1", "--ci-run", "43")
+
+    assert result.returncode == 1
+    assert "CI run 43 is a pull request metadata check" in result.stderr
+    assert json.loads(env.state_file("g1").read_text())["ci"] is None
+    repo = env.state["repo"]
+    assert env.calls("api", f"repos/{repo}/actions/runs/43/attempts/2/jobs?per_page=100&page=1")
+
+
 def test_plain_review_cannot_authorize_go_or_land(env):
     st = go_ready(env, seats=False)
     refused = env.run("go-req", "--name", "g1")

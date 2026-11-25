@@ -2,6 +2,14 @@
 
 `tests.yml` runs on every pull request to `main`, every push to `main`, and manual dispatch.
 
+An edit confined to the title or description runs the base-pinned commit policy as
+`ci-pr-description` in a concurrency group unique to that workflow run. The policy still
+reads the edited title and description for Plan-Item coverage. The required `ci-gate` result
+and any running tests are preserved. An edit that changes the base follows normal CI,
+even when it also updates the title or description. Exact-head CI readers use the
+run's metadata marker and its attempt's job names to exclude metadata checks from
+test proof and rerun accounting. An unconfirmed run cannot supply green CI evidence.
+
 The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, architecture and CLI version; cache misses retain the archive SHA-256 check and retry downloads across a six-minute window.
 
 The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike`. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs `scrub` only.

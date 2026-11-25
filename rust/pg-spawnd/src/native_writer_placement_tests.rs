@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory() as directory:
         hosts.append(dict(id=name, transport='local' if name == 'local' else 'ssh', os='linux',
             placement_fallback=name == 'local', state_dir='/state', roles=['implement', 'review'],
             repos={'plangraph': {'root': checkout if name == 'local' else '/repo/' + name}},
-            caps={'mem_floor_mb': floor}, warmup={'ramp_mb': {'implement': 1024, 'review': 512}}))
+            remote_placement=True, caps={'mem_floor_mb': floor}, warmup={'ramp_mb': {'implement': 1024, 'review': 512}}))
         row = dict(host=name, mem_available_mb=free, live_runs=0, disk_free_gb=20,
                    ok=True, checked_at=datetime.now(timezone.utc).isoformat())
         (ready / (name + '.json')).write_text(json.dumps(row))

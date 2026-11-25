@@ -14,6 +14,7 @@ struct Fixture {
     fail_logs: bool,
     fail_rerun: bool,
     run_pages: usize,
+    metadata_jobs: Option<Vec<Value>>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -26,6 +27,7 @@ impl Fixture {
             fail_logs: false,
             fail_rerun: false,
             run_pages: 0,
+            metadata_jobs: None,
         }
     }
 }
@@ -53,6 +55,14 @@ impl Github for Fixture {
         assert!(endpoint.ends_with("&branch=main") || endpoint.ends_with("&head_sha=abc123"));
         self.run_pages += 1;
         Ok(self.runs.clone())
+    }
+    fn value(&mut self, endpoint: &str) -> Result<Value> {
+        assert_eq!(endpoint, "actions/runs/901/attempts/1/jobs?per_page=100");
+        let jobs = self
+            .metadata_jobs
+            .as_ref()
+            .expect("unexpected metadata job lookup");
+        Ok(json!({"jobs": jobs, "total_count": jobs.len()}))
     }
     fn log(&mut self, job: u64) -> Result<String> {
         assert_eq!(job, 100);
@@ -87,6 +97,61 @@ fn run_history_is_read_one_page_per_query() {
     .unwrap();
     // One open PR head plus main: two single-page requests, never paginated.
     assert_eq!(gh.run_pages, 2);
+}
+#[test]
+fn a_green_metadata_run_never_advances_the_failure_watch_cursor() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    let mut metadata = gh.runs[0].clone();
+    metadata["id"] = json!(901);
+    metadata["display_title"] = json!("PR metadata check 901");
+    metadata["conclusion"] = json!("success");
+    gh.runs.push(metadata);
+    gh.metadata_jobs = Some(vec![
+        json!({"name": "ci-pr-description", "conclusion": "success"}),
+        json!({"name": "Select suites for this change", "conclusion": "skipped"}),
+    ]);
+    let rows = scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(true)
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(tasks(temp.path())[0].run_id, 900);
+    let ledger: Reruns = read(&temp.path().join("reruns.json")).unwrap();
+    assert_eq!(
+        ledger.newest.values().copied().collect::<Vec<_>>(),
+        vec![900]
+    );
+}
+#[test]
+fn unconfirmed_metadata_on_one_pr_allows_the_watch_to_scan_main() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    let mut metadata = gh.runs[0].clone();
+    metadata["id"] = json!(901);
+    metadata["display_title"] = json!("PR metadata check 901");
+    metadata["conclusion"] = json!("success");
+    gh.runs.push(metadata);
+    gh.metadata_jobs = Some(vec![]);
+    gh.runs[0]["event"] = json!("push");
+    gh.runs[0]["head_branch"] = json!("main");
+
+    let rows = scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(true)
+    })
+    .unwrap();
+
+    assert!(rows
+        .iter()
+        .any(|row| row.contains("ci-watch unconfirmed run=901")));
+    let tasks = tasks(temp.path());
+    assert_eq!(tasks.len(), 1);
+    assert_eq!((tasks[0].head.as_str(), tasks[0].run_id), ("main", 900));
+    let ledger: Reruns = read(&temp.path().join("reruns.json")).unwrap();
+    assert_eq!(
+        ledger.newest.values().copied().collect::<Vec<_>>(),
+        vec![900]
+    );
 }
 #[test]
 fn failed_pr_rescan_updates_one_task_and_defines_once() {
