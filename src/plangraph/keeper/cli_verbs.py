@@ -432,7 +432,7 @@ def _sweep_claim_paths(card, state):
         if not isinstance(meta, dict):
             raise ValueError("invalid claim metadata")
         # A run's recorded publish ref or worktree branch binds the claim to its lane.
-        for field in ("branch", "publish_ref"):
+        for field in ("branch", "publish_ref", "pushed"):
             value = meta.get(field)
             if isinstance(value, str) and value:
                 branches.add(value.removeprefix("refs/heads/"))

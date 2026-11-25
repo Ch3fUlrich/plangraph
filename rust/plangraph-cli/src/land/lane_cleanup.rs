@@ -5,8 +5,9 @@
 //! the old work). Stale heads are report-only. Any unresolved protection (claims, open PRs as head
 //! or base, checkout, hold, repository binding) keeps the head.
 use super::lane_guard::load_protection;
+use super::lane_probe;
 use super::lane_proof::{classify, out, preserved_by, stem, Class, Replacement};
-use super::{lane_probe, lane_repo};
+use pg_worker_core::lane_repo;
 use pg_worker_core::{
     lane_delete::{self, run_git, Outcome},
     lockfile,
@@ -36,7 +37,7 @@ struct Cfg {
 
 impl Cfg {
     fn gh_target(&self) -> String {
-        lane_repo::gh_target(&self.gh_host, &self.gh_repo)
+        lane_repo::target(&self.gh_host, &self.gh_repo)
     }
 }
 
@@ -308,8 +309,7 @@ fn sweep(args: &[String]) -> Result<i32, String> {
             continue;
         }
         let file = restore_file(&cfg, &mut made)?;
-        let result =
-            lane_delete::delete(&cfg.repo, &cfg.remote, reference, sha, &file, Some(&target));
+        let result = lane_delete::delete(&cfg.repo, &cfg.remote, reference, sha, &file);
         match result {
             Ok(Outcome::Deleted) => {
                 tally.deleted += 1;

@@ -1,5 +1,6 @@
 //! A bare fixture remote with lane heads, a clone that runs the repository's pre-push hook,
 //! and a fake `gh` that serves canned JSON and logs closes.
+#![allow(dead_code)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -74,7 +75,12 @@ case "$1 $2" in
   "pr view")
     c="$d/count-pr-$3"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"
     if [ "$n" -gt 1 ] && [ -f "$d/pr-$3.then.json" ]; then cat "$d/pr-$3.then.json"; else cat "$d/pr-$3.json"; fi ;;
-  "run view") cat "$d/run-$3.json" ;;
+  "run view")
+    c="$d/count-run-$3"; n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"
+    cat "$d/run-$3.json"
+    if [ "$n" -eq 2 ] && [ -f "$d/on-run-$3.second" ]; then
+      read src dst < "$d/on-run-$3.second"; cp "$d/$src" "$d/$dst"
+    fi ;;
   "pr close") echo "$3" >> "$d/closed.log" ;;
   *) echo "unexpected gh $*" >&2; exit 9 ;;
 esac

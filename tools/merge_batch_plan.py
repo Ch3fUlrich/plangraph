@@ -380,23 +380,29 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         page += 1
 
 
-def lane_cleanup_landed(repo, st, landed):
-    """Run `plangraph lane-cleanup` for exactly the frozen refs and SHAs of the landed parts whose
-    pull request head is a branch of this repository (never a fork's). Exit 3 (a delete was
-    refused) raises, so a strict settlement resumes at its cleanup step; moved and absent refs
-    are done or re-evaluated by the daily run, which also takes older rounds of the lane."""
-    pairs = []
+def same_repo_parts(st, landed):
+    """(ref, head) of the landed parts whose pull request head is a branch of this repository, by the
+    PR's own fields. A fork's part, or one whose identity cannot be read, is left out of every delete."""
+    parts = []
     for rec in landed:
         ref = st["prs"][str(rec["pr"])]["ref"]
-        if not ref.startswith("lane/") or not st.get("repo"):
+        if not st.get("repo"):
             continue
         try:
             view = gh_json("pr", "view", str(rec["pr"]), "--repo", st["repo"],
                            "--json", "isCrossRepository,headRefName")
         except MergeBatchError:
-            continue  # Identity unproven: the ref is left to the daily run.
+            continue
         if view.get("isCrossRepository") is False and view.get("headRefName") == ref:
-            pairs.append((ref, rec["head"]))
+            parts.append((ref, rec["head"]))
+    return parts
+
+
+def lane_cleanup_landed(repo, st, parts):
+    """Run `plangraph lane-cleanup` for exactly the frozen (ref, head) pairs of `same_repo_parts`.
+    Exit 3 (a delete was refused) raises, so a strict settlement resumes at its cleanup step; moved
+    and absent refs are done or re-evaluated by the daily run, which also takes older rounds."""
+    pairs = [(ref, sha) for ref, sha in parts if ref.startswith("lane/")]
     if not pairs:
         return
     state = os.environ.get("PG_LANE_STATE", str(Path.home() / ".local/state/plangraph/lane-cleanup"))
@@ -433,12 +439,12 @@ def cleanup_landed(st, landed, *, strict=False):
             argv.extend(["--root", str(root)])
         for path, branch, sha in targets:
             argv.extend(["--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
-        for rec in landed:
-            branch = st["prs"][str(rec["pr"])]["ref"]
-            argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
+        verified = same_repo_parts(st, landed)  # a fork's ref never reaches a remote delete
+        for branch, head in verified:
+            argv.extend(["--remote-target", f"{branch}:{head}"])
         result = run(argv)
         print(result.stdout, end="", file=sys.stderr)
-        lane_cleanup_landed(repo, st, landed)
+        lane_cleanup_landed(repo, st, verified)
     except MergeBatchError as exc:
         if strict:
             raise

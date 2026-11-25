@@ -17,7 +17,6 @@ pub mod lane_cleanup;
 mod lane_guard;
 mod lane_probe;
 mod lane_proof;
-mod lane_repo;
 pub mod main_gh;
 #[cfg(test)]
 mod main_gh_tests;

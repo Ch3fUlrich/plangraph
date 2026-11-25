@@ -177,7 +177,6 @@ pub fn delete(
     reference: &str,
     sha: &str,
     record_file: &Path,
-    gh_target: Option<&str>,
 ) -> io::Result<Outcome> {
     if !is_lane_ref(reference) || !valid_sha(sha) {
         return Err(io::Error::other("not a lane ref or exact SHA"));
@@ -193,7 +192,11 @@ pub fn delete(
         Some(current) if current != sha => return Ok(Outcome::Moved(current)),
         Some(_) => {}
     }
-    if let Some(why) = open_pr_use(repo, gh_target, reference)? {
+    // Every caller: fetch URLs, push URLs and the PR reads name one verified repository.
+    let target = crate::lane_repo::destination(repo, remote)
+        .map_err(io::Error::other)?
+        .gh_target();
+    if let Some(why) = open_pr_use(repo, Some(&target), reference)? {
         return Err(io::Error::other(format!("protected: {why}")));
     }
     pin(repo, remote, reference, sha)?;
@@ -230,7 +233,18 @@ pub fn delete_or_err(
     sha: &str,
     record_file: &Path,
 ) -> io::Result<()> {
-    match delete(repo, &remote_name(), reference, sha, record_file, None)? {
+    let remote = remote_name();
+    // The sweeps judge containment by origin/main: the push destination must be that repository.
+    if remote != "origin" {
+        let same = crate::lane_repo::destination(repo, "origin").map_err(io::Error::other)?
+            == crate::lane_repo::destination(repo, &remote).map_err(io::Error::other)?;
+        if !same {
+            return Err(io::Error::other(
+                "delete remote is not the repository of origin/main",
+            ));
+        }
+    }
+    match delete(repo, &remote, reference, sha, record_file)? {
         Outcome::Moved(_) => Err(io::Error::other("remote branch moved: lease refused")),
         Outcome::Deleted | Outcome::Absent => Ok(()),
     }

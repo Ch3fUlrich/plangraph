@@ -227,14 +227,108 @@ with TemporaryDirectory() as tmp:
     assert argv[argv.index('--refs') + 1] == 'refs/heads/lane/landed-r3:' + 'c'*40, argv
     assert '--stems' not in argv and '--apply' in argv, argv
     assert argv[argv.index('--gh-repo') + 1] == 'example/repo', argv
-    # A part whose head lives in a fork is never a deletion target.
+    # A part whose head lives in a fork reaches neither the legacy sweeper nor the lane cleanup.
     fork.append(True)
     lane_calls.clear()
-    with patch.object(plan, 'gh_json', side_effect=head_identity), patch.object(plan, 'run', cleanup_run):
-        plan.lane_cleanup_landed('/repo', dict(repo='example/repo', prs={'5': dict(ref='lane/landed-r3')}),
-                                 [dict(pr=5, head='c'*40)])
-    assert lane_calls == [], lane_calls
+    sweeps = []
+    def sweep_run(argv, **kwargs):
+        if argv[0] == 'pg-worktree-sweep':
+            sweeps.append(argv)
+        if argv[:2] == ['plangraph', 'lane-cleanup']:
+            lane_calls.append(argv)
+        return Mock(returncode=0, stdout='', stderr='')
+    forked = dict(repo='example/repo', worktree='', branch='', head='b'*40, prs={'5': dict(ref='lane/landed-r3')})
+    with (patch.object(plan, 'gh_json', side_effect=head_identity), patch.object(plan, 'run', sweep_run),
+          patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')), patch.object(plan, 'worktrees', return_value=[])):
+        plan.cleanup_landed(forked, [dict(pr=5, head='c'*40)], strict=True)
+        fork.clear()
+        plan.cleanup_landed(forked, [dict(pr=5, head='c'*40)], strict=False)
+    assert len(sweeps) == 2 and '--remote-target' not in sweeps[0], sweeps
+    assert sweeps[1][sweeps[1].index('--remote-target') + 1] == 'lane/landed-r3:' + 'c'*40, sweeps[1]
+    assert len(lane_calls) == 1, lane_calls
 "#,
+    );
+}
+
+#[path = "lane_support/mod.rs"]
+mod lane_support;
+
+/// The settlement step against a real hooked fixture remote: the hook refuses a remote that is not
+/// the App's, the step fails, and the retry sends the same frozen ref and SHA and deletes it.
+#[test]
+fn settle_retries_a_real_hook_refusal_with_the_same_frozen_sha() {
+    let f = lane_support::Fixture::new();
+    let sha = f.lane("lane/landed", "main", "m.txt", "m\n");
+    f.main_ff("lane/landed");
+    f.set(
+        "pr-9.json",
+        r#"{"isCrossRepository":false,"headRefName":"lane/landed"}"#,
+    );
+    f.hook_on(false);
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let binary = Path::new(env!("CARGO_BIN_EXE_plangraph"));
+    let step = || {
+        let script = r#"
+import json, os, sys
+import merge_batch_plan as plan
+calls = []
+real = plan.run
+def recording(argv, **kwargs):
+    calls.append(list(argv))
+    return real(argv, **kwargs)
+plan.run = recording
+st = dict(repo='fixture/origin', prs={'9': dict(ref='lane/landed')})
+parts = plan.same_repo_parts(st, [dict(pr=9, head=os.environ['FROZEN'])])
+try:
+    plan.lane_cleanup_landed(os.environ['WORK'], st, parts)
+    outcome = 'done'
+except plan.MergeBatchError as exc:
+    outcome = 'deferred' if 'deferred' in str(exc) else 'other: ' + str(exc)
+print(json.dumps([outcome, calls]))
+"#;
+        let path = format!(
+            "{}:{}:/usr/bin:/bin",
+            f.bin.display(),
+            binary.parent().unwrap().display()
+        );
+        let output = test_python::command()
+            .current_dir(repo.join("tools"))
+            .env("PYTHONPATH", repo.join("src"))
+            .env("PATH", path)
+            .env("FAKE_GH_DIR", &f.gh)
+            .env("FROZEN", &sha)
+            .env("WORK", &f.work)
+            .env("PG_LANE_STATE", &f.state)
+            .env("PG_LANE_GH_HOST", "local")
+            .env(
+                "PG_SWEEP_CLAIMS_READER",
+                format!("cat {}", f.gh.join("claims.json").display()),
+            )
+            .args(["-c", script])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let first = step();
+    assert!(first.starts_with(r#"["deferred""#), "{first}");
+    assert_eq!(f.heads(), ["landed"], "a refused delete leaves the ref");
+    // The operator marks the App's remote; the retry carries the same frozen pair.
+    lane_support::git(
+        &f.work,
+        &["config", "remote.origin.plangraph-lane-delete", "app"],
+    );
+    let second = step();
+    assert!(second.starts_with(r#"["done""#), "{second}");
+    assert!(f.heads().is_empty());
+    let frozen = format!("refs/heads/lane/landed:{sha}");
+    assert!(
+        first.contains(&frozen) && second.contains(&frozen),
+        "{first} {second}"
     );
 }
 

@@ -15,7 +15,7 @@ remote `lane/*` head and every recorded CI probe pull request an end of life. Da
 | stale | older than `--stale-days` (3) and none of the above | report only |
 | live | everything else | keep |
 
-Kept even when eligible: a claim of the keeper claims reader (`branches`, plus the branch of any local
+Kept even when eligible: a claim of the keeper claims reader (`branches`, which include the `branch`, `publish_ref` and `pushed` ref a local run record names, plus the branch of any local
 worktree under a claimed `path`), a local checkout, a ref in `<state>/lane-holds.txt`, an open pull
 request that has the ref as head **or base** (read for that ref right before the push), and any run where
 the claims reader, the PR read or the repository binding is unresolved. When the claims reader reports
@@ -23,9 +23,13 @@ the claims reader, the PR read or the repository binding is unresolved. When the
 class is deleted. The run ends with one `reconcile heads=… eligible=… protected=… deleted=… absent=…
 moved=… refused=… stale_report_only=… remaining=…` line.
 
-Repository binding: the fetch URL and the effective push URL (`pushurl` and `insteadOf` applied) of
-`--remote` must both reduce to `--gh-host`/`--gh-repo` (default host `github.com`; `--gh-host local` is
-for offline fixtures), and pull request reads use `gh --repo HOST/OWNER/NAME`.
+Repository binding (`rust/worker-core/src/lane_repo.rs`, used by the delete door itself, so the verb
+and `pg-worktree-sweep --delete-remote` share it): every fetch URL and every push URL of the remote
+(`pushurl` and `insteadOf` applied; a named push can reach several) must reduce to one host and
+`OWNER/NAME`; the open-PR reads use `gh --repo HOST/OWNER/NAME` of that identity; the verb also
+compares it with `--gh-host`/`--gh-repo` (default host `github.com`; `--gh-host local` is for offline
+fixtures); the sweeper additionally requires the delete remote to be the repository of `origin`, whose
+`main` it judges containment by.
 
 ## Replacement and probe records (producers)
 
@@ -34,7 +38,7 @@ for offline fixtures), and pull request reads use `gh --repo HOST/OWNER/NAME`.
   then appends `<state>/lane-replacements.jsonl`. A higher `-rN` alone never deletes.
 - `plangraph lane-cleanup record-probe --gh-repo R --pr N --head SHA --run-id ID` appends
   `<state>/probe-prs.jsonl`; `close-probes` closes a PR only when its record exists, the PR is open at the
-  recorded head and the run (same head) is `completed`, read twice, the second time right before the close.
+  recorded head and the run (same head) is `completed`; the run is read first and the PR head last, twice, the second time right before the close.
   Ordinary drafts have no record. No code of this repository creates probe PRs, so the caller of
   `record-probe` is whatever creates them; follow-up slice: wire both record producers.
 
@@ -64,5 +68,4 @@ Each delete first pins the commit as `refs/plangraph/restore/<sha>` and syncs a 
 `<state>/sweep/<ts>.tsv` (repo, `-`, ref, sha). Restore: `git push <remote> refs/plangraph/restore/<sha>:refs/heads/lane/<name>`.
 The push uses `--force-with-lease=<ref>:<sha>`. Outcomes: deleted and absent are done; moved
 (the remote advanced) is kept and re-evaluated on the next run; refused (hook, ruleset, network) exits 3,
-so a strict settlement step fails and resumes, and the daily timer retries. Settlement passes only the
-frozen included refs and SHAs of parts whose pull request head is a branch of this repository.
+so a strict settlement step fails and resumes, and the daily timer retries. Settlement checks each part's pull request first (`isCrossRepository` false and `headRefName` equal to the frozen ref, `tools/merge_batch_plan.py::same_repo_parts`) and only then lets the legacy sweeper's `--remote-target` and this verb see the exact frozen ref and SHA; a fork's ref reaches neither.

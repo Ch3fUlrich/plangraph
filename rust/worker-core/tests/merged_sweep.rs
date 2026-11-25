@@ -323,10 +323,10 @@ fn lane_delete_refuses_a_ref_that_is_the_base_of_an_open_pull() {
     ));
     std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
     let reference = "refs/heads/lane/parent";
-    let blocked = delete(&work, "origin", reference, &sha, &record, None);
+    let blocked = delete(&work, "origin", reference, &sha, &record);
     let still = git(&bare, &["rev-parse", reference]);
     fs::write(gh.with_extension("base"), "[]").unwrap();
-    let freed = delete(&work, "origin", reference, &sha, &record, None);
+    let freed = delete(&work, "origin", reference, &sha, &record);
     match original {
         Some(value) => std::env::set_var("PATH", value),
         None => std::env::remove_var("PATH"),
