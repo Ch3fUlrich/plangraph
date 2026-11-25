@@ -335,7 +335,7 @@ def configured_hosts():
     return validated
 
 
-# A host has at most one transport at a time: a caller that finds one in flight shares its result
+# A query (host entry) has at most one transport at a time: a caller that finds one in flight shares its result
 # instead of starting another, and at most MAX_WORKERS transports are in flight across every
 # caller. A transport whose caller gave up is "stuck": it keeps running (a thread cannot be
 # cancelled) but frees its slot, so it cannot starve other hosts; its host is not queried again
@@ -345,21 +345,21 @@ _SLOTS = threading.Condition()
 _state = dict(in_flight=0, flights={}, stuck={})
 
 
-def _join_or_claim(name, budget):
+def _join_or_claim(key, budget):
     """Under the lock: the flight to share, or a new one that holds a slot; None when refused."""
     deadline = time.monotonic() + budget + GRACE
     with _SLOTS:
         while True:
             stuck = _state['stuck']
-            for key in [key for key, thread in stuck.items() if not thread.is_alive()]:
-                del stuck[key]
-            if name in stuck:
+            for old in [old for old, thread in stuck.items() if not thread.is_alive()]:
+                del stuck[old]
+            if key in stuck:
                 return None
-            if name in _state['flights']:
-                return _state['flights'][name], False
+            if key in _state['flights']:
+                return _state['flights'][key], False
             if _state['in_flight'] < MAX_WORKERS:
                 flight = dict(outcome=[], done=threading.Event(), thread=None)
-                _state['flights'][name] = flight
+                _state['flights'][key] = flight
                 _state['in_flight'] += 1
                 return flight, True
             remaining = deadline - time.monotonic()
@@ -375,7 +375,10 @@ def _bounded(host, transport):
     """
     budget = host_timeout(host)
     name = str(host.get('name'))
-    claimed = _join_or_claim(name, budget)
+    # Results are shared only between identical queries (target, paths, state directory, cursor),
+    # never by display label.
+    key = json.dumps(host, sort_keys=True, default=str)
+    claimed = _join_or_claim(key, budget)
     if claimed is None:
         raise TimeoutError('host query failed')
     flight, owner = claimed
@@ -389,8 +392,8 @@ def _bounded(host, transport):
             finally:
                 flight['done'].set()
                 with _SLOTS:
-                    if _state['stuck'].get(name) is threading.current_thread():
-                        del _state['stuck'][name]
+                    if _state['stuck'].get(key) is threading.current_thread():
+                        del _state['stuck'][key]
                     _SLOTS.notify_all()
 
         thread = threading.Thread(target=run, daemon=True, name='ps-transport-' + name)
@@ -400,9 +403,9 @@ def _bounded(host, transport):
         finally:
             with _SLOTS:
                 _state['in_flight'] -= 1
-                _state['flights'].pop(name, None)
+                _state['flights'].pop(key, None)
                 if thread.is_alive():
-                    _state['stuck'][name] = thread
+                    _state['stuck'][key] = thread
                     flight['done'].set()  # callers sharing this flight stop waiting with no result
                 _SLOTS.notify_all()
     else:

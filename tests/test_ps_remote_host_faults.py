@@ -508,3 +508,40 @@ def test_two_overlapping_polls_share_one_transport_and_its_result(config):
     first.join(30)
     second.join(30)
     assert [[r['status'] for r in rows] for rows in results] == [['running']] * 2 and len(calls) == 1
+
+
+def test_same_label_with_different_targets_are_queried_separately(config):
+    write(config, [dict(name='label', target='first', src='/s/src'),
+                   dict(name='label', target='second', src='/s/src')])
+    asked = []
+
+    def transport(host, timeout):
+        asked.append(host['target'])
+        time.sleep(0.1)
+        return json.dumps({'runs': [dict(run_id='run-' + host['target'], host='x', status='running')]})
+    rows = remote_ps.list_runs([], transport=transport)
+    assert sorted(asked) == ['first', 'second']
+    assert sorted(r['run_id'] for r in rows) == ['run-first', 'run-second']
+
+
+def test_a_poll_after_a_state_dir_change_does_not_get_the_old_result(config):
+    asked = []
+
+    def transport(host, timeout):
+        asked.append(host.get('state_dir'))
+        time.sleep(0.4)
+        return json.dumps({'runs': [dict(run_id='in-' + host['state_dir'][1:], host='x', status='running')]})
+
+    def poll(state):
+        write(config, [dict(name='h', target='h', src='/s/src', state_dir=state)])
+        results.append(remote_ps.list_runs([], transport=transport))
+    results = []
+    first = threading.Thread(target=poll, args=('/old',))
+    first.start()
+    time.sleep(0.15)
+    second = threading.Thread(target=poll, args=('/new',))
+    second.start()
+    first.join(30)
+    second.join(30)
+    assert sorted(asked) == ['/new', '/old']
+    assert sorted(r['run_id'] for rows in results for r in rows) == ['in-new', 'in-old']
