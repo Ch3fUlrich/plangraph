@@ -3,6 +3,38 @@
 Use `systemctl --user` for the user units below. The WSL cache guard uses
 a root system service and timer.
 
+## 0. The deploy manifest
+
+`deploy/manifest.toml` is the one table of what runs where. Every Git-tracked unit file under `deploy/` (any depth;
+service, timer, socket, target, mount, path and the other systemd unit types, and their `*.in` templates) and every
+binary target Cargo lists for the `rust/` workspace is named there. Coverage names a unit file by its path under
+`deploy/` (`systemd/foo.service`, `pganchor/pganchor.socket`, `foo.service` for `deploy/foo.service`), so the same
+file name in two directories needs two entries (`dir = "<subdir>"` outside `deploy/systemd`, `dir = "."` for
+`deploy/` itself).
+
+- A unit family lists its files, scope, host roles (`keeper`, `worker`, `wsl`, `all`), the env file names it reads
+  (never values; `%i` for the instance of a template; a file outside the config directories as its absolute or `%h` path, spaces allowed: systemd reads the rest of the line as the path and does not unquote it) and its first-run check. A family whose files are templates
+  (`*.in`, or `@ROOT@` placeholders) names its `[unit.installer]`: the tracked script (`via`), the command it runs (`step`), the unit names it writes
+  (`renders`) and the installed timer or service it enables (`enable`); the family's `files` are sources, `enable`
+  and `renders` are the installed names.
+- A binary lists its package, bin, host roles and, in `install_paths`, every path a consumer runs it from, each with
+  its roles; no list means only `~/.local/bin/<bin>`, and a binary run from two places lists both.
+- A host lists its roles in `PG_HOST_ROLES` or in `~/.config/plangraph/host-roles`; the manifest holds no host names.
+- `not_deployed = "<reason>"` is the only way to leave a unit or binary out.
+
+Two commands check it, and both are needed because the first filter matches test names only:
+
+```sh
+cargo test --offline --locked --manifest-path rust/Cargo.toml -p plangraph-cli deploy_manifest
+cargo test --offline --locked --manifest-path rust/Cargo.toml -p plangraph-cli --test deploy_manifest
+```
+
+They fail for a unit file or binary target the manifest does not name, for an entry whose file is not tracked, for a
+program a unit runs (`Exec*`, any directory) from a path its binary entry does not declare for the unit's roles, for an
+`EnvironmentFile` its entry omits, and for a template or `@NAME@` placeholder unit without an installer or with an
+installer script Git does not track. Nothing in them reads systemd. The
+tables below describe the units; the manifest decides where they are installed.
+
 ## 1. Files
 
 | File | Role | Host |
