@@ -130,6 +130,7 @@ RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tupl
     )
 )
 _DOC_EXTENSIONS = {"md", "rst", "txt", "adoc"}
+_GATE_TEXT_FILE = "tools/ci_commit_exempt.txt"
 _UNIT_EXTENSIONS = {"service", "socket", "timer", "target", "mount", "automount",
                     "path", "slice", "scope", "swap"}
 
@@ -166,8 +167,9 @@ def _path_rules(path: str, *, include_non_code: bool = False) -> list[tuple[str,
     )
     matches.extend(("high", tags) for matched, tags in structural_rules if matched)
     # The table skips docs, tests and Rust test modules by place, not the shared non_code flag, so
-    # tools/ci_commit_exempt.txt is placed and a *_policy_tests.rs file keeps its token match.
-    table_skip = (extension in {"md", "rst", "adoc"}
+    # a *_policy_tests.rs file keeps its token match. The gate's exempt list is the one text file
+    # that is a gate file, not documentation.
+    table_skip = (extension in _DOC_EXTENSIONS and norm != _GATE_TEXT_FILE
                   or bool(set(segments[:-1]) & {"docs", "doc", "tests", "test"})
                   or stem.startswith("test_") or stem.endswith(("_test", "_tests")))
     if include_non_code or not table_skip:

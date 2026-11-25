@@ -3,6 +3,8 @@
 Portable like test_planner_service: ``World`` follows ``PG_KEEPER_BACKEND``,
 repo trees live under ``tmp_path`` and nothing is executed for real.
 """
+import os
+
 import pytest
 
 from door_util import Doors
@@ -11,7 +13,7 @@ from plangraph.governor import policy
 from plangraph.keeper.api import KeeperHandler
 from plangraph.keeper import api_routes
 from plangraph.keeper.errors import Refused
-from plangraph.planner import phase, shadow
+from plangraph.planner import phase, readiness, shadow
 from plangraph.settings import enforce_review_scope
 from plangraph.planner.legs import DEFAULT_LEGS
 
@@ -66,6 +68,30 @@ def test_plan_phase_scopes_resolve_against_the_repo_for_rule_33(w, repo):
     w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/a.py"]))
     plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
     assert [c["route"]["review_seats"] for c in plan["cards"]] == [2, 1]  # src holds keeper/; src/a.py is one plain file
+
+
+@pytest.mark.parametrize("scope", ["src/plangraph/review/gatewa?.py", "src/plangraph/review/./gatewa?.py",
+                                   "./src/plangraph/review/gatewa?.py", "src/./plangraph/review"])
+def test_plan_phase_one_rule_33_answer_for_every_scope_spelling(w, repo, scope):
+    # The glob names no gateway file as written: only the files it resolves to place it.
+    (repo / "src" / "plangraph" / "review").mkdir(parents=True)
+    (repo / "src" / "plangraph" / "review" / "gateway.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["cards"][0]["route"]["review_seats"] == 2
+
+
+def test_plan_phase_does_not_walk_a_parent_relative_scope(w, repo, monkeypatch):
+    (repo.parent / "outside").mkdir()
+    walked = []
+    real_walk = os.walk
+    monkeypatch.setattr(readiness.os, "walk", lambda top, *a, **k: (walked.append(str(top)), real_walk(top, *a, **k))[1])
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["../outside/*.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert walked == []
+    assert any(f["code"] == "bad_path" for f in plan["cards"][0]["findings"])
 
 
 PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",

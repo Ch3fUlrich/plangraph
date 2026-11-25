@@ -82,12 +82,8 @@ class Verdict:
 # ---------------------------------------------------------------- path overlap
 
 def _norm(path: str) -> str:
-    p = str(path).strip().replace("\\", "/")
-    while p.startswith("./"):
-        p = p[2:]
-    p = re.sub(r"/{2,}", "/", p)
-    p = p.rstrip("/")
-    return "" if p == "." else p
+    """The planner's canonical spelling (card_paths.normalise_path): ``a/./b`` is ``a/b``."""
+    return (normalise_path(str(path)) or "").rstrip("/")
 
 
 def _is_glob(path: str) -> bool:
@@ -183,11 +179,17 @@ def scope_files(repo_root: Path | str, write_set: Sequence[str]) -> list[str]:
     A scope that names one file as written is left out: the card's own paths already carry it.
     """
     root, found = Path(repo_root), set()
+    real_root = root.resolve()
     for scope in write_set:
         norm = _norm(scope)
-        if norm and not _is_glob(norm) and _looks_like_file(scope):
+        # A scope the card check rejects (absolute, drive, parent step) is never walked.
+        if path_problem("write_set", str(scope), normalise_path(str(scope))) is not None:
+            continue
+        if norm and not _is_glob(norm) and _looks_like_file(norm):
             continue
         start = root.joinpath(*_literal_prefix(norm))
+        if not start.resolve().is_relative_to(real_root):  # a symlink leading out of the repo
+            continue
         for here, dirs, names in os.walk(start):
             dirs[:] = [d for d in dirs if d not in _SCOPE_SKIP_DIRS]
             for name in names:

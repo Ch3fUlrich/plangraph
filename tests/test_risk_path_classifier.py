@@ -145,6 +145,13 @@ def test_rule_33_table_leaves_docs_tests_and_unplaced_paths_low(path):
     assert evaluate_risk([path], bucket="S0", has_tests=True).risk == "low"
 
 
+def test_rule_33_table_keeps_the_doc_exclusion_but_for_the_gate_exempt_file():
+    for path in ("src/plangraph/keeper/notes.txt", "deployment/notes.txt", "tools/check_notes.rst"):
+        assert evaluate_risk([path], bucket="S0").risk == "low", path
+    assert evaluate_risk(["tools/ci_commit_exempt.txt"], bucket="S0").risk == "high"
+    assert evaluate_risk(["./tools/ci_commit_exempt.txt"], bucket="S0").risk == "high"
+
+
 @pytest.mark.parametrize("path", [
     "rust/plangraph-cli/src/land/go_verify_tests.rs",
     "rust/plangraph-cli/src/land/registrar_tests.rs",

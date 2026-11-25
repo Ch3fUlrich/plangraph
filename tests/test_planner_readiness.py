@@ -43,6 +43,42 @@ def test_constants():
                              "bad_path"}
 
 
+# ---------------------------------------------------------------- scope_files
+
+def _scope_tree(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tools").mkdir(parents=True)
+    (repo / "tools" / "a.py").write_text("A = 1\n", encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "b.py").write_text("B = 1\n", encoding="utf-8")
+    (tmp_path / "outside" / "tools").mkdir(parents=True)
+    (tmp_path / "outside" / "tools" / "o.py").write_text("O = 1\n", encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize("scope", ["tools/*.py", "./tools/*.py", "tools/./*.py", "tools//*.py",
+                                   r"tools\*.py", "tools/./a.p?", "tools"])
+def test_scope_files_one_answer_for_every_spelling(tmp_path, scope):
+    assert rd.scope_files(_scope_tree(tmp_path), [scope]) == ["tools/a.py"]
+
+
+@pytest.mark.parametrize("scope", ["../outside/tools/*.py", "../outside/tools", "tools/../../outside/tools",
+                                   "/abs/tools", "C:/tools", "*/../../outside/tools/*.py"])
+def test_scope_files_never_walks_outside_the_repo(tmp_path, monkeypatch, scope):
+    repo = _scope_tree(tmp_path)
+    walked = []
+    real_walk = os.walk
+    monkeypatch.setattr(rd.os, "walk", lambda top, *a, **k: (walked.append(str(top)), real_walk(top, *a, **k))[1])
+    assert rd.scope_files(repo, [scope]) == []
+    assert all(os.path.realpath(w).startswith(str(repo.resolve())) for w in walked), walked
+
+
+def test_scope_files_does_not_follow_a_symlink_out_of_the_repo(tmp_path):
+    repo = _scope_tree(tmp_path)
+    (repo / "link").symlink_to(tmp_path / "outside")
+    assert rd.scope_files(repo, ["link", "link/*.py"]) == []
+
+
 # ---------------------------------------------------------------- paths_overlap
 
 OVERLAP = [
