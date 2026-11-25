@@ -190,7 +190,8 @@ def ssh(argv, *, input, **kwargs):
     assert f'pg-spawnd resume-local {run_id} --state' in argv[-1], argv
     begin, end = re.findall(r'PLANGRAPH_RECEIPT_[a-f0-9]+_(?:BEGIN|END)', argv[-1])
     seen.append(argv[-1])
-    receipt = json.dumps(dict(run_id=run_id, ok=True, resumed=True, queued=True))
+    request_id = re.search(r'--request-id ([0-9a-f]{32})', argv[-1]).group(1)
+    receipt = json.dumps(dict(run_id=run_id, ok=True, resumed=True, queued=True, request_id=request_id))
     return SimpleNamespace(stdout=f'{begin}\n{receipt}\n{end}\n'.encode())
 
 with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
@@ -248,7 +249,9 @@ target = [dict(base, status='completed', ended=10.0, final_head='old-head', resu
 def ssh(argv, *, input=None, **kwargs):
     begin, end = re.findall(r'PLANGRAPH_RECEIPT_[a-f0-9]+_(?:BEGIN|END)', argv[-1])
     if 'resume-local' in argv[-1]:
-        body = dict(run_id=run_id, ok=True, resumed=True, queued=True, resume_number=1)
+        request_id = re.search(r'--request-id ([0-9a-f]{32})', argv[-1]).group(1)
+        body = dict(run_id=run_id, ok=True, resumed=True, queued=True, resume_number=1,
+                    request_id=request_id)
         return SimpleNamespace(stdout=f'{begin}\n{json.dumps(body)}\n{end}\n'.encode())
     # `result` reads the target's text output.
     return SimpleNamespace(stdout=f'{begin}\n{json.dumps(target[0])}\n{end}\n')
@@ -310,26 +313,84 @@ origin = dict(base, status='completed', ended=10.0, started=1.0, overflow_remote
 host = dict(repo=str(state), ssh='fixture', spawner_src=str(state), state_dir=str(state))
 routes = {'hosts': {'posix': host}}
 reopened = dict(base, status='running', started=15.0, resume_number=1)
-timeouts = []
+timeouts, sent = [], []
 def ssh(argv, *, timeout, **kwargs):
     timeouts.append(timeout)
     begin, end = re.findall(r'PLANGRAPH_RECEIPT_[a-f0-9]+_(?:BEGIN|END)', argv[-1])
     if 'resume-local' in argv[-1]:
+        sent.append(re.search(r'--request-id ([0-9a-f]{32})', argv[-1]).group(1))
         raise subprocess.TimeoutExpired(argv, timeout)
-    return SimpleNamespace(stdout=f'{begin}\n{json.dumps(reopened)}\n{end}\n')
+    # The target reopened the run for the request that was sent, or for another one.
+    return SimpleNamespace(stdout=f'{begin}\n{json.dumps(dict(reopened, resume_request_id=answer[0] or sent[-1]))}\n{end}\n')
 service = SpawnService(state=state)
+answer = ['other-request']
 with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
      patch('plangraph.spawner.overflow.placement_config', return_value=routes), \
      patch.object(remote_ps.subprocess, 'run', side_effect=ssh):
+    # A newer round that carries another request's id never confirms this prompt.
+    out = io.StringIO()
+    with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
+        cli.main(['--state', str(state), 'resume', run_id, '--host', 'posix'])
+    reply = json.loads(out.getvalue())
+    assert reply['ok'] is False and 'resume_requested' not in service.result(run_id), reply
+    answer[0] = None
     out = io.StringIO()
     with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
         cli.main(['--state', str(state), 'resume', run_id, '--host', 'posix'])
     reply = json.loads(out.getvalue())
     assert reply['ok'] and reply['resume_number'] == 1 and reply['reconciled'], reply
+    assert reply['request_id'] == sent[-1] and sent[0] != sent[1], (reply, sent)
     # The resume waits longer than the owner's reopen wait (30 s); `result` keeps the short bound.
     assert timeouts[0] == remote_ps.RESUME_TIMEOUT > 30 and timeouts[1] == 10, timeouts
+    assert len(timeouts) == 4, timeouts
     saved = service.result(run_id)
     assert saved['status'] == 'running' and saved['resume_requested'] == 1, saved
+"#,
+        )
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The local owner path waits as long as the ssh path for a slow reopen.
+#[test]
+fn local_resume_waits_for_a_slow_reopen() {
+    let state = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let output = test_python::command()
+        .env("PYTHONPATH", source)
+        .arg("-c")
+        .arg(
+            r#"
+import contextlib, io, json, pathlib, re, subprocess, sys
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.spawner import cli, remote_ps
+
+state = pathlib.Path(sys.argv[1])
+run_id = 'run-fixture3'
+(state / 'runs' / run_id).mkdir(parents=True)
+(state / 'runs' / run_id / 'record.json').write_text(json.dumps(dict(
+    run_id=run_id, run_kind='native-codex', role='implement', host='local',
+    status='completed', ended=1.0, started=0.5)))
+waits = []
+def run(argv, *, timeout, **kwargs):
+    # The owner takes 25 s to reopen: a shorter bound would lose the acknowledgement.
+    waits.append(timeout)
+    if timeout < 25:
+        raise subprocess.TimeoutExpired(argv, timeout)
+    return SimpleNamespace(returncode=0, stdout=json.dumps(dict(run_id=run_id, ok=True, resumed=True)).encode())
+with patch('plangraph.fleet_snapshot._projection_binary', return_value='pg-spawnd'), \
+     patch.object(remote_ps.subprocess, 'run', side_effect=run):
+    out = io.StringIO()
+    with patch('sys.stdin', io.StringIO('fix round')), contextlib.redirect_stdout(out):
+        cli.main(['--state', str(state), 'resume', run_id])
+    assert json.loads(out.getvalue())['resumed'] is True and waits == [remote_ps.RESUME_TIMEOUT], waits
 "#,
         )
         .arg(state.path())

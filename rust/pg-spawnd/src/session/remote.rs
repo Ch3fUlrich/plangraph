@@ -29,14 +29,11 @@ a=p["argv"]
 env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")
 import shutil
 exe=shutil.which("pg-spawnd")
-if exe:
- launcher=[exe,"session"]
- env.setdefault("PLANGRAPH_FLEET_OPS",str(root/"ops"))
-elif "--respawn" in a:
- print("fleet-launch: refused host "+p["host"]+": pg-spawnd is not installed there; a respawn cannot resume its saved session",file=sys.stderr)
+if not exe:
+ print("fleet-launch: refused host "+p["host"]+": pg-spawnd is not installed there; no launch",file=sys.stderr)
  sys.exit(2)
-else:
- launcher=[str(root/"bin/fleet-launch")]
+launcher=[exe,"session"]
+env.setdefault("PLANGRAPH_FLEET_OPS",str(root/"ops"))
 role=a[0].rsplit("-",1)
 role=role[0] if len(role)==2 and role[1].isdigit() and len(role[1])>=4 else a[0]
 saved=state/"sessions"/((a[a.index("--session")+1] if "--session" in a else a[0])+".json")

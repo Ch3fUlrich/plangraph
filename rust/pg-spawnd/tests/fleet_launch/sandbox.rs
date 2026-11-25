@@ -158,6 +158,16 @@ impl Sandbox {
         fixture
     }
 
+    /// The target's routing state root: nondefault for the Rust receiver, which honours
+    /// `ROUTING_STATE_DIR`; the pinned Python receiver always uses the home default.
+    pub fn target_state(&self) -> &'static str {
+        if self.rust {
+            "target/routing-state"
+        } else {
+            "target/.local/state/routing"
+        }
+    }
+
     pub fn path(&self, path: &str) -> PathBuf {
         self.dir.path().join(path)
     }

@@ -201,7 +201,12 @@ fn read_prompt(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
+fn reopen(
+    state: &Path,
+    id: &str,
+    prompt_path: &Path,
+    request_id: Option<&str>,
+) -> Result<Value, String> {
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
     let path = directory.join("record.json");
     let _owner = crate::writer_control::supervisor_guard(&path)?;
@@ -253,6 +258,13 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
         .unwrap_or(0)
         .checked_add(1)
         .ok_or("resume number overflow")?);
+    // The round's request id lets the requesting host confirm that exactly its prompt started it.
+    match request_id {
+        Some(request_id) => record["resume_request_id"] = json!(request_id),
+        None => {
+            record.as_object_mut().unwrap().remove("resume_request_id");
+        }
+    }
     record["status"] = json!("running");
     record["started"] = json!(chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
     record["review_rounds"] = json!(0);
@@ -265,7 +277,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
 }
 
 pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), String> {
-    let usage = "usage: pg-spawnd resume RUN_ID --prompt-file PATH [--state PATH] [--host NAME]";
+    let usage = "usage: pg-spawnd resume RUN_ID --prompt-file PATH [--state PATH] [--host NAME] [--request-id ID]";
     let mut args = args.iter().map(String::as_str);
     let id = args.next().ok_or(usage)?;
     if id == "--help" || id == "-h" {
@@ -274,8 +286,14 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     let mut prompt_path = None;
     let mut state = None;
     let mut host = None;
+    let mut request_id = None;
     while let Some(flag) = args.next() {
         match flag {
+            "--request-id" if request_id.is_none() => {
+                let id = args.next().ok_or(usage)?;
+                request_id =
+                    Some(crate::native_writer_remote_resume::valid_request_id(id).ok_or(usage)?);
+            }
             "--host" if host.is_none() => host = Some(args.next().ok_or(usage)?),
             "--prompt-file" if prompt_path.is_none() => {
                 prompt_path = Some(args.next().ok_or(usage)?)
@@ -300,7 +318,7 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     if !directory.join("record.json").exists() {
         return Err("unknown run id".into());
     }
-    let record = reopen(&state, id, prompt)?;
+    let record = reopen(&state, id, prompt, request_id)?;
     writeln!(output, "{record}").map_err(|e| e.to_string())?;
     if record["status"] != "completed" {
         return Err(record["reason"]

@@ -348,16 +348,22 @@ fn check_destination(launcher: &Launcher) {
     assert_eq!(record["seq"], 1);
     assert_eq!(
         record["prompt_file"],
-        "$ROOT/target/.local/state/routing/launch/writer.remote-prompt.md"
+        format!("$ROOT/{}/launch/writer.remote-prompt.md", s.target_state())
     );
     assert_eq!(
-        fs::read_to_string(s.path("target/.local/state/routing/launch/writer.remote-prompt.md"))
-            .unwrap(),
+        fs::read_to_string(s.path(&format!(
+            "{}/launch/writer.remote-prompt.md",
+            s.target_state()
+        )))
+        .unwrap(),
         PROMPT
     );
     assert_eq!(
-        fs::read_to_string(s.path("target/.local/state/routing/launch/writer.remote-mcp.json"))
-            .unwrap(),
+        fs::read_to_string(s.path(&format!(
+            "{}/launch/writer.remote-mcp.json",
+            s.target_state()
+        )))
+        .unwrap(),
         "{}\n"
     );
     assert_eq!(s.json("child.json")["forwarded"], Value::Null);
@@ -367,7 +373,7 @@ fn check_destination(launcher: &Launcher) {
         .unwrap()
         .push(json!("--respawn"));
     // The target keeps no record of this role yet and the origin sent none: refused.
-    let launch_dir = s.path("target/.local/state/routing/launch");
+    let launch_dir = s.path(&format!("{}/launch", s.target_state()));
     fs::remove_file(launch_dir.join("writer.json")).unwrap();
     fs::remove_dir_all(launch_dir.join("sessions")).unwrap();
     let output = deliver(&s, encoded, &payload);
@@ -385,7 +391,7 @@ fn check_destination(launcher: &Launcher) {
 /// The saved session exists only on the target: the forwarded dry run and the live respawn both
 /// run the target's launcher with the forwarded prompt and read the target's own record.
 fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
-    let launch_dir = s.path("target/.local/state/routing/launch");
+    let launch_dir = s.path(&format!("{}/launch", s.target_state()));
     fs::create_dir_all(launch_dir.join("sessions")).unwrap();
     fs::write(
         launch_dir.join("sessions/writer-0776.json"),
@@ -439,6 +445,19 @@ fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
     let record: Value = serde_json::from_str(record).unwrap();
     assert_eq!(record["session_name"], "writer-0776");
     assert_eq!(record["session_id"], SID);
+    // The receipt is the target's own role record under its configured state root, and the
+    // forwarded prompt (not the origin-only path) reached the launcher.
+    assert_eq!(record["host"], REMOTE);
+    assert_eq!(
+        fs::read_to_string(launch_dir.join("writer-0776.remote-prompt.md")).unwrap(),
+        PROMPT
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(launch_dir.join("writer.json")).unwrap())
+            .unwrap()["session_name"],
+        "writer-0776"
+    );
+    assert!(!s.path("target/.local/state/routing/launch").exists());
     let child = s.json("child.json");
     let argv: Vec<&str> = child["argv"]
         .as_array()
@@ -451,6 +470,31 @@ fn check_target_only_respawn(s: &Sandbox, encoded: &str, payload: &Value) {
         .position(|a| *a == "--resume")
         .expect("--resume");
     assert_eq!(argv[at + 1], SID);
+
+    // The installed legacy entry point is not used: removing it changes nothing.
+    let router = super::sandbox::receiver_router(
+        &String::from_utf8(STANDARD.decode(encoded).unwrap()).unwrap(),
+    )
+    .unwrap();
+    fs::remove_file(s.path("target").join(router).join("bin/fleet-launch")).unwrap();
+    let output = deliver(s, encoded, &dry);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        s.normalize(&output.stderr)
+    );
+
+    // A target without `pg-spawnd` refuses every launch, fresh or respawn, and never falls back
+    // to a launcher that would start a fresh session.
+    let bare = format!("{}:/usr/bin:/bin", s.path("no-pg-spawnd").display());
+    for request in [&payload, &live] {
+        let output = deliver_with(s, encoded, request, &[("PATH", bare.clone())]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(s
+            .normalize(&output.stderr)
+            .contains("pg-spawnd is not installed there"));
+    }
 }
 
 fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
@@ -461,7 +505,8 @@ fn deliver_with(s: &Sandbox, encoded: &str, payload: &Value, env: &[(&str, Strin
     let mut command = s.python_command();
     command
         .env("HOME", s.path("target"))
-        .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
+        // A nondefault state root: a receiver that looks only under the home default misses it.
+        .env("ROUTING_STATE_DIR", s.path(s.target_state()))
         .envs(env.iter().map(|(k, v)| (*k, v.as_str())));
     let mut child = command
         .args([

@@ -365,9 +365,9 @@ async def check():
     # A fix round routed to the owning host (`resume-local`, prompt on stdin) resumes the same
     # session detached, and its commit lands on the same checkout.
     routed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume-local', run['run_id'],
-        '--state', str(root/'state')], input='brief marker external fix routed', capture_output=True, text=True)
+        '--state', str(root/'state'), '--request-id', 'ab' * 16], input='brief marker external fix routed', capture_output=True, text=True)
     routed_receipt = json.loads(routed.stdout)
-    assert routed_receipt['resumed'] is True and routed_receipt['resume_number'] == 2, (routed.stdout, routed.stderr)
+    assert routed_receipt['resumed'] is True and routed_receipt['resume_number'] == 2 and routed_receipt['request_id'] == 'ab' * 16, (routed.stdout, routed.stderr)
     for _ in range(600):
         again = service.result(run['run_id'])
         if again.get('resume_number') == 2 and again['status'] in ('completed', 'failed'):
@@ -375,6 +375,7 @@ async def check():
         await asyncio.sleep(0.1)
     assert again['status'] == 'completed' and again['final_head'] != fixed['final_head'], again
     assert again['session_id'] == fixed['session_id'] and again['cwd'] == fixed['cwd'], again
+    assert again['resume_request_id'] == 'ab' * 16 and 'resume_request_id' not in fixed, again
     assert again['resume_from']['head'] == fixed['final_head'], again
     assert subprocess.check_output(['git','-C',again['cwd'],'rev-parse','HEAD'], text=True).strip() == again['final_head']
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)

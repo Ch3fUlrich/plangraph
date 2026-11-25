@@ -11,6 +11,12 @@ use std::{
 
 const MAX_PROMPT: u64 = 1024 * 1024;
 
+/// A request id as the requesting host generates it: 8 to 64 hex digits or dashes.
+pub(crate) fn valid_request_id(id: &str) -> Option<&str> {
+    ((8..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
+        .then_some(id)
+}
+
 fn refusal(id: &str, error: &str) -> Value {
     json!({"run_id":id,"ok":false,"resumed":false,"error":error})
 }
@@ -60,7 +66,7 @@ const REOPEN_WAIT: Duration = Duration::from_secs(30);
 /// Reserve the next resume round of the run, start it detached and acknowledge only once the
 /// resume has reopened the run (it holds the supervisor lock and has bumped `resume_number`).
 /// The prompt file belongs to that round alone.
-fn start(state: &Path, id: &str, prompt: &str) -> Result<Value, String> {
+fn start(state: &Path, id: &str, prompt: &str, request_id: Option<&str>) -> Result<Value, String> {
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
     let record_path = directory.join("record.json");
     let read =
@@ -88,34 +94,37 @@ fn start(state: &Path, id: &str, prompt: &str) -> Result<Value, String> {
         std::io::ErrorKind::AlreadyExists => format!("resume round {round} is already reserved"),
         _ => "resume prompt not stored".to_owned(),
     })?;
-    let started = spawn_detached(state, id, &directory, &file, round).and_then(|mut child| {
-        let deadline = std::time::Instant::now() + REOPEN_WAIT;
-        loop {
-            let reopened = read().is_ok_and(|r| r["resume_number"].as_u64() >= Some(round));
-            if reopened {
-                return Ok(());
+    let started =
+        spawn_detached(state, id, &directory, &file, round, request_id).and_then(|mut child| {
+            let deadline = std::time::Instant::now() + REOPEN_WAIT;
+            loop {
+                let reopened = read().is_ok_and(|r| r["resume_number"].as_u64() >= Some(round));
+                if reopened {
+                    return Ok(());
+                }
+                if child
+                    .try_wait()
+                    .map_err(|_| "resume child unreadable")?
+                    .is_some()
+                {
+                    return Err(failure(&directory, round));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err("resume did not reopen the run in time".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            if child
-                .try_wait()
-                .map_err(|_| "resume child unreadable")?
-                .is_some()
-            {
-                return Err(failure(&directory, round));
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err("resume did not reopen the run in time".into());
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    });
+        });
     if let Err(reason) = started {
         let _ = std::fs::remove_file(&file);
         return Err(reason);
     }
-    Ok(
-        json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,"queued":true,
-              "resume_number":round}),
-    )
+    let mut receipt = json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,
+                             "queued":true,"resume_number":round});
+    if let Some(request_id) = request_id {
+        receipt["request_id"] = json!(request_id);
+    }
+    Ok(receipt)
 }
 
 /// The last line the failed resume child logged.
@@ -160,6 +169,7 @@ fn spawn_detached(
     directory: &Path,
     prompt: &Path,
     round: u64,
+    request_id: Option<&str>,
 ) -> Result<std::process::Child, String> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -169,11 +179,16 @@ fn spawn_detached(
         .open(directory.join(format!("resume-{round}.log")))
         .map_err(|_| "resume log not writable")?;
     let exe = std::env::current_exe().map_err(|_| "own executable unknown")?;
-    Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(["resume", id, "--state"])
         .arg(state)
         .arg("--prompt-file")
-        .arg(prompt)
+        .arg(prompt);
+    if let Some(request_id) = request_id {
+        command.args(["--request-id", request_id]);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log)
@@ -189,6 +204,7 @@ fn spawn_detached(
     _: &Path,
     _: &Path,
     _: u64,
+    _: Option<&str>,
 ) -> Result<std::process::Child, String> {
     Err("native writer resume requires the POSIX transport".into())
 }
@@ -199,11 +215,21 @@ pub(crate) fn local_cli(
     input: impl Read,
     output: &mut dyn Write,
 ) -> Result<(), String> {
-    let (id, state) = match args {
-        [id] => (id, None),
-        [id, flag, path] if flag == "--state" => (id, Some(path.as_str())),
-        _ => return Err("usage: pg-spawnd resume-local RUN_ID [--state PATH]".into()),
+    let usage = "usage: pg-spawnd resume-local RUN_ID [--state PATH] [--request-id ID]";
+    let [id, flags @ ..] = args else {
+        return Err(usage.into());
     };
+    let (mut state, mut request_id) = (None, None);
+    let mut flags = flags.iter().map(String::as_str);
+    while let Some(flag) = flags.next() {
+        match (flag, flags.next()) {
+            ("--state", Some(path)) if state.is_none() => state = Some(path),
+            ("--request-id", Some(value)) if request_id.is_none() => {
+                request_id = Some(valid_request_id(value).ok_or(usage)?)
+            }
+            _ => return Err(usage.into()),
+        }
+    }
     let state = crate::state::resolve_state(state, |key| std::env::var_os(key))?;
     let mut prompt = String::new();
     let reply = input
@@ -214,7 +240,7 @@ pub(crate) fn local_cli(
             if prompt.len() as u64 > MAX_PROMPT {
                 Err("resume prompt must contain between 1 byte and 1 MiB of text".to_owned())
             } else {
-                start(&state, id, &prompt)
+                start(&state, id, &prompt, request_id)
             }
         })
         .unwrap_or_else(|reason| refusal(id, &reason));

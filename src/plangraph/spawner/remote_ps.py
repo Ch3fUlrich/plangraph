@@ -400,7 +400,7 @@ STDIN_VERBS = ('steer', 'resume')
 _RECEIPT_FLAG = dict(steer='steered', resume='resumed')
 
 
-def native_result(record, *, verb='result', message=None):
+def native_result(record, *, verb='result', message=None, request_id=None):
     """Refresh a native overflow receipt with target-host terminal evidence."""
     from plangraph.keeper.credential_guard import mask
     try:
@@ -418,7 +418,8 @@ def native_result(record, *, verb='result', message=None):
             command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
         command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
         state_args = ['--state', host['state_dir']] if host.get('state_dir') else []
-        argv = (['pg-spawnd', f'{verb}-local', run_id, *state_args] if verb in STDIN_VERBS else
+        extra = ['--request-id', request_id] if verb == 'resume' and request_id else []
+        argv = (['pg-spawnd', f'{verb}-local', run_id, *state_args, *extra] if verb in STDIN_VERBS else
                 ['python3', '-m', 'plangraph.spawner.cli', *state_args, verb, run_id])
         command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join(argv)
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
@@ -495,9 +496,16 @@ def _route_native(service, run_id, message, host, verb):
         record = service.result(run_id)
     except ValueError:
         record = None
+    request_id = secrets.token_hex(16) if verb == 'resume' else None
     if record and not (record.get('overflow_remote') or record.get('origin_receipt')) and host in (None, record.get('host')):
-        reply = subprocess.run([_projection_binary(), f'{verb}-local', run_id, '--state', str(service.state)],
-                               input=message.encode(), capture_output=True, timeout=10)
+        argv = [_projection_binary(), f'{verb}-local', run_id, '--state', str(service.state)]
+        try:
+            # A resume waits for the owner's reopen (up to 30 s), like the ssh route.
+            reply = subprocess.run(argv + (['--request-id', request_id] if request_id else []),
+                                   input=message.encode(), capture_output=True,
+                                   timeout=RESUME_TIMEOUT if verb == 'resume' else 10)
+        except subprocess.SubprocessError:
+            return refused(f'local {verb} command failed')
         if reply.returncode:
             return refused(f'local {verb} command failed')
         try:
@@ -511,23 +519,29 @@ def _route_native(service, run_id, message, host, verb):
         if len(hosts) != 1:
             return refused(f'{verb} host is ambiguous' if hosts else 'unknown run id')
         host = hosts.pop()
-    receipt = native_result(dict(run_id=run_id, host=host), verb=verb, message=message)
-    if verb == 'resume' and not receipt.get('ok') and record and record.get('overflow_remote'):
-        receipt = _reconcile_resume(record, receipt)
+    receipt = native_result(dict(run_id=run_id, host=host), verb=verb, message=message,
+                            request_id=request_id)
+    if verb == 'resume' and receipt.get('ok') and receipt.get('request_id') != request_id:
+        # Success counts only when the target confirms this exact request.
+        receipt = refused('resume receipt does not confirm this request')
+    elif verb == 'resume' and not receipt.get('ok') and record and record.get('overflow_remote'):
+        receipt = _reconcile_resume(record, receipt, request_id)
     if verb == 'resume' and receipt.get('resumed') and record and record.get('overflow_remote'):
         _track_resume(service, record, receipt)
     return receipt
 
 
-def _reconcile_resume(record, receipt):
+def _reconcile_resume(record, receipt, request_id):
     """A lost acknowledgement: the detached resume may still have reopened the run on the target."""
     if receipt.get('error') != 'resume host route failed':
         return receipt
     seen = native_result(dict(record), verb='result')
     number, known = seen.get('resume_number'), record.get('resume_number') or 0
-    if not seen.get('remote_query_error') and type(number) is int and number > known:
+    # Only the round that carries this request's id proves the prompt reached the target.
+    if (not seen.get('remote_query_error') and seen.get('resume_request_id') == request_id
+            and type(number) is int and number > known):
         return dict(run_id=record['run_id'], ok=True, resumed=True, queued=True,
-                    resume_number=number, reconciled=True)
+                    resume_number=number, request_id=request_id, reconciled=True)
     return receipt
 
 
