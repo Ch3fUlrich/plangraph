@@ -52,6 +52,22 @@ def make_phase(w):
 def code_of(exc):
     return getattr(exc, "code", None) or exc.args[0]
 
+def test_plan_phase_scopes_resolve_against_the_repo_for_rule_33(w, repo):
+    (repo / "src" / "plangraph" / "keeper").mkdir(parents=True)
+    (repo / "src" / "plangraph" / "keeper" / "api_routes.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "ci_commit_gate.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/plangraph/keeper"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["tools/*.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert [c["route"]["review_seats"] for c in plan["cards"]] == [2, 2]
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/a.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert [c["route"]["review_seats"] for c in plan["cards"]] == [2, 1]  # src holds keeper/; src/a.py is one plain file
+
+
 PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",
              "overlaps", "skipped", "busy"}
 CARD_KEYS = {"key", "state", "write_set", "ready", "findings",

@@ -20,7 +20,7 @@ from plangraph.card_paths import normalise_path, path_problem
 from plangraph.keeper.schema import WINDOW_CLASSES
 
 __all__ = ["WINDOW_TOKENS", "USABLE_FRACTION", "CODES", "Finding", "Verdict",
-           "paths_overlap", "write_sets_disjoint", "default_dry_run", "check_card",
+           "paths_overlap", "scope_files", "write_sets_disjoint", "default_dry_run", "check_card",
            "check_cards", "check_read_paths", "protected_check_paths"]
 
 #: Context window per class, in tokens.
@@ -172,6 +172,29 @@ def paths_overlap(a: str, b: str) -> bool:
     if _glob_re(a).match(b) or _glob_re(b).match(a):
         return True
     return _prefix_related(_literal_prefix(a), _literal_prefix(b))
+
+
+_SCOPE_SKIP_DIRS = frozenset({".git", "target", "node_modules", ".venv", "__pycache__"})
+
+
+def scope_files(repo_root: Path | str, write_set: Sequence[str]) -> list[str]:
+    """Files under ``repo_root`` that the directory and glob scopes of ``write_set`` may name.
+
+    A scope that names one file as written is left out: the card's own paths already carry it.
+    """
+    root, found = Path(repo_root), set()
+    for scope in write_set:
+        norm = _norm(scope)
+        if norm and not _is_glob(norm) and _looks_like_file(scope):
+            continue
+        start = root.joinpath(*_literal_prefix(norm))
+        for here, dirs, names in os.walk(start):
+            dirs[:] = [d for d in dirs if d not in _SCOPE_SKIP_DIRS]
+            for name in names:
+                rel = (Path(here) / name).relative_to(root).as_posix()
+                if paths_overlap(norm, rel):
+                    found.add(rel)
+    return sorted(found)
 
 
 def write_sets_disjoint(write_set: Sequence[str],

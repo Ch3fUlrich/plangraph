@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
+from plangraph.card_paths import normalise_path
+
 # Minimum AA Intelligence threshold per risk band
 RISK_MIN_INTELLIGENCE: dict[str, float] = {
     "low": 37.5,
@@ -68,7 +70,8 @@ HIGH_RISK_KEYWORDS: tuple[str, ...] = (
 
 
 def _normalize_path(path: str) -> str:
-    return str(path).strip().replace("\\", "/").lower()
+    # The planner's canonical spelling, so ./x and a/./x rate like x.
+    return (normalise_path(str(path)) or "").lower()
 
 
 def is_critical_path(path: str) -> bool:
@@ -91,6 +94,40 @@ _TOKEN_RULES = (
      "high", ("secrets",)),
     ({"migration", "migrations"}, "high", ("migration",)),
     ({"live", "systemd", "deploy"}, "high", ("live-step",)),
+)
+# Rule 3.3 classes that are HIGH by place: one table of (class, path regex, proposed tags),
+# read by _path_rules for every code path, before any size shortcut in evaluate_risk, so a
+# one-file S0 change on these paths is still at least high. A later class is one more row.
+# GATE_PATHS of tools/ci_commit_gate.py is the coverage contract of the gate-files rows.
+RULE_33_CLASSES: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = tuple(
+    (name, re.compile(pattern), tags) for name, pattern, tags in (
+        ("keeper-service-api", r"^(?:.*/)?src/plangraph/keeper/", ()),
+        ("keeper-service-api", r"^(?:.*/)?keeper[^/]*/(?:api|server|service)[^/]*$", ()),
+        ("gate-files",
+         r"^(?:tools/(?:ci_commit_[^/]*|gate_wiring_check[^/]*|check_[^/]*|preflight[^/]*"
+         r"|merge_gate[^/]*|bench_gate|hooks/[^/]*)|\.githooks/.*"
+         r"|rust/plangraph-cli/src/land/(?:accept|chain|cli|go_verify|main_state|registrar|resolve)[^/]*"
+         r"|(?:.*/)?\.gitattributes)$", ()),
+        ("gate-files", r"^(?:.*/)?[^/]*(?:guard|validator|hook)s?[^/]*\.(?:py|rs|sh|toml)$", ()),
+        # The verdict and record tools decide what a review counts for; the classifier decides how
+        # much review a change needs. A change to either is as sensitive as a gate file.
+        ("gate-files", r"^(?:.*/)?tools/seat_[^/]+\.py$", ()),
+        ("gate-files", r"^(?:.*/)?src/plangraph/routing_support/risk\.py$", ()),
+        ("gate-files", r"^(?:.*/)?src/plangraph/spawner/(?:opencode_isolation|runner|service|prompt_input)\.py$", ()),
+        # The writer-family resolver decides which review seats a head excludes and whether a gpt
+        # review counts alone at train admission.
+        ("gate-files", r"^(?:.*/)?src/plangraph/review/family\.py$", ()),
+        ("gate-files", r"^(?:.*/)?rust/worker-core/src/writer_families[^/]*\.rs$", ()),
+        ("gateway", r"(?:^|/)[^/]*gateway[^/]*(?:/|\.[a-z]+$)", ()),
+        ("deploy-config", r"^(?:.*/)?(?:deployment|deploy|deployments)/[^/]+$", ("live-step",)),
+        ("installer", r"^(?:.*/)?setup/[^/]+\.(?:sh|ps1|py|toml|ya?ml)$", ("live-step",)),
+        ("installer", r"^(?:.*/)?rust/plangraph-cli/src/setup_artifact[^/]*\.rs$", ("live-step",)),
+        # What applies the jail and builds the native writer's sandbox arguments.
+        ("privileged-lane", r"^(?:.*/)?(?:sandbox|privileged)[^/]*\.(?:py|rs|sh)$", ()),
+        ("privileged-lane",
+         r"^(?:.*/)?rust/(?:pg-jail/src/[^/]+|pg-spawnd/src/native_writer_sandbox[^/]*"
+         r"|worker-core/src/host_readiness[^/]*)\.rs$", ()),
+    )
 )
 _DOC_EXTENSIONS = {"md", "rst", "txt", "adoc"}
 _UNIT_EXTENSIONS = {"service", "socket", "timer", "target", "mount", "automount",
@@ -128,6 +165,13 @@ def _path_rules(path: str, *, include_non_code: bool = False) -> list[tuple[str,
         (extension in _UNIT_EXTENSIONS, ("live-step",)),
     )
     matches.extend(("high", tags) for matched, tags in structural_rules if matched)
+    # The table skips docs, tests and Rust test modules by place, not the shared non_code flag, so
+    # tools/ci_commit_exempt.txt is placed and a *_policy_tests.rs file keeps its token match.
+    table_skip = (extension in {"md", "rst", "adoc"}
+                  or bool(set(segments[:-1]) & {"docs", "doc", "tests", "test"})
+                  or stem.startswith("test_") or stem.endswith(("_test", "_tests")))
+    if include_non_code or not table_skip:
+        matches.extend(("high", tags) for _, rx, tags in RULE_33_CLASSES if rx.search(norm))
     return matches
 
 
