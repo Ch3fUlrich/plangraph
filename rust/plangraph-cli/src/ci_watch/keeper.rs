@@ -56,12 +56,19 @@ impl Keeper for Http {
 }
 /// Cancels the fix task `key` in the keeper (main is green again).
 pub fn cancel(env: &BTreeMap<String, String>, key: &str) -> Result<()> {
+    cancel_for(env, key, "main is green again")
+}
+
+/// Cancels the fix task `key` with the reason the keeper records.
+pub fn cancel_for(env: &BTreeMap<String, String>, key: &str, reason: &str) -> Result<()> {
     let mut http = http(env)?;
     // A task whose creation reply was lost may not exist: there is nothing to close then.
-    if http.show(key)?.is_none() {
-        return Ok(());
+    match http.show(key)? {
+        None => Ok(()),
+        // Already done or cancelled: nothing left to close.
+        Some(item) if terminal(&item)? => Ok(()),
+        Some(_) => http.cancel(key, reason),
     }
-    http.cancel(key, "main is green again")
 }
 
 fn http(env: &BTreeMap<String, String>) -> Result<Http> {
@@ -81,7 +88,12 @@ fn http(env: &BTreeMap<String, String>) -> Result<Http> {
     })
 }
 
-pub fn define(env: &BTreeMap<String, String>, task: &mut Task) -> Result<bool> {
+/// Defines the fix item of `task`; the key it is about to create is written to the row in `tasks` first.
+pub fn define(
+    env: &BTreeMap<String, String>,
+    task: &mut Task,
+    tasks: &std::path::Path,
+) -> Result<bool> {
     let base = env.get("PG_URL").ok_or("PG_URL required")?;
     let token_path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE required")?;
     let token = std::fs::read_to_string(token_path).map_err(|_| "cannot read keeper token file")?;
@@ -91,13 +103,14 @@ pub fn define(env: &BTreeMap<String, String>, task: &mut Task) -> Result<bool> {
         .timeout_global(Some(Duration::from_secs(30)))
         .build()
         .into();
-    deliver(
+    deliver_with(
         &mut Http {
             agent,
             base: base.trim_end_matches('/').into(),
             token: token.trim().into(),
         },
         task,
+        &mut |task| persist_row(tasks, task),
     )
 }
 fn terminal(item: &Value) -> Result<bool> {
@@ -107,7 +120,22 @@ fn terminal(item: &Value) -> Result<bool> {
         None => Err("keeper response missing state".into()),
     }
 }
+/// Writes `task` over its row on disk, so the key of an item about to be created is never only in memory.
+pub(super) fn persist_row(path: &std::path::Path, task: &Task) -> Result<()> {
+    super::update_tasks(path, |rows| {
+        rows.insert(task.key.clone(), task.clone());
+    })
+}
+#[cfg(test)]
 fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {
+    deliver_with(keeper, task, &mut |_| Ok(()))
+}
+/// `before_create` runs with the row's selected key set, right before the keeper is asked to create it.
+fn deliver_with(
+    keeper: &mut impl Keeper,
+    task: &mut Task,
+    before_create: &mut dyn FnMut(&Task) -> Result<()>,
+) -> Result<bool> {
     let mut key = task.keeper_key.clone().unwrap_or_else(|| task.key.clone());
     let marker = format!("[ci-watch-run:{}]", task.run_id);
     if let Some(item) = keeper.show(&key)? {
@@ -140,8 +168,11 @@ fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {
     if terminal(&parent)? {
         return Err("keeper parent plangraph:PH-ORCH-SETUP must be active".into());
     }
+    // The key is kept on the row before the create: a reply lost after the item exists must not lose
+    // the key the sweep has to close.
+    task.keeper_key = Some(key.clone());
+    before_create(task)?;
     keeper.create(definition(task, &key))?;
-    task.keeper_key = Some(key);
     Ok(true)
 }
 

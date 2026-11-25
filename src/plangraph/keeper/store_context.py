@@ -374,8 +374,10 @@ class ContextMixin:
                 bases[item["key"]] = train["base_sha"]
             return train is not False
 
-        rows = [dict(row) for row in views.ready(items, project=project, owner=owner, agent=agent,
-                                                dependencies_ready=dependencies_ready)]
+        eff = views.effective_priorities(items)[0]
+        rows = [views.with_effective(row, eff)
+                for row in views.ready(items, project=project, owner=owner, agent=agent,
+                                       dependencies_ready=dependencies_ready, eff=eff)]
         for row in rows:
             if row["key"] in bases:
                 row["base_sha"] = bases[row["key"]]

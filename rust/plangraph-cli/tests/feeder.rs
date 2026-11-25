@@ -136,7 +136,7 @@ fn admit_all_refusal_reasons_and_boundaries() {
                 host: "unknown".into(),
                 ..facts()
             },
-            "unknown_host",
+            "unknown_host:unknown",
         ),
         (
             HostFacts {
@@ -406,6 +406,21 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     let p: Policy = toml::from_str(include_str!("../../../deploy/feeder/policy.toml")).unwrap();
     assert_eq!(p.max_writers["dell"], 5);
     assert_eq!(p.max_writers["coding"], 3);
+    // The workstation is listed, so its limit comes from the policy file; any other host
+    // refuses by name.
+    assert_eq!(p.max_writers["workstation"], 8);
+    assert_eq!(writer_limit("workstation", &p), Some(8));
+    assert_eq!(writer_limit("workstation.example", &p), Some(8));
+    assert_eq!(
+        admit(
+            &HostFacts {
+                host: "laptop".into(),
+                ..facts()
+            },
+            &p
+        ),
+        Admission::Refuse("unknown_host:laptop".into())
+    );
     assert_eq!(p.disk_floor_bytes, 10_000_000_000);
     assert_eq!(p.ram_per_run_bytes, 4_000_000_000);
     assert_eq!(p.quota_floor_percent, 10.0);

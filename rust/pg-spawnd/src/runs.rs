@@ -199,6 +199,10 @@ impl Runs {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        // The reservation this seat was admitted under (seat_admission), so the slot is not counted twice.
+        if let Some(token) = args.get(crate::seat_admission::TOKEN_FIELD) {
+            base[crate::seat_admission::TOKEN_FIELD] = token.clone();
+        }
         if let Some((seat_group_id, index, total, paths)) = group_meta {
             base["seat_group"] = json!(seat_group_id);
             base["review_group"] = json!({

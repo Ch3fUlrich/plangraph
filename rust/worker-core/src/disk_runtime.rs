@@ -135,11 +135,24 @@ fn push_process_path(path: &Path, output: &mut Vec<std::path::PathBuf>) -> io::R
     Ok(())
 }
 
+/// `PG_PROCESS_INVENTORY=reader` takes the inventory from the process reader alone, never from `/proc`:
+/// fixtures that must not see the host's own builds set it; the default is the scan with the reader as
+/// its fallback when `/proc` entries are unreadable.
+fn reader_only() -> bool {
+    std::env::var_os("PG_PROCESS_INVENTORY").is_some_and(|value| value == "reader")
+}
+
 pub fn processes() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    if reader_only() {
+        return read_processes(&[]);
+    }
     resolve_processes(processes_direct(), || read_processes(&[]))
 }
 
 pub fn process_references() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    if reader_only() {
+        return read_processes(&["--references"]);
+    }
     resolve_processes(process_references_direct(), || {
         read_processes(&["--references"])
     })

@@ -160,7 +160,7 @@
       d = naturalCmp(a.phase || "", b.phase || "") || ((p1 === undefined ? 9999 : p1) - (p2 === undefined ? 9999 : p2));
     } else if (col === "title" || col === "owner" || col === "kind") {
       d = plainAsc(String(a[col] || "").toLowerCase(), String(b[col] || "").toLowerCase());
-    } else if (col === "priority") d = (Number(a.priority) || 0) - (Number(b.priority) || 0);
+    } else if (col === "priority") d = PlanUI.effectivePriority(a) - PlanUI.effectivePriority(b);
     else if (col === "est") d = (Number(a.estimate_h) || 0) - (Number(b.estimate_h) || 0);
     else if (col === "unblocks") d = (a.unblocks ? a.unblocks.length : 0) - (b.unblocks ? b.unblocks.length : 0);
     else if (col === "op") d = (operatorNeeded(a) ? 1 : 0) - (operatorNeeded(b) ? 1 : 0);

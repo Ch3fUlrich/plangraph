@@ -143,15 +143,9 @@ pub enum Admission {
 }
 
 pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
-    // Explicit full names in private policies win; public defaults use short aliases.
-    let host = canonical_host(&f.host, p);
-    let limit = p
-        .max_writers
-        .get(&f.host)
-        .or_else(|| p.max_writers.get(&host))
-        .or_else(|| p.max_writers.get(host.split('.').next().unwrap_or(&host)));
+    let limit = writer_limit(&f.host, p);
     let reason = if f.kill_switch {
-        Some("kill_switch")
+        Some("kill_switch".to_string())
     } else if !p.quota_floor_percent.is_finite()
         || !(0.0..100.0).contains(&p.quota_floor_percent)
         || p.facts_max_age_seconds < 0
@@ -161,27 +155,42 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         || p.estimate_tokens == 0
         || !(1..=MAX_BATCH_ITEMS).contains(&p.batch_max_items)
     {
-        Some("invalid_policy")
+        Some("invalid_policy".to_string())
     } else if f.observed_at > f.now || f.now.saturating_sub(f.observed_at) > p.facts_max_age_seconds
     {
-        Some("stale_facts")
+        Some("stale_facts".to_string())
     } else if limit.is_none() {
-        Some("unknown_host")
-    } else if f.running_writers >= *limit.unwrap_or(&0) {
-        Some("max_writers")
+        Some(format!("unknown_host:{}", f.host))
+    } else if f.running_writers >= limit.unwrap_or(0) {
+        Some("max_writers".to_string())
     } else if f.free_ram_bytes < p.ram_per_run_bytes {
-        Some("ram")
+        Some("ram".to_string())
     } else if f.free_disk_bytes < p.disk_floor_bytes {
-        Some("disk")
+        Some("disk".to_string())
     } else if !f
         .quota_remaining_percent
         .is_some_and(|q| q.is_finite() && q > p.quota_floor_percent && q <= 100.0)
     {
-        Some("provider_quota")
+        Some("provider_quota".to_string())
     } else {
         None
     };
-    reason.map_or(Admission::Admit, |r| Admission::Refuse(r.into()))
+    reason.map_or(Admission::Admit, Admission::Refuse)
+}
+
+/// The writer cap the policy lists for `host`: its full name first (private policies name
+/// full hosts; public defaults use short aliases), then its canonical identity, then the
+/// first DNS label. `None` for a host the policy does not list.
+pub fn writer_limit(host: &str, p: &Policy) -> Option<usize> {
+    let canonical = canonical_host(host, p);
+    p.max_writers
+        .get(host)
+        .or_else(|| p.max_writers.get(&canonical))
+        .or_else(|| {
+            p.max_writers
+                .get(canonical.split('.').next().unwrap_or(&canonical))
+        })
+        .copied()
 }
 
 pub fn brief(item: &Task, house_rules: &str) -> String {

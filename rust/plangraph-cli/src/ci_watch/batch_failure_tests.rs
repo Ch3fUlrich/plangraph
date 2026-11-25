@@ -15,6 +15,7 @@ fn task(pr: Option<u64>) -> Task {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        sha: None,
     }
 }
 

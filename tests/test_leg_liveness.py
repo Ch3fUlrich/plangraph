@@ -50,7 +50,7 @@ def test_commit_probe_and_timeout(monkeypatch, success):
     async def factory(*args, **kwargs):
         roots.append(kwargs['cwd'])
         if success:
-            code = "from pathlib import Path; import subprocess; Path('ok.txt').write_text('ok'); subprocess.run(['git','add','ok.txt'],check=True); subprocess.run(['git','-c','commit.gpgsign=false','commit','-m','probe'],check=True)"
+            code = "from pathlib import Path; import json, subprocess; Path('ok.txt').write_text('ok'); subprocess.run(['git','add','ok.txt'],check=True); subprocess.run(['git','-c','commit.gpgsign=false','commit','-m','probe'],check=True); print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'ok'}}))"
         else:
             code = 'import time; time.sleep(60)'
         return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)

@@ -35,6 +35,7 @@ fn task() -> Task {
         priority: 10,
         keeper_defined: false,
         keeper_key: None,
+        sha: None,
     }
 }
 #[test]
@@ -102,4 +103,73 @@ fn active_card_is_reused_and_closed_parent_is_reported() {
         .unwrap_err()
         .contains("must be active"));
     assert!(keeper.creates.is_empty());
+}
+#[test]
+fn a_create_whose_reply_is_lost_leaves_the_attempted_key_on_the_row() {
+    let mut task = task();
+    let mut keeper = Recorded::default();
+    keeper.items.insert(PARENT.into(), json!({"state":"open"}));
+    keeper.items.insert(
+        task.key.clone(),
+        json!({"state":"done","description":"[ci-watch-run:899]"}),
+    );
+    keeper.lose_reply = true;
+    assert!(deliver(&mut keeper, &mut task).is_err());
+    // The item exists under the successor key and the row still names it.
+    assert!(keeper.items.contains_key("plangraph:CI-FIX-example-R900"));
+    assert_eq!(
+        task.keeper_key.as_deref(),
+        Some("plangraph:CI-FIX-example-R900")
+    );
+}
+
+#[test]
+fn the_selected_key_is_on_disk_when_the_create_is_issued() {
+    /// Reads the row file at the moment of the create.
+    struct Watching {
+        inner: Recorded,
+        path: std::path::PathBuf,
+        on_disk_at_create: Option<Option<String>>,
+    }
+    impl Keeper for Watching {
+        fn show(&mut self, key: &str) -> Result<Option<Value>> {
+            self.inner.show(key)
+        }
+        fn create(&mut self, item: Value) -> Result<()> {
+            self.on_disk_at_create = Some(
+                super::super::load_tasks(&self.path)
+                    .unwrap()
+                    .values()
+                    .next()
+                    .and_then(|row| row.keeper_key.clone()),
+            );
+            self.inner.create(item)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks.jsonl");
+    let mut task = task();
+    // The row exists without a key, as the scan saves it before it defines.
+    let mut rows = BTreeMap::new();
+    rows.insert(task.key.clone(), task.clone());
+    super::super::save_tasks(&path, &rows).unwrap();
+    let mut keeper = Watching {
+        inner: Recorded::default(),
+        path: path.clone(),
+        on_disk_at_create: None,
+    };
+    keeper
+        .inner
+        .items
+        .insert(PARENT.into(), json!({"state":"open"}));
+    keeper.inner.items.insert(
+        task.key.clone(),
+        json!({"state":"done","description":"[ci-watch-run:899]"}),
+    );
+    assert!(deliver_with(&mut keeper, &mut task, &mut |t| persist_row(&path, t)).unwrap());
+    assert_eq!(
+        keeper.on_disk_at_create,
+        Some(Some("plangraph:CI-FIX-example-R900".to_owned())),
+        "the key was only in memory when the create went out"
+    );
 }
