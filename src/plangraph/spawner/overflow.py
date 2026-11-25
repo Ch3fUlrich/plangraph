@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import subprocess
@@ -36,7 +37,11 @@ class Decision(NamedTuple):
 
 
 class RemoteRefusal(ValueError):
-    """Safe, value-free remote failure reason."""
+    """Safe remote failure reason with an optional masked admission receipt."""
+
+    def __init__(self, reason, *, receipt=None):
+        super().__init__(reason)
+        self.receipt = receipt
 
 
 def failure_reason(exc):
@@ -518,8 +523,12 @@ def remote_spawn(name, host, card, prompt, options):
             receipt = None
         if isinstance(receipt, dict) and receipt.get('status') == 'refused':
             reason = receipt.get('reason')
-            if card.get('run_kind') == 'native-codex' and isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
-                raise RemoteRefusal(reason)
+            if card.get('run_kind') == 'native-codex':
+                run_id = receipt.get('run_id')
+                retained = receipt if isinstance(run_id, str) and re.fullmatch(r'run-[A-Za-z0-9]+', run_id) else None
+                if isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
+                    raise RemoteRefusal(reason, receipt=retained)
+                raise RemoteRefusal('target rejected admission', receipt=retained)
             raise RemoteRefusal('target rejected admission')
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):

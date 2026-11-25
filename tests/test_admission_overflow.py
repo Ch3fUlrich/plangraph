@@ -652,3 +652,28 @@ def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monk
     service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
     assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
     probe.assert_any_call(target)
+
+
+def test_final_native_target_refusal_keeps_the_target_run(orchestration, monkeypatch, tmp_path):
+    from plangraph.spawner import host_ready
+
+    service, rows, remote, _, _ = orchestration
+    rows['host-b'].update(disk_free_gb=30, sandbox_ok=True)
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs:
+                        (None, 'cargo_target_cap: local cache full'))
+    monkeypatch.setattr(overflow, 'worker_host_refusal', lambda *args: None)
+    target = dict(run_id='run-target', run_kind='native-codex', host='host-b',
+                  status='refused', ended=2, exit_code=2, reason='cargo_target_cap: target cache full')
+    refusal = overflow.RemoteRefusal(target['reason'])
+    refusal.receipt = target
+    remote.side_effect = refusal
+
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A')
+    record = service.admit_spawn({'role': 'implement', 'prompt': 'fixture'}, card=card)
+
+    remote.assert_called_once()
+    assert record['run_id'] == target['run_id']
+    assert record['host'] == record['placement']['host'] == 'host-b'
+    assert record['origin_receipt'] is True
+    assert record['ended'] == target['ended'] and record['reason'] == target['reason']
+    assert [run['run_id'] for run in service.ps()['runs']] == [target['run_id']]

@@ -244,6 +244,7 @@ def admit(service, options, *, card=None, preview=False):
         return None
     from . import overflow
     from .item_key import native_writer_review
+    from .remote_ps import native_receipt
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
@@ -348,6 +349,7 @@ def admit(service, options, *, card=None, preview=False):
     retry_native_disk = native and disk and disk.startswith(('disk_low:', 'cargo_target_cap:'))
     may_queue = not (remote_first or preview or sandbox_blocked) and (retry_native_disk or not (placed or compare_local))
     queued, window = None, admission_window() if may_queue else 0
+    target_refusal = None
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -397,9 +399,15 @@ def admit(service, options, *, card=None, preview=False):
                             if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
                             return use_local()
                         continue
-                    return _close_queue(service, queued, status='refused', reason=decision.reason,
-                                        overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
-                                        error=f'{decision.reason} (admission window {window:g}s elapsed)')
+                    if target_refusal is None:
+                        return _close_queue(service, queued, status='refused', reason=decision.reason,
+                                            overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
+                                            error=f'{decision.reason} (admission window {window:g}s elapsed)')
+                    if (settled := _close_queue(service, queued)) is not None:
+                        return settled
+                if target_refusal is not None:
+                    record, placement = target_refusal
+                    break
                 record = {'run_id': 'run-' + uuid.uuid4().hex,
                           'status': 'refused',
                           'reason': decision.reason, 'overflow_reason': decision.reason,
@@ -421,13 +429,17 @@ def admit(service, options, *, card=None, preview=False):
                 refusal = 'remote spawn failed'
             except overflow.RemoteRefusal as exc:
                 result, refusal = None, str(exc)
+                if native and exc.receipt is not None:
+                    host = exc.receipt.get('host') or name
+                    retained = native_receipt(dict(exc.receipt, host=host, run_kind='native-codex',
+                                                   overflow_reason=decision.reason, overflow_remote=True))
+                    target_refusal = (retained, dict(placement, host=host))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 result, refusal = None, overflow.failure_reason(exc)
             if result is not None:
                 if queued is not None:
                     _close_queue(service, queued)
                     queued = None
-                from .remote_ps import native_receipt
                 record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
                 record.setdefault('status', 'unknown')
                 break
@@ -447,7 +459,7 @@ def admit(service, options, *, card=None, preview=False):
     from .notify import annotate_native
     annotate_item(record, card)
     annotate_native(record, card)
-    if native and record['status'] == 'refused':
+    if native and record['status'] == 'refused' and not record.get('origin_receipt'):
         record.setdefault('ended', time.time())
     return record
 
