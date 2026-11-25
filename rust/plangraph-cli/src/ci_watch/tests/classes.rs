@@ -123,12 +123,14 @@ fn every_red_run_is_recorded_once_with_its_class_and_the_report_counts_the_gaps(
     .unwrap();
     assert!(again.iter().all(|r| !r.starts_with("red: ")), "{again:?}");
     let report = super::super::report::report(temp.path()).unwrap();
-    assert_eq!(report["red_runs"], 1);
-    assert_eq!(report["red_runs_by_class"]["fmt"], 1);
+    // The fixture also lists an older red run of the same head: a superseded attempt, classified and counted.
+    assert_eq!(report["red_runs"], 2);
+    assert_eq!(report["red_runs_superseded_without_task"], 1);
+    assert_eq!(report["red_runs_by_class"]["fmt"], 2);
     let sha = tasks(temp.path())[0].head_sha.clone();
     assert_eq!(
         report["red_runs_per_head_sha_by_class"][format!("pr-42@{sha}")]["fmt"],
-        1
+        2
     );
     assert_eq!(report["red_runs_without_class"], 0);
     assert_eq!(report["red_runs_without_task"], 0);
@@ -234,7 +236,11 @@ fn a_red_run_a_newer_run_superseded_is_recorded_and_reported_as_a_gap() {
     );
     let out = report(temp.path()).unwrap();
     assert_eq!(out["red_runs_superseded_without_task"], 1, "{out}");
-    assert_eq!(out["red_runs"], 0, "{out}");
+    // The superseded attempt is a red run like the others: classified and counted in the coverage.
+    assert_eq!(out["red_runs"], 1, "{out}");
+    assert_eq!(out["red_runs_by_class"]["code"], 1, "{out}");
+    assert_eq!(out["red_runs_without_class"], 0, "{out}");
+    assert_eq!(out["red_runs_without_task"], 0, "{out}");
     // Scanning again does not count it twice.
     scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
         Ok(false)
@@ -244,4 +250,40 @@ fn a_red_run_a_newer_run_superseded_is_recorded_and_reported_as_a_gap() {
         report(temp.path()).unwrap()["red_runs_superseded_without_task"],
         1
     );
+}
+
+#[test]
+fn a_rerun_that_leaves_one_job_failing_a_test_keeps_that_jobs_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    gh.two_jobs = true;
+    gh.second_name = Some("Public scrub".into());
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(false)
+    })
+    .unwrap();
+    let first = tasks(temp.path());
+    assert_eq!(first.len(), 2);
+    let kept = first
+        .iter()
+        .find(|t| t.job == "rust tests")
+        .unwrap()
+        .key
+        .clone();
+    // The next attempt: only the first job still fails the same test.
+    gh.two_jobs = false;
+    gh.runs[0]["run_attempt"] = json!(2);
+    scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(false)
+    })
+    .unwrap();
+    let after = tasks(temp.path());
+    assert_eq!(
+        after.len(),
+        2,
+        "the same job and test keep one task, no third row: {after:?}"
+    );
+    let current: Vec<_> = after.iter().filter(|t| t.current).collect();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].key, kept);
 }

@@ -51,9 +51,8 @@ pub fn report(dir: &Path) -> Result<Value> {
     let mut superseded = 0;
     for row in &rows {
         if row.action == "superseded" {
-            // A red run a newer run replaced before it was read: counted here, never as a run without a task.
+            // Red, classified and counted like the rest; it has no task because a newer run decides the head.
             superseded += 1;
-            continue;
         }
         *by_class.entry(&row.run_class).or_default() += 1;
         *heads
@@ -64,7 +63,7 @@ pub fn report(dir: &Path) -> Result<Value> {
         if row.run_class.is_empty() || row.jobs.iter().any(|(_, _, class)| class.is_empty()) {
             unclassified += 1;
         }
-        if row.tasks == 0 && row.action != "flake-rerun" {
+        if row.tasks == 0 && row.action != "flake-rerun" && row.action != "superseded" {
             untasked += 1;
         }
     }
@@ -93,7 +92,7 @@ pub fn report(dir: &Path) -> Result<Value> {
             .insert(class, result);
     }
     Ok(json!({
-        "red_runs": rows.len() - superseded,
+        "red_runs": rows.len(),
         "red_runs_superseded_without_task": superseded,
         "red_runs_by_class": by_class,
         "red_runs_per_head_sha_by_class": heads,

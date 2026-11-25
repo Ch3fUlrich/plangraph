@@ -18,6 +18,8 @@ struct Fixture {
     two_jobs: bool,
     /// The log of job 101 when it differs from the log of job 100.
     second_log: Option<String>,
+    /// The display name of job 101 when it differs from job 100's.
+    second_name: Option<String>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -32,6 +34,7 @@ impl Fixture {
             run_pages: 0,
             two_jobs: false,
             second_log: None,
+            second_name: None,
         }
     }
 }
@@ -44,19 +47,25 @@ impl Github for Fixture {
                 !endpoint.starts_with("actions/workflows/"),
                 "runs must not paginate"
             );
-            assert_eq!(
-                endpoint,
-                format!(
-                    "actions/runs/{}/jobs?filter=latest&per_page=100",
-                    self.runs[0]["id"].as_u64().unwrap()
-                )
+            // The jobs of a listed run: the newest one for its tasks, a superseded red one for the coverage ledger.
+            assert!(
+                self.runs.iter().any(|run| endpoint
+                    == format!(
+                        "actions/runs/{}/jobs?filter=latest&per_page=100",
+                        run["id"].as_u64().unwrap()
+                    )),
+                "{endpoint}"
             );
             let mut jobs: Vec<Value> = serde_json::from_str(JOBS).unwrap();
             if self.two_jobs {
                 let mut second = jobs[0].clone();
                 second["id"] = json!(101);
                 // A matrix repeats the display name; the job id tells the jobs apart.
-                second["name"] = jobs[0]["name"].clone();
+                if let Some(name) = &self.second_name {
+                    second["name"] = json!(name);
+                } else {
+                    second["name"] = jobs[0]["name"].clone();
+                }
                 jobs.push(second);
             }
             Ok(jobs)
@@ -126,7 +135,8 @@ fn failed_pr_rescan_updates_one_task_and_defines_once() {
     assert_eq!(records[0].pr, Some(42));
     assert_eq!(records[0].test, "seat_pool::tests::broken");
     assert_eq!(calls, 1);
-    assert_eq!(gh.reads, 2);
+    // One log read for the newest run per scan, and one for the older red run 899, read once for the ledger.
+    assert_eq!(gh.reads, 3);
     gh.log = "FAILED tests/a.py::test_other - AssertionError".into();
     scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
         Ok(false)
@@ -389,7 +399,8 @@ fn in_flight_rerun_does_not_revive_older_completed_failures() {
             .is_empty()
     );
     assert_eq!(gh.reruns, vec![900]);
-    assert_eq!(gh.reads, 1);
+    // The newest run's log, and the older red run's once for the coverage ledger; the rescan reads nothing.
+    assert_eq!(gh.reads, 2);
 }
 
 #[test]

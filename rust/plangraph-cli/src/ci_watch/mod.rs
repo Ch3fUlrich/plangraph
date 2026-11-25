@@ -286,6 +286,8 @@ fn scan(
             if failed(&run) && !dry {
                 let attempt = run["run_attempt"].as_u64().unwrap_or(1);
                 if reruns.sightings.insert(format!("red:{run_id}:{attempt}")) {
+                    // Read and classified like any red run; only its fix dispatch is left to the newer run.
+                    let (jobs, run_class) = observe_red_jobs(gh, run_id);
                     report::append(
                         dir,
                         &report::RunRow {
@@ -293,8 +295,8 @@ fn scan(
                             attempt,
                             head: head.clone(),
                             head_sha: sha.to_owned(),
-                            run_class: String::new(),
-                            jobs: Vec::new(),
+                            run_class,
+                            jobs,
                             tasks: 0,
                             action: "superseded".into(),
                         },
@@ -411,11 +413,8 @@ fn scan(
             .map(|f| (f.0.clone(), f.4, f.3.name().to_owned()))
             .collect();
         let mut made = 0usize;
-        // The same test failing in two jobs is two failures: the job name then tells the tasks apart.
-        let mut per_test: BTreeMap<String, usize> = BTreeMap::new();
         let mut per_job_test: BTreeMap<(String, String), usize> = BTreeMap::new();
         for failure in &failures {
-            *per_test.entry(failure.1.clone()).or_default() += 1;
             *per_job_test
                 .entry((failure.0.clone(), failure.1.clone()))
                 .or_default() += 1;
@@ -424,20 +423,16 @@ fn scan(
             if !attempted && !rerun_failed && flakes.contains_key(&test) {
                 continue;
             }
-            // A job that failed without a test id is told apart by its job id (names repeat across a matrix):
-            // two such jobs are two failures.
-            let identity = if test == "<job-failure>" {
-                format!("{test}\0{job_id}")
-            } else if per_job_test
+            // A failure is a test in a job: the job's name is stable across attempts of a run (its id is not), so a
+            // rerun that changes how many jobs fail a test keeps each job's task. Only two jobs of one display name
+            // need their ids to be told apart.
+            let identity = if per_job_test
                 .get(&(job.clone(), test.clone()))
                 .is_some_and(|n| *n > 1)
             {
-                // Two jobs of one display name: only the job id tells them apart.
                 format!("{test}\0{job}\0{job_id}")
-            } else if per_test.get(&test).is_some_and(|n| *n > 1) {
-                format!("{test}\0{job}")
             } else {
-                test.clone()
+                format!("{test}\0{job}")
             };
             let digest = Sha256::digest(format!("{repo}\0{head}\0{identity}").as_bytes());
             let key = format!("plangraph:CI-FIX-{digest:x}");
@@ -504,6 +499,35 @@ fn scan(
         save_tasks(&task_path, &tasks)?;
     }
     Ok(output)
+}
+
+/// The failed jobs of a run and their classes, for the coverage ledger of a run that gets no task of its own. A
+/// run whose jobs cannot be read has no class (empty), which the report counts as a gap.
+fn observe_red_jobs(gh: &mut impl Github, run_id: u64) -> (Vec<(String, u64, String)>, String) {
+    let Ok(jobs) = gh.pages(
+        &format!("actions/runs/{run_id}/jobs?filter=latest&per_page=100"),
+        Some("jobs"),
+    ) else {
+        return (Vec::new(), String::new());
+    };
+    let mut seen = Vec::new();
+    let mut classes = Vec::new();
+    for job in jobs.iter().filter(|job| failed(job)) {
+        let (Some(id), Some(name)) = (job["id"].as_u64(), job["name"].as_str()) else {
+            continue;
+        };
+        let name = logs::scrub(name);
+        let log = gh
+            .log(id)
+            .unwrap_or_else(|_| "Job log unavailable; inspect the failed job on GitHub".into());
+        let class = classify::classify_job(&name, &logs::scrub(&log), false);
+        classes.push(class);
+        seen.push((name, id, class.name().to_owned()));
+    }
+    if seen.is_empty() {
+        return (seen, String::new());
+    }
+    (seen, classify::classify_run(&classes).name().to_owned())
 }
 
 /// Persists a fix task first, so a keeper outage never loses it, then defines it in the keeper.

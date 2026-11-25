@@ -68,16 +68,20 @@ not read from the data (one account does every action). A follow-up item covers 
 
 ## Query
 
-Exported on 2026-11-25 for the interval 2026-11-21T19:00:00Z to 2026-11-24T09:00:00Z (the table was read on
-2026-11-24; its last run was created at 08:26Z; three `land/*` runs cancelled later that day, 45374976754,
-45385108859 and 45492431938, are outside it). Workflow `tests`, status cancelled, filtered to `land/*` heads:
+Exported on 2026-11-25 for the interval 2026-11-21T19:00:00Z to 2026-11-24T09:00:00Z. The table was read on
+2026-11-24: its latest cancelled run was created at 2026-11-23T17:09:45Z, and the latest run of any conclusion in that
+read at 2026-11-24T08:26:13Z, so the upper bound of 09:00Z closes the interval just after it; three `land/*` runs
+cancelled later that day (45374976754, 45385108859 and 45492431938, created 10:27Z, 11:32Z and 21:34Z) are outside it.
+Workflow `tests`, status cancelled, filtered to `land/*` heads:
 
 ```sh
 gh api --paginate 'repos/<owner>/<repo>/actions/workflows/tests.yml/runs?status=cancelled&created=2026-11-21T19:00:00Z..2026-11-24T09:00:00Z&per_page=100' \
   --jq '.workflow_runs[] | select(.head_branch|startswith("land/")) | .id'
 ```
 
-It returns 36 run ids, and `diff` of the sorted ids against the first column of the table above is empty. The same
+It returns the 36 run ids saved in `docs/ci-cancelled-runs-query-ids.txt`, and `diff` of those sorted ids against the
+first column of the table above is empty; `docs/ci-cancelled-runs-evidence.tsv` holds, per row, the latest cancelled
+job end of the run, the canceller run with its creation time and head, and the timeline events within 90 s before it. The same
 interval without the branch filter returns 52 cancelled runs of the workflow (the repository-wide
 `actions/runs` query returns the same 52, `tests` being the only workflow that cancels). The cause of each row is
 read from three calls: the run's jobs (`actions/runs/<id>/jobs`: the latest `completed_at` of a cancelled job is
