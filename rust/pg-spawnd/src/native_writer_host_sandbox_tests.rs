@@ -213,13 +213,16 @@ fn wide_request(dir: &Path, run_id: &str, sandbox: Value) -> (PathBuf, PathBuf) 
 fn host_configure_refuses_danger_full_access_with_a_named_reason() {
     let dir = tempfile::tempdir().unwrap();
     let (record_path, request) = wide_request(dir.path(), "run-card", json!("danger-full-access"));
+    let request = crate::records::read_record_file(&request)
+        .ok()
+        .expect("read native request fixture");
     let mut host = Host::from_request(
-        &read_record(&request).unwrap(),
+        &request,
         &json!({"cwd":dir.path(), "run_id":"run-card", "repo":dir.path(), "tool_path":"x"}),
         record_path,
     )
     .unwrap();
-    let reason = host.configure(&read_record(&request).unwrap()).unwrap_err();
+    let reason = host.configure(&request).unwrap_err();
     assert!(
         reason.starts_with("sandbox_refused: danger-full-access"),
         "{reason}"
