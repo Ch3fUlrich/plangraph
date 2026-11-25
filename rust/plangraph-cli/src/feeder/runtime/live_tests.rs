@@ -186,7 +186,9 @@ mod proc_fixture {
             let _ = fs::remove_dir_all(&dir);
             let _ = fs::remove_file(&dir);
             match state {
-                "missing" => {}
+                // The file stays absent for "permission_denied": a real open says NotFound
+                // (paced), so only the injected error keeps `load_paced` false.
+                "missing" | "permission_denied" => {}
                 "not_a_dir" => fs::write(&dir, "").unwrap(),
                 _ => {
                     fs::create_dir_all(&dir).unwrap();
