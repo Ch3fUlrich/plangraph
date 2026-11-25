@@ -220,9 +220,27 @@ fn overlapping_feeder_launches_produce_the_cards_and_briefs_the_native_writer_te
     let actual: Value = serde_json::from_str(&normalised(&json!(launches).to_string())).unwrap();
     let golden: Value = serde_json::from_str(OVERLAP_LAUNCHES).unwrap();
     assert_eq!(
-        actual,
-        golden,
-        "{}",
-        serde_json::to_string_pretty(&actual).unwrap()
+        actual.as_array().unwrap().len(),
+        golden.as_array().unwrap().len()
     );
+    for (actual, golden) in actual
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(golden.as_array().unwrap())
+    {
+        assert_eq!(actual["card"], golden["card"], "{actual:#}");
+        // The brief is a version line plus a JSON payload carried inside a string: compare the
+        // parsed payloads, since the key order of the embedded text depends on the build.
+        let (version, payload) = payload_of(actual["brief"].as_str().unwrap());
+        let (golden_version, golden_payload) = payload_of(golden["brief"].as_str().unwrap());
+        assert_eq!(version, golden_version);
+        assert_eq!(payload, golden_payload, "{actual:#}");
+    }
+}
+
+/// The version line and the parsed JSON payload of a `PLANGRAPH-BATCH-INPUT-V1` brief.
+fn payload_of(brief: &str) -> (String, Value) {
+    let (version, payload) = brief.split_once('\n').unwrap();
+    (version.to_owned(), serde_json::from_str(payload).unwrap())
 }
