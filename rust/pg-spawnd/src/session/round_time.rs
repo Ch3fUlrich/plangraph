@@ -102,7 +102,11 @@ fn has(command: &str, needles: &[&str]) -> bool {
 /// Class of a shell command; a gate outranks a test because a gate runs tests.
 pub fn classify_command(command: &str) -> Class {
     let first = command.trim_start();
-    if has(
+    // A polling loop is a wait whatever its path or pattern spells (a temp directory
+    // named after pytest is no test).
+    if first.starts_with("until ") || first.starts_with("while ") || first.starts_with("tail -f") {
+        Class::Wait
+    } else if has(
         command,
         &[
             "git push",
@@ -129,11 +133,7 @@ pub fn classify_command(command: &str) -> Class {
         ],
     ) {
         Class::Build
-    } else if first.starts_with("sleep ")
-        || first.starts_with("until ")
-        || first.starts_with("while ")
-        || first.starts_with("tail -f")
-    {
+    } else if first.starts_with("sleep ") {
         Class::Wait
     } else {
         Class::Other
@@ -186,8 +186,10 @@ pub struct OpenWait {
     pub task_id: String,
     /// The open wait call; a stop is authorised only while this very call is open.
     pub call_id: String,
+    /// The task with its output path and launch window, for the owner lookup.
+    pub task: super::round_wait::TaskRef,
     pub command: String,
     pub class: Class,
-    /// Time of waits that named the task, plus the open tail; idle time does not count.
+    /// Age of this wait call alone.
     pub waited_ms: i64,
 }

@@ -348,10 +348,10 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
     def _relaunch_inner(self, name, handoff):
         cfg = self._load_config()
         name = self._check_name(name)
+        self._refuse_blocked_round(name)
         rec = self._find_record(name, None)
         if rec is None:
             raise _refuse(f"unknown session: {name}")
-        self._refuse_blocked_round(name)
         old_sid = rec.get("session_id")
         handoff_path = self._relaunch_handoff(rec, cfg, name, handoff)
         # The stored spec is re-validated BEFORE the stop: never lose the session.

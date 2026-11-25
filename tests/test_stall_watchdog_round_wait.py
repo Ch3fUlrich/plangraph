@@ -11,16 +11,15 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from plangraph.spawner import stall_watchdog as w
 
-T0 = 1_700_000_000.0
+T0 = time.time()  # processes started by the test must fall into their launch windows
 RUST = Path(__file__).resolve().parents[1] / 'rust'
-
-
 def _binary():
     target = os.environ.get('CARGO_TARGET_DIR')
     if not target:
@@ -59,10 +58,22 @@ def result(seconds, ident, task=None):
     return line(seconds, 'user', message=dict(role='user', content=[dict(type='tool_result', tool_use_id=ident, content='ok')]), **extra)
 
 
-def waiting(task, command, start):
-    return [request(start + 1), tool(start + 2, 'u-' + task, command, run_in_background=True),
-            result(start + 2.5, 'u-' + task, task), request(start + 3),
-            tool(start + 4, 'w-' + task, 'until grep -q rc= /t/tasks/%s.output; do sleep 15; done' % task)]
+def output_path(root, task):
+    return root / 'tasks' / f'{task}.output'
+
+
+def launch(root, task, command, at):
+    """A background start as the harness records it, with the real output path."""
+    text = (f'Command running in background with ID: {task}. Output is being written to: '
+            f'{output_path(root, task)}. You will be notified when it completes')
+    return [request(at - 0.5), tool(at, 'u-' + task, command, run_in_background=True),
+            line(at + 0.5, 'user', toolUseResult=dict(backgroundTaskId=task),
+                 message=dict(role='user', content=[dict(type='tool_result', tool_use_id='u-' + task, content=text)]))]
+
+
+def wait_call(root, task, at):
+    call = f'until grep -q rc= {output_path(root, task)}; do sleep 15; done'
+    return [request(at - 0.5), tool(at, 'w-' + task, call)]
 
 
 def command_shell(root, session_id, task, command):
@@ -79,6 +90,7 @@ def world(tmp_path, monkeypatch):
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     (bin_dir / 'pg-spawnd').symlink_to(_binary())
+    globals()['T0'] = time.time()  # after the build: the shells start within seconds of it
     stop_log = tmp_path / 'claude-stop.log'
     stub = tmp_path / 'claude-stub'
     stub.write_text(f'#!/bin/sh\necho "$@" >> {stop_log}\n')
@@ -127,10 +139,10 @@ def world(tmp_path, monkeypatch):
 def test_the_scheduled_tick_ends_the_task_once_blocks_the_second_wait_and_closes_the_round(world):
     root = world.root
     first = command_shell(root, 'sid-5xxxx', 'bgA', 'sleep 401')
-    twin = command_shell(root, 'sid-5xxxx', 'bgZ', 'sleep 401')  # same command text, another task
-    head = [line(0, 'user', promptId='p1', origin=dict(kind='human'), message=dict(role='user', content='go')),
-            request(1)]
-    one = head + waiting('bgA', 'sleep 401', 1)
+    second = command_shell(root, 'sid-5xxxx', 'bgB', 'sleep 402')
+    twin = command_shell(root, 'sid-5xxxx', 'bgZ', 'sleep 401')  # same command text as bgA, another task
+    head = [line(0, 'user', promptId='p1', origin=dict(kind='human'), message=dict(role='user', content='go'))]
+    one = head + launch(root, 'bgA', 'sleep 401', 2) + launch(root, 'bgB', 'sleep 402', 3) + wait_call(root, 'bgA', 4)
     world.tick(1, one)
     assert 'round-wait' not in world.tick(14, one)
     assert first.poll() is None, 'under the cap nothing is stopped'
@@ -142,35 +154,45 @@ def test_the_scheduled_tick_ends_the_task_once_blocks_the_second_wait_and_closes
     assert note['recipient'] == 'writer-5' and 'sleep 401' in note['text']
     assert not world.outbox(), 'delivered and removed'
     assert 'round-wait' not in world.tick(17, one), 'a later tick adds nothing'
-    assert len(world.delivered()) == 1
+    assert len(world.delivered()) == 1, 'delivered notices are not queued again'
 
-    second = command_shell(root, 'sid-5xxxx', 'bgB', 'sleep 402')
-    two = one + [line(17 * 60, 'user', origin=dict(kind='task-notification'),
+    # bgA is reported ended; the writer now waits on bgB for over fifteen minutes.
+    two = one + [line(19 * 60, 'user', origin=dict(kind='task-notification'),
                       message=dict(role='user', content='<task-notification><task-id>bgA</task-id></task-notification>')),
-                 result(17 * 60 + 1, 'w-bgA')]
-    two += waiting('bgB', 'sleep 402', 17 * 60 + 2)
-    world.tick(18, two)
-    status = world.tick(34, two)
-    assert 'round-blocked' in status and 'sleep 402' in status and 'round-session-ended' in status
+                 result(19 * 60 + 1, 'w-bgA')] + wait_call(root, 'bgB', 19 * 60 + 3)
+    world.tick(20, two)
+    status = world.tick(36, two)
+    assert 'round-blocked' in status and 'sleep 402' in status
+    assert 'round-session-ended' not in status, 'the writer is not stopped before its notices are delivered'
     assert second.wait(timeout=20) is not None
-    assert world.stops.read_text() == 'stop sid-5xxx\n', 'the live session is stopped once'
+    assert not world.stops.exists()
     recipients = sorted(e['recipient'] for e in world.delivered()[1:])
     assert recipients == ['routing', 'writer-5'] and all(e['text'].startswith('BLOCKED') for e in world.delivered()[1:])
+    assert 'round-session-ended' in world.tick(37, two), 'delivered: the session is ended'
+    assert world.stops.read_text() == 'stop sid-5xxx\n'
 
-    # The writer talks on after the close: the round row does not grow.
+    # The writer talks on after the close: the round row does not grow past the close.
     three = two + [request(40 * 60), line(41 * 60, 'assistant', requestRef='r%d' % (40 * 60),
                                            message=dict(id='mx', stop_reason='end_turn', content=[dict(type='text', text='x')]))]
     world.tick(42, three)
     rows = [json.loads(row) for row in (world.spawn / 'round-telemetry/rows.jsonl').read_text().splitlines()]
+    closed = int((T0 + 36 * 60) * 1000)
     assert rows[0]['outcome'] == 'BLOCKED' and rows[0]['round_key'] == 'writer-5:p1'
-    assert rows[0]['closed_ms'] == int((T0 + 34 * 60) * 1000) and rows[0]['ended_ms'] <= rows[0]['closed_ms']
+    assert rows[0]['closed_ms'] == closed and rows[0]['ended_ms'] == closed
+    assert rows[0]['causes']['wait_other'] > 15 * 60 * 1000, 'the minutes of the wait that earned the close'
     assert world.stops.read_text() == 'stop sid-5xxx\n', 'ended once'
     twin.kill()
     twin.wait()
 
-    # A restart of the blocked session is refused through the scheduled path's record.
+    # The public relaunch path refuses before it launches anything, from the record the tick wrote.
     from plangraph.routing_errors import ParameterRefused
     from plangraph.spawner.sessions import Sessions
-    sessions = Sessions(state_root=world.spawn, config_path=str(world.root / 'none.json'))
+    from sessions_support import FakeRun, write_config
+    config = world.root / 'sessions.json'
+    write_config(config, json.dumps({'cwd_roots': [str(world.root)], 'models': ['m'], 'efforts': ['high'],
+                                     'permission_modes': ['bypassPermissions'], 'mcp_configs': [], 'session_names': 'free'}))
+    run = FakeRun()
+    sessions = Sessions(state_root=world.spawn, config_path=str(config), run=run)
     with pytest.raises(ParameterRefused, match='BLOCKED.*sleep 402'):
-        sessions._refuse_blocked_round('writer-5')
+        sessions.relaunch('writer-5')
+    assert run.calls == [], 'the launcher and `claude stop` were never invoked'

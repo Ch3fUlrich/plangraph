@@ -23,6 +23,7 @@ pub mod round_store;
 pub mod round_time;
 #[cfg(test)]
 mod round_time_tests;
+pub mod round_wait;
 pub mod round_watch;
 #[cfg(test)]
 mod round_watch_tests;

@@ -8,8 +8,8 @@
 //! repeating it.
 
 pub use super::round_state::{blocked_outcome, closed_rounds, spawn_state_dir, state_file};
-use super::round_state::{closed_rounds_of, read_state};
-use super::{round_reader::Reader, round_time::OpenWait};
+use super::round_state::{closed_rounds_of, notice_line, read_state};
+use super::{round_reader::Reader, round_time::OpenWait, round_wait::TaskRef};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Map, Value};
 use std::{io, path::Path};
@@ -39,11 +39,16 @@ pub enum Stop {
 
 /// Effects of the watchdog. The real host reads /proc and signals; tests fake it.
 pub trait Host {
-    /// The one live process of `session` whose output file is the task's; none when gone or ambiguous.
-    fn resolve_owner(&self, session: &str, task_id: &str) -> Option<Owner>;
-    /// End the recorded owner and its process group, only while that very process
-    /// (same start time) still writes the output file of `task_id`.
-    fn stop(&self, owner: &Owner, task_id: &str) -> Stop;
+    /// The one live process of `session` that launched `task`: its output is the task's
+    /// full output path and it started inside the task's launch window; none otherwise.
+    fn resolve_owner(&self, session: &str, task: &TaskRef) -> Option<Owner>;
+    /// End the recorded owner's process group, only while that very process (same start
+    /// time) still writes the task's output file. `signalled` says an earlier stop left
+    /// survivors. `Ended` needs evidence: live members were signalled and the group was
+    /// then found empty, or the group was empty after an earlier signal.
+    fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop;
+    /// True while the line queued for `recipient` under `key` has not been delivered.
+    fn pending(&self, recipient: &str, key: &str) -> bool;
     /// Queue one line for `recipient`; `key` makes a second queue of it a no-op.
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()>;
     /// End the live writer session of a BLOCKED round; true once it is stopped.
@@ -106,8 +111,13 @@ pub enum Action {
     },
 }
 
-fn action_key(round_key: &str, task_id: &str) -> String {
+/// Owners are recorded per task; stops and strikes per wait call.
+fn owner_key(round_key: &str, task_id: &str) -> String {
     format!("{round_key}|{task_id}")
+}
+
+fn action_key(wait: &OpenWait) -> String {
+    format!("{}|{}|{}", wait.round_key, wait.task_id, wait.call_id)
 }
 
 /// One session's watchdog: its durable state file and its host.
@@ -136,6 +146,7 @@ impl Watch<'_> {
         entry["round_key"] = json!(wait.round_key);
         entry["task_id"] = json!(wait.task_id);
         entry["call_id"] = json!(wait.call_id);
+        entry["task"] = wait.task.to_json();
         entry["command"] = json!(wait.command);
     }
 
@@ -168,11 +179,11 @@ impl Watch<'_> {
     fn record_owners(&mut self, reader: &Reader) -> io::Result<()> {
         let mut changed = false;
         for task in reader.running() {
-            let key = action_key(&task.round_key, &task.task_id);
+            let key = owner_key(&task.round_key, &task.task.id);
             if self.state["owners"][&key].is_object() {
                 continue;
             }
-            if let Some(owner) = self.host.resolve_owner(self.session, &task.task_id) {
+            if let Some(owner) = self.host.resolve_owner(self.session, &task.task) {
                 self.state["owners"][&key] =
                     json!({"pid": owner.pid, "start_time": owner.start_time});
                 changed = true;
@@ -186,7 +197,7 @@ impl Watch<'_> {
 
     fn finish(&mut self, key: &str, mut phase: Phase, wait: &OpenWait) -> io::Result<()> {
         if phase == Phase::Stopping {
-            let Some(owner) = self.owner_of(key) else {
+            let Some(owner) = self.owner_of(&owner_key(&wait.round_key, &wait.task_id)) else {
                 self.settle(key, "unowned")?;
                 self.done.push(Action::OwnerUnknown {
                     task_id: wait.task_id.clone(),
@@ -197,11 +208,7 @@ impl Watch<'_> {
             // signal that was really sent. A crash before the signal leaves none, so an
             // owner that then ends by itself is a finished command, not a strike.
             let signalled = self.state["actions"][key]["signalled"] == json!(true);
-            let result = match self.host.stop(&owner, &wait.task_id) {
-                Stop::Gone if signalled => Stop::Ended,
-                other => other,
-            };
-            match result {
+            match self.host.stop(&owner, &wait.task, signalled) {
                 Stop::Survivors => {
                     self.state["actions"][key]["signalled"] = json!(true);
                     self.save()?;
@@ -236,7 +243,7 @@ impl Watch<'_> {
                 self.state["blocked"] = json!({
                     "round_key": wait.round_key, "command": wait.command,
                     "reason": "second wait over the cap in one round",
-                    "closed_ms": self.now_ms,
+                    "closed_ms": self.now_ms, "action": key,
                 });
                 self.save()?;
                 self.done.push(Action::Blocked {
@@ -244,7 +251,7 @@ impl Watch<'_> {
                     command: wait.command.clone(),
                 });
             }
-            let text = line(wait, count);
+            let text = notice_line(wait, count);
             let session = self.session;
             let recipients: &[&str] = if blocked {
                 &[session, "routing"]
@@ -257,6 +264,15 @@ impl Watch<'_> {
                     .is_ok()
             });
             if sent {
+                if blocked && self.state["blocked"]["action"] == json!(key) {
+                    // The BLOCKED notices themselves are what the shutdown waits for.
+                    let notices: Vec<Value> = recipients
+                        .iter()
+                        .map(|who| json!({"recipient": who, "key": format!("{key}>{who}")}))
+                        .collect();
+                    self.state["blocked"]["notices"] = json!(notices);
+                    self.state["blocked"]["notified"] = json!(true);
+                }
                 self.set_phase(key, Phase::Notified, wait);
                 self.save()?;
                 self.done.push(Action::Notified {
@@ -267,48 +283,36 @@ impl Watch<'_> {
         Ok(())
     }
 
-    /// A BLOCKED round ends its live session once the writer and routing know.
+    /// A BLOCKED round ends its live session once its own BLOCKED notices are queued
+    /// and delivered: the writer is not stopped before it can read the reason.
     fn end_blocked_round(&mut self) -> io::Result<()> {
         let blocked = &self.state["blocked"];
-        if !blocked.is_object() || blocked["ended"] == json!(true) {
+        if !blocked.is_object()
+            || blocked["ended"] == json!(true)
+            || blocked["notified"] != json!(true)
+        {
             return Ok(());
         }
-        let notified = self.state["actions"].as_object().is_some_and(|actions| {
-            actions
-                .values()
-                .any(|a| a["round_key"] == blocked["round_key"] && a["phase"] == json!("notified"))
-        });
-        if notified && self.host.end_session(self.session) {
-            let round_key = self.state["blocked"]["round_key"]
-                .as_str()
-                .unwrap_or("")
-                .to_owned();
+        let undelivered = blocked["notices"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|notice| {
+                self.host.pending(
+                    notice["recipient"].as_str().unwrap_or(""),
+                    notice["key"].as_str().unwrap_or(""),
+                )
+            });
+        if undelivered {
+            return Ok(());
+        }
+        let round_key = blocked["round_key"].as_str().unwrap_or("").to_owned();
+        if self.host.end_session(self.session) {
             self.state["blocked"]["ended"] = json!(true);
             self.save()?;
             self.done.push(Action::RoundEnded { round_key });
         }
         Ok(())
-    }
-}
-
-fn line(wait: &OpenWait, strikes: usize) -> String {
-    let minutes = wait.waited_ms / 60_000;
-    let first = format!(
-        "Watchdog ended your background command `{}` (task {}) after {minutes} min of waiting; \
-         the cap is {} min. Do not wait on one command that long: split it or run it in the \
-         foreground with a timeout.",
-        wait.command,
-        wait.task_id,
-        WAIT_LIMIT_MS / 60_000
-    );
-    if strikes >= STRIKE_LIMIT {
-        format!(
-            "BLOCKED: second wait over the cap in this round, last command `{}`; this session \
-             is ended. {first}",
-            wait.command
-        )
-    } else {
-        first
     }
 }
 
@@ -342,6 +346,7 @@ pub fn tick(
                 round_key: a["round_key"].as_str()?.into(),
                 task_id: a["task_id"].as_str()?.into(),
                 call_id: a["call_id"].as_str()?.into(),
+                task: TaskRef::from_json(&a["task"])?,
                 command: a["command"].as_str()?.into(),
                 class: super::round_time::Class::Other,
                 waited_ms: a["waited_ms"].as_i64().unwrap_or(0),
@@ -362,7 +367,7 @@ pub fn tick(
         watch.finish(&key, phase, &wait)?;
     }
     if let Some(wait) = open.filter(|w| w.waited_ms > WAIT_LIMIT_MS) {
-        let key = action_key(&wait.round_key, &wait.task_id);
+        let key = action_key(&wait);
         if watch.state["actions"][&key].is_null() {
             watch.set_phase(&key, Phase::Stopping, &wait);
             watch.state["actions"][&key]["waited_ms"] = json!(wait.waited_ms);

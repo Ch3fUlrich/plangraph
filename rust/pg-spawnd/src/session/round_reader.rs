@@ -6,24 +6,29 @@
 //! tool calls with their results, and task notifications. A gap that these lines do not
 //! explain is booked as `unknown`.
 
-use super::round_time::{classify_command, Cause, Class, OpenWait, RoundRow};
+use super::{
+    round_time::{classify_command, Cause, Class, OpenWait, RoundRow},
+    round_wait::{command_reads, output_path_of, TaskRef},
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 struct Background {
-    id: String,
+    task: TaskRef,
     command: String,
     class: Class,
-    waited_ms: i64,
 }
 
 #[derive(Debug)]
 struct OpenTool {
     class: Class,
     command: String,
+    /// `task_id` of a task-output call: a structured binding to one task.
     task_ref: Option<String>,
     background: bool,
+    /// When the call was issued: a wait is as old as its own call.
+    started_ms: i64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -38,7 +43,7 @@ enum Prev {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Running {
     pub round_key: String,
-    pub task_id: String,
+    pub task: TaskRef,
     pub command: String,
 }
 
@@ -76,6 +81,7 @@ impl Reader {
         let mut reader = Self::new(session);
         reader.closed = closed;
         reader.feed_all(text);
+        reader.book_closed_tail();
         reader
     }
 
@@ -101,16 +107,18 @@ impl Reader {
         }
     }
 
-    /// The background task a wait call names: its id is one whole word of the call's text
-    /// (`bg1` is not named by `bg10`).
-    fn named_task(&self, hint: &str) -> Option<usize> {
-        let words: Vec<&str> = hint
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .collect();
-        self.background
-            .iter()
-            .position(|bg| !bg.id.is_empty() && words.contains(&bg.id.as_str()))
+    /// The running task a wait call is bound to: by the structured task id of a
+    /// task-output call, or by the task's full output path as a word of the command.
+    fn named_task(&self, tool: &OpenTool) -> Option<usize> {
+        if let Some(id) = &tool.task_ref {
+            return self.background.iter().position(|bg| &bg.task.id == id);
+        }
+        self.background.iter().position(|bg| {
+            bg.task
+                .output_path
+                .as_deref()
+                .is_some_and(|path| command_reads(&tool.command, path))
+        })
     }
 
     fn cause_of_gap(&mut self, next: Prev, request: Option<&str>, human: bool, gap: i64) -> Cause {
@@ -144,26 +152,11 @@ impl Reader {
     }
 
     /// Overlapping tool calls: a wait outranks a gate, a test, a build, any other tool.
-    fn tool_cause(&mut self, gap: i64) -> Cause {
-        let hint: String = self
-            .open
-            .values()
-            .filter(|tool| tool.class == Class::Wait)
-            .map(|tool| {
-                format!(
-                    "{} {}",
-                    tool.task_ref.clone().unwrap_or_default(),
-                    tool.command
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        if self.open.values().any(|tool| tool.class == Class::Wait) {
-            return match self.named_task(&hint) {
-                Some(index) => {
-                    self.background[index].waited_ms += gap; // explicit waits only
-                    Cause::wait_for_class(self.background[index].class)
-                }
+    fn tool_cause(&mut self, _gap: i64) -> Cause {
+        let waiting = self.open.values().find(|tool| tool.class == Class::Wait);
+        if let Some(tool) = waiting {
+            return match self.named_task(tool) {
+                Some(index) => Cause::wait_for_class(self.background[index].class),
                 None => Cause::WaitSleep,
             };
         }
@@ -237,12 +230,13 @@ impl Reader {
         }
         self.prev_ts = Some(ts);
         self.prev = Some(next);
-        if request.is_some() {
+        // A request or output line without an id leaves nothing to match against.
+        if matches!(kind, "api-request" | "assistant") {
             self.prev_request = request;
         }
         match kind {
-            "assistant" => self.open_tools(value),
-            "user" => self.close_tools(value),
+            "assistant" => self.open_tools(value, ts),
+            "user" => self.close_tools(value, ts),
             _ => {}
         }
     }
@@ -265,7 +259,7 @@ impl Reader {
         });
     }
 
-    fn open_tools(&mut self, value: &Value) {
+    fn open_tools(&mut self, value: &Value, ts: i64) {
         for block in value["message"]["content"].as_array().into_iter().flatten() {
             if block["type"] != "tool_use" {
                 continue;
@@ -293,12 +287,13 @@ impl Reader {
                     command,
                     task_ref,
                     background: input["run_in_background"] == true,
+                    started_ms: ts,
                 },
             );
         }
     }
 
-    fn close_tools(&mut self, value: &Value) {
+    fn close_tools(&mut self, value: &Value, ts: i64) {
         for block in value["message"]["content"].as_array().into_iter().flatten() {
             if block["type"] != "tool_result" {
                 continue;
@@ -310,17 +305,21 @@ impl Reader {
             let task = value["toolUseResult"]["backgroundTaskId"].as_str();
             if let (true, Some(task)) = (tool.background, task) {
                 self.background.push(Background {
-                    id: task.into(),
+                    task: TaskRef {
+                        id: task.into(),
+                        output_path: output_path_of(block),
+                        launched_from_ms: tool.started_ms,
+                        launched_to_ms: ts,
+                    },
                     class: classify_command(&tool.command),
                     command: tool.command,
-                    waited_ms: 0,
                 });
             }
         }
         if value["origin"]["kind"] == "task-notification" {
             let text = value["message"]["content"].as_str().unwrap_or("");
             self.background
-                .retain(|bg| !text.contains(&format!("<task-id>{}</task-id>", bg.id)));
+                .retain(|bg| !text.contains(&format!("<task-id>{}</task-id>", bg.task.id)));
         }
     }
 
@@ -333,39 +332,59 @@ impl Reader {
             .iter()
             .map(|bg| Running {
                 round_key: row.round_key.clone(),
-                task_id: bg.id.clone(),
+                task: bg.task.clone(),
                 command: bg.command.clone(),
             })
             .collect()
     }
 
-    /// The wait the writer is in at `now_ms`: a wait call that is still open and names
-    /// one running task. An idle writer or a sleep that names no task is no wait to stop.
+    /// The wait the writer is in at `now_ms`: the oldest open wait call bound to one
+    /// running task. Its age is the age of that call alone; idle time, an earlier call
+    /// or a sleep that names no task does not count.
     pub fn open_wait(&self, now_ms: i64) -> Option<OpenWait> {
         let row = self.rows.last()?;
-        let tail = (now_ms - self.prev_ts?).max(0);
         let mut calls: Vec<(&String, &OpenTool)> = self
             .open
             .iter()
             .filter(|(_, tool)| tool.class == Class::Wait)
             .collect();
         calls.sort_by_key(|(id, _)| id.as_str());
-        let (call_id, index) = calls.into_iter().find_map(|(id, tool)| {
-            let hint = format!(
-                "{} {}",
-                tool.task_ref.clone().unwrap_or_default(),
-                tool.command
-            );
-            Some((id.clone(), self.named_task(&hint)?))
-        })?;
-        let task = &self.background[index];
+        let (call_id, tool, index) = calls
+            .into_iter()
+            .find_map(|(id, tool)| Some((id.clone(), tool, self.named_task(tool)?)))?;
+        let bg = &self.background[index];
         Some(OpenWait {
             round_key: row.round_key.clone(),
-            task_id: task.id.clone(),
+            task_id: bg.task.id.clone(),
+            task: bg.task.clone(),
             call_id,
-            command: task.command.clone(),
-            class: task.class,
-            waited_ms: task.waited_ms + tail,
+            command: bg.command.clone(),
+            class: bg.class,
+            waited_ms: (now_ms - tool.started_ms).max(0),
         })
+    }
+
+    /// A round the watchdog closed ends at its terminal time: the open wait that earned
+    /// the close is booked up to it, so the row holds the minutes that triggered it.
+    fn book_closed_tail(&mut self) {
+        let Some(at) = self
+            .rows
+            .last()
+            .and_then(|row| self.closed.get(&row.round_key))
+            .copied()
+        else {
+            return;
+        };
+        let Some(previous) = self.prev_ts.filter(|p| *p < at) else {
+            return;
+        };
+        let gap = at - previous;
+        let cause = if !self.open.is_empty() {
+            self.tool_cause(gap)
+        } else {
+            self.cause_of_gap(Prev::Other, None, false, gap)
+        };
+        self.book(cause, gap);
+        self.prev_ts = Some(at);
     }
 }

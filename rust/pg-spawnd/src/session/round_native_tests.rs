@@ -1,4 +1,4 @@
-use super::round_native::row;
+use super::round_native::rows;
 use super::round_time::Cause;
 use serde_json::json;
 
@@ -16,38 +16,65 @@ fn turn(from: i64, to: i64) -> serde_json::Value {
 }
 
 #[test]
-fn stages_and_turns_book_every_instant_once() {
+fn each_writer_turn_starts_a_round_and_every_instant_is_booked_once() {
     let base = 1_700_000_000_000;
     let record = json!({"run_id": "run-1", "result": "BLOCKED",
         "stage_timings": [
             stage("writing", base, base + 100_000),
             stage("fast_checks", base + 100_000, base + 120_000),
             stage("review", base + 120_000, base + 200_000),
-            // Final gates overlap the end of review by 5 s: that time stays with review.
-            stage("final_gates", base + 195_000, base + 230_000),
-            stage("push", base + 230_000, base + 240_000),
+            // The fix turn: its stage and the final gates overlap by 5 s, which stay with the turn.
+            stage("writing", base + 200_000, base + 230_000),
+            stage("final_gates", base + 225_000, base + 260_000),
+            stage("push", base + 260_000, base + 270_000),
         ],
-        // The writing stage and its turn are the same interval; a second turn has no stage.
-        "writer_turns": [turn(base, base + 100_000), turn(base + 250_000, base + 270_000)]});
-    let row = row(&record).unwrap();
-    let ms = |cause| row.causes.get(&cause).copied().unwrap_or(0);
-    assert_eq!(ms(Cause::NativeTurn), 100_000 + 20_000);
-    assert_eq!(ms(Cause::Review), 80_000);
-    assert_eq!(ms(Cause::Gate), 20_000 + 30_000);
-    assert_eq!(ms(Cause::Push), 10_000);
+        "writer_turns": [turn(base, base + 100_000), turn(base + 200_000, base + 230_000)]});
+    let rows = rows(&record);
+    assert_eq!(rows.len(), 2);
+    let ms =
+        |row: &super::round_time::RoundRow, cause| row.causes.get(&cause).copied().unwrap_or(0);
+    assert_eq!(ms(&rows[0], Cause::NativeTurn), 100_000);
+    assert_eq!(ms(&rows[0], Cause::Gate), 20_000);
+    assert_eq!(ms(&rows[0], Cause::Review), 80_000);
+    assert_eq!(rows[0].wall_ms(), 200_000);
+    assert_eq!(ms(&rows[1], Cause::NativeTurn), 30_000);
+    assert_eq!(ms(&rows[1], Cause::Gate), 30_000);
+    assert_eq!(ms(&rows[1], Cause::Push), 10_000);
+    assert_eq!(rows[1].wall_ms(), 70_000);
+    assert_eq!(rows[0].round_key, format!("run-1:native:{base}"));
     assert_eq!(
-        ms(Cause::Unknown),
-        10_000,
-        "the gap between push and the second turn"
+        rows[1].round_key,
+        format!("run-1:native:{}", base + 200_000)
     );
-    assert_eq!(row.wall_ms(), 270_000);
-    assert_eq!(row.wall_ms(), row.ended_ms - row.started_ms);
-    assert_eq!(row.round_key, "run-1:native");
-    assert_eq!(row.outcome.as_deref(), Some("BLOCKED"));
+    assert_eq!((rows[0].index, rows[1].index), (1, 2));
+    assert_eq!(rows[0].outcome, None);
+    assert_eq!(rows[1].outcome.as_deref(), Some("BLOCKED"));
+    // A re-read of the same record rewrites the same keys.
+    assert_eq!(
+        rows.iter().map(|r| r.round_key.clone()).collect::<Vec<_>>(),
+        super::round_native::rows(&record)
+            .iter()
+            .map(|r| r.round_key.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_turn_without_a_stage_fills_only_uncovered_time_and_gaps_are_unknown() {
+    let base = 1_700_000_000_000;
+    let record = json!({"run_id": "run-3",
+        "stage_timings": [stage("push", base + 50_000, base + 60_000)],
+        "writer_turns": [turn(base, base + 40_000)]});
+    let rows = rows(&record);
+    assert_eq!(rows.len(), 1);
+    let ms = |cause| rows[0].causes.get(&cause).copied().unwrap_or(0);
+    assert_eq!(ms(Cause::NativeTurn), 40_000);
+    assert_eq!(ms(Cause::Push), 10_000);
+    assert_eq!(ms(Cause::Unknown), 10_000);
 }
 
 #[test]
 fn a_record_without_stage_intervals_has_no_row() {
-    assert!(row(&json!({"run_id": "run-2", "stage_timings": []})).is_none());
-    assert!(row(&json!({"run_id": "run-2"})).is_none());
+    assert!(rows(&json!({"run_id": "run-2", "stage_timings": []})).is_empty());
+    assert!(rows(&json!({"run_id": "run-2"})).is_empty());
 }
