@@ -768,6 +768,7 @@ def test_completed_writer_probe_without_exit_code_is_no_pass(tmp_path):
     store = LegStateStore(tmp_path / 'legs.sqlite')
     result = asyncio.run(leg_probe.probe(_committing_runner('completed', None), leg, timeout_s=20, store=store))
     assert result['ok'] is False and result['infra'] is False, result
+    assert result['reason'].startswith('missing exit code'), result
     assert _events(store, 'provider-probe') == []
 
 

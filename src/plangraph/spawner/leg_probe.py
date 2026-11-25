@@ -314,7 +314,9 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     status, code = getattr(job, 'status', None), getattr(job, 'exit_code', None)
                     ok = changed and 'ok.txt' in files and status == 'completed' and code == 0
                     reason = ('' if ok else f'exit {code}' if code else
-                              'no commit' if not (changed and 'ok.txt' in files) else str(status or 'failed'))
+                              'no commit' if not (changed and 'ok.txt' in files) else
+                              'missing exit code' if status == 'completed' and code is None else
+                              str(status or 'failed'))
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
