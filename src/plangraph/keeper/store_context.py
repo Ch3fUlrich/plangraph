@@ -38,6 +38,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .item_fields import CLOCK_PREMISE_FIELDS
 from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
@@ -84,6 +85,73 @@ def _graph(index):
     return dependents, corrected
 
 
+def _new_ids(after, before):
+    """Numbers of the D-ids *after* cites and *before* did not."""
+    old = set(src.decision_ids(before))
+    return [_num(did) for did in src.decision_ids(after) if did not in old]
+
+
+class _ClockReader:
+    """Replays definition events into the shared decision clock's premise facts.
+
+    Per item it keeps the last recorded description and the anchor: the seq of its creation
+    or of its last *recorded* premise change.  A rehome copies both from ``rehomed_from``.
+    Evidence is read only where an event records a value: a creation's description, the
+    ``after`` side of an audit pair that differs from its ``before``, a top-level description
+    that differs from the last recorded one, and the criteria ledger row of the event's seq.
+    A ``fields`` entry alone, a note, a migrated description and metadata prove no change.
+    Only D-ids a changed value introduces count.
+    """
+
+    def __init__(self, amendments):
+        self.amendments = amendments
+        self.description, self.anchor = {}, {}
+
+    def read(self, kind, key, seq, payload):
+        """``(anchor_moved, new D-id numbers)`` of one event."""
+        if kind == "item_created":
+            origin = payload.get("rehomed_from")
+            text = payload.get("description")
+            self.description[key] = text if isinstance(text, str) else ""
+            if origin:
+                if origin in self.anchor:
+                    self.anchor[key] = self.anchor[origin]
+                return False, []
+            self.anchor[key] = seq
+            return False, _new_ids(text, "")
+        if payload.get("migrated"):
+            if isinstance(payload.get("description"), str):
+                self.description[key] = payload["description"]
+            return False, []
+        changes = self._changes(key, seq, payload)
+        for name, before, after in changes:
+            if name == "description":
+                self.description[key] = after
+        if changes:
+            self.anchor[key] = seq
+        return bool(changes), [n for _, before, after in changes for n in _new_ids(after, before)]
+
+    def _changes(self, key, seq, payload):
+        before, after = payload.get("before"), payload.get("after")
+        pair = isinstance(before, dict) and isinstance(after, dict)
+        out = [(name, before[name] or "", after[name] or "") for name in CLOCK_PREMISE_FIELDS
+               if pair and name in before and name in after
+               and isinstance(after[name] or "", str) and isinstance(before[name] or "", str)
+               and (before[name] or "") != (after[name] or "")]
+        names = {name for name, _, _ in out}
+        text = payload.get("description")
+        if "description" not in names and isinstance(text, str) and not (pair and "description" in after):
+            if key not in self.description:
+                self.description[key] = text          # no earlier value to compare with
+            elif self.description[key] != text:
+                out.append(("description", self.description[key], text))
+        if "done_criteria" not in names and payload.get("criteria_ledger"):
+            row = self.amendments.get(seq)
+            if row and row[0] == key and row[1] != row[2]:
+                out.append(("done_criteria", row[1] or "", row[2] or ""))
+        return out
+
+
 class ContextMixin:
     """Task-context reads and the stale-claim guard."""
 
@@ -126,8 +194,9 @@ class ContextMixin:
     def _decision_clock(self):
         """``{"seqs", "marks", "last"}``: running max D-id over definition events.
 
-        ``marks[i]`` is the highest D-id cited by any item definition up to
-        ``seqs[i]``; ``last`` maps a key to its newest definition seq.  Kept on
+        ``marks[i]`` is the highest D-id a recorded premise value introduced up to
+        ``seqs[i]`` (see :class:`_ClockReader`); ``last`` maps a key to the seq of its
+        creation or last recorded premise change, inherited on a rehome.  Kept on
         the store and rebuilt whenever the (count, max, sum of seq) of definition
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
@@ -140,17 +209,20 @@ class ContextMixin:
         if clock is not None and clock["stamp"] == stamp:
             return clock
         clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        reader = _ClockReader({
+            row["seq"]: (row["key"], row["original_text"], row["new_text"])
+            for row in self.conn.execute(
+                "SELECT seq, key, original_text, new_text FROM criteria_amendments")})
         mark = -1
         for row in self.conn.execute(
-                f"SELECT seq, key, payload FROM events WHERE {DEFINITION_EVENTS}"
+                f"SELECT seq, key, type, payload FROM events WHERE {DEFINITION_EVENTS}"
                 " ORDER BY seq"):
-            raw = row["payload"]
-            ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
+            _, ids = reader.read(row["type"], row["key"], row["seq"], _payload(row["payload"]))
             if ids:
-                mark = max(mark, _num(ids[-1]))
+                mark = max(mark, *ids)
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
-            clock["last"][row["key"]] = row["seq"]
+        clock["last"] = reader.anchor
         self._ctx_clock = clock
         return clock
 
@@ -158,8 +230,8 @@ class ContextMixin:
         """The newest decision the item's premise knew of, as a number.
 
         The highest D-id cited in the item text; failing that, the decision
-        clock at its last definition (the highest D-id any definition had
-        cited by then).  ``None`` = unknown, which never refuses.
+        clock at its creation or last recorded premise change (the highest D-id
+        any premise value had introduced by then).  ``None`` = unknown, which never refuses.
         """
         cited = src.decision_ids(*self._texts(item)) if cited is None else cited
         if cited:

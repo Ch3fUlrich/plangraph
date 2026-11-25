@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -336,3 +337,121 @@ def test_mcp_claim_passes_force_stale_through():
                Client())
     assert seen == [("POST", "claim", {"key": "demo:A", "force_stale": "why"})]
 
+
+
+# ---- PREMISE-EVENT-WATERMARK: the shared clock reads recorded premise values only ----
+
+_GOALS = iter(range(1000))
+_AMEND = {"criteria_reason": "scope moved", "criteria_evidence": "see the decision"}
+
+
+def _mk(w, *lanes):
+    """Create *lanes* in one batch under a fresh goal (a batch without a goal is refused)."""
+    goal = f"GOAL{next(_GOALS)}"
+    w.store.create_items(w.p("router"), [*lanes, defn(goal, [d["id"] for d in lanes], kind="goal")])
+
+
+def _newer(w, key):
+    return w.store.show(w.p("router"), key)["newer_decisions"]
+
+
+def _refuses(w, key):
+    with pytest.raises(Refused) as exc:
+        w.store.claim(w.p("l1main"), key)
+    assert "premise outdated" in exc.value.msg, exc.value.msg
+    return exc.value.msg
+
+
+def _clock_top(w):
+    return w.store._decision_clock()["marks"][-1]
+
+
+def test_definition_event_metadata_cannot_hide_a_newer_decision(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("A", design_ref="docs/D-999999.md"))
+    w.store.edit_definition(w.p("router"), "demo:A", {"design_ref": "docs/D-999998.md"})
+    _mk(w, defn("B"))
+    assert _clock_top(w) == 5800
+    _decide(decisions, 5900, "demo:B now also covers the web")
+    assert "D-5900" in _refuses(w, "demo:B")
+
+
+def test_definition_event_uses_only_changed_after_premise_fields(w, decisions):
+    _mk(w, defn("A", done_criteria="per D-999999"))
+    w.store.edit_definition(w.p("router"), "demo:A",
+                            {"done_criteria": "per D-5800", **_AMEND})
+    _mk(w, defn("R", done_criteria="per D-999999"))
+    w.store.edit_definition(w.p("router"), "demo:R", {"done_criteria": "per D-999999"})  # resave
+    _mk(w, defn("B"))
+    assert _clock_top(w) == 5800
+    _decide(decisions, 5700, "demo:B first planned")
+    assert _newer(w, "demo:B") == []
+    _decide(decisions, 5900, "demo:B scope moved")
+    assert _newer(w, "demo:B") == ["D-5900"]
+    assert "D-5900" in _refuses(w, "demo:B")
+
+
+def test_a_ledger_only_criteria_event_reads_the_amendment_row(w, decisions):
+    # the shape written before the audit pair: the event names the edit, the ledger the values
+    _mk(w, defn("A"))
+    with w.store._write():
+        seq, _ = w.store._append(w.p("router"), "demo:A", "item_defined",
+                                 {"fields": ["done_criteria"], "criteria_ledger": True}, time.time())
+        w.conn.execute(
+            "INSERT INTO criteria_amendments(seq,key,original_text,new_text,reason,evidence,"
+            "authority,ts) VALUES(?,?,?,?,?,?,?,?)",
+            (seq, "demo:A", "per D-999999", "per D-5800", "r", "e", "router", "2026-01-01T00:00:00Z"))
+    _mk(w, defn("B"))
+    assert _clock_top(w) == 5800
+    _decide(decisions, 5700, "demo:B first planned")
+    _decide(decisions, 5900, "demo:B scope moved")
+    msg = _refuses(w, "demo:B")
+    assert "D-5900" in msg and "D-5700" not in msg
+
+
+def test_metadata_only_edit_does_not_move_the_fallback_anchor(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U"))
+    _mk(w, defn("E", description="per D-6000"))
+    w.store.edit_definition(w.p("router"), "demo:U", {"design_ref": "docs/x.md"})
+    _decide(decisions, 5950, "demo:U scope changed")
+    assert "D-5950" in _refuses(w, "demo:U")
+    w.store.edit_definition(w.p("router"), "demo:U", {"description": "reworded"})
+    assert _newer(w, "demo:U") == []
+    assert w.store.claim(w.p("l1main"), "demo:U")["epoch"] == 1
+
+
+def test_rehome_keeps_the_original_fallback_anchor(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U"))
+    _mk(w, defn("E", description="per D-6000"))
+    w.store.rehome(w.p("router"), "demo:U", "other", "box")
+    assert _clock_top(w) == 6000                      # the rehome advanced nothing
+    _decide(decisions, 5900, "other:U scope changed")
+    assert _newer(w, "other:U") == ["D-5900"]
+
+
+def test_migrated_description_does_not_publish_carried_citations(w, decisions):
+    _mk(w, defn("C", description="per D-5800"))
+    _mk(w, defn("U"))
+    w.store.edit_definition(w.p("router"), "demo:U", {"note": "description: per D-999999"})
+    w.store.migrate_descriptions(w.p("router"))
+    assert _clock_top(w) == 5800
+    w.store.rehome(w.p("router"), "demo:U", "other", "box")
+    w.store.edit_definition(w.p("router"), "other:U", {"description": "per D-999999 and D-6000"})
+    _mk(w, defn("L"))
+    assert _clock_top(w) == 6000
+    _decide(decisions, 5900, "demo:L first planned")
+    _decide(decisions, 6100, "demo:L scope moved")
+    assert _newer(w, "demo:L") == ["D-6100"]
+
+
+def test_a_note_only_event_supplies_no_shared_clock_evidence(w, decisions):
+    # a partial-merge note carries the whole note, with no field boundaries: its D-ids stay out
+    _mk(w, defn("N"))
+    with w.store._write():
+        w.store._append(w.p("router"), "demo:N", "item_defined", {"note": "per D-5800"}, time.time())
+    _mk(w, defn("L"))
+    assert _clock_top(w) == -1
+    _decide(decisions, 5900, "demo:L scope moved")
+    assert w.store.claim(w.p("l1main"), "demo:L")["epoch"] == 1       # unknown watermark never refuses

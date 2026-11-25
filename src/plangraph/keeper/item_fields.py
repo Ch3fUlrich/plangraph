@@ -104,6 +104,11 @@ def check_wait(value, key=None):
 #: Optional columns folded from ``item_created``/``item_defined`` payloads.
 SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
                 "phase_kind", "fixes", "choices", "kg_refs", "design_ref")
+#: The only item fields whose recorded values the shared decision clock reads.  ``note`` is
+#: not one: historical note text has no reliable field boundaries (a folded description, a
+#: merged-part line) and so supplies no premise evidence.  Metadata such as ``design_ref``
+#: never is.
+CLOCK_PREMISE_FIELDS = ("title", "description", "done_criteria", "source")
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 
