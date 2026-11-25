@@ -49,6 +49,7 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
         state: dir.path().to_path_buf(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],

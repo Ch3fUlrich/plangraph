@@ -1,7 +1,9 @@
 """Quiet loop and flake naming of tools/affected_tests.py, on real pytest in a fixture tree."""
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import textwrap
@@ -208,7 +210,8 @@ def test_rerun_output_is_not_echoed(fx):
     fx.write(FLAKY)
     fx.commit()
     result = fx.run()
-    assert result.stdout.count("1 failed") <= 1
+    report = "\n".join(line for line in result.stdout.splitlines() if not line.startswith("AFFECTED "))
+    assert report.count("1 failed") <= 1
 
 
 def test_a_change_committed_by_the_run_is_not_a_flake(fx):
@@ -324,3 +327,153 @@ def test_collection_attempt_and_retries_get_isolated_basetemps(fx):
     assert len({base.parent for base in bases[1:]}) == 1
     assert all(base.parent.name.startswith("pg-affected-") for base in bases)
     assert all(not base.parent.exists() for base in bases)
+
+
+# LE-FAST-CHECKS-RESULT-READ-FROM-TAIL: --run ends with one machine-read result line.
+PGTEST = Path(__file__).resolve().parents[1] / "tools/pgtest.py"
+LINE = re.compile(r"^AFFECTED rc=(\d+) batches=(\d+) failed=(\d+)$")
+
+
+def selector():
+    spec = importlib.util.spec_from_file_location("pgtest_result", PGTEST)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def last_line(result):
+    return result.stdout.rstrip("\n").splitlines()[-1]
+
+
+def test_early_failing_batch_with_passing_last_batch_is_nonzero_and_counted():
+    summary = selector().affected_summary([("pytest", 1), ("keeper-postgres", 0)])
+    assert summary == (1, "AFFECTED rc=1 batches=2 failed=1")
+
+
+def test_every_batch_green_is_zero():
+    assert selector().affected_summary([("pytest", 0), ("keeper-postgres", 0)]) == (
+        0, "AFFECTED rc=0 batches=2 failed=0")
+
+
+def test_a_failed_batch_keeps_its_own_exit_code():
+    assert selector().affected_summary([("pytest", 0), ("keeper-postgres", 5)])[0] == 5
+
+
+def test_failing_run_ends_with_the_result_line_and_exits_nonzero(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    assert False\n")
+    fixture.commit()
+    result = fixture.run()
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert LINE.match(last_line(result)), result.stdout
+    assert last_line(result) == "AFFECTED rc=1 batches=1 failed=1"
+
+
+def test_passing_run_ends_with_the_result_line(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    result = fixture.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert last_line(result) == "AFFECTED rc=0 batches=1 failed=0"
+
+
+def test_an_empty_selection_still_ends_with_the_result_line(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    result = subprocess.run(
+        [sys.executable, str(TOOL), "--base", "HEAD", "--root", str(fixture.tree),
+         "--changed", "docs/none.md", "--run", "-n", "0", "--within", "tests/test_x.py"],
+        cwd=fixture.tree, env=fixture.env, capture_output=True, text=True, timeout=300)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert last_line(result) == "AFFECTED rc=0 batches=0 failed=0", result.stdout
+
+
+def test_a_refused_selection_still_ends_with_the_result_line(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    result = fixture.run("--within", "no/such/path")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert last_line(result) == "AFFECTED rc=2 batches=0 failed=1", result.stdout
+
+
+def test_argparse_exits_and_collection_only_runs_end_with_the_result_line(tmp_path, monkeypatch):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    bad = subprocess.run([sys.executable, str(TOOL), "--run"], cwd=fixture.tree, env=fixture.env,
+                         capture_output=True, text=True, timeout=300)
+    assert bad.returncode == 2
+    assert last_line(bad) == "AFFECTED rc=2 batches=0 failed=1", bad.stdout + bad.stderr
+    collect = fixture.run("--collect-only")
+    assert collect.returncode == 0, collect.stdout + collect.stderr
+    assert last_line(collect) == "AFFECTED rc=0 batches=0 failed=0", collect.stdout
+
+
+def test_an_early_failing_batch_then_a_passing_batch_through_the_cli(tmp_path, monkeypatch, capsys):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    assert False\n")
+    fixture.commit()
+    tool = load_tool()
+    # A second batch that passes: the CLI wiring still reports the first failure last.
+    monkeypatch.setattr(tool, "keeper_postgres_files", lambda root, changed: ["tests/x"])
+    monkeypatch.setattr(tool, "run_keeper_postgres", lambda *args, **kwargs: 0)
+    for key, value in fixture.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.chdir(fixture.tree)
+    monkeypatch.setattr(sys, "argv", [str(TOOL), "--base", "HEAD", "--root", str(fixture.tree),
+                                      "--changed", "tests/test_x.py", "--run", "-n", "0"])
+    assert tool.main() == 1
+    lines = capsys.readouterr().out.rstrip("\n").splitlines()
+    assert lines[-1] == "AFFECTED rc=1 batches=2 failed=1", lines[-3:]
+
+
+def load_tool():
+    spec = importlib.util.spec_from_file_location("affected_tests_cli", TOOL)
+    tool = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TOOL.parent))
+    try:
+        spec.loader.exec_module(tool)
+    finally:
+        sys.path.pop(0)
+    return tool
+
+
+def test_the_abbreviated_run_flag_and_operational_errors_end_with_a_result_line(tmp_path, monkeypatch, capsys):
+    fixture = Fixture(tmp_path, monkeypatch)
+    fixture.write("def test_x():\n    pass\n")
+    fixture.commit()
+    # `--ru` is argparse's own abbreviation of `--run`: one run-mode decision, the parser's.
+    short = subprocess.run([sys.executable, str(TOOL), "--ru", "--within", "no/such/path", "--base", "HEAD"],
+                           cwd=fixture.tree, env=fixture.env, capture_output=True, text=True, timeout=300)
+    assert short.returncode == 2
+    assert last_line(short) == "AFFECTED rc=2 batches=0 failed=1", short.stdout + short.stderr
+    ambiguous = subprocess.run([sys.executable, str(TOOL), "--ru"], cwd=fixture.tree, env=fixture.env,
+                               capture_output=True, text=True, timeout=300)
+    assert last_line(ambiguous) == "AFFECTED rc=2 batches=0 failed=1", ambiguous.stdout
+    # One diagnostic, not one per parse: a usage error and --help each print their text once.
+    assert short.stderr.count("usage:") == 0 and ambiguous.stderr.count("usage:") == 1, ambiguous.stderr
+    # After `--` a `--run` is a value, not a flag: the usage error stays free of a result line.
+    after = subprocess.run([sys.executable, str(TOOL), "--base", "HEAD", "--", "--run"], cwd=fixture.tree,
+                           env=fixture.env, capture_output=True, text=True, timeout=300)
+    assert after.returncode == 2 and "AFFECTED" not in after.stdout + after.stderr, after.stdout + after.stderr
+    helped = subprocess.run([sys.executable, str(TOOL), "--help"], cwd=fixture.tree, env=fixture.env,
+                            capture_output=True, text=True, timeout=300)
+    assert helped.returncode == 0 and helped.stdout.count("usage:") == 1 and "AFFECTED" not in helped.stdout
+    # An operational error (no scratch directory) is nonzero and says so, then still raises.
+    tool = load_tool()
+
+    def no_scratch(*args, **kwargs):
+        raise OSError("No usable temporary directory found")
+
+    monkeypatch.setattr(tool, "affected_pytest", no_scratch)
+    for key, value in fixture.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.chdir(fixture.tree)
+    monkeypatch.setattr(sys, "argv", [str(TOOL), "--base", "HEAD", "--root", str(fixture.tree),
+                                      "--changed", "tests/test_x.py", "--run", "-n", "0"])
+    with pytest.raises(OSError):
+        tool.main()
+    assert capsys.readouterr().out.rstrip("\n").splitlines()[-1] == "AFFECTED rc=1 batches=0 failed=1"
