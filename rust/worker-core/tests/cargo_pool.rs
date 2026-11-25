@@ -356,3 +356,22 @@ fn a_symlinked_temp_root_is_followed_for_a_target_that_does_not_exist_yet() {
         &[link.as_path()]
     ));
 }
+
+#[test]
+fn the_pool_path_is_what_is_classified_as_temp_on_both_sides() {
+    use pg_worker_core::cargo_cache::review_fallback_primary_in;
+    let home = std::path::Path::new("/fixture/homedir");
+    let default = home.join(".cache/plangraph/cargo-target");
+    // TMPDIR is the pool directory itself, the target sits beside it: the pool is under temp.
+    let roots = [std::path::PathBuf::from("/srv/cargo-target-pool")];
+    assert_eq!(
+        review_fallback_primary_in(std::path::Path::new("/srv/cargo-target"), home, &roots),
+        Some(default)
+    );
+    // TMPDIR is the target's own name: the pool is not under it.
+    let roots = [std::path::PathBuf::from("/srv/cargo-target")];
+    assert_eq!(
+        review_fallback_primary_in(std::path::Path::new("/srv/cargo-target"), home, &roots),
+        None
+    );
+}

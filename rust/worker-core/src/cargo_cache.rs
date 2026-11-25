@@ -43,7 +43,26 @@ pub fn under_roots(path: &Path, roots: &[&Path]) -> bool {
 /// The shared target review seats use in place of one configured under the system temp
 /// directory, which no cap or trim would cover: `<home>/.cache/plangraph/cargo-target`.
 pub fn review_fallback_primary(primary: &Path, home: &Path) -> Option<PathBuf> {
-    under_system_temp(primary).then(|| home.join(".cache/plangraph/cargo-target"))
+    let roots = [
+        Path::new("/tmp"),
+        Path::new("/var/tmp"),
+        env::temp_dir().as_path(),
+    ]
+    .map(Path::to_path_buf);
+    review_fallback_primary_in(primary, home, &roots)
+}
+
+/// As `review_fallback_primary` with explicit temp roots. The classified path is the review
+/// pool (`<target>-pool`), the directory the seats' slots are made in, as the Python placement
+/// classifies it: a `TMPDIR` that is the pool itself counts, a target beside it does not.
+pub fn review_fallback_primary_in(
+    primary: &Path,
+    home: &Path,
+    roots: &[PathBuf],
+) -> Option<PathBuf> {
+    let pool = crate::cargo_pool::pool_root(primary).ok()?;
+    let roots: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+    under_roots(&pool, &roots).then(|| home.join(".cache/plangraph/cargo-target"))
 }
 
 /// Check the actual child setting against the host's configured writer target.
