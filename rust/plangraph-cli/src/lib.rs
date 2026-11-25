@@ -24,7 +24,7 @@ mod landing_hosts;
 mod landing_report;
 pub mod lane_alert;
 pub mod merge_close;
-mod merge_close_unit;
+pub mod merge_close_unit;
 pub mod operator_turns;
 pub mod paths;
 pub mod review;
