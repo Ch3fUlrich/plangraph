@@ -111,23 +111,36 @@ fn decimal_ns(text: &str) -> Option<i128> {
             STAMP_BOUND_NS
         });
     }
-    let places = if n > 1e11 { 6 } else { 9 };
+    let places: i64 = if n > 1e11 { 6 } else { 9 };
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
-        None => (unsigned, 0),
-    };
+    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, ""));
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     // The digits and how many of them lie before the decimal point, leading zeros dropped.
     let all = format!("{whole}{fraction}");
     let digits = all.trim_start_matches('0');
-    let point = whole.len() as i32 + exponent - (all.len() - digits.len()) as i32;
-    // The first `point + places` digits are the value in units of 10^-places of the unit.
-    let keep = usize::try_from(point + places).unwrap_or(0);
+    if digits.is_empty() {
+        return Some(0); // a zero mantissa is zero whatever its exponent says
+    }
+    // An exponent past i64 is a float underflow when negative (the size check refused the rest).
+    let exponent = match exponent.parse::<i64>() {
+        _ if exponent.is_empty() => 0,
+        Ok(exponent) => exponent,
+        Err(_) if exponent.starts_with('-') => return Some(0),
+        Err(_) => return None,
+    };
+    let point = (whole.len() as i64)
+        .saturating_add(exponent)
+        .saturating_sub((all.len() - digits.len()) as i64);
+    // The first `point + places` digits are the value in units of 10^-places of the unit. The
+    // size check above bounds `point` near 16, so more than 25 digits cannot be a real value.
+    let keep = point.saturating_add(places).max(0);
+    if keep > 38 {
+        return None;
+    }
     let kept: String = digits
         .chars()
         .chain(std::iter::repeat('0'))
-        .take(keep)
+        .take(keep as usize)
         .collect();
     let value = if kept.is_empty() {
         0
@@ -334,6 +347,18 @@ mod tests {
         );
         assert_eq!(stamp_ns(&json!("0.0000000000001e13")), Some(1_000_000_000));
         assert_eq!(stamp_ns(&json!("-1.5e0")), Some(-1_500_000_000));
+        // An enormous exponent costs nothing: zero stays zero, a vanishing value is zero.
+        for text in [
+            "0e2147483647",
+            "0e2147483630",
+            "-0e2147483648",
+            "0e99999999999999999999",
+        ] {
+            assert_eq!(stamp_ns(&json!(text)), Some(0), "{text}");
+        }
+        for text in ["1e-2147483648", "1e-99999999999", "1e-99999999999999999999"] {
+            assert_eq!(stamp_ns(&json!(text)), Some(0), "{text}");
+        }
         assert_eq!(
             stamp_ns(&json!("+1800000000.5")),
             stamp_ns(&json!(1_800_000_000.5))

@@ -138,3 +138,40 @@ fn quota_pool_ranks_exponent_form_times_by_their_digits() {
         assert_eq!(at, t as i64 * 1_000_000_000 + 1_501, "{name}");
     }
 }
+
+#[test]
+fn quota_pool_survives_extreme_exponents_beside_a_healthy_account() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    let directory = tempfile::tempdir().unwrap();
+    // Texts a float reads as zero (or not at all) but whose exponent is enormous: they must
+    // neither overflow the digit arithmetic nor ask for gigabytes of digits.
+    let extreme = [
+        "0e2147483647",
+        "0e2147483630",
+        "-0e2147483648",
+        "1e-2147483648",
+        "1e-99999999999",
+        "0e99999999999999999999",
+        "1e-99999999999999999999",
+    ];
+    let mut inserts = insert(1, "codex:a", "NULL", "weekly", "50", &t.to_string(), reset);
+    for (i, text) in extreme.iter().enumerate() {
+        let account = format!("codex:x{i}");
+        inserts += &insert(
+            2 + i as i64,
+            &account,
+            "NULL",
+            "weekly",
+            "50",
+            &format!("'{text}'"),
+            reset,
+        );
+    }
+    let report = pool(Some(&database_sql(directory.path(), &inserts)));
+    let weekly = window(&report, "weekly");
+    near(&weekly["used_pct"], 50.0);
+    assert_eq!(weekly["coverage"]["observed_accounts"], 8, "{weekly}");
+    assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
+    assert_eq!(weekly["accounts"][0]["account"], "a");
+}
