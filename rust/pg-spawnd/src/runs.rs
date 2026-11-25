@@ -196,11 +196,6 @@ impl Runs {
         dry: bool,
         group_meta: Option<(&str, usize, usize, &[String])>,
     ) -> Result<Value, ToolError> {
-        // The id is claimed before the prompt, the captured config or any record is written
-        // into its directory: a refused id leaves every existing run of that id untouched.
-        if !dry && self.supervisor.claim_run(run_id).is_err() {
-            return Err(internal("run id already started or claimed"));
-        }
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});

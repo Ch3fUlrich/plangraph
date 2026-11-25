@@ -58,54 +58,10 @@ impl slots::SeatLocks for Conservative {
         slots::LockState::Unknown
     }
 }
-/// The bound slots that name the same run, process, group and role as an inventory row: the
-/// only rows a proven-gone run may later free.
-fn validated_slots(
-    rows: &[crate::reconcile_store::Entry],
-    table: &slots::SlotTable,
-) -> Vec<(String, u32, Option<u64>, Option<String>)> {
-    let mut validated = Vec::new();
-    for row in rows {
-        for slot in table
-            .active
-            .iter()
-            .filter(|slot| slot.bound && slot.run_id == row.run_id)
-        {
-            let Some(identity) = row.identity.as_ref() else {
-                continue;
-            };
-            if identity.pid != slot.pid
-                || (identity.start_time.is_none() && identity.group.is_none())
-                || !start_matches(identity.start_time, slot.start_time)
-                || identity.group != slot.group
-                || serde_json::to_value(slot.role).ok().as_ref()
-                    != Some(&serde_json::json!(row.role))
-            {
-                continue;
-            }
-            validated.push((
-                slot.run_id.clone(),
-                slot.pid,
-                identity.start_time,
-                slot.group.clone(),
-            ));
-        }
-    }
-    validated
-}
 fn reclaim_after(root: &Path, proof: Reconciled, now: u64) -> Result<(), ReconcileError> {
     if proof.root != root {
         return Err(ReconcileError::Invalid);
     }
-    // A daemon that died between its slot bind and the launcher's result left a row with no
-    // process behind it; it is freed only on proof, before the reconciled rows are reclaimed.
-    #[cfg(target_os = "linux")]
-    pg_worker_core::run::slot_bind::release_pre_exec(
-        root,
-        &slots::LinuxLiveness::host(),
-        &crate::reconcile_scope_proof::CgroupScopes::host(),
-    )
-    .map_err(|_| ReconcileError::Io)?;
     let report = slots::with_table(root, Duration::from_secs(2), |table| {
         // Exclude pending, queued, live and unrecognized bindings entirely;
         // in particular the core's groupless dead-pid shortcut cannot run on them.
@@ -255,8 +211,34 @@ fn start(root: &Path, guard: &mut Guard) -> Result<(), ReconcileError> {
         }
     };
     let rows = crate::reconcile_store::inventory(root)?;
-    let validated = slots::with_table(root, Duration::from_secs(2), |table| {
-        validated_slots(&rows, table)
+    let mut validated = Vec::new();
+    slots::with_table(root, Duration::from_secs(2), |table| {
+        for row in &rows {
+            for slot in table
+                .active
+                .iter()
+                .filter(|slot| slot.bound && slot.run_id == row.run_id)
+            {
+                let Some(identity) = row.identity.as_ref() else {
+                    continue;
+                };
+                if identity.pid != slot.pid
+                    || (identity.start_time.is_none() && identity.group.is_none())
+                    || !start_matches(identity.start_time, slot.start_time)
+                    || identity.group != slot.group
+                    || serde_json::to_value(slot.role).ok().as_ref()
+                        != Some(&serde_json::json!(row.role))
+                {
+                    continue;
+                }
+                validated.push((
+                    slot.run_id.clone(),
+                    slot.pid,
+                    identity.start_time,
+                    slot.group.clone(),
+                ));
+            }
+        }
     })
     .map_err(|_| ReconcileError::Io)?;
     // Replay uses daemon-level evidence configuration, never a record's role.
