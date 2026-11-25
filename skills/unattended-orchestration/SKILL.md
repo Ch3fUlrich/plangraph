@@ -170,3 +170,21 @@ the session through `plangraph watcher-launch`.
   is never the fix.
 - Before you start work in an area, read the open and done `LE-*` items that name its files.
 - A lesson that happens twice raises the priority of its item.
+
+## Messages between sessions: the fleet bus, nothing else
+
+Every message from one agent session to another goes over the fleet bus of the keeper, on every host and in
+every harness (Claude Code, Codex, OpenCode). The bus signs each message with the host key, the keeper stores it,
+and the web UI shows it. Pull request comments, inbox files and harness-private messages are not a channel: a
+decision that arrives that way is not on record.
+
+- The client is in the repository. Set it up once per shell, from the repository root:
+  `export FLEET_MSG_INVENTORY=~/.config/plangraph/fleet-bus/inventory.json FLEET_MSG_HOST=<this host's name in the
+  inventory> PG_TOKEN_FILE=<your keeper token file> PYTHONPATH=src`
+- Send: `python3 -m plangraph.fleet_bus.client send <role> "<one line>"` (roles: routing, plan-order,
+  plan-roadmap, chatgpt-main, ...). Read: `python3 -m plangraph.fleet_bus.client read`; act on the rows whose
+  `to` is your role.
+- At session start send one test line to routing and read the reply before relying on the channel.
+- A refusal is fixed, not reported and worked around: `unknown_kid` means the keeper unit lacks
+  `PLANGRAPH_BUS_INVENTORY`; an unknown role means the inventory's `agents` map lacks it on some host.
+- The wire contract is `docs/FLEET-BUS.md`.
