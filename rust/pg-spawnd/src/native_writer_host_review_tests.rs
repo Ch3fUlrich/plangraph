@@ -136,6 +136,7 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         state: dir.path().to_path_buf(),
         brief: "the item brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -231,4 +232,125 @@ fn native_sonnet_pass_requires_reported_tests() {
         let verdict = review_record_verdict(state.path(), &record, &head, &paths, None).unwrap();
         assert_eq!(verdict["verdict"], expected, "{verdict}");
     }
+}
+
+/// Set on the stand-in's child process only (by `Host::fast_checks_command`): the test harness's
+/// own process never has it, so the stand-in test below is a no-op there.
+pub(super) const STAND_IN_MARKER: &str = "PG_FAKE_FAST_CHECKS";
+const STAND_IN_TEST: &str = "native_writer_host::review_tests::fast_checks_stand_in";
+
+/// What a test host runs in place of the shared exact-head fast checks (the real command is tested
+/// in plangraph-cli), on every platform: this test executable runs again, as the policy and umask
+/// tests of this module do, and that run publishes the receipt through the real producer.
+pub(super) fn stand_in_argv() -> Option<Vec<String>> {
+    Some(vec![
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--exact".into(),
+        STAND_IN_TEST.into(),
+        "--nocapture".into(),
+    ])
+}
+
+/// The stand-in's own run: publishes the receipt of HEAD in the current directory when the host
+/// marked it; nothing when the harness runs it as an ordinary test.
+#[test]
+fn fast_checks_stand_in() {
+    if std::env::var_os(STAND_IN_MARKER).is_none() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let head = pg_worker_core::git::git(&cwd, &["rev-parse", "HEAD"]).unwrap();
+    let check = pg_worker_core::fast_check_stamp::Check {
+        label: "fake-fast-checks".into(),
+        rc: 0,
+        seconds: 0.1,
+    };
+    pg_worker_core::fast_check_stamp::publish(&cwd, &head, &[check]).unwrap();
+}
+
+/// The fast-check receipt is the shared producer's (structured, in the shared state and as one
+/// parentless commit), and the push sends the head and its per-lane receipt ref in one atomic push.
+pub(super) fn assert_shared_receipt_and_push(host: &mut Host, dir: &Path, head: &str) {
+    let cwd = host.cwd.clone();
+    let receipt = fs::read_to_string(host.stamp(head).unwrap()).unwrap();
+    assert!(
+        receipt.starts_with(&format!(
+            "head {head}\nresult green\ncheck fake-fast-checks rc=0 "
+        )),
+        "{receipt}"
+    );
+    assert!(pg_worker_core::fast_check_stamp::green(&cwd, head));
+    let remote = dir.join("receipts-remote.git");
+    host.git(&["init", "-q", "--bare", remote.to_str().unwrap()])
+        .unwrap();
+    host.git(&["remote", "set-url", "origin", remote.to_str().unwrap()])
+        .unwrap();
+    host.push_ref = Some("refs/heads/lane/h".into());
+    host.push(head).unwrap();
+    let tip = pg_worker_core::git::git(
+        &remote,
+        &["rev-parse", "refs/notes/plangraph-fast-checks-lane%2fh"],
+    )
+    .unwrap();
+    assert_eq!(
+        pg_worker_core::fast_check_stamp::notes_commit_green(&remote, &tip, Some(head)),
+        Ok(())
+    );
+    assert_eq!(
+        pg_worker_core::git::git(&remote, &["rev-parse", "refs/heads/lane/h"]).unwrap(),
+        head
+    );
+    host.push_ref = None;
+}
+
+/// A fresh feeder launch renders its brief before the worktree exists: the gate paths come from
+/// the host repository, not from the display `WORKTREE` sentence or the missing worktree.
+#[test]
+fn a_fresh_feeder_launch_renders_the_gate_paths_before_its_worktree_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(repo.join("tools")).unwrap();
+    fs::write(
+        repo.join("tools/ci_commit_gate.py"),
+        "GATE_PATHS: tuple[str, ...] = (\n    'tools/ci_commit_gate.py',\n    '.github/workflows/*',\n)\n",
+    )
+    .unwrap();
+    let record_path = dir.path().join("state/runs/run-fresh/record.json");
+    let record = json!({"run_id":"run-fresh", "repo":repo, "base_ref":"refs/heads/main",
+        "tool_path":"/nonexistent", "cwd":dir.path().join("worktree-not-yet-created")});
+    let request = json!({"record":record, "record_path":record_path, "card":{},
+        "prompt": include_str!("../tests/fixtures/feeder-batch-input.txt")});
+    let mut host = Host::from_request(&request, &record, record_path).unwrap();
+    host.configure(&request).unwrap();
+    let line = host
+        .brief
+        .lines()
+        .find(|line| line.starts_with("GATE_PATHS "))
+        .unwrap_or_else(|| panic!("no GATE_PATHS line in {}", host.brief));
+    assert!(line.contains("tools/ci_commit_gate.py") && line.contains(".github/workflows/*"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failing_command_carries_its_stdout_and_stderr() {
+    let error = output(Command::new("sh").args([
+        "-c",
+        "echo 'stdout line: gate output'; echo 'stderr line' >&2; exit 3",
+    ]))
+    .unwrap_err();
+    assert!(error.contains("exit status: 3"), "{error}");
+    assert!(
+        error.contains("stdout: stdout line: gate output"),
+        "{error}"
+    );
+    assert!(error.contains("stderr: stderr line"), "{error}");
+    // A tool that prints nothing still names the exit status.
+    let error = output(&mut Command::new("false")).unwrap_err();
+    assert!(
+        error.starts_with("command failed (exit status: 1)"),
+        "{error}"
+    );
 }

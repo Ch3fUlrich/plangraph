@@ -54,6 +54,10 @@ struct Host {
     record_path: PathBuf,
     base_ref: String,
     tool_path: String,
+    /// Tests only: runs in place of `plangraph fast-checks --owned-worktree` (a build without
+    /// `cfg(test)` has no way to replace the required command).
+    #[cfg(test)]
+    fast_checks_stand_in: Option<Vec<String>>,
     effort: String,
     /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
     state: PathBuf,
@@ -84,6 +88,51 @@ fn output(command: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }
 impl Host {
+    /// The shared exact-head fast checks: always `plangraph fast-checks --owned-worktree`.
+    #[cfg(not(test))]
+    fn fast_checks_command(&self) -> Command {
+        let mut command = self.command("plangraph");
+        command.args(["fast-checks", "--owned-worktree"]);
+        command
+    }
+    /// The same, or the stand-in a test gave this host, marked for the child process only.
+    #[cfg(test)]
+    fn fast_checks_command(&self) -> Command {
+        match &self.fast_checks_stand_in {
+            Some(argv) => {
+                let mut command = self.command(&argv[0]);
+                command
+                    .args(&argv[1..])
+                    .env(review_tests::STAND_IN_MARKER, "1");
+                command
+            }
+            None => {
+                let mut command = self.command("plangraph");
+                command.args(["fast-checks", "--owned-worktree"]);
+                command
+            }
+        }
+    }
+    /// Push `head` to `target` with its receipt in one push (a lane gets its designated receipt
+    /// ref, any other branch is pushed alone). The caller holds the mutation guard.
+    fn publish_head(&mut self, head: &str, target: &str) -> Result<(), String> {
+        // No force flag on the branch: the remote refuses anything but a fast-forward.
+        let mut argv = pg_worker_core::fast_check_stamp::push_argv(head, target);
+        // A head that was never fast-checked has no receipt to send; the lane hook refuses it.
+        if self
+            .git(&[
+                "rev-parse",
+                "--verify",
+                "-q",
+                &pg_worker_core::fast_check_stamp::local_receipt_ref(head),
+            ])
+            .is_err()
+        {
+            argv.truncate(4);
+        }
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        self.git(&argv).map(|_| ())
+    }
     fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut command = Command::new(program);
         command.env("PATH", &self.tool_path);
@@ -333,14 +382,43 @@ impl Driver for Host {
         // The turns up to this head are bound to it before the gates run, so a head whose gate
         // fails keeps its own output and the next head starts after it.
         self.session_excerpt(&stamp)?;
-        let log = self.checks()?;
+        let (mut log, _) = self.checks_run()?;
+        // The shared exact-head fast checks (affected tests, lints, formatting): the same command
+        // a human writer runs, and the only producer of the receipt a lane push needs.
+        let shared = self
+            .fast_checks_command()
+            .current_dir(&self.cwd)
+            .output()
+            .map_err(|e| format!("plangraph fast-checks: {e}"))?;
+        log.push_str(&format!(
+            "== plangraph fast-checks --owned-worktree ({})\n{}{}\n",
+            shared.status,
+            String::from_utf8_lossy(&shared.stdout),
+            String::from_utf8_lossy(&shared.stderr)
+        ));
         // The exact-head gate output, named in the review brief next to the stamp.
-        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
-        fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
-            .map_err(|e| e.to_string())
+        fs::write(stamp.with_extension("log"), &log).map_err(|e| e.to_string())?;
+        if !shared.status.success() {
+            return Err(format!(
+                "plangraph fast-checks failed ({}):\n{}",
+                shared.status,
+                String::from_utf8_lossy(&shared.stderr).trim()
+            ));
+        }
+        // The worktree's own stamp holds the shared receipt's text for the review gate.
+        let receipt = pg_worker_core::worktree::fast_check_stamp(&self.cwd, head)
+            .map_err(|e| e.to_string())?;
+        let text = fs::read_to_string(receipt).map_err(|e| format!("no shared receipt: {e}"))?;
+        if !pg_worker_core::fast_check_stamp::text_is_green(&text, head) {
+            return Err(format!("shared receipt of {head} is not green"));
+        }
+        fs::write(&stamp, text).map_err(|e| e.to_string())
     }
     fn stamped(&mut self, head: &str) -> bool {
-        self.stamp(head).is_ok_and(|stamp| stamp.is_file())
+        self.stamp(head).is_ok_and(|stamp| {
+            fs::read_to_string(stamp)
+                .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, head))
+        })
     }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
@@ -355,8 +433,7 @@ impl Driver for Host {
             return Ok(None);
         };
         let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        // No force flag: the remote refuses anything but a fast-forward.
-        self.git(&["push", "origin", &format!("{head}:{target}")])?;
+        self.publish_head(head, &target)?;
         Ok(Some(target))
     }
     fn record_quota(&mut self, limit: &crate::native_writer::quota::Limit) -> Result<(), String> {

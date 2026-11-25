@@ -55,6 +55,7 @@ fn local_base_fixture(dir: &Path) -> Host {
         state: dir.to_path_buf(),
         brief: "brief".into(),
         push_ref: Some("refs/heads/phase/local-result".into()),
+        fast_checks_stand_in: super::review_tests::stand_in_argv(),
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],

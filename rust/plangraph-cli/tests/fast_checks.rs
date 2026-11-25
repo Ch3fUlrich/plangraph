@@ -4,6 +4,30 @@ mod test_python;
 
 use std::{fs, path::Path, process::Command};
 
+fn git_stdin(root: &Path, args: &[&str], input: &str) -> String {
+    use std::io::Write;
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "F")
+        .env("GIT_AUTHOR_EMAIL", "f@example.test")
+        .env("GIT_COMMITTER_NAME", "F")
+        .env("GIT_COMMITTER_EMAIL", "f@example.test")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().into()
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(root)
@@ -310,18 +334,268 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         let commit = git(root, &["rev-parse", "HEAD"]);
         let output = run(fail);
         assert_eq!(output.status.success(), fail == "0", "{output:?}");
-        assert_eq!(
-            root.join(".git/plangraph-state/fast-checks")
-                .join(&commit)
-                .is_file(),
-            fail == "0"
+        // Every outcome leaves a receipt for the head; only a passing run leaves a green one.
+        let receipt =
+            fs::read_to_string(root.join(".git/plangraph-state/fast-checks").join(&commit))
+                .unwrap();
+        let verdict = if fail == "0" { "green" } else { "red" };
+        assert!(
+            receipt.starts_with(&format!("head {commit}\nresult {verdict}\n")),
+            "{receipt}"
         );
+        assert!(
+            receipt.contains(&format!("check affected-tests rc={fail} wall=")),
+            "{receipt}"
+        );
+        // The receipt also travels as one parentless commit holding only that receipt.
+        let local = format!("refs/plangraph/receipts/{commit}");
+        assert_eq!(
+            git(root, &["show", &format!("{local}:{commit}")]),
+            receipt.trim()
+        );
+        assert_eq!(git(root, &["rev-list", "--count", &local]), "1");
         assert_eq!(
             git(root, &["worktree", "list", "--porcelain"]).replace(&commit, &base),
             before
         );
         assert!(!root.join("generated").exists());
     }
+}
+
+#[test]
+fn stamp_green_accepts_only_a_green_receipt_of_that_head() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    git(root, &["init", "-q"]);
+    git(root, &["commit", "--allow-empty", "-qm", "base"]);
+    let head = git(root, &["rev-parse", "HEAD"]);
+    let ask = |head: &str| {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(root)
+            .args(["fast-checks", "--stamp-green", head])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(!ask(&head), "no receipt");
+    let state = root.join(".git/plangraph-state/fast-checks");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(
+        state.join(&head),
+        format!("head {head}\nresult red\ncheck fmt rc=1 wall=1.000\n"),
+    )
+    .unwrap();
+    assert!(!ask(&head), "red receipt");
+    fs::write(
+        state.join(&head),
+        format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n"),
+    )
+    .unwrap();
+    assert!(ask(&head), "green receipt");
+    assert!(!ask(&"0".repeat(40)), "another head");
+}
+
+#[test]
+fn a_receipt_pushed_with_the_lane_head_is_read_green_from_a_second_clone() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = dir.path().join("remote.git");
+    let writer = dir.path().join("writer");
+    let orchestrator = dir.path().join("orchestrator");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    fs::create_dir_all(&writer).unwrap();
+    git(&writer, &["init", "-q"]);
+    git(
+        &writer,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&writer, &["commit", "--allow-empty", "-qm", "item"]);
+    let head = git(&writer, &["rev-parse", "HEAD"]);
+    // The receipt exactly as `fast-checks --owned-worktree` publishes it: one parentless commit.
+    let receipt = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n");
+    let blob = git_stdin(&writer, &["hash-object", "-w", "--stdin"], &receipt);
+    let tree = git_stdin(
+        &writer,
+        &["mktree"],
+        &format!("100644 blob {blob}\t{head}\n"),
+    );
+    let commit = git(
+        &writer,
+        &["commit-tree", &tree, "-m", "fast-checks receipt"],
+    );
+    let local = format!("refs/plangraph/receipts/{head}");
+    git(&writer, &["update-ref", &local, &commit]);
+    // The designated receipt ref of the lane comes from the one mapping.
+    let designated = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(&writer)
+        .args(["fast-checks", "--receipt-ref", "refs/heads/lane/x"])
+        .output()
+        .unwrap();
+    let designated = String::from_utf8(designated.stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert_eq!(designated, "refs/notes/plangraph-fast-checks-lane%2fx");
+    // The one documented push: the lane head and its receipt ref, atomically.
+    git(
+        &writer,
+        &[
+            "push",
+            "-q",
+            "--atomic",
+            "origin",
+            "HEAD:refs/heads/lane/x",
+            &format!("+{local}:{designated}"),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            orchestrator.to_str().unwrap(),
+        ],
+    );
+    let ask = || {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .current_dir(&orchestrator)
+            .args(["fast-checks", "--stamp-green", &head])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    git(&orchestrator, &["fetch", "-q", "origin", "lane/x"]);
+    assert!(!ask(), "the lane head alone carries no receipt");
+    git(
+        &orchestrator,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            &format!("+{designated}:{designated}"),
+        ],
+    );
+    assert!(
+        ask(),
+        "the fetched receipt ref is a green receipt of that head"
+    );
+}
+
+/// The pairing of a lane head and its receipt at publication is held by the managed publisher:
+/// `push_argv` is `--atomic`, and git applies an atomic push all or nothing. A per-ref `update`
+/// hook (which, unlike `pre-receive`, can reject one ref and let another through) shows both
+/// halves: with `--atomic` a rejected receipt leaves the lane unchanged; without it the lane
+/// moves alone, and the consumer (`--stamp-green`) then refuses that head. The guarantee is
+/// scoped to the managed atomic publisher; nothing on the receiving side of a plain push can
+/// enforce more.
+#[cfg(unix)]
+#[test]
+fn an_atomic_push_moves_both_refs_or_neither_and_a_split_lane_has_no_green_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = dir.path().join("remote.git");
+    let writer = dir.path().join("writer");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    fs::create_dir_all(&writer).unwrap();
+    git(&writer, &["init", "-q"]);
+    git(
+        &writer,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&writer, &["commit", "--allow-empty", "-qm", "item"]);
+    let head = git(&writer, &["rev-parse", "HEAD"]);
+    let receipt = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n");
+    let blob = git_stdin(&writer, &["hash-object", "-w", "--stdin"], &receipt);
+    let tree = git_stdin(
+        &writer,
+        &["mktree"],
+        &format!("100644 blob {blob}\t{head}\n"),
+    );
+    let commit = git(
+        &writer,
+        &["commit-tree", &tree, "-m", "fast-checks receipt"],
+    );
+    git(
+        &writer,
+        &[
+            "update-ref",
+            &format!("refs/plangraph/receipts/{head}"),
+            &commit,
+        ],
+    );
+    let argv = pg_worker_core::fast_check_stamp::push_argv(&head, "lane/x");
+    assert_eq!(argv[1], "--atomic");
+    let split: Vec<&String> = argv.iter().filter(|a| *a != "--atomic").collect();
+    // Reject only the receipt ref, per ref.
+    let hook = remote.join("hooks/update");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &hook,
+        "#!/bin/sh\ncase \"$1\" in refs/notes/*) exit 1;; esac\nexit 0\n",
+    );
+    let atomic = Command::new("git")
+        .current_dir(&writer)
+        .args(&argv)
+        .output()
+        .unwrap();
+    assert!(!atomic.status.success(), "{atomic:?}");
+    assert!(
+        !git(&remote, &["for-each-ref"]).contains("lane"),
+        "an atomic push with a rejected receipt moved the lane"
+    );
+    // Without --atomic the same rejection splits the publication: the lane lands alone.
+    let plain = Command::new("git")
+        .current_dir(&writer)
+        .args(split)
+        .output()
+        .unwrap();
+    assert!(!plain.status.success(), "{plain:?}");
+    let refs = git(&remote, &["for-each-ref"]);
+    assert!(
+        refs.contains("refs/heads/lane/x") && !refs.contains("plangraph-fast-checks"),
+        "{refs}"
+    );
+    // The consumer refuses the split lane: a fetched head with no receipt is not green.
+    let clone = dir.path().join("clone");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            remote.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
+    );
+    let green = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(&clone)
+        .args(["fast-checks", "--stamp-green", &head])
+        .status()
+        .unwrap();
+    assert!(
+        !green.success(),
+        "a lane head without its receipt must not be green"
+    );
+    // Nothing rejected: both refs land together.
+    fs::remove_file(&hook).unwrap();
+    git(&remote, &["update-ref", "-d", "refs/heads/lane/x"]);
+    let pushed = Command::new("git")
+        .current_dir(&writer)
+        .args(&argv)
+        .output()
+        .unwrap();
+    assert!(pushed.status.success(), "{pushed:?}");
+    let refs = git(&remote, &["for-each-ref"]);
+    assert!(
+        refs.contains("refs/heads/lane/x") && refs.contains("plangraph-fast-checks-lane%2fx"),
+        "{refs}"
+    );
 }
 
 #[test]

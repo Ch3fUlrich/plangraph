@@ -94,6 +94,7 @@ fn native_class_search_uses_the_pinned_range_under_the_policy_lease() {
         state: root.clone(),
         brief: "brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
