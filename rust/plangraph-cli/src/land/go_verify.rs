@@ -143,7 +143,7 @@ fn no(code: &'static str, detail: impl Into<String>) -> Refusal {
     }
 }
 
-fn operator_class(path: &str) -> bool {
+pub(super) fn operator_class(path: &str) -> bool {
     OPERATOR_CLASS.iter().any(|p| match p.strip_suffix('/') {
         Some(_) => path.starts_with(p),
         None => {

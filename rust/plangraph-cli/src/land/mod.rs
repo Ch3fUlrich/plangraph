@@ -4,6 +4,11 @@ pub mod build;
 mod build_tests;
 mod chain;
 pub mod cli;
+#[cfg(test)]
+mod cut_check_tests;
+mod cut_gate;
+#[cfg(test)]
+mod cut_preflight_tests;
 pub mod delta;
 pub mod deploy;
 mod deploy_probe;

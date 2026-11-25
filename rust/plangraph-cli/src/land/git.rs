@@ -183,12 +183,28 @@ impl Checkout {
     pub fn new(repo: &Path, commit: &str) -> Result<Checkout, String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let target = dir.path().to_string_lossy().into_owned();
-        let source = repo.to_string_lossy().into_owned();
-        out(
-            dir.path(),
-            &["clone", "-q", "--shared", "--no-checkout", &source, &target],
-        )?;
-        out(dir.path(), &["checkout", "-q", "--detach", commit])?;
+        // The clone runs inside the scratch directory: a relative repository path would no longer resolve there.
+        let source = std::path::absolute(repo)
+            .map_err(|e| format!("repository path {}: {e}", repo.display()))?
+            .to_string_lossy()
+            .into_owned();
+        // System attributes would change what the checkout converts; the clone and the checkout read none.
+        let step = |args: &[&str]| -> Result<(), String> {
+            let o = command(dir.path(), None)
+                .env("GIT_ATTR_NOSYSTEM", "1")
+                .args(args)
+                .output()
+                .map_err(|e| format!("git {args:?}: {e}"))?;
+            if o.status.success() {
+                return Ok(());
+            }
+            Err(format!(
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ))
+        };
+        step(&["clone", "-q", "--shared", "--no-checkout", &source, &target])?;
+        step(&["checkout", "-q", "--detach", commit])?;
         Ok(Checkout {
             dir,
             repo: repo.to_owned(),
