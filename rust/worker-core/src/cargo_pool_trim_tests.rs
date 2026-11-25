@@ -94,7 +94,14 @@ fn trim_preserves_build_unit_beneath_ancestor_bind_mount() {
         // A bind mount of `debug` (same device, so metadata cannot tell) above the stale unit.
         let mut report = Report::default();
         let total = with_inventory(Some(mounted(&slot.join("debug"))), || {
-            enforce_review_slots(&primary, &[slot.clone()], 500, apply, &mut report).unwrap()
+            enforce_review_slots(
+                &primary,
+                std::slice::from_ref(&slot),
+                500,
+                apply,
+                &mut report,
+            )
+            .unwrap()
         });
         assert!(old.join("output").exists());
         assert!(report.skipped.iter().any(|l| l.contains("mount above")));
@@ -120,7 +127,14 @@ fn pool_fallback_preserves_mount_root_and_contents() {
         let root = primary.canonicalize().unwrap().join("debug");
         let mut report = Report::default();
         let total = with_inventory(Some(vec![root.clone()]), || {
-            enforce_pool_cap(&primary, &[primary.clone()], 500, apply, &mut report).unwrap()
+            enforce_pool_cap(
+                &primary,
+                std::slice::from_ref(&primary),
+                500,
+                apply,
+                &mut report,
+            )
+            .unwrap()
         });
         assert!(root.join("data").exists(), "mount root and contents kept");
         assert!(report.skipped.iter().any(|l| l.contains("mount inside")));
@@ -139,7 +153,14 @@ fn unreadable_inventory_leaves_the_bytes_and_records_a_skip() {
         let (slot, old) = review_slot(&primary, "a");
         let mut report = Report::default();
         with_inventory(None, || {
-            enforce_review_slots(&primary, &[slot.clone()], 500, apply, &mut report).unwrap()
+            enforce_review_slots(
+                &primary,
+                std::slice::from_ref(&slot),
+                500,
+                apply,
+                &mut report,
+            )
+            .unwrap()
         });
         assert!(old.exists());
         assert!(report.skipped.iter().any(|l| l.contains("unreadable")));
@@ -169,7 +190,14 @@ fn dry_run_counts_a_subtree_once_across_unit_and_profile_passes() {
         let mut report = Report::default();
         // Unit pass removes 400 of 1300; the profile fallback removes the rest of `debug` (600):
         // `release` (300) is what remains, and the loop stops there.
-        enforce_pool_cap(&primary, &[primary.clone()], 300, apply, &mut report).unwrap()
+        enforce_pool_cap(
+            &primary,
+            std::slice::from_ref(&primary),
+            300,
+            apply,
+            &mut report,
+        )
+        .unwrap()
     };
     assert_eq!(expected(true), 300);
     assert_eq!(expected(false), 300);
@@ -212,7 +240,7 @@ fn an_unmeasurable_slot_is_reported_incomplete() {
     let hidden = slot.join("hidden");
     fs::create_dir(&hidden).unwrap();
     let original_permissions = fs::metadata(&hidden).unwrap().permissions();
-    fs::set_permissions(&hidden, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o000)).unwrap();
     let mut report = Report::default();
     let result = enforce_review_slots(&primary, &[slot], 100, true, &mut report);
     fs::set_permissions(&hidden, original_permissions).unwrap();

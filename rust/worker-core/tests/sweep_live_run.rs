@@ -43,6 +43,7 @@ fn protection(guards: Guards) -> Protection {
         claims: Claims {
             paths: vec![],
             branches: vec![],
+            unbound_runs: 0,
         },
         units: vec![],
         unit_refs: vec![],
