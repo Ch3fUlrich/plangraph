@@ -238,19 +238,15 @@ fn rules(lines: Vec<Value>) -> Vec<String> {
 }
 
 fn stub_claude(root: &Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let stub = root.join("claude-stub");
     let log = root.join("stop.log");
-    fs::write(
-        &stub,
-        format!(
+    pg_worker_core::executable_test_support::write_script(
+        root,
+        "claude-stub",
+        &format!(
             "#!/bin/sh\n[ \"$1\" = stop ] && echo \"$@\" >> {}\nexit 0\n",
             log.display()
         ),
     )
-    .unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-    stub
 }
 
 #[test]
