@@ -321,7 +321,7 @@ pub fn tick(
         // open: a command that finished, a wait that returned or a new round releases it.
         let same = open.as_ref().is_some_and(|o| {
             o.round_key == wait.round_key && o.task_id == wait.task_id && o.call_id == wait.call_id
-        });
+        }) || reader.episode_alive(&wait.task_id, &wait.call_id, now_ms);
         if phase == Phase::Stopping && !same {
             // The wait closed. No new signal is sent. If this stop reached its signal stage
             // (its mark is in the owner's output) the harness's report decides it: a

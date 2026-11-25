@@ -60,15 +60,30 @@ impl Reader {
             .into_iter()
             .find_map(|(id, tool)| Some((id.clone(), tool, self.authorized_task(tool)?)))?;
         let bg = &self.background[index];
+        // The wait is the episode this call belongs to, named by its first call.
+        let episode = self.episodes.get(&bg.task.id);
         Some(OpenWait {
             round_key: row.round_key.clone(),
             task_id: bg.task.id.clone(),
             task: bg.task.clone(),
-            call_id,
+            call_id: episode.map_or(call_id, |e| e.first_call.clone()),
             command: bg.command.clone(),
             class: bg.class,
-            waited_ms: (now_ms - tool.started_ms).max(0),
+            waited_ms: (now_ms - episode.map_or(tool.started_ms, |e| e.start_ms)).max(0),
         })
+    }
+
+    /// True while the episode of `call_id` on the task goes on: the writer is between two of
+    /// its back-to-back calls (the last line is seconds old) and the command still runs.
+    pub fn episode_alive(&self, task_id: &str, call_id: &str, now_ms: i64) -> bool {
+        const BETWEEN_CALLS_MS: i64 = 30_000;
+        self.prev_ts
+            .is_some_and(|last| now_ms - last <= BETWEEN_CALLS_MS)
+            && self.background.iter().any(|bg| bg.task.id == task_id)
+            && self
+                .episodes
+                .get(task_id)
+                .is_some_and(|e| !e.interrupted && e.first_call == call_id)
     }
     /// A round the watchdog closed ends at its terminal time: the open wait that earned
     /// the close is booked up to it, so the row holds the minutes that triggered it.

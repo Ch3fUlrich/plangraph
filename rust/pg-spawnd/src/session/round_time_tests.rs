@@ -508,3 +508,67 @@ fn time_after_an_ended_turn_with_nothing_running_is_between_rounds_not_harness()
         "prompt to request, and two model waits"
     );
 }
+
+#[test]
+fn consecutive_blocking_calls_on_one_task_are_one_episode_named_by_its_first_call() {
+    let mut t = explicit_wait("bg1", "echo started");
+    t.0.pop();
+    t.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.result(4_000 + 5 * MIN, "c1", None);
+    t.tool(
+        4_000 + 5 * MIN + 500,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    let wait = t.read().open_wait(T0 + 4_000 + 8 * MIN).unwrap();
+    assert_eq!(wait.call_id, "c1");
+    assert_eq!(
+        wait.waited_ms,
+        8 * MIN,
+        "age counts from the first call of the chain"
+    );
+    // Work in between starts a new episode with its own first call and its own age.
+    let mut broken = explicit_wait("bg1", "echo started");
+    broken.0.pop();
+    broken.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    broken.result(4_000 + 5 * MIN, "c1", None);
+    broken.tool(
+        4_000 + 5 * MIN + 100,
+        "e1",
+        "Edit",
+        json!({"file_path": "a.rs"}),
+    );
+    broken.result(4_000 + 5 * MIN + 200, "e1", None);
+    broken.tool(
+        4_000 + 5 * MIN + 500,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    let wait = broken.read().open_wait(T0 + 4_000 + 8 * MIN).unwrap();
+    assert_eq!(wait.call_id, "c2");
+    assert_eq!(wait.waited_ms, 8 * MIN - 5 * MIN - 500);
+    assert!(broken
+        .read()
+        .episode_alive("bg1", "c2", T0 + 4_000 + 5 * MIN + 10_000));
+    assert!(
+        !broken
+            .read()
+            .episode_alive("bg1", "c2", T0 + 4_000 + 9 * MIN),
+        "a long silence is no gap between calls"
+    );
+    assert!(!broken
+        .read()
+        .episode_alive("bg1", "c1", T0 + 4_000 + 5 * MIN + 10_000));
+}
