@@ -13,10 +13,12 @@ fn catalog() -> Vec<Value> {
             "-c",
             r#"
 import json
+import sys
 from dataclasses import replace
 from unittest.mock import patch
 from plangraph.planner.legs import spawnable_legs, REVIEW_FALLBACK_LEGS
 from plangraph.routing_support import resolver
+from plangraph.routing_support.clients import HarnessBinary
 from plangraph.routing_support.opencode_overlay import overlay_env
 from plangraph.routing_support.opencode_render import render_gateway_providers
 
@@ -25,7 +27,11 @@ legs['unknown-model-regression'] = replace(legs['omniroute-muse-spark'],
     id='unknown-model-regression', model='omniroute/unknown-model')
 rows = []
 # Use shipped configuration and fixture endpoints, never operator files or live probes.
+# The harness lookup is stubbed to any existing executable: the catalog check must not depend on
+# an opencode install (the CI runners have none), on a shell script, or on the platform.
+found = lambda name, env=None, search=None: HarnessBinary(name, sys.executable, (sys.executable,), 'env')
 with patch.object(resolver, 'host_probe_env', lambda env: overlay_env(env)), \
+     patch.object(resolver, 'resolve_harness_binary', found), \
      patch('plangraph.routing_support.clients.effective_gateway_base_url',
            return_value='https://gateway.example/v1'):
     for leg in legs.values():

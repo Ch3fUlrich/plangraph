@@ -195,8 +195,9 @@ def hermetic_opencode_binary(monkeypatch, tmp_path_factory):
     """A fixture opencode sits last on PATH: no test depends on the host's install, and a test
     that sets its own PATH or places its own binary first still decides."""
     directory = tmp_path_factory.mktemp('opencode-bin')
-    binary = directory / 'opencode'
-    binary.write_text('#!/bin/sh\n')
+    windows = sys.platform == 'win32'   # a .cmd stand-in is what PATHEXT finds there; a script elsewhere
+    binary = directory / ('opencode.cmd' if windows else 'opencode')
+    binary.write_text('@echo off\r\n' if windows else '#!/bin/sh\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', os.pathsep.join(filter(None, (os.environ.get('PATH'), str(directory)))))
 
