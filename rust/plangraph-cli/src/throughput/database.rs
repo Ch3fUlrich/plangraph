@@ -359,14 +359,15 @@ impl Db {
         for (set, row) in [(arrivals, &mut arrival_row), (trains, &mut train_row)] {
             for arrival in set {
                 let parts = inputs.accepted_parts(arrival);
-                if std::ptr::eq(set, trains) {
-                    // More accepted heads than parts the lander recorded: some head was not part of this train
-                    // (it reached main on its own), so the join cannot be verified and stays unknown.
-                    if arrival.parts.is_some_and(|held| parts.len() > held) {
+                if let Some(heads) = &arrival.part_heads {
+                    // The history shows as many part heads as the lander recorded parts, or nothing is attributed.
+                    if arrival.parts != Some(heads.len()) || heads.is_empty() {
                         continue;
                     }
-                    // The landing's parts are known: a count of none is a true zero, not a missing base.
-                    joined.execute(params![repo, arrival.sha])?;
+                    // Complete only when every part head has its accepted review.
+                    if parts.len() == heads.len() {
+                        joined.execute(params![repo, arrival.sha])?;
+                    }
                 }
                 for (head, accepted) in &parts {
                     row.execute(params![

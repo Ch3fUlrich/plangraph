@@ -62,17 +62,21 @@ items, items landed and batches merged per UTC hour. A landing database without 
 reports it null, and `attempts` is null when `ci_reruns` is. Red runs, one row per batch and fix rounds by cause are not in the landing row and stay unread (slice THROUGHPUT-BATCH-ROWS).
 Quota rows (`throughput_quota_window`) hold provider, account, window, the percent and the reset the snapshot
 names; a missing reset or a stale snapshot is null. Rows an earlier collector wrote to `throughput_quota_hourly`
-and `throughput_accept` are carried into the new tables by the next collection (`INSERT OR IGNORE`, the old tables
-stay), and a report made before that collection reads them from the old tables. Each landing in a collected window is joined from the landed history: its train is every commit reachable from its
-landed SHA and not from its base. In the merging modes (`train-pr-merge`, `single-pr`) the base is the first parent
-of the merge commit; in `tested-fast-forward` it is the latest recorded landing in the landed SHA's ancestry (the one
-no other ancestor landing descends from), and the landed SHA must lie on the selected main ref. When more accepted
-heads fall in that range than the lander recorded parts, one reached main on its own and the join stays unverified.
-A report row keeps every verified sample and says in `parts_complete` whether the train's parts were all joined;
-`accepted_parts` is unknown only when there is neither a sample nor a join, counted at the landing's own time, so a tested fast-forward, whose parts' merges reach main
-under SHAs and commit times of their own, and a train that began before the window both join all their parts. A
-part head has one row (`repo`, `head`); a first-parent arrival never replaces the row of the train that carried
-it. Rows migrated from the first collector are marked legacy and dropped once verified part rows exist for their
-landing, so re-collecting does not count a landing twice; the migration runs once, so collecting another window never
-brings a retired sample back. Hourly counts of items landed and batches
+and `throughput_accept` are carried into the new tables by the next collection (`INSERT OR IGNORE`, once; the old
+tables stay), and a report made before that collection reads them from the old tables.
+
+Each landing in a collected window is joined from the landed history, at the landing's own time. Its train is every
+commit reachable from its landed SHA and not from its base: in the merging modes (`train-pr-merge`, `single-pr`)
+the first parent of the merge commit, in `tested-ff` the latest recorded landing in the landed SHA's ancestry (the
+one no other ancestor landing descends from; the landed SHA must lie on the selected main ref; none means no
+verified base). The parts it held are the second parents of the merges on the first-parent chain from that base to
+its tip (the lander builds a train by merging each part's head, so a head that reached main on its own is no such
+parent), and their number must equal the number the lander recorded, else nothing is attributed. Only a part head
+with an accepted review gets a row; `parts_complete` is 1 when every part head has one (never with zero reviews).
+A report row keeps every verified sample, and `accepted_parts` is unknown only when there is neither a sample nor a
+complete join. A tested fast-forward, whose parts' merges reach main under SHAs and commit times of their own, and a
+train that began before the window both join all their parts. A part head has one row (`repo`, `head`); a
+first-parent arrival never replaces the row of the train that carried it. Rows migrated from the first collector are
+marked legacy and dropped once verified part rows exist for their landing, so re-collecting does not count a landing
+twice and collecting another window never brings a retired sample back. Hourly counts of items landed and batches
 merged stop at the hour's observed end (`through`), so a landing after a partial-hour cutoff is not counted.

@@ -30,6 +30,8 @@ struct Arrival {
     items: Vec<String>,
     /// How many parts the lander recorded for the landing this arrival stands for; `None` for a plain arrival.
     parts: Option<usize>,
+    /// The part heads the landing's history shows; `None` for a plain arrival.
+    part_heads: Option<Vec<String>>,
 }
 
 fn git(args: &[&str]) -> Result<String, String> {
@@ -104,18 +106,19 @@ fn arrivals(reference: &str, project: &str, start: i64, end: i64) -> Result<Vec<
                 members,
                 items,
                 parts: None,
+                part_heads: None,
             })
         })
         .collect()
 }
 
-/// What each landing in the window brought to main, at the landing's own time: for a merge commit what its first
-/// parent did not have, for a fast-forward what the latest recorded landing in its ancestry did not have (never a
-/// landing chosen by clock); the landed SHA must lie on the selected main ref. When more accepted heads fall in
-/// that range than the lander recorded parts, some head reached main on its own and the join stays unknown. Parts reach main under SHAs of their own in a tested fast-forward, and a
-/// train may start before the window, so the join reads the landed history, not the first-parent arrivals of the
-/// window. A landing with no earlier landing has no verified base: its parts stay unknown here (a PR-merge
-/// landing is still joined through its own arrival).
+/// What each landing in the window brought to main, at the landing's own time, and which part heads it held. The
+/// lander builds a train by merging each part's head, so the parts are the second parents of the merges on the
+/// first-parent chain from the train's base to its tip: for a merging landing the chain is `first-parent..second-
+/// parent` of the landed merge, for a tested fast-forward `latest recorded landing in the ancestry..landed` (never a
+/// landing chosen by clock). A head that reached main on its own is no such second parent, so it never counts. The
+/// landed SHA must lie on the selected main ref, and the number of parts found must equal the number the lander
+/// recorded, else the join stays unverified. A landing with no verified base joins nothing here.
 fn train_arrivals(
     db: &database::Db,
     repo: &str,
@@ -155,8 +158,8 @@ fn train_arrivals(
         );
         let merge =
             merging && git(&["rev-parse", "--verify", "--quiet", &format!("{sha}^2")]).is_ok();
-        let range = if merge {
-            format!("{sha}^1..{sha}")
+        let (base, tip) = if merge {
+            (format!("{sha}^1"), format!("{sha}^2"))
         } else {
             let earlier: Vec<&String> = landings
                 .iter()
@@ -170,8 +173,9 @@ fn train_arrivals(
             }) else {
                 continue;
             };
-            format!("{base}..{sha}")
+            ((*base).clone(), sha.clone())
         };
+        let range = format!("{base}..{sha}");
         let Ok(listing) = git(&["rev-list", "--parents", "--reverse", "-n", "20000", &range])
         else {
             continue;
@@ -183,6 +187,25 @@ fn train_arrivals(
                 (fields.next().unwrap_or_default(), fields.collect())
             })
             .collect();
+        let merges = git(&[
+            "log",
+            "--first-parent",
+            "--merges",
+            "--format=%P",
+            &format!("{base}..{tip}"),
+        ])
+        .unwrap_or_default();
+        let mut part_heads: Vec<String> = merges
+            .lines()
+            .flat_map(|parents| parents.split_whitespace().skip(1).map(str::to_owned))
+            .collect();
+        if part_heads.is_empty() {
+            // A train of one part with no merge: its tip is the part's head.
+            part_heads.extend(
+                git(&["rev-parse", "--verify", &format!("{tip}^{{commit}}")])
+                    .map(|s| s.trim().to_owned()),
+            );
+        }
         trains.push(Arrival {
             sha: sha.clone(),
             at: *at,
@@ -190,6 +213,7 @@ fn train_arrivals(
             members,
             items: Vec::new(),
             parts: *parts,
+            part_heads: Some(part_heads),
         });
     }
     Ok(trains)

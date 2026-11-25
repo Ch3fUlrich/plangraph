@@ -68,11 +68,12 @@ enum Mode {
 }
 
 fn train(mode: Mode) -> Train {
-    train_with(mode, false)
+    train_with(mode, false, &[])
 }
 
 /// With `direct`, one more accepted head reached main on its own, after the base and before the train was built.
-fn train_with(mode: Mode, direct: bool) -> Train {
+/// `skip` lists parts (0-based) whose writer run has no accepted review record.
+fn train_with(mode: Mode, direct: bool, skip: &[usize]) -> Train {
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().to_path_buf();
     let bin = repo.join("bin");
@@ -169,7 +170,11 @@ fn train_with(mode: Mode, direct: bool) -> Train {
     let snapshot = repo.join("keeper.json");
     fs::write(&snapshot, json!({"items":[]}).to_string()).unwrap();
     let runs = repo.join("runs");
+    fs::create_dir_all(&runs).unwrap();
     for (n, head) in heads.iter().chain(direct_head.iter()).enumerate() {
+        if skip.contains(&n) {
+            continue;
+        }
         let dir = runs.join(format!("run-{n}"));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("record.json"), json!({
@@ -548,7 +553,7 @@ fn a_landing_takes_only_the_parts_after_the_latest_landing_in_its_ancestry() {
 
 #[test]
 fn an_accepted_head_that_reached_main_on_its_own_is_not_a_part_of_the_next_merge_train() {
-    let train = train_with(Mode::PrMerge, true);
+    let train = train_with(Mode::PrMerge, true, &[]);
     train.collect("2026-11-22T00:00:00Z");
     let report = train.report();
     assert_eq!(
@@ -561,7 +566,7 @@ fn an_accepted_head_that_reached_main_on_its_own_is_not_a_part_of_the_next_merge
 
 #[test]
 fn a_fast_forward_range_holding_more_accepted_heads_than_parts_stays_unverified() {
-    let train = train_with(Mode::TestedFastForward, true);
+    let train = train_with(Mode::TestedFastForward, true, &[]);
     train.collect("2026-11-22T00:00:00Z");
     let report = train.report();
     // Seven accepted heads lie between the earlier landing and this one, the lander recorded six parts.
@@ -602,4 +607,25 @@ fn a_stored_wait_survives_a_collection_of_an_unrelated_window() {
     assert_eq!(old["accepted_parts"], 1, "{report}");
     assert_eq!(old["accept_to_main_seconds"], 900.0, "{report}");
     assert_eq!(old["parts_complete"], 0, "{report}");
+}
+
+#[test]
+fn a_part_without_a_review_record_leaves_the_train_incomplete_and_unattributed_to_others() {
+    let train = train_with(Mode::TestedFastForward, false, &[2]);
+    train.collect("2026-11-22T00:00:00Z");
+    let report = train.report();
+    // Five of the six part heads have their review: five rows, and the train is not complete.
+    assert_eq!(train_row(&report)["accepted_parts"], 5, "{report}");
+    assert_eq!(train_row(&report)["parts_complete"], 0, "{report}");
+}
+
+#[test]
+fn a_train_with_no_review_record_at_all_is_never_complete() {
+    for mode in [Mode::PrMerge, Mode::TestedFastForward] {
+        let train = train_with(mode, false, &[0, 1, 2, 3, 4, 5]);
+        train.collect("2026-11-22T00:00:00Z");
+        let report = train.report();
+        assert_eq!(train_row(&report)["parts_complete"], 0, "{report}");
+        assert!(train_row(&report)["accepted_parts"].is_null(), "{report}");
+    }
 }

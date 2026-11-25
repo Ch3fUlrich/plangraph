@@ -156,6 +156,10 @@ impl Inputs {
             if review["verdict"] != "ACCEPT"
                 || run["final_head"] != head
                 || !arrival.members.iter().any(|(sha, _)| sha == head)
+                || arrival
+                    .part_heads
+                    .as_ref()
+                    .is_some_and(|parts| !parts.iter().any(|part| part == head))
             {
                 continue;
             }
