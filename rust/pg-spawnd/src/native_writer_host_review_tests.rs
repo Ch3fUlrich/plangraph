@@ -233,32 +233,51 @@ fn native_sonnet_pass_requires_reported_tests() {
     }
 }
 
-/// A PATH whose `plangraph` stands in for the shared exact-head fast checks (the real command is
-/// tested in plangraph-cli): it publishes a receipt through the same files and refs the producer
-/// uses, so the host's use of it (run, read green, copy to its stamp, push) is what is tested.
-#[cfg(unix)]
-pub(super) fn fake_plangraph_path(dir: &Path) -> String {
-    let bin = dir.join("fake-bin");
-    fs::create_dir_all(&bin).unwrap();
-    pg_worker_core::executable_test_support::write_executable(
-        bin.join("plangraph"),
-        format!(
-            "#!/bin/sh\n{}",
-            include_str!("../tests/fixtures/fake-plangraph-fast-checks.txt")
-        ),
-    );
-    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+const FAST_CHECKS_OWNER: &str = "PG_FAKE_FAST_CHECKS_OWNER";
+const FAST_CHECKS_STAND_IN: &str = "native_writer_host::review_tests::fast_checks_stand_in";
+
+/// Stand-in for the shared exact-head fast checks (the real command is tested in plangraph-cli),
+/// on every platform: the host runs this test binary again as its fast-checks command (the way the
+/// policy and umask tests re-run themselves), and that run, below, publishes the receipt through
+/// the same producer the real command uses. Returns the PATH to give the host.
+pub(super) fn fake_plangraph_path(_: &Path) -> String {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let argv = json!([
+            std::env::current_exe().unwrap(),
+            "--exact",
+            FAST_CHECKS_STAND_IN,
+            "--nocapture"
+        ]);
+        std::env::set_var("PLANGRAPH_NATIVE_FAST_CHECKS_CLI", argv.to_string());
+        // The process that set the stand-in up is not the stand-in: a child sees another pid.
+        std::env::set_var(FAST_CHECKS_OWNER, std::process::id().to_string());
+    });
+    std::env::var("PATH").unwrap()
 }
 
-/// Windows has no shell to stand in for the command: the host tests that need it are unix-only.
-#[cfg(not(unix))]
-pub(super) fn fake_plangraph_path(_: &Path) -> String {
-    std::env::var("PATH").unwrap()
+/// The stand-in's own run: publishes the receipt of HEAD in the current directory. Run by the
+/// test harness itself (the owner's pid matches) it does nothing.
+#[test]
+fn fast_checks_stand_in() {
+    let Some(owner) = std::env::var_os(FAST_CHECKS_OWNER) else {
+        return;
+    };
+    if owner == std::process::id().to_string().as_str() {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap();
+    let head = pg_worker_core::git::git(&cwd, &["rev-parse", "HEAD"]).unwrap();
+    let check = pg_worker_core::fast_check_stamp::Check {
+        label: "fake-fast-checks".into(),
+        rc: 0,
+        seconds: 0.1,
+    };
+    pg_worker_core::fast_check_stamp::publish(&cwd, &head, &[check]).unwrap();
 }
 
 /// The fast-check receipt is the shared producer's (structured, in the shared state and as one
 /// parentless commit), and the push sends the head and its per-lane receipt ref in one atomic push.
-#[cfg(unix)]
 pub(super) fn assert_shared_receipt_and_push(host: &mut Host, dir: &Path, head: &str) {
     let cwd = host.cwd.clone();
     let receipt = fs::read_to_string(host.stamp(head).unwrap()).unwrap();
