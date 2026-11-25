@@ -515,10 +515,7 @@ fn a_member_that_exits_before_the_signal_is_no_stop_of_ours() {
     let mut host = LocalHost::new(world.state.clone(), id.into());
     host.send_signal = racing_signal;
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    assert_eq!(
-        host.stop(&owner, &task, false),
-        super::round_watch::Stop::Gone
-    );
+    assert_eq!(host.signal(&owner, &task), super::round_watch::Sent::Gone);
     assert!(shell.wait().is_ok());
     assert_ne!(
         RACING.load(std::sync::atomic::Ordering::SeqCst),
@@ -636,20 +633,21 @@ fn when_no_signal_is_accepted_the_stop_is_unsignalled_and_nothing_died() {
     host.send_signal = refusing_signal;
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(
-        host.stop(&owner, &task, false),
-        super::round_watch::Stop::Unsignalled
+        host.signal(&owner, &task),
+        super::round_watch::Sent::Refused
     );
     assert_eq!(
-        host.stop(&owner, &task, true),
-        super::round_watch::Stop::Unsignalled
+        host.signal(&owner, &task),
+        super::round_watch::Sent::Refused
     );
+    assert!(!host.group_gone(&owner, &task));
     assert!(shell.try_wait().unwrap().is_none());
     shell.kill().unwrap();
     let _ = shell.wait();
 }
 
 #[test]
-fn the_owners_output_carries_the_stop_mark_for_its_action_only() {
+fn the_owners_output_carries_one_stop_line_per_action() {
     let world = World::live();
     let root = world.state.parent().unwrap().to_path_buf();
     let mut shell = command_shell(&root, "sess-mark-0001", "bgM", "sleep 311");
@@ -665,15 +663,14 @@ fn the_owners_output_carries_the_stop_mark_for_its_action_only() {
         owner.output.is_some(),
         "the output inode is part of the owner"
     );
-    assert!(!host.has_mark(&owner, &task, "r|bgM|w1"));
     assert!(host.mark_stop(&owner, &task, "r|bgM|w1"));
-    assert!(host.has_mark(&owner, &task, "r|bgM|w1"));
-    assert!(
-        !host.has_mark(&owner, &task, "r|bgM|w2"),
-        "another action has no mark"
-    );
+    assert!(host.mark_stop(&owner, &task, "r|bgM|w2"));
     let text = fs::read_to_string(root.join("tasks/bgM.output")).unwrap();
-    assert!(text.contains("[round-watch] ending this command"), "{text}");
+    assert_eq!(
+        text.matches("[round-watch] ending this command").count(),
+        2,
+        "{text}"
+    );
     shell.kill().unwrap();
     let _ = shell.wait();
 }
@@ -708,10 +705,6 @@ fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
     assert!(fs::read_to_string(&moved)
         .unwrap()
         .contains("[round-watch]"));
-    assert!(
-        !host.has_mark(&owner, &task, "r|bgW|w1"),
-        "the path no longer reaches the owner's file"
-    );
     // A forged owner whose recorded inode is another file's is refused.
     let mut forged = owner.clone();
     forged.output = Some((1, 1));
@@ -721,7 +714,7 @@ fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
 }
 
 #[test]
-fn a_command_that_ignores_hangup_is_ended_by_the_verified_escalation() {
+fn a_command_that_ignores_terminate_is_killed_by_the_verified_escalation() {
     use std::os::unix::process::CommandExt;
     let world = World::live();
     let root = world.state.parent().unwrap().to_path_buf();
@@ -729,7 +722,7 @@ fn a_command_that_ignores_hangup_is_ended_by_the_verified_escalation() {
     fs::create_dir_all(&tasks).unwrap();
     let output = fs::File::create(tasks.join("bgH.output")).unwrap();
     let mut shell = std::process::Command::new("/bin/sh")
-        .args(["-c", "trap '' HUP; sleep 313; true"])
+        .args(["-c", "trap '' TERM; sleep 313; true"])
         .env("CLAUDE_CODE_SESSION_ID", "sess-hup-0001")
         .stdout(output.try_clone().unwrap())
         .stderr(output)
@@ -746,9 +739,14 @@ fn a_command_that_ignores_hangup_is_ended_by_the_verified_escalation() {
     let host = LocalHost::new(world.state.clone(), "sess-hup-0001".into());
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(
-        host.stop(&owner, &task, false),
+        host.signal(&owner, &task),
+        super::round_watch::Sent::Accepted
+    );
+    assert_eq!(
+        host.finish_stop(&owner, &task),
         super::round_watch::Stop::Ended
     );
+    assert!(host.group_gone(&owner, &task));
     let status = shell.wait().unwrap();
     assert!(!status.success(), "ended by a signal, not by itself");
 }

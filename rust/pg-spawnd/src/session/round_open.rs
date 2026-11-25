@@ -56,9 +56,9 @@ impl Reader {
             .filter(|(_, tool)| tool.class == Class::Wait)
             .collect();
         calls.sort_by_key(|(id, _)| id.as_str());
-        let (call_id, tool, index) = calls
+        let (call_id, index) = calls
             .into_iter()
-            .find_map(|(id, tool)| Some((id.clone(), tool, self.authorized_task(tool)?)))?;
+            .find_map(|(id, tool)| Some((id.clone(), self.authorized_task(tool)?)))?;
         let bg = &self.background[index];
         // The wait is the episode this call belongs to, named by its first call.
         let episode = self.episodes.get(&bg.task.id);
@@ -69,8 +69,36 @@ impl Reader {
             call_id: episode.map_or(call_id, |e| e.first_call.clone()),
             command: bg.command.clone(),
             class: bg.class,
-            waited_ms: (episode.map_or(0, |e| e.blocked_ms) + (now_ms - tool.started_ms)).max(0),
+            waited_ms: self.blocked_ms(&bg.task.id, now_ms),
         })
+    }
+
+    /// Time the writer has spent inside blocking calls on the task in this episode: the union
+    /// of the spans of its returned calls and of its calls still open at `now_ms`, so
+    /// overlapping calls count once and idle time between calls not at all.
+    fn blocked_ms(&self, task_id: &str, now_ms: i64) -> i64 {
+        let mut spans: Vec<(i64, i64)> = self
+            .episodes
+            .get(task_id)
+            .map(|e| e.spans.clone())
+            .unwrap_or_default();
+        spans.extend(
+            self.open
+                .values()
+                .filter(|tool| tool.structured && tool.task_ref.as_deref() == Some(task_id))
+                .map(|tool| (tool.started_ms, now_ms.max(tool.started_ms))),
+        );
+        spans.sort_unstable();
+        let mut total = 0;
+        let mut end = i64::MIN;
+        for (from, to) in spans {
+            let from = from.max(end);
+            if to > from {
+                total += to - from;
+            }
+            end = end.max(to);
+        }
+        total
     }
 
     /// True while the episode of `call_id` on the task goes on: the writer is between two of

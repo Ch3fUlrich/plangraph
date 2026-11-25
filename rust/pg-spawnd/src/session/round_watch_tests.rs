@@ -1,6 +1,6 @@
 use super::round_time_tests::{Transcript, MIN, T0};
 use super::round_wait::TaskRef;
-use super::round_watch::{blocked_outcome, tick, Action, Host, Owner, Stop};
+use super::round_watch::{blocked_outcome, tick, Action, Host, Owner, Sent, Stop};
 use serde_json::json;
 use std::{cell::RefCell, collections::HashSet, io};
 
@@ -11,8 +11,11 @@ pub(super) struct Fake {
     pub(super) asked: RefCell<Vec<String>>,
     pub(super) ended: RefCell<u32>,
     pub(super) undelivered: RefCell<bool>,
-    pub(super) seen_signalled: RefCell<Vec<bool>>,
+    /// First signals sent and escalations asked for.
     pub(super) stopped: RefCell<Vec<(u32, String)>>,
+    pub(super) finishes: RefCell<Vec<(u32, String)>>,
+    /// Whether nothing of the owner's group is left.
+    pub(super) gone: RefCell<bool>,
     pub(super) sent: RefCell<Vec<(String, String, String)>>,
     /// Stop actions whose line the owner's output holds.
     pub(super) marks: RefCell<HashSet<String>>,
@@ -32,8 +35,9 @@ impl Fake {
             asked: RefCell::default(),
             ended: RefCell::default(),
             undelivered: RefCell::new(false),
-            seen_signalled: RefCell::default(),
             stopped: RefCell::default(),
+            finishes: RefCell::default(),
+            gone: RefCell::new(true),
             sent: RefCell::default(),
             marks: RefCell::default(),
             mark_ok: true,
@@ -49,19 +53,31 @@ impl Host for Fake {
         self.asked.borrow_mut().push(task.id.clone());
         self.owner.clone()
     }
-    fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop {
+    fn signal(&self, owner: &Owner, task: &TaskRef) -> Sent {
         self.stopped.borrow_mut().push((owner.pid, task.id.clone()));
-        self.seen_signalled.borrow_mut().push(signalled);
-        *self.stop.borrow()
+        match *self.stop.borrow() {
+            Stop::Gone => Sent::Gone,
+            Stop::Unsignalled => Sent::Refused,
+            Stop::Ended | Stop::Survivors => Sent::Accepted,
+        }
+    }
+    fn finish_stop(&self, owner: &Owner, task: &TaskRef) -> Stop {
+        self.finishes
+            .borrow_mut()
+            .push((owner.pid, task.id.clone()));
+        match *self.stop.borrow() {
+            Stop::Survivors => Stop::Survivors,
+            _ => Stop::Ended,
+        }
+    }
+    fn group_gone(&self, _: &Owner, _: &TaskRef) -> bool {
+        *self.gone.borrow()
     }
     fn mark_stop(&self, _: &Owner, _: &TaskRef, key: &str) -> bool {
         if self.mark_ok {
             self.marks.borrow_mut().insert(key.into());
         }
         self.mark_ok
-    }
-    fn has_mark(&self, _: &Owner, _: &TaskRef, key: &str) -> bool {
-        self.marks.borrow().contains(key)
     }
     fn pending(&self, _: &str, _: &str) -> bool {
         *self.undelivered.borrow()
@@ -245,30 +261,38 @@ fn a_stop_that_leaves_survivors_is_no_strike_and_the_recorded_owner_is_stopped_a
     let restarted = Fake::new(false, Stop::Ended);
     let done = run(&t, 17, dir.path(), &restarted);
     assert_eq!(done.len(), 2, "{done:?}");
-    assert_eq!(restarted.stopped.borrow()[0].0, 4242);
+    assert_eq!(
+        restarted.finishes.borrow()[0].0,
+        4242,
+        "the recorded owner is asked"
+    );
+    assert!(
+        restarted.stopped.borrow().is_empty(),
+        "the accepted signal is not sent again"
+    );
     assert_eq!(restarted.sent.borrow().len(), 1);
 }
 
 #[test]
-fn a_retry_after_survivors_tells_the_host_a_signal_was_sent() {
+fn an_accepted_signal_is_on_record_before_the_escalation_and_never_sent_twice() {
     let dir = tempfile::tempdir().unwrap();
     let host = Fake::new(true, Stop::Survivors);
     let t = first_wait("a");
     run(&t, 1, dir.path(), &host);
     run(&t, 16, dir.path(), &host);
-    // The host decides: with the earlier signal on record, an empty group is a confirmed stop.
+    let state = std::fs::read_to_string(dir.path().join("w.json")).unwrap();
+    assert!(state.contains("\"acked\":true"), "{state}");
     let restarted = Fake::new(false, Stop::Ended);
     let done = run(&t, 17, dir.path(), &restarted);
     assert!(done.contains(&Action::Stopped {
         task_id: "a".into(),
         command: "cargo test -p a".into()
     }));
-    assert_eq!(*restarted.seen_signalled.borrow(), vec![true]);
-    assert_eq!(
-        *host.seen_signalled.borrow(),
-        vec![false],
-        "the first stop had no signal on record"
+    assert!(
+        restarted.stopped.borrow().is_empty(),
+        "no second signal after the acknowledgement"
     );
+    assert_eq!(*host.stopped.borrow(), vec![(4242, "a".to_string())]);
     assert_eq!(restarted.sent.borrow().len(), 1);
 }
 
@@ -278,9 +302,7 @@ fn a_command_that_finished_by_itself_before_the_stop_is_no_strike_and_no_notice(
     let host = Fake::new(true, Stop::Gone);
     let t = first_wait("a");
     run(&t, 1, dir.path(), &host);
-    // Gone after the mark: the harness's report decides, and it has not come yet.
-    assert!(run(&t, 16, dir.path(), &host).is_empty());
-    let done = run(&t, 27, dir.path(), &host);
+    let done = run(&t, 16, dir.path(), &host);
     assert_eq!(
         done,
         vec![Action::Finished {
@@ -335,7 +357,7 @@ fn an_idle_writer_with_a_running_command_is_never_stopped() {
 #[test]
 fn a_pending_stop_is_released_when_its_wait_closed_before_the_stop() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Fake::new(true, Stop::Survivors);
+    let host = Fake::new(true, Stop::Unsignalled);
     let mut t = first_wait("a");
     run(&t, 1, dir.path(), &host);
     assert_eq!(run(&t, 16, dir.path(), &host).len(), 1);
@@ -367,11 +389,7 @@ fn a_crash_before_the_signal_and_a_natural_exit_is_no_strike() {
         "task_id": "a", "call_id": "w-a", "command": "cargo test -p a", "waited_ms": 1,
         "task": {"id": "a", "output_path": "/t/tasks/a.output", "launched_from_ms": 0, "launched_to_ms": 1}});
     std::fs::write(&path, state.to_string()).unwrap();
-    assert!(
-        run(&t, 16, dir.path(), &host).is_empty(),
-        "marked, gone, no report yet"
-    );
-    let done = run(&t, 27, dir.path(), &host);
+    let done = run(&t, 16, dir.path(), &host);
     assert_eq!(
         done,
         vec![Action::Finished {
@@ -385,7 +403,7 @@ fn a_crash_before_the_signal_and_a_natural_exit_is_no_strike() {
 #[test]
 fn a_stop_needs_the_very_wait_call_that_earned_it() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Fake::new(true, Stop::Survivors);
+    let host = Fake::new(true, Stop::Unsignalled);
     let mut t = first_wait("a");
     run(&t, 1, dir.path(), &host);
     assert_eq!(run(&t, 16, dir.path(), &host).len(), 1);
@@ -438,7 +456,7 @@ fn a_wait_on_a_prefix_task_id_stops_nothing() {
 #[test]
 fn a_replacement_wait_call_qualifies_on_its_own_after_a_release() {
     let dir = tempfile::tempdir().unwrap();
-    let host = Fake::new(true, Stop::Survivors);
+    let host = Fake::new(true, Stop::Unsignalled);
     let mut t = first_wait("a");
     run(&t, 1, dir.path(), &host);
     assert_eq!(run(&t, 16, dir.path(), &host).len(), 1);

@@ -20,8 +20,9 @@ pub(super) const EPISODE_GAP_MS: i64 = 30_000;
 #[derive(Debug)]
 pub(super) struct Episode {
     pub(super) first_call: String,
-    /// Time spent inside its closed blocking calls: idle time between calls is not counted.
-    pub(super) blocked_ms: i64,
+    /// The spans of its returned blocking calls. Their union is the time spent waiting:
+    /// idle time between calls is not counted and overlapping calls count once.
+    pub(super) spans: Vec<(i64, i64)>,
     /// When its last call returned; a call after a longer gap starts a new episode.
     pub(super) last_end_ms: i64,
     /// Another call or a new round came between: the next wait call starts a new episode.
@@ -323,7 +324,7 @@ impl Reader {
                     if !continues {
                         let episode = Episode {
                             first_call: id.clone(),
-                            blocked_ms: 0,
+                            spans: Vec::new(),
                             last_end_ms: ts,
                             interrupted: false,
                         };
@@ -360,7 +361,9 @@ impl Reader {
             };
             if let (true, Some(task)) = (tool.structured, &tool.task_ref) {
                 if let Some(episode) = self.episodes.get_mut(task) {
-                    episode.blocked_ms += (ts - tool.started_ms).max(0);
+                    episode
+                        .spans
+                        .push((tool.started_ms, ts.max(tool.started_ms)));
                     episode.last_end_ms = ts;
                 }
             }

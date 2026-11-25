@@ -630,3 +630,37 @@ fn only_time_inside_blocking_calls_counts_and_a_long_gap_starts_a_new_episode() 
     assert_eq!(wait.call_id, "c1");
     assert_eq!(wait.waited_ms, 5 * MIN + (7 * MIN - 5 * MIN - 2_000));
 }
+
+#[test]
+fn overlapping_blocking_calls_count_their_union_not_their_sum() {
+    let mut t = explicit_wait("bg1", "echo started");
+    t.0.pop();
+    // Three calls on the task: two five-minute calls that overlap almost completely and
+    // are back to back with a third that is still open. Fifteen minutes of calls, but
+    // only about eight minutes of waiting.
+    t.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.tool(
+        6_000,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.result(4_000 + 5 * MIN, "c1", None);
+    t.result(6_000 + 5 * MIN, "c2", None);
+    t.tool(
+        6_000 + 5 * MIN + 1_000,
+        "c3",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    let now = T0 + 6_000 + 5 * MIN + 1_000 + 3 * MIN;
+    let wait = t.read().open_wait(now).unwrap();
+    assert_eq!(wait.call_id, "c1");
+    // Union: [4 s, 5 min 6 s] plus [5 min 7 s, 8 min 7 s] = 5 min 2 s + 3 min.
+    assert_eq!(wait.waited_ms, (5 * MIN + 2_000) + 3 * MIN);
+}

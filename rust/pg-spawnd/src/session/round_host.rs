@@ -3,7 +3,7 @@
 pub use super::round_signal::{signal_member, Member};
 use super::{
     round_wait::TaskRef,
-    round_watch::{Host, Owner, Stop},
+    round_watch::{Host, Owner, Sent, Stop},
 };
 use pg_worker_core::run::{
     group_unix::{parse_stat, proc_start_time, Roots},
@@ -75,6 +75,20 @@ impl LocalHost {
                 })
             })
             .collect()
+    }
+
+    /// The group of the owner when it is still the owner's: a live leader with another start
+    /// time or output is a reused pid and owns nothing; a dead leader with members left is
+    /// its own group, whose id cannot be reused yet.
+    fn owned_group(&self, owner: &Owner, task: &TaskRef) -> Option<u32> {
+        let dir = self.roots.proc.join(owner.pid.to_string());
+        let alive = proc_start_time(&self.roots.proc, owner.pid);
+        let output = task.output_path.as_deref().map(PathBuf::from);
+        let ours = alive.is_some()
+            && alive == owner.start_time
+            && output.is_some()
+            && output_file(&dir) == output;
+        (alive.is_none() || ours).then_some(owner.pid)
     }
 
     /// Signal every member of the group through its pidfd; how many the kernel accepted.
@@ -197,39 +211,32 @@ impl Host for LocalHost {
         (found.len() == 1).then(|| found.remove(0))
     }
 
-    fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop {
-        let dir = self.roots.proc.join(owner.pid.to_string());
-        let leader_alive = proc_start_time(&self.roots.proc, owner.pid);
-        let output = task.output_path.as_deref().map(PathBuf::from);
-        let leader_ours = leader_alive.is_some()
-            && leader_alive == owner.start_time
-            && output.is_some()
-            && output_file(&dir) == output;
-        // A live process with another start time or output is a reused pid: not ours. A
-        // dead leader with members left is its own group: its pid cannot be reused yet.
-        if leader_alive.is_some() && !leader_ours {
-            return Stop::Gone;
-        }
-        let group = owner.pid;
+    fn signal(&self, owner: &Owner, task: &TaskRef) -> Sent {
+        let Some(group) = self.owned_group(owner, task) else {
+            return Sent::Gone;
+        };
         if self.scan_members(group).is_empty() {
-            // Nothing left to signal: it ended by itself, or after our earlier signal.
-            return if signalled { Stop::Ended } else { Stop::Gone };
+            return Sent::Gone;
         }
-        // The first signal is SIGHUP, which an independent end of a command rarely is: an
-        // exit report of 129 is then the harness's receipt of this stop. The kernel must
-        // accept it for a member seen alive; a member gone before the signal is no stop of
-        // ours.
-        if self.signal_group(group, libc::SIGHUP) == 0 {
-            return match (self.scan_members(group).is_empty(), signalled) {
-                (true, true) => Stop::Ended,
-                (true, false) => Stop::Gone,
-                (false, _) => Stop::Unsignalled,
-            };
+        // The kernel must accept the signal for a member seen alive; a member gone before
+        // the signal is no stop of ours.
+        if self.signal_group(group, libc::SIGTERM) > 0 {
+            return Sent::Accepted;
         }
+        if self.scan_members(group).is_empty() {
+            Sent::Gone
+        } else {
+            Sent::Refused
+        }
+    }
+
+    fn finish_stop(&self, owner: &Owner, task: &TaskRef) -> Stop {
+        let Some(group) = self.owned_group(owner, task) else {
+            return Stop::Ended;
+        };
         // Escalation goes through the same verified signalling, member by member.
         for (signal, limit) in [
             (None, Duration::from_secs(5)),
-            (Some(libc::SIGTERM), Duration::from_secs(5)),
             (Some(libc::SIGKILL), Duration::from_secs(5)),
         ] {
             if let Some(signal) = signal {
@@ -240,6 +247,11 @@ impl Host for LocalHost {
             }
         }
         Stop::Survivors
+    }
+
+    fn group_gone(&self, owner: &Owner, task: &TaskRef) -> bool {
+        self.owned_group(owner, task)
+            .is_none_or(|group| self.scan_members(group).is_empty())
     }
 
     fn mark_stop(&self, owner: &Owner, _task: &TaskRef, key: &str) -> bool {
@@ -268,30 +280,6 @@ impl Host for LocalHost {
                 .is_ok_and(|m| (m.dev(), m.ino()) == expected)
         };
         same && file.write_all(line.as_bytes()).is_ok() && file.sync_all().is_ok()
-    }
-
-    fn has_mark(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool {
-        use std::io::{Read, Seek, SeekFrom};
-        use std::os::unix::fs::MetadataExt;
-        let (Some(path), Some(expected)) = (task.output_path.as_deref(), owner.output) else {
-            return false;
-        };
-        let Ok(mut file) = fs::File::open(path) else {
-            return false;
-        };
-        let Ok(meta) = file.metadata() else {
-            return false;
-        };
-        // A file that is not the owner's output proves nothing.
-        if (meta.dev(), meta.ino()) != expected {
-            return false;
-        }
-        let mut tail = Vec::new();
-        let ok = file
-            .seek(SeekFrom::Start(meta.len().saturating_sub(256 * 1024)))
-            .is_ok()
-            && file.read_to_end(&mut tail).is_ok();
-        ok && String::from_utf8_lossy(&tail).contains(&format!("(stop {})", mark_id(key)))
     }
 
     fn pending(&self, recipient: &str, key: &str) -> bool {

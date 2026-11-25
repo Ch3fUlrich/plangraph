@@ -7,9 +7,6 @@ use std::io;
 pub const WAIT_LIMIT_MS: i64 = 15 * 60_000;
 /// Waits ended in one round before the round is BLOCKED.
 pub const STRIKE_LIMIT: usize = 2;
-/// The exit code of a command ended by SIGHUP, the first signal of a stop: the harness's
-/// report of it is the receipt of our own signal. Independent ends are almost always 143 or 137.
-pub const OUR_SIGNAL_EXIT: i64 = 129;
 /// How long a BLOCKED round waits for its notices to be delivered before it closes anyway.
 pub const NOTICE_GRACE_MS: i64 = 10 * 60_000;
 
@@ -23,16 +20,25 @@ pub struct Owner {
     pub output: Option<(u64, u64)>,
 }
 
-/// What a stop found.
+/// What the first signal of a stop found.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stop {
+pub enum Sent {
     /// The recorded process is gone or is no longer that task's command: nothing was signalled.
     Gone,
-    /// The watchdog signalled it and nothing of it is left.
-    Ended,
-    /// The watchdog signalled it and part of it is still running.
-    Survivors,
     /// Members are alive but the kernel accepted no signal: nothing was stopped, try again.
+    Refused,
+    /// The kernel accepted the signal for at least one member seen alive.
+    Accepted,
+}
+
+/// How a stop ended after an accepted signal, or what a host fixture is set up to do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stop {
+    Gone,
+    /// The group was found empty after the signal.
+    Ended,
+    /// Part of the group is still running after the escalation.
+    Survivors,
     Unsignalled,
 }
 
@@ -41,16 +47,17 @@ pub trait Host {
     /// The one live process of `session` that launched `task`: its output is the task's
     /// full output path and it started inside the task's launch window; none otherwise.
     fn resolve_owner(&self, session: &str, task: &TaskRef) -> Option<Owner>;
-    /// End the recorded owner's process group, only while that very process (same start
-    /// time) still writes the task's output file. `signalled` says an earlier stop left
-    /// survivors. `Ended` needs evidence: live members were signalled and the group was
-    /// then found empty, or the group was empty after an earlier signal.
-    fn stop(&self, owner: &Owner, task: &TaskRef, signalled: bool) -> Stop;
-    /// Append the line saying why the command is ended to the task's own output file, the
-    /// owner's durable acknowledgement that this stop reached its signal stage.
+    /// The first signal of a stop to every live member of the owner's group, only while
+    /// that very process (same start time) still writes the task's output file.
+    fn signal(&self, owner: &Owner, task: &TaskRef) -> Sent;
+    /// After an accepted signal: wait for the group to empty and escalate. `Ended` or
+    /// `Survivors`; the caller has recorded the acceptance before it asks.
+    fn finish_stop(&self, owner: &Owner, task: &TaskRef) -> Stop;
+    /// True when nothing of the owner's group is left.
+    fn group_gone(&self, owner: &Owner, task: &TaskRef) -> bool;
+    /// Append the line saying why the command is ended to the owner's own output: what the
+    /// writer reads. It is no receipt of anything.
     fn mark_stop(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool;
-    /// True when the output file of the task carries the line `mark_stop` wrote for `key`.
-    fn has_mark(&self, owner: &Owner, task: &TaskRef, key: &str) -> bool;
     /// True while the line queued for `recipient` under `key` has not been delivered.
     fn pending(&self, recipient: &str, key: &str) -> bool;
     /// Queue one line for `recipient`; `key` makes a second queue of it a no-op.

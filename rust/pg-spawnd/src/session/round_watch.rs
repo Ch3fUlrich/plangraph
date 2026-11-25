@@ -10,7 +10,7 @@
 pub use super::round_state::{blocked_outcome, closed_rounds, spawn_state_dir, state_file};
 use super::round_state::{closed_rounds_of, notice_line, read_state};
 pub use super::round_types::{
-    Action, Host, Owner, Stop, NOTICE_GRACE_MS, OUR_SIGNAL_EXIT, STRIKE_LIMIT, WAIT_LIMIT_MS,
+    Action, Host, Owner, Sent, Stop, NOTICE_GRACE_MS, STRIKE_LIMIT, WAIT_LIMIT_MS,
 };
 use super::{round_reader::Reader, round_time::OpenWait, round_wait::TaskRef};
 use pg_worker_core::run::record_io::atomic_write_private;
@@ -130,13 +130,7 @@ impl Watch<'_> {
         Ok(())
     }
 
-    fn finish(
-        &mut self,
-        key: &str,
-        mut phase: Phase,
-        wait: &OpenWait,
-        exit: Option<i64>,
-    ) -> io::Result<()> {
+    fn finish(&mut self, key: &str, mut phase: Phase, wait: &OpenWait) -> io::Result<()> {
         if phase == Phase::Stopping {
             let Some(owner) = self.owner_of(&owner_key(&wait.round_key, &wait.task_id)) else {
                 self.settle(key, "unowned")?;
@@ -145,13 +139,8 @@ impl Watch<'_> {
                 });
                 return Ok(());
             };
-            // `signalled` is written only after a stop that left survivors: it records a
-            // signal that was really sent. A crash before the signal leaves none, so an
-            // owner that then ends by itself is a finished command, not a strike.
-            let signalled = self.state["actions"][key]["signalled"] == json!(true);
-            // The mark goes into the owner's own output before any signal. A crash after
-            // the kill leaves the mark, and mark plus the harness's report of a signal
-            // exit is the receipt that settles it; without the mark no signal was sent.
+            // The line telling the writer why goes into the owner's own output first. It is
+            // what the writer reads, no receipt: nothing in the output proves a signal.
             if self.state["actions"][key]["marked"] != json!(true) {
                 if !self.host.mark_stop(&owner, &wait.task, key) {
                     self.done.push(Action::StopPending {
@@ -160,44 +149,38 @@ impl Watch<'_> {
                     return Ok(());
                 }
                 self.state["actions"][key]["marked"] = json!(true);
-                self.state["actions"][key]["marked_ms"] = json!(self.now_ms);
                 self.save()?;
             }
-            match self.host.stop(&owner, &wait.task, signalled) {
-                Stop::Unsignalled => {
-                    self.done.push(Action::StopPending {
-                        task_id: wait.task_id.clone(),
-                    });
-                    return Ok(());
-                }
-                Stop::Survivors => {
-                    self.state["actions"][key]["signalled"] = json!(true);
-                    self.save()?;
-                    self.done.push(Action::StopPending {
-                        task_id: wait.task_id.clone(),
-                    });
-                    return Ok(());
-                }
-                Stop::Gone => {
-                    // Gone after the mark: either the command ended by itself or our signal
-                    // ended it before this look. Only the harness's report tells them apart,
-                    // and only the exit our own signal produces counts as a stop.
-                    let since = self.state["actions"][key]["marked_ms"]
-                        .as_i64()
-                        .unwrap_or(self.now_ms);
-                    match exit {
-                        Some(OUR_SIGNAL_EXIT) => {}
-                        None if self.now_ms - since < NOTICE_GRACE_MS => return Ok(()),
-                        _ => {
-                            self.settle(key, "finished")?;
-                            self.done.push(Action::Finished {
-                                task_id: wait.task_id.clone(),
-                            });
-                            return Ok(());
-                        }
+            // A stop counts only after the kernel accepted a signal for a member seen alive
+            // and that acceptance is on record. A crash between the signal and its record
+            // leaves a finished or released stop: no strike is taken on a guess.
+            if self.state["actions"][key]["acked"] != json!(true) {
+                match self.host.signal(&owner, &wait.task) {
+                    Sent::Refused => {
+                        self.done.push(Action::StopPending {
+                            task_id: wait.task_id.clone(),
+                        });
+                        return Ok(());
+                    }
+                    Sent::Gone => {
+                        self.settle(key, "finished")?;
+                        self.done.push(Action::Finished {
+                            task_id: wait.task_id.clone(),
+                        });
+                        return Ok(());
+                    }
+                    Sent::Accepted => {
+                        self.state["actions"][key]["acked"] = json!(true);
+                        self.state["actions"][key]["acked_ms"] = json!(self.now_ms);
+                        self.save()?;
                     }
                 }
-                Stop::Ended => {}
+            }
+            if self.host.finish_stop(&owner, &wait.task) == Stop::Survivors {
+                self.done.push(Action::StopPending {
+                    task_id: wait.task_id.clone(),
+                });
+                return Ok(());
             }
             self.set_phase(key, Phase::Stopped, wait);
             self.save()?;
@@ -339,10 +322,8 @@ pub fn tick(
         })
         .collect();
     for (key, phase, wait) in pending {
-        let exit = reader.exit_of(&wait.task_id);
-        // A stop is only carried out while the very wait call that earned it is open: only
-        // then may a signal be sent. A command that finished, a wait that returned or a new
-        // round never signals again.
+        // A signal is only sent while the very wait call that earned the stop is open. A
+        // command that finished, a wait that returned or a new round never signals again.
         let open_same = open.as_ref().is_some_and(|o| {
             o.round_key == wait.round_key && o.task_id == wait.task_id && o.call_id == wait.call_id
         });
@@ -351,33 +332,34 @@ pub fn tick(
             if reader.episode_alive(&wait.task_id, &wait.call_id, now_ms) {
                 continue;
             }
-            // The wait is over. If the stop reached its signal stage (its mark is in the
-            // owner's output) the harness's report decides it: the exit of our own signal
-            // is the stop, any other exit means the command ended by itself. Until the
-            // report arrives the stop stays pending, up to the grace; no signal is sent.
-            let owner = watch.owner_of(&owner_key(&wait.round_key, &wait.task_id));
-            let marked = owner
-                .as_ref()
-                .is_some_and(|o| watch.host.has_mark(o, &wait.task, &key));
-            let since = watch.state["actions"][&key]["marked_ms"]
+            // The wait is over and no signal follows. A stop whose accepted signal is on
+            // record is a stop once nothing of the group is left; one that is not on record
+            // never counts. An acknowledged stop whose group still runs stays pending up to
+            // the grace.
+            let acked = watch.state["actions"][&key]["acked"] == json!(true);
+            let since = watch.state["actions"][&key]["acked_ms"]
                 .as_i64()
                 .unwrap_or(now_ms);
-            match (marked, exit) {
-                (true, Some(OUR_SIGNAL_EXIT)) => {
+            let owner = watch.owner_of(&owner_key(&wait.round_key, &wait.task_id));
+            let gone = owner
+                .as_ref()
+                .is_some_and(|o| watch.host.group_gone(o, &wait.task));
+            match (acked, gone) {
+                (true, true) => {
                     watch.set_phase(&key, Phase::Stopped, &wait);
                     watch.save()?;
                     watch.done.push(Action::Stopped {
                         task_id: wait.task_id.clone(),
                         command: wait.command.clone(),
                     });
-                    watch.finish(&key, Phase::Stopped, &wait, exit)?;
+                    watch.finish(&key, Phase::Stopped, &wait)?;
                 }
-                (true, None) if now_ms - since < NOTICE_GRACE_MS => {}
+                (true, false) if now_ms - since < NOTICE_GRACE_MS => {}
                 _ => watch.settle(&key, "released")?,
             }
             continue;
         }
-        watch.finish(&key, phase, &wait, exit)?;
+        watch.finish(&key, phase, &wait)?;
     }
     if let Some(wait) = open.filter(|w| w.waited_ms > WAIT_LIMIT_MS) {
         let key = action_key(&wait);
@@ -385,7 +367,7 @@ pub fn tick(
             watch.set_phase(&key, Phase::Stopping, &wait);
             watch.state["actions"][&key]["waited_ms"] = json!(wait.waited_ms);
             watch.save()?;
-            watch.finish(&key, Phase::Stopping, &wait, reader.exit_of(&wait.task_id))?;
+            watch.finish(&key, Phase::Stopping, &wait)?;
         }
     }
     watch.end_blocked_round()?;
