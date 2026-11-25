@@ -1,0 +1,1 @@
+- **LAND-STAGE-HOST-RESULT-COLUMNS:** Record installed release digests and verify the pinned checkout and binary set in one read-only host-sync command.
