@@ -332,3 +332,25 @@ fn a_fresh_feeder_launch_renders_the_gate_paths_before_its_worktree_exists() {
         .unwrap_or_else(|| panic!("no GATE_PATHS line in {}", host.brief));
     assert!(line.contains("tools/ci_commit_gate.py") && line.contains(".github/workflows/*"));
 }
+
+#[cfg(unix)]
+#[test]
+fn a_failing_command_carries_its_stdout_and_stderr() {
+    let error = output(Command::new("sh").args([
+        "-c",
+        "echo 'stdout line: gate output'; echo 'stderr line' >&2; exit 3",
+    ]))
+    .unwrap_err();
+    assert!(error.contains("exit status: 3"), "{error}");
+    assert!(
+        error.contains("stdout: stdout line: gate output"),
+        "{error}"
+    );
+    assert!(error.contains("stderr: stderr line"), "{error}");
+    // A tool that prints nothing still names the exit status.
+    let error = output(&mut Command::new("false")).unwrap_err();
+    assert!(
+        error.starts_with("command failed (exit status: 1)"),
+        "{error}"
+    );
+}
