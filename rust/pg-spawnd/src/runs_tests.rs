@@ -35,6 +35,8 @@ fn gitconfig_guard_only_arms_writers() {
                 json!({"first_leg":{"family":"f"}}),
                 |_, _| {
                     Ok(crate::launch::LaunchSpec {
+                        max_request_tokens: None,
+                        split_inline_diff: false,
                         argv: vec![
                             "/bin/sh".into(),
                             "-c".into(),
@@ -119,6 +121,8 @@ fn embedded_prompt_and_distinct_stdin() {
     let raw = format!("{}{}", "sk-", "a".repeat(24));
     for stdin in ["other".to_owned(), format!("prefix {raw} suffix")] {
         let mut launch = crate::launch::LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec!["sh".into(), "-c".into(), format!("echo {raw}")],
             cwd: dir.clone(),
             env: BTreeMap::new(),
@@ -147,6 +151,8 @@ fn short_prompt_substrings_are_not_carriers() {
     let dir = Dir(std::env::temp_dir().join(new_run_id()));
     for raw in ["gemini", "p", "-", "é"] {
         let mut launch = crate::launch::LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec![
                 "agy".into(),
                 "--dangerously-skip-permissions".into(),
@@ -202,6 +208,8 @@ fn stream_prompt_snapshot_is_text_not_transport() {
     let raw = format!("{}\né\n\n", "x".repeat(300 * 1024));
     let transport = json!({"event":"user", "message":{"role":"user", "content":raw}}).to_string();
     let mut launch = crate::launch::LaunchSpec {
+        max_request_tokens: None,
+        split_inline_diff: false,
         argv: vec!["agy".into(), "--input-format".into(), "stream-json".into()],
         cwd: dir.clone(),
         env: BTreeMap::new(),
@@ -235,6 +243,8 @@ fn prompt_snapshot_before_dispatch() {
     let id = new_run_id();
     let raw = format!("héllo {}{}", "sk-", "a".repeat(24));
     let mut launch = crate::launch::LaunchSpec {
+        max_request_tokens: None,
+        split_inline_diff: false,
         argv: vec!["fake".into()],
         cwd: dir.clone(),
         env: BTreeMap::new(),
@@ -362,6 +372,8 @@ fn registered_job_with_card(dry: bool, card: Value) {
             json!({"first_leg":{"family":"f"}}),
             |_, _| {
                 Ok(crate::launch::LaunchSpec {
+                    max_request_tokens: None,
+                    split_inline_diff: false,
                     argv: vec!["/bin/cat".into()],
                     cwd: dir.0.clone(),
                     env: BTreeMap::new(),
@@ -429,6 +441,8 @@ fn env_prompt_and_missing_carrier() {
     let dir = Dir(std::env::temp_dir().join(new_run_id()));
     let raw = ["sk-", &"a".repeat(24)].concat();
     let mut launch = crate::launch::LaunchSpec {
+        max_request_tokens: None,
+        split_inline_diff: false,
         argv: vec!["sh".into(), "-c".into(), "printf %s \"$PROMPT\"".into()],
         cwd: dir.0.clone(),
         env: BTreeMap::from([("PROMPT".into(), raw.clone())]),
@@ -571,6 +585,8 @@ fn review_seat_keeps_allowlisted_shas_and_masks_others() {
             json!({"first_leg": {"family": "f"}}),
             |_, _| {
                 Ok(crate::launch::LaunchSpec {
+                    max_request_tokens: None,
+                    split_inline_diff: false,
                     argv: vec!["/bin/sh".into(), "-c".into(), output_script.clone()],
                     cwd: repo.clone(),
                     env: BTreeMap::new(),

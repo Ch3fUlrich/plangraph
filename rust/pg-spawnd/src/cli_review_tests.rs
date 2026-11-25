@@ -28,6 +28,8 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         ],
     );
     let mut launch = LaunchSpec {
+        max_request_tokens: None,
+        split_inline_diff: false,
         argv: vec!["agy".into()],
         cwd: dir.path().into(),
         env: Default::default(),

@@ -207,11 +207,12 @@ def _review(tags: Sequence[str], risk: str = "normal") -> tuple[str, int]:
 
 def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: int = 1,
                unavailable: Collection[str] = (), exclude_families: Collection[str] = (),
-               overflow: bool = False, role: str | None = None, now=None) -> Route:
+               overflow: bool = False, role: str | None = None, now=None, view=None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
     ``role`` falls back to ``card["role"]``; absent roles retain keeper admission.
     Spawn roles use the leg's context; the keeper pack still budgets by class.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
+    ``view`` (a ``ProviderView``) says the caller already bound ``legs`` to the active registry; None binds them here.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     from .route_policy import implement_family_excluded
@@ -223,6 +224,12 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
     if research:
         legs = research_route_pool(legs)
+    unbound: dict[str, int] = {}
+    if view is None:
+        from .legs import bound_legs
+        legs, refused = bound_legs(legs, None, card, effective_role)
+        if refused:
+            unbound["request_bound_malformed"] = len(refused)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     bad = [t for t in tags if t not in RISK_TAGS]
@@ -258,7 +265,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     window_fits = _fits(effective, window_class)
     serving_windows = WINDOW_CLASSES[WINDOW_CLASSES.index(window_class):] if research else (largest,)
     bound_notes = []
-    dropped: dict[str, int] = {}
+    dropped: dict[str, int] = dict(unbound)
     eligible: list[tuple[int, int, Leg]] = []
     for pos, leg in enumerate(legs):
         declared_bound = (per_leg and leg.max_request_tokens is not None
@@ -480,6 +487,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS, get_catalog_models
     catalog_rows = tuple(get_catalog_models() if catalog_rows is None else catalog_rows)
     legs = catalog_tiers(tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS), catalog_rows)
+    # One registry snapshot binds every OpenCode leg before any size check, under the launch identity.
+    from plangraph.routing_support.opencode_overlay import ProviderView
+    from .legs import bound_legs
+    view = ProviderView()
+    legs, refused = bound_legs(legs, view, card, role)
+    harness_skipped.extend({"leg": leg.id, "reason": "request_bound_malformed",
+                            "evidence": {"kind": "request_bound_malformed", "detail": detail}}
+                           for leg, detail in refused)
     for candidate in legs:
         validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
@@ -617,7 +632,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason, rank_evidence[leg.id] = ineligible
         else:
             try:
-                route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now)
+                route_card(card, legs=(leg,), role=role, exclude_families=excluded, now=now, view=view)
             except RouteError as exc:
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
                 states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
@@ -644,7 +659,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         "effort_channel", "stale_row", "canary_pending")}
     try:
         route = route_card(card, legs=candidates, unavailable=blocked | policy_skipped,
-                           exclude_families=excluded, role=role, now=now)
+                           exclude_families=excluded, role=role, now=now, view=view)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement, agy_quota_states=quota_states)

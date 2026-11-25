@@ -49,6 +49,40 @@ pub(crate) fn oversized_reason(
 pub(crate) fn check_prompt_limit(prompt: &str, leg: &Value) -> Result<(), InlineDiffError> {
     core_split::check_prompt_limit(prompt, leg).map_err(InlineDiffError::Oversized)
 }
+pub(crate) fn effective_prompt_leg<'a>(
+    leg: &'a Value,
+    launch: &LaunchSpec,
+) -> std::borrow::Cow<'a, Value> {
+    if let Some(prepared) = launch.max_request_tokens {
+        let mut leg = leg.clone();
+        let cap = leg_max_request_tokens(&leg).map_or(prepared, |routed| routed.min(prepared));
+        if let Some(fields) = leg.as_object_mut() {
+            fields.insert("max_request_tokens".into(), cap.into());
+        }
+        std::borrow::Cow::Owned(leg)
+    } else {
+        std::borrow::Cow::Borrowed(leg)
+    }
+}
+
+pub(crate) fn check_prepared_prompt(
+    launch: &LaunchSpec,
+    text: &str,
+) -> Result<(), crate::errors::ToolError> {
+    let Some(max_request_tokens) = launch.max_request_tokens else {
+        return Ok(());
+    };
+    check_prompt_limit(
+        text,
+        &serde_json::json!({ "max_request_tokens": max_request_tokens }),
+    )
+    .map_err(|e| crate::errors::ToolError::Refused {
+        kind: crate::errors::RefusalKind::Spawn,
+        message: e.to_string(),
+        legs: vec![],
+    })
+}
+
 pub(crate) fn config_root() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -126,6 +160,14 @@ pub(crate) fn prepare_launch_group(
         .and_then(Value::as_str)
         .unwrap_or("implement");
     crate::pre_review::prepare(args, launch)?;
+    if let Some(routed) = leg_max_request_tokens(leg) {
+        launch.max_request_tokens = launch
+            .max_request_tokens
+            .map(|prepared| prepared.min(routed));
+    }
+    if let Some(text) = launch.prompt.as_deref() {
+        check_prepared_prompt(launch, text)?;
+    }
     if role != "review" {
         return Ok(None);
     }
@@ -133,7 +175,11 @@ pub(crate) fn prepare_launch_group(
         return if dry {
             Ok(None)
         } else {
-            crate::cli_review::prepare(args, launch, leg)
+            let dispatch = crate::cli_review::prepare(args, launch, leg)?;
+            if let Some(text) = launch.prompt.as_deref() {
+                check_prepared_prompt(launch, text)?;
+            }
+            Ok(dispatch)
         };
     }
     let review_args = serde_json::json!(args);
@@ -270,6 +316,8 @@ pub(crate) fn prepare_review_with_group(
     enabled: bool,
     group: Option<(usize, usize, &[String])>,
 ) -> Result<(), InlineDiffError> {
+    let effective = effective_prompt_leg(leg, launch);
+    let leg = effective.as_ref();
     let Some((mut diff, repo, text, mandatory)) =
         resolve_inline_diff_target(args, leg, launch, repos, enabled)?
     else {

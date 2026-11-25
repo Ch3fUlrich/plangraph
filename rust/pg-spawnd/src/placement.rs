@@ -84,10 +84,25 @@ pub(crate) fn run(
 }
 pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
     crate::leg_ref::check_review_role(args)?;
-    let card = args
+    let mut card = args
         .get("card")
         .ok_or_else(|| ToolError::Key("card".into()))?
-        .to_string();
+        .clone();
+    let reference = &card["diff_ref"];
+    if reference.get("repo_id").is_some() {
+        let diff = serde_json::from_value::<pg_worker_core::workspace::DiffRef>(reference.clone())
+            .map_err(|_| parameter("invalid registered-repository diff_ref"))?;
+        crate::prompt_git::validate(&diff)
+            .map_err(|_| parameter("invalid registered-repository diff_ref"))?;
+        let repos = crate::prompt::repos();
+        let repo = repos
+            .get(&diff.repo_id)
+            .ok_or_else(|| parameter("unknown registered repository in diff_ref"))?;
+        card["diff_ref"] = serde_json::json!({
+            "repo": repo.root, "base": diff.base_sha, "head": diff.head_sha, "paths": diff.paths,
+        });
+    }
+    let card = card.to_string();
     let role = args
         .get("role")
         .and_then(Value::as_str)

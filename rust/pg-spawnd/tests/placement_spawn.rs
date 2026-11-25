@@ -235,7 +235,17 @@ fn malformed_prompt_transport_records_named_reason() {
 
 #[test]
 fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
-    let f = Fixture::new("touch should_not_run", json!("review"), &[]);
+    registered_mimo_diff(10, None, false);
+}
+
+#[test]
+fn mimo_inline_diff_respects_effective_request_limit() {
+    registered_mimo_diff(10_000, Some(10), false);
+    registered_mimo_diff(10_000, Some(1_000), true);
+}
+
+fn registered_mimo_diff(routed: u64, prepared: Option<u64>, fits: bool) {
+    let f = Fixture::new("cat > observed_stdin", json!("review"), &[]);
     let repo = f.state.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let run_git = |args: &[&str]| -> String {
@@ -271,7 +281,7 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
         "model": "mimo/mimo-v2.6-pro",
         "family": "mimo",
         "tool_mode": "inline-only",
-        "max_request_tokens": 10
+        "max_request_tokens": routed
     });
     let plan = json!({"legs": [leg.clone()], "first_leg": leg, "skipped": []});
     pg_worker_core::executable_test_support::write_executable(
@@ -310,6 +320,20 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
     });
     std::fs::write(cfg_dir.join("hosts.json"), hosts.to_string()).unwrap();
 
+    if let Some(prepared) = prepared {
+        let spec = json!({
+            "argv": ["/bin/sh", "-c", "cat > observed_stdin"],
+            "cwd": f.state.path(),
+            "env": {},
+            "prompt": "review",
+            "stdin": "review",
+            "max_request_tokens": prepared
+        });
+        pg_worker_core::executable_test_support::write_executable(
+            f.state.path().join("launch"),
+            format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{spec}'\n"),
+        );
+    }
     let socket2 = f.state.path().join("socket-xdg");
     let mut cmd = std::process::Command::new(binary::spawnd());
     cmd.args(["serve", "--no-scope", "--socket"])
@@ -336,6 +360,13 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
         }),
     );
     let row = payload(reply);
+    let observed = f.state.path().join("observed_stdin");
+    if fits {
+        assert_eq!(row["status"], "completed", "{row}");
+        let stdin = std::fs::read_to_string(observed).unwrap();
+        assert!(stdin.contains("diff --git a/change.txt b/change.txt"));
+        return;
+    }
     assert_eq!(row["status"], "failed");
     assert_eq!(row["reason"], "prompt_too_large");
     assert_eq!(row["attempts"][0]["skip_reason"], "prompt_too_large");
@@ -345,7 +376,7 @@ fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
             && err.contains("max_request_tokens 10"),
         "{err}"
     );
-    assert!(!f.state.path().join("should_not_run").exists());
+    assert!(!observed.exists());
 }
 
 #[test]
