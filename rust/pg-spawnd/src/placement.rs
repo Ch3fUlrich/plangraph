@@ -83,6 +83,15 @@ pub(crate) fn run(
     }
 }
 pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
+    let argv = route_argv(args)?;
+    if args["card"].to_string().len() > 24000 {
+        return Err(parameter("card too large for the route adapter"));
+    }
+    Ok(argv)
+}
+/// The route adapter arguments of `args`, without the size limit of the caller's card: dispatch
+/// checks that limit on the card as sent (`route_args`) and then adds the admitted keys.
+pub(crate) fn route_argv(args: &Args) -> Result<Vec<String>, ToolError> {
     crate::leg_ref::check_review_role(args)?;
     let card = args
         .get("card")
@@ -127,9 +136,6 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
                 .ok_or_else(|| parameter("bench_db must be a string"))?
                 .into(),
         ]);
-    }
-    if card.len() > 24000 {
-        return Err(parameter("card too large for the route adapter"));
     }
     argv.push("--json".into());
     Ok(argv)
@@ -225,21 +231,82 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     if args.get("role").is_some_and(|role| role != "implement") {
         return Err(parameter("native-codex requires implement role"));
     }
-    crate::native_writer_host::writer_effort(&args["card"]).map_err(parameter)?;
+    crate::native_writer_host::check_launch_card(&args["card"]).map_err(parameter)?;
     let prompt = args
         .get("prompt")
         .and_then(Value::as_str)
         .ok_or_else(|| parameter("prompt must be a string"))?;
-    let mut argv = route_args(args)?;
-    argv[0] = "spawn".into();
-    argv.extend(["--".into(), prompt.into()]);
     if let Some(wait) = args.get("wait_seconds") {
         if !wait.as_f64().is_some_and(|n| n >= 0.0) {
             return Err(parameter("wait_seconds must be a number >= 0"));
         }
         // The adapter only waits for base admission; callers poll the durable record.
     }
+    // Every launch option is valid before admission, so a refused option never touches it.
+    let args = admit_lane(state, args)?;
+    let mut argv = route_argv(&args)?;
+    argv[0] = "spawn".into();
+    argv.extend(["--".into(), prompt.into()]);
     native_call(state, &argv, Duration::from_secs(200))
+}
+/// The item keys a launch card names: its singular `item_key` (else `item`, else the key the
+/// spawner inherits from `PLANGRAPH_SPAWN_ITEM`, the precedence of the run record) and each
+/// member of a batch card, those the record grammar accepts.
+pub(crate) fn card_keys(card: &Value, inherited: Option<String>) -> Vec<String> {
+    let blank = |value: &Value| value.is_null() || value.as_str() == Some("");
+    let singular = [&card["item_key"], &card["item"]];
+    let mut keys: Vec<String> = if singular.into_iter().all(blank) {
+        inherited.into_iter().collect()
+    } else {
+        singular
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect()
+    };
+    keys.extend(
+        card["item_keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(str::to_owned)),
+    );
+    keys.retain(|key| crate::records::valid_item(key));
+    keys
+}
+/// Refuse a native writer for an item key another live writer run holds, naming the run; a run
+/// whose liveness cannot be decided refuses with the reason `lane_unreadable`. `state` is the
+/// one state path of the dispatch. Check only: the admitted keys go into the returned card's
+/// `item_keys`, with the mark that they were admitted, after the caller's card passed its size
+/// limit.
+pub(crate) fn admit_lane(state: &Path, args: &Args) -> Result<Args, ToolError> {
+    use pg_spawnd::lane_guard::{admit_launch, LaunchRequest};
+    let card = &args["card"];
+    let prompt = args["prompt"]
+        .as_str()
+        .ok_or_else(|| parameter("prompt must be a string"))?;
+    let extra = card_keys(card, std::env::var("PLANGRAPH_SPAWN_ITEM").ok());
+    let keys = admit_launch(&LaunchRequest {
+        prompt,
+        extra: &extra,
+        state,
+    })
+    .map_err(|refusal| match refusal.code {
+        "batch_input" => parameter(refusal.message),
+        code => ToolError::Refused {
+            kind: RefusalKind::Lane(code),
+            message: refusal.message,
+            legs: vec![],
+        },
+    })?;
+    let mut admitted = args.clone();
+    // Only this guard may say the keys were admitted; a caller-supplied mark is dropped.
+    let card = admitted["card"].as_object_mut().expect("card is an object");
+    card.remove("item_keys");
+    if !keys.is_empty() {
+        card.insert("item_keys".into(), serde_json::json!(keys));
+    }
+    card.insert("lane_keys_admitted".into(), Value::Bool(true));
+    Ok(admitted)
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;

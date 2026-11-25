@@ -7,6 +7,9 @@ pub(crate) enum RefusalKind {
     Parameter,
     Spawn,
     Benchmark,
+    /// A parameter refusal of the lane guard; the data carries its stable `reason` code
+    /// (`lane_unreadable`, `lane_collision`, ...).
+    Lane(&'static str),
 }
 #[allow(dead_code)]
 pub(crate) enum ToolError {
@@ -28,16 +31,22 @@ impl ToolError {
                 message,
                 legs,
             } => {
+                let reason = match &kind {
+                    RefusalKind::Lane(reason) => Some(*reason),
+                    _ => None,
+                };
                 let (code, name, exit) = match kind {
-                    RefusalKind::Parameter => (-32602, "ParameterRefused", 2),
+                    RefusalKind::Parameter | RefusalKind::Lane(_) => {
+                        (-32602, "ParameterRefused", 2)
+                    }
                     RefusalKind::Spawn => (-32000, "SpawnRefused", 2),
                     RefusalKind::Benchmark => (-32602, "BenchmarkError", 3),
                 };
-                (
-                    code,
-                    message,
-                    json!({"type":name,"exit_code":exit,"legs":legs}),
-                )
+                let mut data = json!({"type":name,"exit_code":exit,"legs":legs});
+                if let Some(reason) = reason {
+                    data["reason"] = json!(reason);
+                }
+                (code, message, data)
             }
             other => {
                 let (code, name, message) = match other {

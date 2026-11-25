@@ -611,5 +611,8 @@ fn writer_attempt(
     }
 }
 #[cfg(test)]
+#[path = "native_writer_lane_tests.rs"]
+mod lane_tests;
+#[cfg(test)]
 #[path = "native_writer_tests.rs"]
 mod tests;

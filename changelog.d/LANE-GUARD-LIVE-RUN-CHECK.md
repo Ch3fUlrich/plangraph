@@ -1,0 +1,1 @@
+MCP dispatch of a native writer now refuses an item key a live writer run of the same state holds, naming the run, and refuses every keyed launch while a run record's liveness cannot be decided (reason `lane_unreadable`); the check does not serialize concurrent dispatches. Deploy: restart the spawner MCP service after the binary update; no data migration.

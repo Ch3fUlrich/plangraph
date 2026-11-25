@@ -73,13 +73,7 @@ impl Host {
     }
 
     pub(super) fn configure(&mut self, request: &Value) -> Result<(), String> {
-        if self
-            .push_ref
-            .as_ref()
-            .is_some_and(|target| !target.starts_with("refs/heads/"))
-        {
-            return Err("push_ref must name refs/heads/...".into());
-        }
+        super::check_push_ref(&request["card"])?;
         self.brief = pg_spawnd::batch_writer_brief::render_in(
             request["prompt"].as_str().ok_or("prompt missing")?,
             // A fresh launch renders before its worktree exists: the host repository is the checkout.
@@ -161,6 +155,15 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
     execute_request(&request, resumed)
 }
 
+/// The record keeps that its `item_keys` were admitted by the dispatch guard, as the private
+/// launch request says: from then on they are the run's whole membership, and the headings of
+/// its brief are not read for keys.
+fn carry_lane_marker(request: &Value, record: &mut Value) {
+    if request["card"]["lane_keys_admitted"] == true {
+        record["lane_keys_admitted"] = json!(true);
+    }
+}
+
 fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
     let record_path = PathBuf::from(
         request["record_path"]
@@ -168,6 +171,7 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
             .ok_or("record_path missing")?,
     );
     mark_process(&mut record);
+    carry_lane_marker(request, &mut record);
     let mut host = Host::from_request(request, &record, record_path)?;
     if let Err(reason) = host.configure(request) {
         record["status"] = json!("failed");
@@ -306,4 +310,20 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
             .into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launch_request_marks_admitted_keys_on_the_record_and_a_plain_request_does_not() {
+        let mut record = json!({"run_id":"run-x","item_keys":["demo:A"]});
+        carry_lane_marker(&json!({"card":{"item_keys":["demo:A"]}}), &mut record);
+        assert!(record.get("lane_keys_admitted").is_none());
+        carry_lane_marker(&json!({"card":{"lane_keys_admitted":"yes"}}), &mut record);
+        assert!(record.get("lane_keys_admitted").is_none());
+        carry_lane_marker(&json!({"card":{"lane_keys_admitted":true}}), &mut record);
+        assert_eq!(record["lane_keys_admitted"], true);
+    }
 }
