@@ -294,6 +294,8 @@
         phase: it.phase || it.track || "", phaseIdx: phaseIdxOf[it.key] || 0,
         kind: it.kind, state: it.state, display: display[it.key],
         owner: it.owner, operator: !!it.operator, priority: num(it.priority),
+        effective_priority: num(it.effective_priority != null ? it.effective_priority : it.priority),
+        priority_via: it.priority_via || null,
         estimate_h: G.estimate(it), deps: depsOf(it), unblocks: waiters[it.key] || [],
         critical: !!critSet[it.key],
         slack: G.isTerminal(it) ? 0 : (slack[it.key] || 0),

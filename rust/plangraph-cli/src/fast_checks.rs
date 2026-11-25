@@ -3,6 +3,7 @@ use crate::fast_check_packages::packages;
 #[path = "fast_check_replay.rs"]
 mod replay;
 use pg_worker_core::cargo_cache;
+use pg_worker_core::fast_check_stamp as stamp;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -258,6 +259,31 @@ fn execute(args: &[String]) -> Result<()> {
     if args.first().map(String::as_str) == Some("--dispatch") {
         return fleet::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--receipt-ref") {
+        // The pre-push hook asks which receipt ref belongs to a lane ref: one mapping, in one place.
+        let target = args.get(1).ok_or("--receipt-ref requires a ref")?;
+        println!("{}", stamp::receipt_ref_for(target));
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("--check-notes") {
+        // The pre-push hook asks this of every receipt ref a push would publish.
+        let commit = args.get(1).ok_or("--check-notes requires a commit")?;
+        return stamp::notes_commit_green(Path::new("."), commit, None);
+    }
+    if args.first().map(String::as_str) == Some("--stamp-green") {
+        // The push gate asks this of a lane head: exit 0 only for a green receipt of exactly that head.
+        let head = args.get(1).ok_or("--stamp-green requires a head sha")?;
+        if args.get(2).map(String::as_str) == Some("--notes-commit") {
+            // A push's receipt ref: only a tree of well-formed receipts with a green one of `head`.
+            let commit = args.get(3).ok_or("--notes-commit requires a commit")?;
+            return stamp::notes_commit_green(Path::new("."), commit, Some(head));
+        }
+        return if stamp::green(Path::new("."), head) {
+            Ok(())
+        } else {
+            Err(format!("no green fast-checks stamp for {head}"))
+        };
+    }
     let start = Instant::now();
     let root = PathBuf::from(
         output(
@@ -327,6 +353,7 @@ fn execute(args: &[String]) -> Result<()> {
     let primary = cargo_cache::shared_cache_roots().map_err(|e| e.to_string())?;
     let target = resolve_cargo_target(&root, &primary[0], "fast-checks")?;
     let mut failures = Vec::new();
+    let mut checks = Vec::new();
     for step in steps {
         let tick = Instant::now();
         let mut command = Command::new(&step.args[0]);
@@ -359,6 +386,11 @@ fn execute(args: &[String]) -> Result<()> {
             step.label,
             tick.elapsed().as_secs_f64()
         );
+        checks.push(stamp::Check {
+            label: step.label.clone(),
+            rc: status.code().unwrap_or(-1),
+            seconds: tick.elapsed().as_secs_f64(),
+        });
         if !status.success() {
             failures.push(step.label);
             // Missing pytest is a precondition failure, not permission to skip Rust tests.
@@ -372,6 +404,11 @@ fn execute(args: &[String]) -> Result<()> {
     if start.elapsed() > Duration::from_secs(300) {
         eprintln!("WARNING: fast-checks exceeded the 300 second budget");
         failures.push("budget".into());
+    }
+    // The owned-worktree parent turns these lines into the head's receipt.
+    if let Some(path) = std::env::var_os(owned::RESULTS_ENV) {
+        let lines: String = checks.iter().map(|c| c.line() + "\n").collect();
+        std::fs::write(path, lines).map_err(|e| e.to_string())?;
     }
     if failures.is_empty() {
         Ok(())

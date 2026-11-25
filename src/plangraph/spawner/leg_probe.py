@@ -192,8 +192,15 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
-def probe_quota_line(leg, review_mode, exit_code, stdout, stderr):
-    """The limit line of a failed probe: an agy review probe's, and any Codex probe's (its account limit)."""
+def probe_quota_line(leg, review_mode, exit_code, stdout, stderr, refusal=None):
+    """The limit line of a failed probe: a review probe's (agy, OpenCode), and any Codex probe's (its account limit)."""
+    if leg.harness == 'opencode' and review_mode:
+        # An OpenCode run is read the way a real run's exit is: without its progress lines. The display
+        # output keeps only a partial answer that precedes the error frame, so the runner's confirmed
+        # refusal (a refused dispatch, exit 7) is the evidence then.
+        from .exit_outcome import without_progress
+        return (harness_limit_line(exit_code, without_progress(stdout), without_progress(stderr))
+                or (refusal if exit_code == 7 and isinstance(refusal, str) else None))
     if leg.harness == 'codex' or (review_mode and leg.harness == 'agy'):
         return harness_limit_line(exit_code, stdout, stderr)
     return None
@@ -309,8 +316,14 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 except (OSError, subprocess.CalledProcessError):
                     ok, reason, infra = False, 'probe infra: git', True
                 else:
-                    ok = changed and 'ok.txt' in files
-                    reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                    # The commit alone is not a pass: the writer process must
+                    # also have completed with exit code zero.
+                    status, code = getattr(job, 'status', None), getattr(job, 'exit_code', None)
+                    ok = changed and 'ok.txt' in files and status == 'completed' and code == 0
+                    reason = ('' if ok else f'exit {code}' if code else
+                              'no commit' if not (changed and 'ok.txt' in files) else
+                              'missing exit code' if status == 'completed' and code is None else
+                              str(status or 'failed'))
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
@@ -328,7 +341,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
             if not leaked and diagnostic is not None:
                 quota = probe_quota_line(leg, review_mode, getattr(diagnostic, 'exit_code', None),
-                                         getattr(diagnostic, 'stdout', '') or '', stderr)
+                                         getattr(diagnostic, 'stdout', '') or '', stderr,
+                                         getattr(diagnostic, 'refusal', None))
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
             if not quota:
@@ -578,7 +592,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
         if quota_reprobe:
             probe_kwargs['quota_reprobe'] = True
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
-    reply = dict(ok=all(row['ok'] for row in results if row.get('skipped') != 'limited'),
+    reply = dict(ok=all(row['ok'] for row in results if not row.get('skipped')),
                  probes=results,
                  limited_legs=[row['id'] for row in results if row.get('skipped') == 'limited'])
     if manage_key is not None:

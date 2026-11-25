@@ -81,6 +81,18 @@ if (mode === "t1") {
   var ctxO = PlanUI.tableContext(vmO);
   var sortedO = PlanUI.tableSort(ctxO.rows, { sort: [{ col: "state", dir: "asc" }] }, ctxO);
   emit({ keys: sortedO.map(function (r) { return r.key; }) });
+} else if (mode === "teff") {
+  var mk = function (key, prio, eff) {
+    var r = { key: key, project: "a", title: key, phase: "P1", phaseIdx: 0, kind: "lane",
+      display: "ready", owner: "o", operator: false, priority: prio, estimate_h: 1, deps: [], unblocks: [] };
+    if (eff != null) { r.effective_priority = eff; r.priority_via = "a:TOP"; }
+    return r;
+  };
+  var vmE = { projects: [{ name: "a", label: "A", color: "#111111" }],
+    items: [mk("a:LOW", 8, 10), mk("a:MID", 9, null), mk("a:ONE", 1, null)] };
+  var ctxE = PlanUI.tableContext(vmE);
+  emit({ desc: PlanUI.tableSort(ctxE.rows, { sort: [{ col: "priority", dir: "desc" }] }, ctxE).map(function (r) { return r.key; }),
+         eff: ctxE.rows.map(PlanUI.effectivePriority) });
 } else if (mode === "t2none") {
   var vmN = { projects: [{ name: "a", label: "A", color: "#111111" }],
     items: [
@@ -286,6 +298,13 @@ def test_t5odd_unknown_display_sorts_last(dump, tmp_path):
     """C1/C7: a display value outside TABLE_STATES sorts after all known ones."""
     res = run_node(tmp_path, RUNNER, "t5odd")
     assert res["keys"] == ["a:1", "a:3", "a:2"]     # ready(0), blocked(1), weird(99) last
+
+
+@need_node
+def test_priority_sort_uses_the_effective_value_and_falls_back_to_the_stored_one(dump, tmp_path):
+    res = run_node(tmp_path, RUNNER, "teff")
+    assert res["eff"] == [10, 9, 1]
+    assert res["desc"] == ["a:LOW", "a:MID", "a:ONE"]   # stored 8 < 9, effective 10 > 9
 
 
 @need_node

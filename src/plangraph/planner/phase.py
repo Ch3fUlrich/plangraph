@@ -148,8 +148,11 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         route_error = None
         shadow_id = None
         try:
+            # Scopes the card names as a directory or glob count for rule 3.3 as the files they hold.
+            scoped = readiness.scope_files(repo_root, _write_set(card))
             route, shadow_id = shadow.route_with_shadow(
-                card, answerer=answerer, legs=legs, unavailable=unavailable,
+                {**card, "scope_files": scoped} if scoped else card,
+                answerer=answerer, legs=legs, unavailable=unavailable,
                 store=store, principal=principal,
                 attempt=store.conn.execute(
                     "SELECT COALESCE(MAX(n), 0)+1 FROM attempts WHERE key=?", (dst,)

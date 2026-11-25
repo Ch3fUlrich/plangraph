@@ -28,7 +28,11 @@ fn mark_process(record: &mut Value) {
 }
 
 impl Host {
-    fn from_request(request: &Value, record: &Value, record_path: PathBuf) -> Result<Self, String> {
+    pub(super) fn from_request(
+        request: &Value,
+        record: &Value,
+        record_path: PathBuf,
+    ) -> Result<Self, String> {
         let state = record_path
             .ancestors()
             .nth(3)
@@ -59,6 +63,8 @@ impl Host {
             state,
             brief: request["prompt"].as_str().unwrap_or("").into(),
             push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
+            #[cfg(test)]
+            fast_checks_stand_in: None,
             reviews_started: 0,
             review_override: None,
             review_cli: super::review::review_cli()?,
@@ -66,7 +72,7 @@ impl Host {
         })
     }
 
-    fn configure(&mut self, request: &Value) -> Result<(), String> {
+    pub(super) fn configure(&mut self, request: &Value) -> Result<(), String> {
         if self
             .push_ref
             .as_ref()
@@ -74,8 +80,10 @@ impl Host {
         {
             return Err("push_ref must name refs/heads/...".into());
         }
-        self.brief = pg_spawnd::batch_writer_brief::render(
+        self.brief = pg_spawnd::batch_writer_brief::render_in(
             request["prompt"].as_str().ok_or("prompt missing")?,
+            // A fresh launch renders before its worktree exists: the host repository is the checkout.
+            &self.repo,
         )?
         .into_owned();
         self.effort = writer_effort(&request["card"])?;

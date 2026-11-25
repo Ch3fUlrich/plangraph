@@ -116,6 +116,7 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
                 .as_ref()
                 .is_some_and(|t| t.keeper_defined && t.run_id == run),
             keeper_key: old.and_then(|t| t.keeper_key),
+            sha: None,
         };
         let mut output = Vec::new();
         let pending =
@@ -133,10 +134,9 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
             .and_then(|t| t.keeper_key.clone())
             .unwrap_or_else(|| key.to_owned());
         (self.close)(&keeper_key)?;
-        let path = self.dir.join("tasks.jsonl");
-        let mut tasks = super::load_tasks(&path)?;
-        tasks.remove(key);
-        super::save_tasks(&path, &tasks)
+        super::update_tasks(&self.dir.join("tasks.jsonl"), |tasks| {
+            tasks.remove(key);
+        })
     }
 }
 
@@ -362,6 +362,29 @@ pub fn deliver_pending(
     Ok(lines)
 }
 
+/// Records the failure of a batch's pull request and delivers it to the batch's writer; false when the
+/// pull request belongs to no recorded batch.
+pub fn route_owned(dir: &Path, task: &Task, now: i64) -> Result<bool> {
+    let owners = load_owners(dir)?;
+    // Recorded under the lock first; the delivery command runs outside it.
+    let routed = update_failures(dir, |records| {
+        Ok(batch_failure::record_failure(records, &owners, task, now))
+    })?;
+    if routed.is_none() {
+        return Ok(false);
+    }
+    deliver_pending(
+        dir,
+        &owners,
+        &mut CommandDeliver {
+            dir,
+            lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
+        },
+        &system_now,
+    )?;
+    Ok(true)
+}
+
 /// Intake path: a failing batch head goes to the batch, everything else to the keeper fix lane.
 pub fn route_or_define(
     dir: &Path,
@@ -369,22 +392,8 @@ pub fn route_or_define(
     now: i64,
     keeper: impl FnOnce(&mut Task) -> Result<bool>,
 ) -> Result<bool> {
-    let owners = load_owners(dir)?;
-    // Recorded under the lock first; the delivery command runs outside it.
-    let routed = update_failures(dir, |records| {
-        Ok(batch_failure::record_failure(records, &owners, task, now))
-    })?;
-    if routed.is_some() {
-        deliver_pending(
-            dir,
-            &owners,
-            &mut CommandDeliver {
-                dir,
-                lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
-            },
-            &system_now,
-        )?;
-        // The record is open and addressed to the batch: no unassigned fix lane is created.
+    // The record is open and addressed to the batch: no unassigned fix lane is created.
+    if route_owned(dir, task, now)? {
         return Ok(true);
     }
     keeper(task)

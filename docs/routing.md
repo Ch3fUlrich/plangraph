@@ -281,6 +281,15 @@ The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_ri
 The Rust route reports legs with more than three missing verdicts in their last
 ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
+## Rule 3.3 path classes in `route_card`
+
+`routing_support/risk.py::RULE_33_CLASSES` places keeper service/API code, gate files, the
+gateway, deploy config, installers and privileged lanes at least high, whatever the size of the
+card. `route_card` takes the higher of that assessed band and the card's `risk` (omitted: normal),
+so such a card gets two review seats (`risky`) and no low-risk-only leg. `plan_phase` resolves
+directory and glob write scopes against the repository (`readiness.scope_files`) so a scope like
+`src/plangraph/keeper` or `tools/*.py` is assessed by the files it holds.
+
 ## Utility eligibility and score rules (ROUTE-RANK-RULES)
 
 - Card needs: `card.needs` (`tools`, `shell`, `long_context`, `vision`) and `card.tool_mode` (the weakest tool mode accepted) filter every candidate leg, fallback legs included; the skip reason is `needs_<need>`.
@@ -371,3 +380,10 @@ fell through to a different leg. Missing benchmark evidence stays null.
 ## Worker claim bases
 
 A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.
+
+Review seats per leg are bounded by `route_policy.json` `review_seat_admission`; the review route carries it as `seat_admission` and the native spawner queues seats beyond the bound: [seat admission](checkpoints/LE-SEAT-BURST-DRAINS-SMART-REVIEW-LEG.md).
+
+## Planner pack order
+
+`planner.context_pack` puts the card and files first and the check-output tail last, so a
+`check_fail` retry shares a byte-identical prefix; layout in `docs/PLANNER-KIT.md`.
