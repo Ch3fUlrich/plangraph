@@ -336,7 +336,7 @@ def admit(service, options, *, card=None, preview=False):
                     row.setdefault('refusal', 'review workspace requires a disk readiness measurement')
         rows.pop(local, None)
         return rows
-    rows = load_rows()
+    rows, held = load_rows(), {}  # held: what hosts refused, kept across readiness refreshes
     def local_health(disk):
         readiness = local_readiness_refusal(public)
         if readiness and readiness.startswith(overflow.SANDBOX_UNAVAILABLE):
@@ -399,11 +399,11 @@ def admit(service, options, *, card=None, preview=False):
                         continue
                     return _close_queue(service, queued, status='refused', reason=decision.reason,
                                         overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
-                                        error=overflow.lane_text(rows, f'{decision.reason} (admission window {window:g}s elapsed)'))
+                                        error=overflow.lane_text(held, f'{decision.reason} (admission window {window:g}s elapsed)'))
                 record = {'run_id': 'run-' + uuid.uuid4().hex,
                           'status': 'refused',
                           'reason': decision.reason, 'overflow_reason': decision.reason,
-                          'exit_code': 2, **_no_hosts_hint(config), **overflow.lane_error(rows, decision.reason)}
+                          'exit_code': 2, **_no_hosts_hint(config), **overflow.lane_error(held, decision.reason)}
                 if native:
                     now = time.time()
                     record.update(run_kind='native-codex', started=now, ended=now)
@@ -431,7 +431,7 @@ def admit(service, options, *, card=None, preview=False):
                 record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
                 record.setdefault('status', 'unknown')
                 break
-            rows[name]['refusal'] = refusal
+            rows[name]['refusal'] = held[name] = refusal
     except Exception as exc:
         if queued is not None:
             _close_queue(service, queued, status='failed', exit_code=1, reason='admission_failed',
