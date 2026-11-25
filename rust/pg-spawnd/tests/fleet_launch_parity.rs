@@ -54,6 +54,7 @@ fn main() {
     use sandbox::Launcher;
     let rust = Launcher::Rust(None);
     check(&rust);
+    check_exec_entry_point();
     records::check_lifecycle(&rust);
     interrupted::check(&rust);
     interrupted::check_counter(&rust, false);
@@ -78,6 +79,27 @@ fn main() {
         }
         _ => {}
     }
+}
+
+/// The operator's `fleet-launch` entry point as a one-line exec of `pg-spawnd session`: worker
+/// respawns through it resume the saved session (dry-run line with `--resume`/`-n`) and
+/// refuse with the named reasons, exactly as `pg-spawnd session` does.
+#[cfg(target_os = "linux")]
+fn check_exec_entry_point() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let entry = dir.path().join("fleet-launch");
+    std::fs::write(
+        &entry,
+        format!(
+            "#!/bin/sh\nexec '{}' session \"$@\"\n",
+            env!("CARGO_BIN_EXE_pg-spawnd")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    resume::check(&sandbox::Launcher::Explicit(entry));
+    println!("fleet-launch exec entry point passed: worker respawn resumes the saved session");
 }
 
 #[cfg(target_os = "linux")]
