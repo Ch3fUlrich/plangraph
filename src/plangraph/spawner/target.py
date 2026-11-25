@@ -4,19 +4,10 @@ import os
 from pathlib import Path
 import re
 
-from plangraph.planner.legs import leg_active, opencode_counterpart
+from plangraph.planner.legs import launch_model, leg_active, opencode_counterpart
 from plangraph.routing_errors import SpawnRefused
 
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
-
-
-def launch_model(leg):
-    """Keep the route identity stable while sending the selected GPT variant."""
-    from plangraph.planner.legs import CX_EFFORTS
-    if not leg.model.startswith('omniroute/cx-gpt-') or leg.effort not in CX_EFFORTS:
-        return leg.model
-    base, _, suffix = leg.model.rpartition('-')
-    return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
 
 
 def effective_leg(leg, card=None, role=None, *, view=None):

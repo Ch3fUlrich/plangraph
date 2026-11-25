@@ -1,6 +1,11 @@
 """Transport completion evidence; deliberately knows nothing about seat verdicts."""
 import json
 
+from plangraph.routing_support.opencode_overlay import (
+    catalog_output_maximum,
+    launch_output_reserve as launch_output_reserve,
+)
+
 from .env_redact import normalize
 
 
@@ -66,24 +71,6 @@ def configure_launch_output(env, model, role, reasoning_cap):
         if maximum is not None:
             env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
     return None
-
-
-def catalog_output_maximum(model):
-    """The catalog's maximum output tokens for ``model``, or None when absent or not positive."""
-    from plangraph.catalog_data import SEED_MODELS
-    maximum = next((row.get('max_output_tokens') for row in SEED_MODELS if row.get('model_id') == model), None)
-    return maximum if type(maximum) is int and maximum > 0 else None
-
-
-def launch_output_reserve(model, registry_output):
-    """Output tokens the launched child reserves: ``cap_reasoning`` writes the catalog maximum for a MiMo id.
-
-    The one transformation of a registry ``limit.output`` that launch applies; request bounds use it so the
-    planner, the launch overlay and the child config agree on the reserve.
-    """
-    from .mimo_policy import is_mimo_id
-    maximum = catalog_output_maximum(model) if is_mimo_id(model) else None
-    return maximum if maximum is not None else registry_output
 
 
 def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap_tokens=None):

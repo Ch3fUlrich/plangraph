@@ -201,6 +201,24 @@ def _child_settings(env):
     return node
 
 
+def catalog_output_maximum(model):
+    """The catalog's maximum output tokens for ``model``, or None when absent or not positive."""
+    from plangraph.catalog_data import SEED_MODELS
+    maximum = next((row.get('max_output_tokens') for row in SEED_MODELS if row.get('model_id') == model), None)
+    return maximum if type(maximum) is int and maximum > 0 else None
+
+
+def launch_output_reserve(model, registry_output):
+    """Output tokens the launched child reserves: ``cap_reasoning`` writes the catalog maximum for a MiMo id.
+
+    The one transformation of a registry ``limit.output`` that launch applies; request bounds use it so the
+    planner, the launch overlay and the child config agree on the reserve.
+    """
+    from plangraph.mimo_policy import is_mimo_id
+    maximum = catalog_output_maximum(model) if is_mimo_id(model) else None
+    return maximum if maximum is not None else registry_output
+
+
 class RequestBoundError(ValueError):
     """A registry entry that names a limit no request can honour (not a positive context minus reserve)."""
 
@@ -264,7 +282,6 @@ class ProviderView:
         for name, value in (('context', context), ('output', output)):
             if type(value) is not int or value < 0:
                 raise RequestBoundError(f'{model}: limit.{name} is not a non-negative integer')
-        from plangraph.spawner.opencode_answer import launch_output_reserve
         bound = context - launch_output_reserve(model, output)
         if bound <= 0:
             raise RequestBoundError(f'{model}: context {context} leaves no room after its output reserve')

@@ -548,6 +548,14 @@ def service_probe(service) -> Callable[[str], bool] | None:
     return client_installed if own_harness_enabled() else None
 
 
+def launch_model(leg):
+    """Keep the route identity stable while sending the selected GPT variant."""
+    if not leg.model.startswith('omniroute/cx-gpt-') or leg.effort not in CX_EFFORTS:
+        return leg.model
+    base, _, suffix = leg.model.rpartition('-')
+    return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
+
+
 def opencode_counterpart(leg: Leg, view=None) -> Leg | None:
     """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged.
 
@@ -596,7 +604,6 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
                 identity = codex_leg_effort(leg, card)
             except SpawnRefused:
                 pass    # the effort refusal belongs to its owner, after admission
-        from plangraph.spawner.target import launch_model
         try:
             bound = view.request_bound(launch_model(identity))
         except RequestBoundError as exc:
