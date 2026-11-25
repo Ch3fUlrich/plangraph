@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import quote
 
+from . import timing
 from .evidence_types import valid_commit_ref
 
 __all__ = ["CIAdapter"]
@@ -199,12 +200,13 @@ class CIAdapter:
         collected: list[dict] = []
         total: int | None = None
         for page in range(1, 11):
+            timing.check_io_deadline(label)
             path = f"{base}?{query}per_page=100&page={page}"
             proc = subprocess.run(
                 [self._gh, "api", path],
                 capture_output=True,
                 text=True,
-                timeout=self._timeout,
+                timeout=timing.io_timeout(self._timeout),
                 check=False,
             )
             if proc.returncode != 0:
@@ -243,7 +245,7 @@ class CIAdapter:
                 [self._git, "-C", value, "remote", "get-url", "origin"],
                 capture_output=True,
                 text=True,
-                timeout=self._timeout,
+                timeout=timing.io_timeout(self._timeout),
                 check=False,
             )
             if proc.returncode == 0:

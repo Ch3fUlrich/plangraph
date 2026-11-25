@@ -185,7 +185,7 @@ def resolve_commit(
             cwd=str(repo),
             capture_output=True,
             text=True,
-            timeout=float(timeout),
+            timeout=timing.io_timeout(float(timeout)),
             check=False,
         )
         if proc.returncode != 0:
