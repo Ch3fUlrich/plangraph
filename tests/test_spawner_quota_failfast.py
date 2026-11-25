@@ -116,20 +116,40 @@ def test_db_returns_latest_row_of_each_window_in_id_order(tmp_path):
     assert [(r['window_key'], r['remaining_percentage']) for r in rows] == [('daily', 30), ('weekly', 100)]
 
 
-def test_all_mode_returns_every_row_and_one_bad_cell_never_spoils_the_reply(tmp_path):
+def _snapshot_db(tmp_path, *inserts):
     path = tmp_path / 'snapshots.sqlite'
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id, '
                    'window_key, remaining_percentage, is_exhausted, next_reset_at, created_at)')
-        db.execute("INSERT INTO quota_snapshots VALUES (1,'codex','a','weekly',90,0,NULL,'2026-11-13 10:00:00.1')")
-        db.execute("INSERT INTO quota_snapshots VALUES (2,'codex','a','weekly',40,0,NULL,'2026-11-13 10:00:00.9')")
-        db.execute("INSERT INTO quota_snapshots VALUES (3,'claude','x','weekly',9e999,0,NULL,'2026-11-13 10:00:00')")
-        db.execute("INSERT INTO quota_snapshots VALUES (4,'claude','y','weekly',x'00ff',0,NULL,CAST(x'ff' AS TEXT))")
-    source = {'QUOTA_SNAPSHOT_DB': str(path)}
+        for insert in inserts:
+            db.execute('INSERT INTO quota_snapshots VALUES ' + insert)
+    return {'QUOTA_SNAPSHOT_DB': str(path)}
+
+
+def test_all_mode_returns_every_row_and_one_bad_cell_never_spoils_the_reply(tmp_path):
+    source = _snapshot_db(
+        tmp_path,
+        "(1,'codex','a','weekly',90,0,NULL,'2026-11-13 10:00:00.1')",
+        "(2,'codex','a','weekly',40,0,NULL,'2026-11-13 10:00:00.9')",
+        "(3,'claude','x','weekly',9e999,0,NULL,'2026-11-13 10:00:00')",
+        "(4,'claude',CAST(x'ff' AS TEXT),'weekly',x'00ff',0,NULL,'2026-11-13 10:00:00')")
     rows = fetch_snapshot_rows(source, latest='all')
     assert [r['remaining_percentage'] for r in rows] == [90, 40, None, None]
+    assert '\ufffd' in rows[3]['connection_id']
     json.dumps(rows, allow_nan=False)  # strict JSON: what the CLI parses
-    assert [r['remaining_percentage'] for r in fetch_snapshot_rows(source)][:2] == [40, None]  # default: highest id
+
+
+def test_default_reader_keeps_its_routing_behaviour_on_malformed_rows(tmp_path):
+    # Tolerant decoding belongs to the pool readout: the routing reader still reads a source
+    # with an undecodable row as unreadable, and the gate then never blocks routing.
+    source = _snapshot_db(
+        tmp_path,
+        "(1,'codex','a','weekly',0,1,'2099-01-01T00:00:00Z','2026-11-13T00:00:00Z')",
+        "(2,'claude',CAST(x'ff' AS TEXT),'weekly',50,0,NULL,'2026-11-13T00:00:00Z')")
+    with pytest.raises(LookupError):
+        fetch_snapshot_rows(source)
+    gate = QuotaGate(lambda: fetch_snapshot_rows(source), clock=lambda: quota_snapshots._ts('2026-11-13T10:00:00Z'))
+    assert gate.apply(SOL, OK) == OK
 
 
 @pytest.mark.parametrize('with_sensitive_values', [False, True], ids=['quota', 'redacted-quota'])

@@ -61,3 +61,32 @@ fn quota_status_leaves_an_unavailable_store_unknown_and_does_not_create_it() {
     assert_eq!(String::from_utf8(result.stdout).unwrap(), "quota unknown\n");
     assert!(!db.exists());
 }
+
+#[test]
+fn quota_status_keeps_an_empty_connection_id_apart_from_the_provider_suffix_account() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = directory.path().join("quota.sqlite");
+    let fixture = test_python::command()
+        .args([
+            "-c",
+            r#"
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.executescript("""
+        CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id,
+          window_key, remaining_percentage, is_exhausted, next_reset_at, created_at);
+        INSERT INTO quota_snapshots VALUES
+          (1, 'codex:a', '', 'weekly', 80, 0, NULL, '2026-11-21T10:00:00Z'),
+          (2, 'codex', 'a', 'weekly', 10, 0, NULL, '2026-11-21T11:00:00Z');
+    """)
+"#,
+        ])
+        .arg(&db)
+        .status()
+        .unwrap();
+    assert!(fixture.success());
+    let text = String::from_utf8(quota_status(&db).stdout).unwrap();
+    // Two accounts as before: the unnamed one and `a`; the empty id is not merged into `a`.
+    assert!(text.contains("codex\t\tweekly\t20% / 100%"), "{text}");
+    assert!(text.contains("codex\ta\tweekly\t90% / 100%"), "{text}");
+}

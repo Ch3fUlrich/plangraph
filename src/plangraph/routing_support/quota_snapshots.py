@@ -100,7 +100,11 @@ def _plain(value):
     return value
 
 
-def _rows(cursor):
+def _history(db):
+    """Every stored row for the pool readout, which tolerates a malformed row: undecodable text
+    is replaced and an unsupported cell becomes None, so independent healthy rows stay readable."""
+    db.text_factory = lambda raw: raw.decode('utf-8', 'replace')
+    cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots ORDER BY id')
     columns = [column[0] for column in cursor.description]
     return [dict(zip(columns, map(_plain, row))) for row in cursor]
 
@@ -108,20 +112,21 @@ def _rows(cursor):
 def fetch_snapshot_rows(env=None, *, fetch=None, latest='id'):
     """Read-only snapshot DB or management API; LookupError when unreadable.
 
-    ``latest='id'`` keeps the highest id per provider, connection and window;
-    ``latest='all'`` returns every stored row, oldest id first, for a reader that picks the
-    newest observation itself (one timestamp reading for the choice and the report).
+    ``latest='id'`` (routing) keeps the highest id per provider, connection and window and reads
+    a malformed row as an unreadable source; ``latest='all'`` (pool readout) returns every
+    stored row, oldest id first, for a reader that picks the newest observation itself.
     """
     source = os.environ if env is None else env
     if source.get('QUOTA_SNAPSHOT_DB'):
         try:
             db = sqlite3.connect(Path(source['QUOTA_SNAPSHOT_DB']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
             try:
-                db.text_factory = lambda raw: raw.decode('utf-8', 'replace')
                 if latest == 'all':
-                    return _rows(db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots ORDER BY id'))
-                return _rows(db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots WHERE id IN '
-                                        '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id'))
+                    return _history(db)
+                cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots WHERE id IN '
+                                    '(SELECT MAX(id) FROM quota_snapshots GROUP BY provider, connection_id, window_key) ORDER BY id')
+                columns = [column[0] for column in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor]
             finally:
                 db.close()
         except Exception:
