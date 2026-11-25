@@ -126,3 +126,23 @@ subject, head, host, start, end, result. `report --last N` prints, per train, th
 critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
 critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
 them into a keeper table needs a keeper schema step that is not part of this change.
+
+## Checking a hand-cut range
+
+`plangraph land-train cut-check --repo DIR --base REV --head REV` (rust/plangraph-cli/src/land/cut_gate.rs) is read-only: it
+resolves both revisions once to full commit ids and works in one private scratch checkout of the head, so the caller's checkout
+and refs are not touched. The gate is `tools/ci_commit_gate.py` of the base commit, as CI reads it; no flag names another. Both
+Python runs (the loader of the gate's own rules and the gate itself) run isolated (`-I`) under one sanitized Git environment: no
+`GIT_*` override, no replacement refs, no user, system or host attributes (the checkout's tracked ones stay), no CI event file.
+
+Every commit of `base..head` is refused before the gate runs when it carries a `(cherry picked from commit ...)` line (recut
+by hand without `-x`), a `Gate-Edit:` line anywhere in its message (also where git's trailer parser misses it; lines are split
+like the gate's Python `splitlines()`, so CR, FF, U+2028 and others count) or a protected path. A protected path is one of the
+pinned gate's `GATE_PATHS` (matched by that script's own Python `fnmatch`, so there is no second matcher) or one of the GO
+verifier's operator-class paths (`go_verify.rs`, for example `deploy/ci-watch/matrix.toml`); the two refusals are worded
+separately. Paths are read NUL-delimited with renames split into a delete and an add, so a rename away from a protected path is
+seen; for a merge they are read against every parent, except that a two-parent merge with replay evidence in the pinned gate
+(`_merge_edit_evidence`) lists only what the merge edited itself, so a clean merge of a protected change from the base is not an
+edit while a conflict resolved by keeping one parent is. The pinned gate then runs on the same range as the backstop.
+`--grants` and `--gate-edits` are refused with `grants are not accepted yet: LAND-CUT-GRANT-RECORD-PRODUCER`: a router-issued
+grant record is a separate slice, and until it lands an operator cuts a gate-path or `Gate-Edit` range by hand.
