@@ -43,6 +43,81 @@ def test_constants():
                              "bad_path"}
 
 
+# ---------------------------------------------------------------- scope_files
+
+def _scope_tree(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tools").mkdir(parents=True)
+    (repo / "tools" / "a.py").write_text("A = 1\n", encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "b.py").write_text("B = 1\n", encoding="utf-8")
+    (tmp_path / "outside" / "tools").mkdir(parents=True)
+    (tmp_path / "outside" / "tools" / "o.py").write_text("O = 1\n", encoding="utf-8")
+    return repo
+
+
+@pytest.mark.parametrize("scope", ["tools/*.py", "./tools/*.py", "tools/./*.py", "tools//*.py",
+                                   r"tools\*.py", "tools/./a.p?", "tools"])
+def test_scope_files_one_answer_for_every_spelling(tmp_path, scope):
+    assert rd.scope_files(_scope_tree(tmp_path), [scope]) == ["tools/a.py"]
+
+
+@pytest.mark.parametrize("scope", ["../outside/tools/*.py", "../outside/tools", "tools/../../outside/tools",
+                                   "/abs/tools", "C:/tools", "*/../../outside/tools/*.py"])
+def test_scope_files_never_walks_outside_the_repo(tmp_path, monkeypatch, scope):
+    repo = _scope_tree(tmp_path)
+    walked = []
+    real_walk = os.walk
+    monkeypatch.setattr(rd.os, "walk", lambda top, *a, **k: (walked.append(str(top)), real_walk(top, *a, **k))[1])
+    assert rd.scope_files(repo, [scope]) == []
+    assert all(os.path.realpath(w).startswith(str(repo.resolve())) for w in walked), walked
+
+
+def test_scope_files_does_not_follow_a_symlink_out_of_the_repo(tmp_path):
+    repo = _scope_tree(tmp_path)
+    (repo / "link").symlink_to(tmp_path / "outside")
+    assert rd.scope_files(repo, ["link", "link/*.py"]) == []
+
+
+@pytest.mark.parametrize("scope", [".", "./", ".//", r".\\"])
+def test_scope_files_root_scope_names_the_whole_repo(tmp_path, scope):
+    assert rd.scope_files(_scope_tree(tmp_path), [scope]) == ["src/b.py", "tools/a.py"]
+
+
+@pytest.mark.parametrize("scope", ["/", "/.", "//", "\\", r"\.", "/./", "C:", "C:/"])
+def test_scope_files_an_absolute_root_spelling_is_never_walked(tmp_path, monkeypatch, scope):
+    repo = _scope_tree(tmp_path)
+    walked = []
+    monkeypatch.setattr(rd.os, "walk", lambda top, *a, **k: walked.append(str(top)) or iter(()))
+    assert rd.scope_files(repo, [scope]) == []
+    assert walked == []
+
+
+@pytest.mark.parametrize("scope", ["pkg.v1/", "pkg.v1", "./pkg.v1//"])
+def test_scope_files_walks_a_dotted_directory(tmp_path, scope):
+    repo = _scope_tree(tmp_path)
+    (repo / "pkg.v1").mkdir()
+    (repo / "pkg.v1" / "m.py").write_text("M = 1\n", encoding="utf-8")
+    assert rd.scope_files(repo, [scope]) == ["pkg.v1/m.py"]
+    assert rd.scope_files(repo, ["pkg.v1/m.py"]) == []  # a file as written stays with the card's paths
+
+
+def test_scope_files_a_symlink_loop_is_an_error_not_a_crash_or_a_skip(tmp_path):
+    repo = _scope_tree(tmp_path)
+    (repo / "loop").symlink_to(repo / "loop")
+    with pytest.raises(ValueError, match="loop"):
+        rd.scope_files(repo, ["loop/*.py"])
+
+
+def test_scope_files_a_resolve_runtime_error_is_a_value_error(tmp_path, monkeypatch):
+    # Python 3.12 raises RuntimeError from Path.resolve on a symlink loop.
+    def boom(self, *a, **k):
+        raise RuntimeError("Symlink loop from 'x'")
+    monkeypatch.setattr(rd.Path, "resolve", boom)
+    with pytest.raises(ValueError, match="cannot be resolved"):
+        rd.scope_files(_scope_tree(tmp_path), ["tools/*.py"])
+
+
 # ---------------------------------------------------------------- paths_overlap
 
 OVERLAP = [
