@@ -161,6 +161,17 @@ def test_a_quota_reply_after_the_file_write_still_books_the_limit(tmp_path, monk
     assert result['skipped'] == 'limited' and store.leg_status('gpt-6.2-sol-medium')['state'] == 'limited', result
 
 
+def test_a_landed_commit_with_a_read_only_error_and_a_nonzero_exit_books_the_failure(tmp_path, monkeypatch):
+    async def spawn(**kw):
+        cwd = Path(kw['cwd'])
+        (cwd / 'ok.txt').write_text('ok')
+        subprocess.run(['git', 'add', 'ok.txt'], cwd=cwd, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=p', '-c', 'user.email=p@x', 'commit', '-qm', 'probe'], cwd=cwd, check=True, capture_output=True)
+        return _job(exit_code=1, stderr='fatal: Unable to create .git/index.lock: Read-only file system')
+    result, store = _probe_with(tmp_path, monkeypatch, spawn)
+    assert result['ok'] is False and not result['infra'] and result['reason'].startswith('exit 1'), result
+
+
 def test_a_real_no_commit_still_books_the_leg_down(tmp_path, monkeypatch):
     async def spawn(**kw):
         return _job(stdout='done')

@@ -291,6 +291,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 ok, reason, infra = False, f'probe infra: spawn: {type(exc).__name__}', True
                 if cause:
                     reason += ': ' + cause
+        committed = False  # the writer's ok.txt commit landed; set by the writer-probe check below
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -321,7 +322,8 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     # The commit alone is not a pass: the writer process must
                     # also have completed with exit code zero.
                     status, code = getattr(job, 'status', None), getattr(job, 'exit_code', None)
-                    ok = changed and 'ok.txt' in files and status == 'completed' and code == 0
+                    committed = changed and 'ok.txt' in files
+                    ok = committed and status == 'completed' and code == 0
                     reason = ('' if ok else f'exit {code}' if code else
                               'no commit' if not (changed and 'ok.txt' in files) else
                               'missing exit code' if status == 'completed' and code is None else
@@ -347,10 +349,11 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                                          getattr(diagnostic, 'refusal', None))
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
-            if not quota and not leaked and leg.harness == 'codex' and not review_mode and diagnostic is not None \
+            if not quota and not leaked and leg.harness == 'codex' and not review_mode and not committed and diagnostic is not None \
                     and (sandbox_denial(stderr, getattr(diagnostic, 'stdout', ''))
                          or any(e.get('event') == 'sandbox_denied' for e in getattr(diagnostic, 'events', None) or ())):
                 # The probe's sandbox blocked the writer (also when it then ran out of time): never a leg failure.
+                # A landed commit means the sandbox let the write through, so a nonzero exit stays a leg failure.
                 ok, reason, infra, excerpt = False, 'probe infra: sandbox denied a write', True, ''
             elif not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
