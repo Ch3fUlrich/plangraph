@@ -10,6 +10,16 @@ even when it also updates the title or description. Exact-head CI readers use th
 run's metadata marker and its attempt's job names to exclude metadata checks from
 test proof and rerun accounting. An unconfirmed run cannot supply green CI evidence.
 
+An ordinary draft `lane/*` run starts only the literal `ci-gate` job. Its
+`Draft lane without test proof` step runs without checkout, commit-policy
+execution, selected suites, or a `ci-full` status. The run is titled
+`Draft lane check <run-id>`. The CI wait, failure watcher, and legacy lander
+exclude it only with the exact Actions attempt's successful witness and skipped
+suites. A missing or contradictory witness withholds CI evidence. A draft lane
+title or description edit still uses `ci-pr-description`, and a base edit takes
+the ordinary suites and gate path. A manually imported timing report is outside
+this admission check.
+
 The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, architecture and CLI version; cache misses retain the archive SHA-256 check and retry downloads across a six-minute window.
 
 The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike`. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs `scrub` only.

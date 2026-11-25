@@ -6,6 +6,10 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const GH_TIMEOUT: Duration = Duration::from_secs(60);
+#[path = "wait_ci_non_test.rs"]
+mod non_test;
+pub(crate) use non_test::verified_non_test_run;
+
 pub(crate) const GH_TIMED_OUT: &str = "gh timed out";
 
 /// One workflow run as `gh run list` reports it.
@@ -132,49 +136,6 @@ fn run_limited(
     Ok((status, text))
 }
 
-const TESTS_METADATA_JOB: &str = "ci-pr-description";
-
-/// A title alone is insufficient: old workflow configurations used the editable PR title.
-pub(crate) fn verified_metadata_run(
-    id: u64,
-    attempt: u64,
-    event: &Value,
-    display_title: &Value,
-    fetch_jobs: impl FnOnce(&str) -> Result<Value, String>,
-) -> Result<bool, String> {
-    if event != "pull_request" || display_title != format!("PR metadata check {id}").as_str() {
-        return Ok(false);
-    }
-    let endpoint = format!("actions/runs/{id}/attempts/{attempt}/jobs?per_page=100");
-    let response = fetch_jobs(&endpoint)?;
-    let jobs = response["jobs"].as_array().ok_or("missing job list")?;
-    if response["total_count"].as_u64() != Some(jobs.len() as u64) {
-        return Err("incomplete job list for metadata run".into());
-    }
-    let alternate_count = jobs
-        .iter()
-        .filter(|job| job["name"] == TESTS_METADATA_JOB)
-        .count();
-    let metadata = alternate_count == 1
-        && jobs.iter().all(|job| match job["name"].as_str() {
-            Some(TESTS_METADATA_JOB) => true,
-            Some(name) if !name.is_empty() && name != "ci-gate" => job["conclusion"] == "skipped",
-            _ => false,
-        });
-    if metadata {
-        return Ok(true);
-    }
-    if jobs
-        .iter()
-        .any(|job| job["name"] == "ci-gate" && job["conclusion"] != "skipped")
-    {
-        return Ok(false);
-    }
-    Err(format!(
-        "run {id} attempt {attempt}: metadata marker's job is unconfirmed"
-    ))
-}
-
 fn newest_workflow_run(
     text: &str,
     sha: &str,
@@ -188,9 +149,9 @@ fn newest_workflow_run(
             continue;
         };
         if row["workflowName"] == "tests"
-            && verified_metadata_run(
+            && verified_non_test_run(
                 id,
-                row["attempt"].as_u64().unwrap_or(1),
+                row["attempt"].as_u64(),
                 &row["event"],
                 &row["displayTitle"],
                 &mut fetch_jobs,

@@ -458,3 +458,31 @@ fn secret_named_modules_and_pytest_classes_keep_distinct_failure_ids() {
     );
     assert_eq!(logs::scrub(&pgp), "[REDACTED]");
 }
+
+#[test]
+fn a_verified_draft_gate_does_not_advance_the_failure_watch_cursor() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut gh = Fixture::new();
+    let mut draft = gh.runs[0].clone();
+    draft["id"] = json!(901);
+    draft["run_attempt"] = json!(1);
+    draft["display_title"] = json!("Draft lane check 901");
+    draft["conclusion"] = json!("success");
+    gh.runs.push(draft);
+    gh.metadata_jobs = Some(vec![
+        json!({"name":"ci-gate","status":"completed","conclusion":"success","steps":[
+            {"name":"Draft lane without test proof","status":"completed","conclusion":"success"},
+            {"name":"Gate","status":"completed","conclusion":"skipped"}
+        ]}),
+        json!({"name":"Select suites for this change","status":"completed","conclusion":"skipped"}),
+    ]);
+    let output = scan(&mut gh, "o/r", temp.path(), &BTreeMap::new(), false, |_| {
+        Ok(true)
+    })
+    .unwrap();
+    assert!(output
+        .iter()
+        .all(|line| !line.contains("unconfirmed run=901")));
+    let reruns: Reruns = read(&temp.path().join("reruns.json")).unwrap();
+    assert!(reruns.newest.values().all(|id| *id != 901));
+}

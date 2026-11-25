@@ -1,0 +1,1 @@
+- **CI-SMART-SELECT:** Give ordinary draft lanes a literal lightweight `ci-gate` check and keep its no-test witness out of test admission and CI accounting.

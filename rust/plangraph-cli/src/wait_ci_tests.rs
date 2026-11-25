@@ -322,3 +322,36 @@ fn startup_time_is_part_of_the_limit() {
     }
     assert!(run_limited(&mut covered, Duration::from_secs(20)).is_ok());
 }
+
+#[test]
+fn a_literal_green_draft_gate_is_filtered_only_with_its_exact_attempt_witness() {
+    use serde_json::json;
+
+    let rows = [
+        json!({"databaseId": 103, "headSha": "abc", "status": "completed", "conclusion": "success",
+               "displayTitle": "Draft lane check 103", "attempt": 2, "event": "pull_request", "workflowName": "tests"}),
+        json!({"databaseId": 102, "headSha": "abc", "status": "completed", "conclusion": "failure"}),
+    ];
+    let text = serde_json::to_string(&rows).unwrap();
+    let draft = json!({"total_count": 2, "jobs": [
+        {"name": "ci-gate", "status": "completed", "conclusion": "success", "steps": [
+            {"name": "Set up job", "status": "completed", "conclusion": "success"},
+            {"name": "Draft lane without test proof", "status": "completed", "conclusion": "success"},
+            {"name": "Gate", "status": "completed", "conclusion": "skipped"},
+            {"name": "Complete job", "status": "completed", "conclusion": "success"}
+        ]},
+        {"name": "Select suites for this change", "status": "completed", "conclusion": "skipped"}
+    ]});
+    let latest = newest_workflow_run(&text, "abc", |endpoint| {
+        assert_eq!(endpoint, "actions/runs/103/attempts/2/jobs?per_page=100");
+        Ok(draft.clone())
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!((latest.id, latest.conclusion.as_str()), (102, "failure"));
+
+    let mut counterfeit = draft;
+    counterfeit["jobs"][0]["steps"][2]["conclusion"] = json!("success");
+    assert!(newest_workflow_run(&text, "abc", |_| Ok(counterfeit.clone())).is_err());
+    assert!(newest_workflow_run(&text, "abc", |_| Err("unavailable".into())).is_err());
+}

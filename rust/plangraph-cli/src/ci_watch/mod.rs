@@ -23,7 +23,7 @@ mod sweep_tests;
 #[cfg(test)]
 mod tests;
 
-use crate::{atomic, wait_ci::verified_metadata_run};
+use crate::{atomic, wait_ci::verified_non_test_run};
 use github::{Gh, Github};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -383,9 +383,9 @@ fn scan_with_owner(
             {
                 continue;
             }
-            match verified_metadata_run(
+            match verified_non_test_run(
                 run_id,
-                run["run_attempt"].as_u64().unwrap_or(1),
+                run["run_attempt"].as_u64(),
                 &run["event"],
                 &run["display_title"],
                 |endpoint| gh.value(endpoint),
