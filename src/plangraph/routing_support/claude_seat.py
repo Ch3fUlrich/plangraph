@@ -168,7 +168,9 @@ def pytest_python(review_checkout=None):
         python = Path(os.path.abspath(python))
         if not os.access(python, os.X_OK):
             continue
-        if review and (python.is_relative_to(review) or python.resolve().is_relative_to(review)):
+        # The path, the binary it resolves to and the directory it sits in (a venv reached through a
+        # directory alias keeps its startup files there, whatever the binary resolves to).
+        if review and any(place.is_relative_to(review) for place in (python, python.resolve(), python.parent.resolve())):
             continue
         try:  # from the interpreter's own directory with safe-path, so no cwd module can shadow pytest
             ran = subprocess.run([str(python), "-m", "pytest", "--version"], capture_output=True, timeout=30,

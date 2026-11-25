@@ -287,3 +287,31 @@ def test_a_relative_preflight_python_is_read_against_the_service_checkout(tmp_pa
     assert str(interpreter) in (tmp_path / 'job/bin/python').read_text()
     ran = subprocess.run([shutil.which('python3', path=path), '-m', 'pytest', '--version'], capture_output=True, text=True)
     assert ran.returncode == 0, ran.stderr
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='shell stubs')
+def test_a_venv_reached_through_a_directory_alias_is_never_run(tmp_path, monkeypatch):
+    """The alias hides the checkout in the path and the binary resolves outside it, but the venv's
+    startup files (pyvenv.cfg, site-packages) are the reviewed tree's."""
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
+    marker = tmp_path / 'checkout-venv-ran'
+    outside = _interpreter(tmp_path / 'outside', f'#!/bin/sh\ntouch {marker}\nexit 0\n')
+    checkout = tmp_path / 'checkout'
+    (checkout / '.venv/bin').mkdir(parents=True)
+    (checkout / '.venv/bin/python').symlink_to(outside)  # resolves outside, sits inside
+    alias = tmp_path / 'alias'
+    alias.symlink_to(checkout / '.venv')
+    (tmp_path / 'service/bin').mkdir(parents=True)
+    monkeypatch.setattr(sys, 'prefix', str(tmp_path / 'service'))
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(alias / 'bin/python'))
+    monkeypatch.delenv('INVOCATION_ID', raising=False)
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    runner = SpawnerRunner(default_cwd=str(checkout))
+    runner._child_envs = _LaunchOwned()
+    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
+                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
+    assert not marker.exists()
+    assert str(alias / 'bin') not in runner._child_envs[job.job_id]['PATH'].split(os.pathsep)
