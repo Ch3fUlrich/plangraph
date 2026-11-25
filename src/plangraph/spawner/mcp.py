@@ -214,6 +214,7 @@ class MCPSpawnerServer:
         for _ in range(3):
             if current == self._served_identity:
                 self._reload_error = None
+                self._bind_missing_head(current)
                 return
             head = checkout_head()
             outcome = self._reload_once(current)
@@ -226,6 +227,16 @@ class MCPSpawnerServer:
             current = self._source_guard.identity()   # the checkout moved while it was read: read it again
         self._reload_error = 'checkout changed during reload'
         self.publish_served()
+
+    def _bind_missing_head(self, identity):
+        """An install whose git lookup failed serves no sha yet: fill it in once the lookup works and the
+        checkout still has the identity that was installed."""
+        if self._served_head:
+            return
+        head = checkout_head()
+        if head and self._source_guard.identity() == identity:
+            self._served_head = head
+            self.publish_served()
 
     def _reload_once(self, expected):
         """One transactional reload of the snapshot of ``expected``: 'committed', 'moved' (the checkout

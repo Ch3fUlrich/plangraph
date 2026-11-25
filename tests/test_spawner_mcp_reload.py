@@ -309,12 +309,15 @@ def test_the_inventory_matches_the_server_invocation_only(monkeypatch):
         '12 vim notes on plangraph.spawner.mcp',
         '13 python3 -m plangraph.spawner.mcp --served-sha',
         '14 /usr/bin/python3 -u -m plangraph.spawner.mcp',
-        '15 less /tmp/-m plangraph.spawner.mcp.log'])
+        '15 less /tmp/-m plangraph.spawner.mcp.log',
+        '16 python3 -c import time -m plangraph.spawner.mcp',
+        '17 python3 tool.py -m plangraph.spawner.mcp',
+        '18 python3 -X dev -m plangraph.spawner.mcp'])
     monkeypatch.setattr(mcp_limits.subprocess, 'run', lambda *a, **k: Mock(stdout=listing))
-    assert mcp_limits.running_mcp_pids() == {10, 14}
+    assert mcp_limits.running_mcp_pids() == {10, 14, 18}
 
 
-def test_a_registration_of_a_reused_pid_or_a_non_server_is_not_a_session(tmp_path):
+def test_a_registration_of_a_reused_pid_is_not_a_session_and_a_late_server_is_kept(tmp_path):
     import subprocess
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     try:
@@ -328,8 +331,35 @@ def test_a_registration_of_a_reused_pid_or_a_non_server_is_not_a_session(tmp_pat
         from plangraph.mcp_supervise.procutil import process_start_time
         stale.write_text(json.dumps({'pid': child.pid, 'start': process_start_time(child.pid),
                                      'served_sha': 'a' * 40, 'route_reload_error': None}))
-        assert mcp_limits.served_report(tmp_path, checkout='a' * 40, running={7}) != []  # not in the inventory
-        assert [r for r in mcp_limits.served_report(tmp_path, checkout='a' * 40, running={7}) if r['registered']] == []
+        # a live registered process the census did not see (it started after the census) is kept and listed
+        listed = mcp_limits.served_report(tmp_path, checkout='a' * 40, running={7})
+        assert [r['pid'] for r in listed if r['registered']] == [child.pid] and stale.exists()
     finally:
         child.kill()
         child.wait()
+
+
+def test_a_real_python_c_process_with_the_module_as_script_arguments_is_not_a_server():
+    import subprocess
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', '-m', 'plangraph.spawner.mcp'])
+    try:
+        assert child.pid not in mcp_limits.running_mcp_pids()
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_a_transient_git_failure_does_not_leave_the_served_sha_empty(tmp_path, monkeypatch):
+    head = {'now': 'a' * 40}
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: head['now'])
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    identity.return_value, head['now'] = NEW, ''          # git HEAD lookup fails while the snapshot installs
+    moved_sources(monkeypatch)
+    server.refresh_route_code()
+    assert sys.modules[SENTINEL].MERGED_ROUTE_CODE is True and server._served_head == ''
+    head['now'] = 'b' * 40                                # the next refresh binds the sha without a reload
+    server.refresh_route_code()
+    assert server._served_head == 'b' * 40
+    published = json.loads((tmp_path / mcp_limits.SERVED_DIR / f'{os.getpid()}.json').read_text())
+    assert published['served_sha'] == 'b' * 40

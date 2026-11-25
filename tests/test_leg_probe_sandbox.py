@@ -225,6 +225,8 @@ def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path,
     ('Error: Read-only file system (os error 30)', True),
     ("OSError: [Errno 30] Read-only file system: 'ok.txt'", True),
     ("touch: cannot touch 'ok.txt': Read-only file system", True),
+    ("fatal: Unable to create '/r/.git/index.lock': Read-only file system\r\n", True),
+    ("fatal: Unable to create '/r/.git/index.lock': Read-only file system\r", True),
     ('I did not encounter a read-only sandbox,', False),
     ('Note: the read-only sandbox blocked nothing', False),
     ('No error was caused by the read-only sandbox', False),
@@ -234,3 +236,28 @@ def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path,
 def test_only_error_shaped_lines_are_sandbox_evidence(line, evidence):
     from plangraph.spawner.env_redact import sandbox_denial
     assert bool(sandbox_denial(line)) is evidence
+
+
+CRLF = r'''
+import sys, time
+sys.stderr.buffer.write(b"fatal: Unable to create '.git/index.lock': Read-only file system\r\n")
+for n in range(350):
+    sys.stderr.buffer.write(b'diagnostic line %d\r\n' % n)
+sys.stderr.buffer.flush()
+time.sleep(60)
+'''
+
+
+def test_a_crlf_terminated_denial_is_still_a_probe_defect(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
+
+    async def factory(exe, *args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', CRLF, **kwargs)
+    runner = SpawnerRunner(process_factory=factory)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=4, store=store))
+    assert any(e.get('event') == 'sandbox_denied' for job in runner.jobs.values() for e in job.events)
+    assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
+    assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'

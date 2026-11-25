@@ -250,6 +250,27 @@ def publish_served(state, served_sha, identity, error=None):
         pass
 
 
+_VALUE_OPTIONS = ('-W', '-X', '--check-hash-based-pycs')
+
+
+def _is_mcp_server(argv):
+    """True for `<python> [interpreter options] -m plangraph.spawner.mcp` with nothing after the module.
+
+    Python's own parsing rules: `-c CODE` and a script path end the interpreter options, so a later
+    `-m plangraph.spawner.mcp` is an argument of that program, not the module being run."""
+    if not argv or not re.fullmatch(r'python[\d.]*(?:\.exe)?', re.split(r'[\\/]', argv[0])[-1], re.I):
+        return False
+    i = 1
+    while i < len(argv):
+        option = argv[i]
+        if option == '-m':
+            return argv[i + 1:] == ['plangraph.spawner.mcp']
+        if option == '-c' or not option.startswith('-'):
+            return False
+        i += 2 if option in _VALUE_OPTIONS else 1
+    return False
+
+
 def running_mcp_pids():
     """pids of live ``python -m plangraph.spawner.mcp`` servers, registered or not; None when unavailable."""
     try:
@@ -265,9 +286,7 @@ def running_mcp_pids():
     pids = set()
     for line in out.splitlines():
         pid, _, args = line.strip().partition(' ')
-        argv = args.split()
-        # The server invocation itself: `<python> [options] -m plangraph.spawner.mcp` with nothing after it.
-        if pid.isdigit() and argv[-2:-1] == ['-m'] and argv[-1:] == ['plangraph.spawner.mcp']:
+        if pid.isdigit() and _is_mcp_server(args.split()):
             pids.add(int(pid))
     return pids - {os.getpid()}
 
@@ -275,8 +294,8 @@ def running_mcp_pids():
 def served_report(state, checkout=None, running=None):
     """Every live MCP server with the sha it serves and whether that is the checkout head.
 
-    Registered rows come from the per-process files (files of dead or reused pids, or of processes that are no longer
-    an MCP server, are removed; liveness never signals). Servers found running but unregistered (started before the code that registers)
+    Registered rows come from the per-process files (a file is removed only when its process is dead or its pid was
+    reused; a live server that started after the census stays listed; liveness never signals). Servers found running but unregistered (started before the code that registers)
     are listed with ``served_sha`` None and ``current`` False: their code cannot be verified.
     ``running`` defaults to the process inventory; None means the inventory is unavailable."""
     from plangraph.mcp_supervise.procutil import pid_matches
@@ -287,7 +306,7 @@ def served_report(state, checkout=None, running=None):
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
             # Bound to the process start time: a reused pid is another process, not this session.
-            alive = pid_matches(row['pid'], row.get('start')) and (running is None or row['pid'] in running)
+            alive = pid_matches(row['pid'], row.get('start'))
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if not alive:
