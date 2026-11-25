@@ -211,10 +211,11 @@ fn an_unmeasurable_slot_is_reported_incomplete() {
     let (slot, old) = review_slot(&primary, "a");
     let hidden = slot.join("hidden");
     fs::create_dir(&hidden).unwrap();
+    let original_permissions = fs::metadata(&hidden).unwrap().permissions();
     fs::set_permissions(&hidden, fs::Permissions::from_mode(0)).unwrap();
     let mut report = Report::default();
     let result = enforce_review_slots(&primary, &[slot], 100, true, &mut report);
-    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&hidden, original_permissions).unwrap();
     result.unwrap();
     assert!(old.exists());
     assert!(report.alarm);

@@ -4,7 +4,7 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-use std::fs;
+use pg_worker_core::executable_test_support::write_script;
 use std::path::Path;
 
 #[test]
@@ -279,13 +279,7 @@ fn settle_retries_a_real_hook_refusal_with_the_same_frozen_sha() {
     );
     f.hook_on(false);
     // The legacy sweeper is not under test here: a stub that succeeds stands in for it.
-    let sweeper = f.bin.join("pg-worktree-sweep");
-    fs::write(&sweeper, "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(
-        &sweeper,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    write_script(&f.bin, "pg-worktree-sweep", "#!/bin/sh\nexit 0\n");
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let binary = Path::new(env!("CARGO_BIN_EXE_plangraph"));
     let step = || {

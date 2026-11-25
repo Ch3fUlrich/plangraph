@@ -1,6 +1,7 @@
 //! A bare fixture remote with lane heads, a clone that runs the repository's pre-push hook,
 //! and a fake `gh` that serves canned JSON and logs closes.
 #![allow(dead_code)]
+use pg_worker_core::executable_test_support::write_script;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -56,9 +57,9 @@ impl Fixture {
         let bin = base.join("bin");
         fs::create_dir_all(&gh).unwrap();
         fs::create_dir_all(&bin).unwrap();
-        let script = bin.join("gh");
-        fs::write(
-            &script,
+        write_script(
+            &bin,
+            "gh",
             r#"#!/bin/sh
 d="$FAKE_GH_DIR"
 case "$1 $2" in
@@ -85,13 +86,7 @@ case "$1 $2" in
   *) echo "unexpected gh $*" >&2; exit 9 ;;
 esac
 "#,
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         fs::write(gh.join("pulls.json"), "[]").unwrap();
         fs::write(gh.join("claims.json"), r#"{"paths":[],"branches":[]}"#).unwrap();
         let state = base.join("state");
