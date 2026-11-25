@@ -58,6 +58,18 @@ pub(crate) fn refused_record_error(value: &Value) -> Option<ErrorData> {
     if !value.is_object() || value["status"] != "refused" {
         return None;
     }
+    let native = value["run_kind"] == "native-codex";
+    if native && value["ended"].is_null() {
+        return None;
+    }
+    let exit_code = if native {
+        json!(value["exit_code"]
+            .as_i64()
+            .filter(|code| *code != 0)
+            .unwrap_or(1))
+    } else {
+        value.get("exit_code").cloned().unwrap_or(json!(2))
+    };
     let refusal = value
         .get("refusal")
         .filter(|v| python_truthy(v))
@@ -73,11 +85,9 @@ pub(crate) fn refused_record_error(value: &Value) -> Option<ErrorData> {
             .as_str()
             .unwrap_or("benchmark rows missing")
             .to_owned(),
-        Some(
-            json!({"type":refusal,"exit_code":value.get("exit_code").unwrap_or(&json!(2)),
+        Some(json!({"type":refusal,"exit_code":exit_code,
             "legs":value.get("legs").filter(|v| python_truthy(v)).unwrap_or(&json!([])),
-            "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)}),
-        ),
+            "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)})),
     ))
 }
 

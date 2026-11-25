@@ -94,3 +94,17 @@ fn refused_table() {
     assert!(refused_record_error(&json!({"status":"completed"})).is_none());
     assert!(refused_record_error(&json!([])).is_none());
 }
+
+#[test]
+fn a_native_refusal_stays_provisional_until_ended() {
+    let mut record =
+        json!({"status":"refused","run_id":"run-native","run_kind":"native-codex","ended":null});
+    assert!(refused_record_error(&record).is_none());
+    record["ended"] = json!("2026-11-25T08:00:00Z");
+    for code in [json!(0), serde_json::Value::Null, json!(-2)] {
+        record["exit_code"] = code.clone();
+        let error = refused_record_error(&record).unwrap();
+        let expected = if code == json!(-2) { -2 } else { 1 };
+        assert_eq!(error.data.unwrap()["exit_code"], expected);
+    }
+}
