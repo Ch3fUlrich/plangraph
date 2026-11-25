@@ -184,7 +184,8 @@ def test_declared_hosts_come_from_the_deploy_hosts_lines_of_the_active_items(mon
     # An item without a declaration declares nothing; the commit trailers decide for it.
     assert merge_batch_plan.declared_hosts(active) == {"p:A": ["alpha", "beta"]}
     # A reply that is not the requested item is no answer either: `{}`, a list, null, another item.
-    for reply in ({}, [], None, {"key": 7}, {"description": "Deploy-Hosts: alpha"}):
+    other = {"key": "p:B", "description": "Deploy-Hosts: elsewhere"}  # the item of another key
+    for reply in ({}, [], None, {"key": 7}, {"description": "Deploy-Hosts: alpha"}, other):
         monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a, reply=reply: types.SimpleNamespace(
             returncode=0, stdout=json.dumps(reply), stderr=""))
         with pytest.raises(MergeBatchError, match="Deploy-Hosts of p:A"):

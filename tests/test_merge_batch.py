@@ -574,7 +574,7 @@ def test_go_req_passes_the_item_declared_hosts_and_the_unit_sources_of_the_head(
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(merge_batch_plan, "keeper_landing_configured", lambda: True)
     monkeypatch.setattr(merge_batch_plan, "file_deploy_blockers", lambda path: None)
-    item = {"description": "Why: x\nDeploy-Hosts: alpha, beta"}
+    item = {"key": "plangraph:ITEM-A", "description": "Why: x\nDeploy-Hosts: alpha, beta"}
     monkeypatch.setattr(merge_batch_plan, "keeper_cli", lambda *a: types.SimpleNamespace(
         returncode=0, stdout=json.dumps(item), stderr=""))
     monkeypatch.setattr(merge_batch_plan, "git", lambda *a, cwd=None, **k: types.SimpleNamespace(

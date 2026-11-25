@@ -412,8 +412,9 @@ def declared_hosts(active):
             if proc.returncode:
                 raise ValueError((proc.stderr.strip().splitlines() or ["refused"])[-1])
             item = json.loads(proc.stdout)
-            if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not item["key"]:
-                raise ValueError("the reply is not the item")
+            if not isinstance(item, dict) or item.get("key") != key:
+                # The declaration of another item, or of an alias the keeper did not confirm, is not this item's.
+                raise ValueError("the reply is not this item")
             hosts = deploy_hosts(item)
         except ValueError as exc:
             # A lookup that failed is not an absent declaration: a commit trailer must not stand in for it.
