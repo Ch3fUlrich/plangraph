@@ -322,13 +322,15 @@ class MergeLocksMixin:
             if not items or any(self._card_requires_non_anthropic_seats({"key": key}) for key in items):
                 return False
             git = self._adapter("git")
-            from .evidence_types import repo_identity
+            import os
             projects = {key.partition(":")[0] for key in items}
-            # One repository counts once whatever name or symlink reaches it (keeper's repo_identity).
-            repos = {repo_identity(git.repo_path(project), git.repo_ref(project)) for project in projects}
-            if len(repos) != 1 or any(path is None for path, _ in repos) or not (isinstance(base, str) and isinstance(head, str)):
+            # The diff names explicit SHAs, so the default ref is no part of the identity: one
+            # resolved directory is one repository whatever name, symlink or ref reaches it.
+            repos = {os.path.realpath(path) if path else None
+                     for path in (git.repo_path(project) for project in projects)}
+            if len(repos) != 1 or None in repos or not (isinstance(base, str) and isinstance(head, str)):
                 return False
-            proc = git._run(next(iter(repos))[0], ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
+            proc = git._run(next(iter(repos)), ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
                                           f"{base}...{head}"])
             if proc.returncode != 0:
                 return False

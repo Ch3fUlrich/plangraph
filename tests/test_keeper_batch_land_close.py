@@ -390,3 +390,11 @@ def test_a_mixed_project_part_is_one_repository_whatever_alias_reaches_it(batch,
     clear = batch.store._override_seat_part_ok
     assert clear(["demo:A", "alias:B"], batch.parts["A"], base) is True
     assert clear(["demo:A", "other:B"], batch.parts["A"], base) is False      # an unregistered project
+
+
+def test_a_mixed_project_part_on_one_directory_clears_whatever_default_refs_the_projects_name(batch):
+    root = str(batch.repo.root)
+    batch.store.ctx = {"git": GitAdapter({"demo": {"path": root, "ref": "main"},
+                                          "alias": {"path": root, "ref": "release"}})}
+    base = git(batch.repo.root, "rev-parse", "main")
+    assert batch.store._override_seat_part_ok(["demo:A", "alias:B"], batch.parts["A"], base) is True
