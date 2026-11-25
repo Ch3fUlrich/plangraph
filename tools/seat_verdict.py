@@ -177,9 +177,11 @@ def _process_diagnostics(seat_dir, text, evidence, cwd=None):
         prompt = ""
     # The serving attempt's own diff binding (digest recomputed in its checkout) fixes the scope;
     # seats without one fall back to the diff the verified prompt carries.
-    scope = classifier.bound_diff_paths(evidence.get("review_binding"), cwd)
-    if scope is None and prompt:
-        scope = classifier.diff_paths(prompt, cwd)
+    # A recorded binding that fails verification leaves the scope unknown: no fallback.
+    if evidence.get("review_binding") is not None:
+        scope = classifier.bound_diff_paths(evidence["review_binding"], cwd)
+    else:
+        scope = classifier.diff_paths(prompt, cwd) if prompt else None
     found = classifier.classify_findings(text, prompt=prompt, changed_paths=scope)
     return {"lines": list(found.process), "blocking": found.blocking,
             "prompt_sha256": evidence.get("prompt_sha256")}

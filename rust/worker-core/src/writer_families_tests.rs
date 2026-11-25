@@ -184,3 +184,32 @@ fn a_lane_head_review_brief_refuses_empty_item_context_by_field_name() {
         assert!(refusal.contains(field), "{field}: {refusal}");
     }
 }
+
+#[test]
+fn classify_review_uses_the_one_classifier_with_prompt_and_diff_scope() {
+    let empty = "=== ITEM CONTEXT\nItem key: k\nChanged public symbols: run\nCallers of changed public symbols: \nAffected test output (paths): l.log\n";
+    let process = "PROCESS review_brief.md field=callers - no callers rendered\n";
+    let text = format!("{process}VERDICT: REQUEST_CHANGES\n");
+    let src = vec!["src/a.rs".to_owned()];
+    let held = classify_review(&text, empty, &src, &python).unwrap();
+    assert_eq!((held.blocking, held.process.len()), (0, 1));
+    // The diff changes the brief itself, or the prompt renders the field: a finding of the head.
+    let touched = vec!["src/plangraph/review/review_brief.md".to_owned()];
+    assert_eq!(
+        classify_review(&text, empty, &touched, &python)
+            .unwrap()
+            .blocking,
+        1
+    );
+    let rendered = empty.replace("symbols: \n", "symbols: a:1\n");
+    assert_eq!(
+        classify_review(&text, &rendered, &src, &python)
+            .unwrap()
+            .blocking,
+        1
+    );
+    // An untyped MED about the brief is never a diagnostic.
+    let med = "MED review_brief.md:26 - omits the callers\nVERDICT: REQUEST_CHANGES\n";
+    let counted = classify_review(med, empty, &src, &python).unwrap();
+    assert_eq!((counted.blocking, counted.process.len()), (1, 0));
+}

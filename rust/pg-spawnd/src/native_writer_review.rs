@@ -133,6 +133,29 @@ impl Host {
                 *distinct.entry(symbol.name).or_insert(false) |= symbol.type_like;
             }
         }
+        // The pinned range diff also holds what no non-merge commit introduced (a conflict
+        // resolution of a merge): those symbols are named as such, not dropped.
+        let whole = self.git(&["diff", "-U0", base, head])?;
+        let read_failed = std::cell::Cell::new(false);
+        let in_range = context::changed_symbols(&whole, &|path| {
+            let shown = self.git(&["show", &format!("{head}:{path}")]);
+            read_failed.set(read_failed.get() || shown.is_err());
+            shown.ok()
+        });
+        if read_failed.get() {
+            return Err(format!("cannot read a changed file of {base}..{head}"));
+        }
+        for symbol in in_range {
+            if let std::collections::btree_map::Entry::Vacant(slot) =
+                distinct.entry(symbol.name.clone())
+            {
+                by_item
+                    .entry("(merge resolution or unattributed change)".to_owned())
+                    .or_default()
+                    .insert(symbol.name);
+                slot.insert(symbol.type_like);
+            }
+        }
         Ok((
             by_item
                 .into_iter()
@@ -578,6 +601,7 @@ impl Host {
         let text = verdict["text"].as_str().unwrap_or_default();
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;
         verdict["path"] = json!(path);
+        verdict["prompt_path"] = json!(prompt_path);
         Ok(verdict)
     }
 }

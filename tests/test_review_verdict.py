@@ -334,8 +334,8 @@ def test_standing_answer_no_tolerates_scope_quotes_and_still_needs_zero_hits():
     )[0] != "no"
 
 
-BRIEF_FINDING = ("MED src/plangraph/review/review_brief.md:26 - the supplied brief still omits the "
-                 "required per-item public symbols, callers and affected test-output paths")
+BRIEF_FINDING = ("PROCESS src/plangraph/review/review_brief.md:26 field=public_symbols - the supplied brief "
+                 "still omits the required per-item public symbols")
 EMPTY_PROMPT = "=== ITEM CONTEXT\nItem key: x\nChanged public symbols: \n"
 LANE_DIFF = "diff --git a/src/a.py b/src/a.py\n+x\n"
 
@@ -366,7 +366,7 @@ def test_process_class_needs_the_defect_in_the_prompt_and_an_untouched_file():
 
 
 def test_typed_process_line_that_fails_verification_counts_as_med():
-    review = "PROCESS skills/review/SKILL.md:1 - the supplied brief omits the callers\n> MED quoted a.py:1 - x\n"
+    review = "PROCESS skills/review/SKILL.md:1 field=callers - the supplied brief omits the callers\n> MED quoted a.py:1 - x\n"
     assert v.classify_findings(review).med == 1
     found = v.classify_findings(review, prompt=EMPTY_PROMPT, changed_paths={"a.py"})
     assert (found.med, len(found.process)) == (0, 1)
@@ -414,13 +414,24 @@ def test_item_context_check_stops_at_the_end_of_the_rendered_block():
     assert item_context_defects(brief + "\nsee === ITEM CONTEXT above") == []
 
 
-def test_advice_to_add_callers_does_not_make_a_rubric_finding_process():
+def test_untyped_findings_are_never_process_whatever_they_say():
     prompt, scope = EMPTY_PROMPT + LANE_DIFF, {"src/a.py"}
-    advice = "HIGH src/plangraph/review/review_brief.md:12 - rubric wording is vague; fix by adding callers"
-    found = v.classify_findings(advice, prompt=prompt, changed_paths=scope)
-    assert (found.high, found.process) == (1, ())
-    statement = "HIGH src/plangraph/review/review_brief.md:26 - the brief omits the callers of changed symbols"
-    assert v.classify_findings(statement, prompt=prompt, changed_paths=scope).process == (statement,)
+    for line in ("HIGH src/plangraph/review/review_brief.md:12 - rubric wording is vague; fix by adding callers",
+                 "HIGH src/plangraph/review/review_brief.md:12 - the rubric uses empty examples of symbols",
+                 "MED src/plangraph/review/review_brief.md:26 - the brief omits the callers of changed symbols"):
+        found = v.classify_findings(line, prompt=prompt, changed_paths=scope)
+        assert (found.blocking, found.process) == (1, ()), line
+
+
+def test_typed_process_line_names_one_context_field_the_prompt_lacks():
+    prompt, scope = EMPTY_PROMPT + LANE_DIFF, {"src/a.py"}
+    ok = "PROCESS review_brief.md field=callers - no callers rendered"
+    assert v.classify_findings(ok, prompt=prompt, changed_paths=scope).process == (ok,)
+    full = EMPTY_PROMPT.replace("symbols: \n", "symbols: run\n") + "Callers of changed public symbols: a\n" \
+        "Affected test output (paths): l\n"
+    assert v.classify_findings(ok, prompt=full, changed_paths=scope).med == 1  # field is rendered
+    assert v.classify_findings("PROCESS review_brief.md - no field", prompt=prompt, changed_paths=scope).med == 1
+    assert v.classify_findings("PROCESS src/a.py field=callers - wrong file", prompt=prompt, changed_paths=scope).med == 1
 
 
 @pytest.mark.parametrize("line", ["HIGH ```", "MED `", "- MED ``` ", "HIGH ", "P2 \"\""])

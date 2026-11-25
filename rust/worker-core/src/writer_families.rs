@@ -81,6 +81,44 @@ pub fn render_review_brief(
     String::from_utf8(out).map_err(|e| format!("refused: review brief output: {e}"))
 }
 
+/// Finding counts of a review reply, from the one classifier
+/// (`plangraph.review.verdict.classify_findings`): `blocking` is HIGH+MED of the head and
+/// `process` the typed PROCESS diagnostics verified against the emitted `prompt` and the
+/// files `paths` of the dispatched diff.
+pub struct ReviewClass {
+    pub blocking: u64,
+    pub process: Vec<String>,
+}
+
+pub fn classify_review(
+    text: &str,
+    prompt: &str,
+    paths: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<ReviewClass, String> {
+    const CODE: &str = "import json, sys; from plangraph.review.verdict import classify_findings; a = json.load(sys.stdin); f = classify_findings(a['text'], prompt=a['prompt'], changed_paths=set(a['paths'])); print(json.dumps({'blocking': f.blocking, 'process': list(f.process)}))";
+    let payload =
+        serde_json::to_vec(&serde_json::json!({"text": text, "prompt": prompt, "paths": paths}))
+            .map_err(|e| format!("serialize review: {e}"))?;
+    let out = run_python(python, CODE, payload, "review classifier")?;
+    let parsed: Value = serde_json::from_slice(&out)
+        .map_err(|e| format!("refused: review classifier output: {e}"))?;
+    Ok(ReviewClass {
+        blocking: parsed["blocking"]
+            .as_u64()
+            .ok_or("refused: review classifier blocking")?,
+        process: parsed["process"]
+            .as_array()
+            .map(|lines| {
+                lines
+                    .iter()
+                    .filter_map(|l| l.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 /// Map each text to its model family through `plangraph.review.family.model_family`,
 /// the one name-to-family table; `None` means unknown or ambiguous.
 fn resolve_families(

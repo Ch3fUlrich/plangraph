@@ -327,35 +327,22 @@ def diff_paths(prompt: str, cwd: str | None = None) -> set[str] | None:
     return paths or None
 
 
-# A PROCESS diagnostic is one fixed statement form: a defect word, then the context field it
-# reports. Advice after "fix"/"suggest"/"should"... is cut first, so a finding about other
-# wording that merely suggests adding callers is not a statement about the prompt.
-_ADVICE = re.compile(r"\b(?:fix|fixes|suggest\w*|should|recommend\w*|replace|change|edit|add|adding|"
-                     r"require|consider)\b.*$", re.I | re.S)
-_DEFECT = r"(?:omits?|omitted|lacks?|lacking|missing|empty|without|unrendered|unavailable|" \
-          r"does not (?:carry|include|supply|render|list|contain))\b[^.;]*?"
-_FIELD_WORDS = {
-    "public_symbols": r"\bsymbols?\b",
-    "callers": r"\bcallers?\b",
-    "test_output_paths": r"\btest[- ]output\b|\boutput paths?\b|\btest logs?\b",
-}
+# The one fixed form of a process diagnostic, matched as a whole (review_brief.md rules):
+#   PROCESS <review_brief.md|skills/review/SKILL.md>[:line] field=<context field> - <what is missing>
+# No HIGH or MED line is ever read as one by its wording.
+_TYPED_PROCESS = re.compile(
+    r"^(?P<path>\S+?)(?::\d+)?\s+field=(?P<field>public_symbols|callers|test_output_paths)\b")
 
 
-def _primary_path(rest: str) -> str | None:
-    """The file of the finding itself: its first token, not a path cited in the advice."""
-    tokens = rest.strip().lstrip("`'\"(").split(None, 1)
-    path = tokens[0].strip("`'\",;)").partition(":")[0] if tokens else ""
-    for name in PROCESS_PATHS:
-        if path == name or path.endswith("/" + name):
-            return path
+def _typed_process(rest: str) -> tuple[str, str] | None:
+    """(path, field) of a well-formed PROCESS line whose path is the review brief or skill."""
+    found = _TYPED_PROCESS.match(rest.strip().lstrip("`'\"("))
+    if not found:
+        return None
+    path = found.group("path").strip("`'\",;)")
+    if any(path == name or path.endswith("/" + name) for name in PROCESS_PATHS):
+        return path, found.group("field")
     return None
-
-
-def _names_defect(rest: str, defects: list[str]) -> bool:
-    """The finding states that the prompt omits a context field the prompt really lacks."""
-    claim = _ADVICE.sub("", rest.partition(" - ")[2] or rest)
-    return any(re.search(_DEFECT + "(?:" + _FIELD_WORDS[field] + ")", claim, re.I)
-               for field in defects)
 
 
 def diff_binding(base: str, head: str, cwd: str) -> tuple[str, set[str]] | None:
@@ -396,32 +383,27 @@ def bound_diff_paths(binding: object, cwd: str | None) -> set[str] | None:
 
 def classify_findings(text: str, *, prompt: str = "",
                       changed_paths: set[str] | None = None) -> Findings:
-    """Count finding lines; a HIGH/MED/PROCESS line about the supplied brief or skill is
-    PROCESS only when the emitted `prompt` has an empty item-context field and the
-    dispatched diff (`changed_paths`) does not change that file. Otherwise it keeps its
-    severity (fail closed); a typed PROCESS line that fails the check counts as MED.
-    """
+    """Count finding lines. A typed `PROCESS` line is a process diagnostic only when its field is
+    really empty in the emitted `prompt` and the dispatched diff (`changed_paths`) does not
+    change the named file; any other PROCESS line counts as MED (fail closed). HIGH and MED
+    lines keep their severity whatever they say."""
     from .prompt import item_context_defects
 
     counts = {"high": 0, "med": 0, "low": 0}
     process: list[str] = []
     defects = item_context_defects(prompt) if prompt else []
-    verified = bool(defects) and changed_paths is not None
     for raw in _unquoted_lines(text):
         found = _FINDING_LINE.match(raw)
         if not found:
             continue
         kind = _SEVERITY[found.group(1)]
-        path = _primary_path(found.group(2))
-        about_prompt = (path is not None and verified and _names_defect(found.group(2), defects)
-                        and not any(c == name or c.endswith("/" + name) or name.endswith("/" + c)
-                                    for c in changed_paths for name in (path,)))
         if kind == "process":
-            kind = "process" if about_prompt else "med"
-        elif kind != "low" and about_prompt:
-            kind = "process"
-        if kind == "process":
-            process.append(raw.strip())
-        else:
-            counts[kind] += 1
+            typed = _typed_process(found.group(2))
+            if (typed is not None and typed[1] in defects and changed_paths is not None
+                    and not any(c == typed[0] or c.endswith("/" + typed[0]) or typed[0].endswith("/" + c)
+                                for c in changed_paths)):
+                process.append(raw.strip())
+                continue
+            kind = "med"
+        counts[kind] += 1
     return Findings(counts["high"], counts["med"], counts["low"], tuple(process))

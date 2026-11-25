@@ -1,5 +1,6 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
 use crate::writer_control::STOPPED;
+pub(crate) use pg_worker_core::writer_families::ReviewClass;
 use serde_json::{json, Value};
 #[path = "native_writer_quota.rs"]
 pub(crate) mod quota;
@@ -27,6 +28,15 @@ pub(crate) trait Driver {
     /// review run record: `verdict` (ACCEPT, REQUEST_CHANGES or no_verdict), `head`,
     /// `run_id`, `text`. `previous` is the last REQUEST_CHANGES review, for a delta review.
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String>;
+    /// HIGH+MED count and verified PROCESS diagnostics of a review reply: the one Python
+    /// classifier against the prompt the seat saw and the diff scope of the review. A driver
+    /// without a prompt counts raw finding lines and finds no diagnostic.
+    fn classify_review(&mut self, review: &Value) -> Result<ReviewClass, String> {
+        Ok(ReviewClass {
+            blocking: high_med(review["text"].as_str().unwrap_or("")),
+            process: Vec::new(),
+        })
+    }
     /// Final gates on the accepted head, the commit-trailer gate included.
     fn gates(&mut self) -> Result<(), String>;
     /// Push the accepted head; returns the pushed ref, or None when no push is configured.
@@ -424,8 +434,19 @@ fn writer_attempt(
         .as_str()
         .or_else(|| record["review"]["head"].as_str())
         .map(str::to_owned);
+    // A run held by process findings about the review prompt continues review-only: no writer
+    // turn, the same head is checked and reviewed again once the prompt has been repaired.
+    let held = record["process_hold"]["head"].as_str().map(str::to_owned);
+    let review_only = saved_session.is_some()
+        && held.is_some()
+        && held.as_deref() == driver.head().ok().as_deref();
+    if review_only {
+        checked_head = None;
+    }
     let session = if let Some(session) = saved_session {
-        resume(driver, record, session, prompt)?;
+        if !review_only {
+            resume(driver, record, session, prompt)?;
+        }
         record.as_object_mut().unwrap().remove("landing_resume");
         session.to_owned()
     } else {
@@ -531,6 +552,8 @@ fn writer_attempt(
             record["status_line"] = json!("DEFERRED");
             return Ok(0);
         }
+        // A fresh review of the held head releases the hold; a new one may be set below.
+        record.as_object_mut().unwrap().remove("process_hold");
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
             "host":review["host"], "leg":review["leg"], "harness":review["harness"],
@@ -540,6 +563,25 @@ fn writer_attempt(
             record["reviews"] = json!([]);
         }
         record["reviews"].as_array_mut().unwrap().push(summary);
+        // Diagnostics about the review prompt itself hold the run, whatever the verdict: the
+        // round does not count, the writer gets no fix turn and nothing is pushed. The hold
+        // stays, by seat run and head, until a fresh review of this head returns
+        // (review-only `pg-spawnd resume`).
+        if record["review"]["text"]
+            .as_str()
+            .is_some_and(|text| text.lines().any(|line| line.contains("PROCESS")))
+        {
+            let class = driver
+                .classify_review(&record["review"])
+                .map_err(|e| (7, e))?;
+            if class.blocking == 0 && !class.process.is_empty() {
+                record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(1) - 1);
+                record["process_hold"] = json!({"head": head, "review_run": record["review"]["run_id"],
+                    "lines": class.process});
+                record["round_stop"] = json!("process_hold");
+                return Ok(3);
+            }
+        }
         if record["review"]["verdict"] == "ACCEPT" {
             if !driver.pending_steer(record).map_err(|e| (7, e))?.is_empty() {
                 if round_cap(record) || session.is_empty() {

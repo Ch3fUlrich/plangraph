@@ -385,11 +385,11 @@ def test_legacy_unbound_seat_goes_to_routing_recovery(tmp_path, monkeypatch):
     assert "no proven admission binding" in (directory / "verdict.recovery.json").read_text()
 
 
-BRIEF_MED = "MED src/plangraph/review/review_brief.md:26 - the supplied brief omits the public symbols"
+BRIEF_MED = "PROCESS src/plangraph/review/review_brief.md:26 field=public_symbols - the supplied brief omits the public symbols"
 EMPTY_BRIEF = "=== ITEM CONTEXT\nItem key: demo:A\nChanged public symbols: unavailable (request before acceptance)\n"
 
 
-def bound_record(tmp_path, name, reply, digest=None, touch_brief=False):
+def bound_record(tmp_path, name, reply, digest=None, touch_brief=False, bad_binding=False):
     """A record-derived seat run bound to a real two-commit repository diff (src/a.py)."""
     import hashlib
     import subprocess
@@ -412,8 +412,9 @@ def bound_record(tmp_path, name, reply, digest=None, touch_brief=False):
         (repo / "src/plangraph/review/review_brief.md").write_text("changed\n")
     git("add", "."); git("commit", "-qm", "head")
     head = git("rev-parse", "HEAD")
-    prompt = EMPTY_BRIEF
-    binding = {"base_sha": base, "head_sha": head, "diff_sha256": diff_binding(base, head, str(repo))[0]}
+    prompt = EMPTY_BRIEF + "diff --git a/src/a.py b/src/a.py\n"  # the prompt text would put src/a.py in scope
+    binding = {"base_sha": base, "head_sha": head,
+               "diff_sha256": "0" * 64 if bad_binding else diff_binding(base, head, str(repo))[0]}
     argv = record_dir(
         tmp_path, name, live_log=reply, head=head, cwd=str(repo), head_sha=head,
         review_binding=binding, completion={"head_sha": head, "review_binding": binding},
@@ -442,5 +443,13 @@ def test_record_derived_digest_mismatch_and_changed_brief_keep_the_finding(tmp_p
     # the bound diff changes the brief itself: a finding about it is a finding of the head
     argv, seat_dir = bound_record(tmp_path, "inscope", reply, touch_brief=True)
     assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    assert not (seat_dir / "process.json").exists()
+
+
+def test_failed_diff_binding_leaves_the_scope_unverified_with_no_prompt_fallback(tmp_path, capsys):
+    reply = f"{BRIEF_MED}\nTEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    argv, seat_dir = bound_record(tmp_path, "badbinding", reply, bad_binding=True)
+    assert sv.main(argv) == 0  # not a hold: the PROCESS line counts as a finding of the head
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
     assert not (seat_dir / "process.json").exists()

@@ -10,6 +10,9 @@ Rules:
   Keep the host's inherited sccache wrapper and cache settings for Cargo builds.
 - Include one standalone TESTS: line with the test commands you ran and their verbatim summaries.
   If you ran none, report TESTS: none: followed by the reason.
+- If a field of the ITEM CONTEXT block below is empty or unavailable, report that defect of this
+  prompt as one line `PROCESS review_brief.md field=<public_symbols|callers|test_output_paths> - <what is missing>`,
+  never as HIGH or MED of the head.
 Language: new code is Rust with Rust tests. New Python, shell or Node source files
 and allowlist additions require an operator D-id; fixes in existing Python stay allowed.
 Gates: cheap checks, changed and affected tests, fast-checks on the exact head, then review.
