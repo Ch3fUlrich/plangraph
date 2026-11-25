@@ -113,6 +113,9 @@ pub struct HostEntry {
     pub wsl_distro: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub placement_fallback: bool,
+    /// Whether the spawner may place work on this host from another host; off unless set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_placement: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     pub os: Os,
