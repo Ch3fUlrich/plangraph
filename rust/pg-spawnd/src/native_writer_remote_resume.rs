@@ -17,6 +17,10 @@ pub(crate) fn valid_request_id(id: &str) -> Option<&str> {
         .then_some(id)
 }
 
+fn generated_request_id() -> String {
+    pg_worker_core::run::record::new_run_id().replace("run-", "")
+}
+
 fn refusal(id: &str, error: &str) -> Value {
     json!({"run_id":id,"ok":false,"resumed":false,"error":error})
 }
@@ -67,6 +71,9 @@ const REOPEN_WAIT: Duration = Duration::from_secs(30);
 /// resume has reopened the run (it holds the supervisor lock and has bumped `resume_number`).
 /// The prompt file belongs to that round alone.
 fn start(state: &Path, id: &str, prompt: &str, request_id: Option<&str>) -> Result<Value, String> {
+    // Every acknowledgement is bound to a persisted id: a caller that sends none gets one made.
+    let generated = generated_request_id();
+    let request_id = request_id.unwrap_or(&generated);
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
     let record_path = directory.join("record.json");
     let read =
@@ -123,21 +130,18 @@ fn start(state: &Path, id: &str, prompt: &str, request_id: Option<&str>) -> Resu
     };
     let mut receipt = json!({"run_id":id,"host":record["host"],"ok":true,"resumed":true,
                              "queued":true,"resume_number":observed});
-    if let Some(request_id) = request_id {
-        receipt["request_id"] = json!(request_id);
-    }
+    receipt["request_id"] = json!(request_id);
     Ok(receipt)
 }
 
 /// Whether the run record shows round `round` (or later) opened, and by which request: only this
 /// request's id confirms it, and the round reported is the one observed.
-fn reopened(record: &Value, round: u64, request_id: Option<&str>) -> Option<Result<u64, String>> {
+fn reopened(record: &Value, round: u64, request_id: &str) -> Option<Result<u64, String>> {
     let observed = record["resume_number"].as_u64().filter(|n| *n >= round)?;
-    Some(match request_id {
-        Some(wanted) if record["resume_request_id"] != wanted => {
-            Err("another resume request reopened the run".into())
-        }
-        _ => Ok(observed),
+    Some(if record["resume_request_id"] == request_id {
+        Ok(observed)
+    } else {
+        Err("another resume request reopened the run".into())
     })
 }
 
@@ -183,7 +187,7 @@ fn spawn_detached(
     directory: &Path,
     prompt: &Path,
     round: u64,
-    request_id: Option<&str>,
+    request_id: &str,
 ) -> Result<std::process::Child, String> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -199,9 +203,7 @@ fn spawn_detached(
         .arg(state)
         .arg("--prompt-file")
         .arg(prompt);
-    if let Some(request_id) = request_id {
-        command.args(["--request-id", request_id]);
-    }
+    command.args(["--request-id", request_id]);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -218,7 +220,7 @@ fn spawn_detached(
     _: &Path,
     _: &Path,
     _: u64,
-    _: Option<&str>,
+    _: &str,
 ) -> Result<std::process::Child, String> {
     Err("native writer resume requires the POSIX transport".into())
 }
@@ -275,27 +277,32 @@ mod tests {
             record
         };
         // Not reopened yet.
-        assert_eq!(reopened(&seen(0, None), 1, Some("aaaaaaaa")), None);
+        assert_eq!(reopened(&seen(0, None), 1, "aaaaaaaa"), None);
         // The round names this request: its observed round is reported.
         assert_eq!(
-            reopened(&seen(1, Some("aaaaaaaa")), 1, Some("aaaaaaaa")),
+            reopened(&seen(1, Some("aaaaaaaa")), 1, "aaaaaaaa"),
             Some(Ok(1))
         );
         assert_eq!(
-            reopened(&seen(3, Some("aaaaaaaa")), 1, Some("aaaaaaaa")),
+            reopened(&seen(3, Some("aaaaaaaa")), 1, "aaaaaaaa"),
             Some(Ok(3))
         );
         // The round was opened by request B: request A is never acknowledged.
         assert!(matches!(
-            reopened(&seen(1, Some("bbbbbbbb")), 1, Some("aaaaaaaa")),
+            reopened(&seen(1, Some("bbbbbbbb")), 1, "aaaaaaaa"),
             Some(Err(_))
         ));
         assert!(matches!(
-            reopened(&seen(1, None), 1, Some("aaaaaaaa")),
+            reopened(&seen(1, None), 1, "aaaaaaaa"),
             Some(Err(_))
         ));
-        // A caller without an id keeps the round check alone.
-        assert_eq!(reopened(&seen(1, Some("bbbbbbbb")), 1, None), Some(Ok(1)));
+    }
+
+    #[test]
+    fn a_caller_without_an_id_gets_a_valid_generated_one() {
+        let first = generated_request_id();
+        assert!(valid_request_id(&first).is_some(), "{first}");
+        assert_ne!(first, generated_request_id());
     }
 
     #[test]
