@@ -342,6 +342,14 @@ fn dry_run_shows_the_batch_without_claiming() {
     assert_eq!(prefix, golden_prefix);
     let payload: Value = serde_json::from_str(payload).unwrap();
     assert_eq!(payload, serde_json::from_str::<Value>(golden).unwrap());
+    // The host pushes to the lane the brief names: one lane per run, from the production card.
+    assert_eq!(
+        row["card"]["push_ref"],
+        json!(format!(
+            "refs/heads/lane/{}",
+            payload["run"]["name"].as_str().unwrap()
+        ))
+    );
     assert!(payload["run"]["trailers"]
         .as_array()
         .unwrap()

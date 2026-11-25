@@ -177,7 +177,9 @@ pub fn digest(job: &Path) -> io::Result<Vec<String>> {
     let root = job.join("watchers");
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(crate::wait::digest_rows(job))
+        }
         Err(error) => return Err(error),
     };
     let mut rows = Vec::new();
@@ -213,6 +215,7 @@ pub fn digest(job: &Path) -> io::Result<Vec<String>> {
         .unwrap_or_else(|error| format!("record error: {error}"));
         rows.push(format!("{name}: {state} ({})", dir.display()));
     }
+    rows.extend(crate::wait::digest_rows(job));
     rows.sort();
     Ok(rows)
 }

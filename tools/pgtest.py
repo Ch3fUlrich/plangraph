@@ -236,3 +236,86 @@ def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POS
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def affected_summary(batches):
+    """(exit code, final line) of a run: the first failing batch's code, one line a machine can read."""
+    failed = [code for _, code in batches if code]
+    code = failed[0] if failed else 0
+    return code, f"AFFECTED rc={code} batches={len(batches)} failed={len(failed)}"
+
+
+_REPORTED = []
+
+
+def report_batches(batches):
+    """Print the result line last (readers never infer it from the tail of pytest output); return the exit code."""
+    code, line = affected_summary(batches)
+    _REPORTED.append(True)
+    print(line, flush=True)
+    return code
+
+
+def run_flag_in(options):
+    """Whether argv tokens spell `--run` (or its accepted abbreviation `--ru`); nothing after `--` is a flag."""
+    if "--" in options:
+        options = options[: options.index("--")]
+    return any(len(arg) >= 4 and "--run".startswith(arg) for arg in options)
+
+
+def with_result_line(run, wants_run):
+    """Run `run()`; a `--run` that ends without any batch reported (a refusal, an argparse exit, a
+    collection-only run, an operational error) still prints the one AFFECTED line, nonzero on any
+    failure. `wants_run()` is the one run-mode decision, taken from the parser itself."""
+    _REPORTED.clear()
+
+    def finish(code):
+        if not _REPORTED and wants_run():
+            print(f"AFFECTED rc={code} batches=0 failed={1 if code else 0}", flush=True)
+
+    try:
+        code = run()
+    except SystemExit as exit_:
+        finish(exit_.code if isinstance(exit_.code, int) else int(exit_.code is not None))
+        raise
+    except Exception:
+        finish(1)
+        raise
+    finish(code)
+    return code
+
+
+def build_fleet_spawnd(root, env):
+    """Build pg-spawnd from the selected checkout (a push preflight runs in a detached one); a failing exit code, else None."""
+    print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
+    try:
+        build = subprocess.run(
+            ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
+            cwd=root, env=env)
+    except OSError as error:
+        print(f'CARGO FAIL: could not prepare pg-spawnd ({error})', file=sys.stderr)
+        return 1
+    return build.returncode or None
+
+
+def affected_parser(description):
+    """The argument parser of tools/affected_tests.py (here so the run-mode decision and `_main` share it)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--base", required=True)
+    parser.add_argument("--head", help="committed comparison endpoint; exclude local changes")
+    parser.add_argument("--run", action="store_true")
+    parser.add_argument("--fleet-spawnd-prebuilt", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
+    parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
+    parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
+    parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
+    parser.add_argument("--keep-local-bound", action="store_true", help="keep the local test bound for spawner/planner core changes (the pre-push hook has a fixed deadline)")
+    parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
+    parser.add_argument("--maxfail", type=int, default=0)
+    parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
+    parser.add_argument("-n", "--workers", default="auto")
+    parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
+    parser.add_argument("--root", default=None, help="repository root")
+    return parser

@@ -90,6 +90,7 @@ pub mod work_disks;
 pub mod worker_host;
 /// Minimum body length redacted for the `gh[pousr]_` token family.
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
+pub mod fast_check_stamp;
 mod redact_wrapped;
 pub mod reset;
 pub mod review_completion;

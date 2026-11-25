@@ -1,0 +1,1 @@
+The batch writer brief builder prints the live `GATE_PATHS` of the checked-out tree (read from `tools/ci_commit_gate.py`, never copied), and a test fails when a tool, skill or Rust source outside `tools/ci_commit_gate.py` spells four or more gate paths by hand. The verifier `go_verify.rs` keeps its own table until a Gate-Edit grant lets it read the list.
