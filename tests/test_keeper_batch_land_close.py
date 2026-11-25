@@ -320,6 +320,9 @@ def test_a_train_prepared_again_on_another_base_checks_the_override_seats_again(
         def repo_path(self, project):
             return "fixture"
 
+        def repo_ref(self, project):
+            return "main"
+
         def _run(self, path, args):
             return SimpleNamespace(returncode=0, stdout=gate[args[-1].split("...")[0]])
 
@@ -340,3 +343,50 @@ def test_a_train_prepared_again_on_another_base_checks_the_override_seats_again(
     assert prepare("1" * 40)["base"] == "1" * 40
     with pytest.raises(Refused, match="no explicit ACCEPT"):
         prepare("2" * 40)
+
+
+def test_a_retried_preparation_checks_the_override_seats_against_the_current_risk_tags(batch):
+    """The same parts on the same base are cleared again: another item of the part gained an auth tag."""
+    from types import SimpleNamespace
+    router, repo = batch.p("router"), "example/repo"
+
+    class Git:
+        def repo_path(self, project):
+            return "fixture"
+
+        def repo_ref(self, project):
+            return "main"
+
+        def _run(self, path, args):
+            return SimpleNamespace(returncode=0, stdout="")
+
+    class Seats:
+        def review_seats(self, item, head, text, **options):
+            if not options.get("allow_override"):
+                raise ValueError("override seat")
+            return [{"verdict": "pass"}]
+
+    batch.store.ctx = {"git": Git(), "spawner_records": Seats()}
+    lease = batch.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+
+    def prepare():
+        return batch.store.land(router, dict(
+            lease, repo=repo, action="prepare", pr=10, base="1" * 40, head="c" * 40,
+            parts=[dict(pr=1, head="b" * 40, items=["demo:A", "demo:B"],
+                        review_runs={"demo:A": "run-" + "1" * 32})]))
+
+    assert prepare()["base"] == "1" * 40
+    batch.store.put_card(router, "demo:B", dict(outcome="fixture", risk_tags=["auth"]))
+    with pytest.raises(Refused, match="no explicit ACCEPT"):
+        prepare()
+
+
+def test_a_mixed_project_part_is_one_repository_whatever_alias_reaches_it(batch, tmp_path):
+    root = batch.repo.root
+    alias = tmp_path / "alias-link"
+    alias.symlink_to(root, target_is_directory=True)
+    batch.store.ctx = {"git": GitAdapter({"demo": str(root), "alias": str(alias)})}
+    base = git(root, "rev-parse", "main")
+    clear = batch.store._override_seat_part_ok
+    assert clear(["demo:A", "alias:B"], batch.parts["A"], base) is True
+    assert clear(["demo:A", "other:B"], batch.parts["A"], base) is False      # an unregistered project

@@ -213,10 +213,9 @@ class MergeLocksMixin:
                 parts = _land_manifest(body)
                 previous = self.conn.execute(select, identity).fetchone()
                 previous_data = _landing_data(previous) if previous else None
-                # An override seat is cleared against the train base, so a new base re-checks every part.
-                if (previous_data is None or previous_data["parts"] != parts
-                        or previous["base"] != _land_sha(body.get("base"))):
-                    self._verify_train_reviews(parts, base=body.get("base"))
+                # An override seat is cleared against the current risk tags and train base, so every
+                # preparation (a retry included) checks every part again.
+                self._verify_train_reviews(parts, base=body.get("base"))
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
                 mode = body.get("mode", "train-pr-merge")
                 if mode not in LANDING_MODES:
@@ -323,10 +322,13 @@ class MergeLocksMixin:
             if not items or any(self._card_requires_non_anthropic_seats({"key": key}) for key in items):
                 return False
             git = self._adapter("git")
-            repos = {git.repo_path(key.partition(":")[0]) for key in items}
-            if len(repos) != 1 or None in repos or not (isinstance(base, str) and isinstance(head, str)):
+            from .evidence_types import repo_identity
+            projects = {key.partition(":")[0] for key in items}
+            # One repository counts once whatever name or symlink reaches it (keeper's repo_identity).
+            repos = {repo_identity(git.repo_path(project), git.repo_ref(project)) for project in projects}
+            if len(repos) != 1 or any(path is None for path, _ in repos) or not (isinstance(base, str) and isinstance(head, str)):
                 return False
-            proc = git._run(repos.pop(), ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
+            proc = git._run(next(iter(repos))[0], ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
                                           f"{base}...{head}"])
             if proc.returncode != 0:
                 return False
