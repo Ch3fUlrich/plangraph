@@ -20,6 +20,7 @@ one exit decision (a ``decision`` item depending on it).
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .credential_guard import guard
@@ -110,6 +111,8 @@ SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
 #: read these and nothing else.  Definition events carry the ones that cite a decision
 #: (``store_input.citing_premise``), so the decision clock is rebuilt from events alone.
 PREMISE_FIELDS = ("title", "description", "done_criteria", "note", "source")
+
+
 def premise_texts(values):
     """Every premise text of the mapping *values* (an item row or a definition payload)."""
     return [values[name] for name in PREMISE_FIELDS if isinstance(values.get(name), str)]
@@ -124,7 +127,9 @@ def check_metadata(raw, key):
 
     Metadata is carried on the creation event and never folded into ``note``: a
     decision id in it is not a citation of the premise.  ``session`` is one line of
-    at most ``SESSION_CAP`` characters; every value is credential-checked.
+    at most ``SESSION_CAP`` characters.  The credential check reads the note and every
+    metadata value together, as the fold into the note did, so a label in the note or in
+    a sibling field covers a value.
     """
     out = {}
     for name in METADATA_FIELDS:
@@ -136,13 +141,34 @@ def check_metadata(raw, key):
                 or _LINE_SEPARATOR.search(value)):
             raise Refused("validation", f"{key}: session must be a one-line string "
                           f"of at most {SESSION_CAP} characters")
-        text = render(value)
-        if len(text) > NOTE_CAP:
+        if len(render(value)) > NOTE_CAP:
             raise Refused("validation", f"{key}: {name} exceeds {NOTE_CAP} characters")
-        # Checked with the note it travels beside: a credential label in the note makes the
-        # value credential-shaped, as it did when the value was folded into the note.
-        guard(name, f"{raw.get('note') if isinstance(raw.get('note'), str) else ''}\n{name}: {text}", key)
         out[name] = value
+    if out:
+        note = raw.get("note") if isinstance(raw.get("note"), str) else ""
+        guard("/".join(sorted(out)), "\n".join([note, *(f"{n}: {render(out[n])}" for n in sorted(out))]), key)
+    return out
+
+
+def creation_metadata(conn, key=None):
+    """``key -> {metadata field: value}`` from the creation events (of one *key*, or all).
+
+    Create and import keep the metadata on the creation event; export and rehome carry it on.
+    """
+    sql = "SELECT key, payload FROM events WHERE type='item_created'"
+    rows = conn.execute(sql + (" AND key=?" if key else "") + " ORDER BY seq", (key,) if key else ())
+    out = {}
+    for row in rows:
+        payload = row["payload"]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                continue
+        found = {name: payload[name] for name in METADATA_FIELDS
+                 if isinstance(payload, dict) and payload.get(name) is not None}
+        if found:
+            out[row["key"]] = found
     return out
 
 
