@@ -115,9 +115,12 @@ fn ingest_native_runs(state: &Path, host: &str, log: &mut Vec<Value>) {
             serde_json::from_str::<Value>(&fs::read_to_string(e.path().join("record.json")).ok()?)
                 .ok()
         })
-        .filter_map(|record| {
-            let row = super::round_native::row(&record)?;
-            Some(row.to_json(host, record["run_id"].as_str()?))
+        .flat_map(|record| {
+            let run = record["run_id"].as_str().unwrap_or("").to_owned();
+            super::round_native::rows(&record)
+                .iter()
+                .map(|row| row.to_json(host, &run))
+                .collect::<Vec<_>>()
         })
         .collect();
     if rows.is_empty() {

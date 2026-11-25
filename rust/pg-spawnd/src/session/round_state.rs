@@ -1,5 +1,6 @@
 //! Durable per-session state of the round watchdog: where it lives and how it is read.
 
+use super::round_time::OpenWait;
 use serde_json::{json, Value};
 use std::{collections::HashMap, fs, path::Path};
 
@@ -50,4 +51,26 @@ pub fn spawn_state_dir() -> std::path::PathBuf {
         .or_else(|| std::env::home_dir().map(|home| home.join(".local/state")))
         .unwrap_or_default();
     base.join("plangraph")
+}
+
+/// The line the writer reads when a wait was ended; the second one says BLOCKED.
+pub(super) fn notice_line(wait: &OpenWait, strikes: usize) -> String {
+    let minutes = wait.waited_ms / 60_000;
+    let first = format!(
+        "Watchdog ended your background command `{}` (task {}) after {minutes} min of waiting; \
+         the cap is {} min. Do not wait on one command that long: split it or run it in the \
+         foreground with a timeout.",
+        wait.command,
+        wait.task_id,
+        super::round_watch::WAIT_LIMIT_MS / 60_000
+    );
+    if strikes >= super::round_watch::STRIKE_LIMIT {
+        format!(
+            "BLOCKED: second wait over the cap in this round, last command `{}`; this session \
+             is ended. {first}",
+            wait.command
+        )
+    } else {
+        first
+    }
 }
