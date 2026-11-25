@@ -60,3 +60,25 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 | `rust-worker` | Rust worker crate: fmt, clippy, tests | standalone `rust/worker` crate (not in the workspace) | none |
 | `rust-spike` | Rust replay spike tests | `rust/spikes/temporal-spike` replay test | none |
 | `ci-gate` | ci-gate | aggregates the jobs above | none |
+
+## Entry replay of changed tests (LE-CI-FLAKE-ENTRY-REPLAY)
+
+`tools/ci_select.py entry-set --run` also replays the tests a part changed (`merge_batch_plan.changed_tests`): every `tests/**/test_*.py` it added
+or changed (browser tests apart) and every Rust `#[test]` fn whose lines it touched, a body-only edit included. Each runs five times in a clean
+detached checkout of the part's own head (verified to be that commit; the working tree never counts): Python files four times serially and once
+with `-n auto`; a Rust test four times alone with `--test-threads=1`, and its fifth run is the whole crate with the default threads, beside its peers.
+Every log is kept with the receipt `replay.json` under `--replay-dir`, by default `<telemetry>/entry-replay/<head>` (`PLANGRAPH_TELEMETRY_DIR`).
+
+- A test with more than one state among its runs (pass, fail, skip) is `FLAKY`, with the log of its first and of its last state: four passes and
+  one skip is flaky, a test skipped on every run is inapplicable there and needs no outcome. A test failing every run, a run exiting with anything but
+  0 or 1 (pytest) or 101 (cargo) even if it printed passes, and a run with no outcome for a collected test id of a changed file (or for a changed Rust
+  test) are `FAIL`. A test id keeps its full node id (a parameter id may hold ` - `); each test has one outcome per run and a failing teardown after a
+  pass makes it failed.
+- **Environments.** The default run is the invoking environment. A change also needs a receipt of each other environment its tests belong to:
+  `postgres` for the keeper tests the Postgres CI job runs (`PG_DSN` of a server; the run sets `PG_KEEPER_BACKEND=postgres`), `browser` for
+  `tests/browser` (`-m browser`) and `windows` for any changed Rust test (run on a Windows host). `entry-set --run --environment E` replays only
+  that environment and writes `replay-E.json`; it refuses a host that does not have it.
+- **Readiness** (`ready_problems` through `merge_batch build`): the part's own head needs a passing receipt of five runs in every environment it needs.
+  `merge_batch_plan.replay_facts` recomputes the part's test inventory against the part's own PR base, which for a stacked child is its parent's
+  head, never `origin/main`; a receipt whose changed files or inventory differ from that is refused, and a flaky one names `FLAKY: <test id>
+  (logs <a> and <b>)`. Green CI alone never stands for the replay.

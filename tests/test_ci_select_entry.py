@@ -12,6 +12,12 @@ ci_select = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci_select)
 
 
+@pytest.fixture(autouse=True)
+def telemetry(tmp_path, monkeypatch):
+    """The entry run writes its replay receipt under the telemetry directory: never the real one."""
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path / "telemetry"))
+
+
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.invalid", *args],
                           check=True, capture_output=True, text=True).stdout.strip()

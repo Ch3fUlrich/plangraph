@@ -381,7 +381,7 @@ def _load_tool(name: str):
     """Import a sibling tool lazily: the CI select job runs without the package installed."""
     import importlib.util
 
-    sys.path.insert(0, str(TOOLS_DIR.parent / "src"))
+    sys.path[:0] = [str(TOOLS_DIR.parent / "src"), str(TOOLS_DIR)]
     spec = importlib.util.spec_from_file_location(f"ci_select_{name}", TOOLS_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -459,6 +459,21 @@ def ready_problems(facts: dict) -> list[str]:
         problems.append("seconds-fast checks did not pass on this head")
     if not facts.get("entry_set"):
         problems.append("entry set did not pass on this head")
+    replay = facts.get("replay") or {}
+    if (facts.get("truncated") or any(re.fullmatch(r"tests/(?:\w+/)*test_\w+\.py|rust/.*\.rs", f) for f in facts.get("files", []))) \
+            and not (replay.get("ok") and replay.get("head") == facts.get("head") and replay.get("runs", 0) >= 5):
+        problems.append("no passing five-run replay of the changed tests bound to this head")
+    if replay and not facts.get("truncated"):   # the receipt must cover this change's own diff: its file list and, when known, its test inventory
+        norm = lambda d: {k: sorted(map(str, d.get(k, []))) for k in ("python", "rust")}  # noqa: E731
+        got = replay.get("changed", {})
+        if sorted(got.get("files", [])) != sorted(facts.get("files", [])) or (facts.get("expected") is not None and norm(got) != norm(facts["expected"])):
+            problems.append("the replay receipt was made against another comparison base: its changed files or test inventory differ from this change's")
+    problems += [f"FLAKY: {t} (logs {' and '.join(replay['logs'][t])})" for t in replay.get("flaky", [])]
+    for env in facts.get("environments", []):   # the other environments the change's tests belong to need their own receipts
+        got = (facts.get("replays") or {}).get(env) or {}
+        if not (got.get("ok") and got.get("head") == facts.get("head") and got.get("runs", 0) >= 5):
+            problems.append(f"no passing five-run replay in the {env} environment bound to this head")
+        problems += [f"FLAKY ({env}): {t} (logs {' and '.join(got['logs'][t])})" for t in got.get("flaky", [])]
     if facts.get("windows_required"):
         if facts.get("windows") is None:
             problems.append("native Windows entry run missing")
@@ -505,6 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     entry_parser.add_argument("--head", required=True)
     entry_parser.add_argument("--root", default=".")
     entry_parser.add_argument("--run", action="store_true")
+    entry_parser.add_argument("--replay-dir", default="", help="logs of the five-run replay of changed tests")
+    entry_parser.add_argument("--environment", default="default", choices=("default", "postgres", "browser", "windows"),
+                              help="replay only the changed tests of this environment (run on a host that has it)")
     cost_parser = subparsers.add_parser("part-cost", help="append the CI cost of a part head to telemetry")
     cost_parser.add_argument("--jobs-json", required=True, help="file with the jobs of the run (GitHub jobs API)")
     cost_parser.add_argument("--pr", type=int, required=True)
@@ -604,12 +622,26 @@ def main(argv: list[str] | None = None) -> int:
         python_path = [str(root / "src"), os.environ.get("PYTHONPATH")]
         python_env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, python_path)))
         failed = 0
-        for command in entry_commands(plan, args.base, args.head, root) if args.run else []:
+        for command in entry_commands(plan, args.base, args.head, root) if args.run and args.environment == "default" else []:
             is_cargo = command[0] == "cargo"
             cwd = root / "rust" if is_cargo else root
             if subprocess.run(command, cwd=cwd, env=None if is_cargo else python_env).returncode:
                 print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
                 failed = 1
+        if args.run:   # the receipt of readiness is written even when no test changed
+            plan_tool = _load_tool("merge_batch_plan")
+            sha = subprocess.run(["git", "rev-parse", f"{args.head}^{{commit}}"], cwd=root, capture_output=True, check=True, text=True).stdout.strip()
+            try:
+                result = plan_tool.replay(root, plan_tool.changed_tests(root, args.base, sha), args.replay_dir or plan_tool.replay_dir(sha),
+                                          head=sha, environment=args.environment)
+            except plan_tool.MergeBatchError as exc:
+                print(f"entry-set: {exc}", file=sys.stderr)
+                return 1
+            for test in result["flaky"]:
+                print(f"entry-set: FLAKY: {test} (logs {' and '.join(result['logs'][test])})", file=sys.stderr)
+            for test in result["failed"] + result["incomplete"]:
+                print(f"entry-set: FAIL: {test}", file=sys.stderr)
+            failed |= int(not result["ok"])
         return failed
 
     if args.command == "part-cost":

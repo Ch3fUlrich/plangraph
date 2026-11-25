@@ -1,4 +1,5 @@
 """Batch assembly applies the part-entry predicate to every part (LAND-PART-ENTRY-CHECKS)."""
+import json
 import os
 import subprocess
 import sys
@@ -223,3 +224,89 @@ def test_newer_red_workflow_overrides_older_green_rerun():
     problems = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1],
                                              attempts_for=lambda *args: rows)
     assert any("latest completed attempt" in p and "failure" in p for p in problems)
+
+
+def test_a_green_part_with_changed_tests_needs_a_replay_receipt_bound_to_its_head(tmp_path, monkeypatch):
+    """Green CI is not proof that the five-run replay ran: the receipt must exist for this exact head."""
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path))
+    ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
+    part = info(files=("tests/test_a.py",))
+    missing = build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok)
+    assert any("five-run replay" in p for p in missing)
+    folder = tmp_path / "entry-replay" / part["head"]
+    folder.mkdir(parents=True)
+    other = dict(head="b" * 40, ok=True, runs=5, flaky=[], failed=[], logs={}, changed={"python": ["tests/test_a.py"], "rust": [], "files": ["tests/test_a.py"]})
+    (folder / "replay.json").write_text(json.dumps(other))
+    assert any("five-run replay" in p for p in build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok))
+    (folder / "replay.json").write_text(json.dumps(other | {"head": part["head"]}))
+    assert build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok) == []
+    wrong_base = other | {"head": part["head"], "changed": {"python": [], "rust": [], "files": []}}   # zero changed tests: another comparison base
+    (folder / "replay.json").write_text(json.dumps(wrong_base))
+    assert any("another comparison base" in p for p in build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok))
+    flaky = other | {"head": part["head"], "ok": False, "flaky": ["tests/test_a.py::t"],
+                     "logs": {"tests/test_a.py::t": ["fail.log", "pass.log"]}}
+    (folder / "replay.json").write_text(json.dumps(flaky))
+    problems = build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok)
+    assert "PR #1: FLAKY: tests/test_a.py::t (logs fail.log and pass.log)" in problems
+
+
+def test_a_part_without_changed_tests_needs_no_replay_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path))
+    ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
+    assert build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=ok) == []
+
+
+def test_readiness_compares_the_receipt_with_the_inventory_of_the_parts_own_diff(tmp_path, monkeypatch):
+    import merge_batch_plan as plan
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path))
+    ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
+    part = info(files=("rust/pg-spawnd/src/lib.rs",))
+    covered = {"python": [], "rust": [["rust/pg-spawnd/Cargo.toml", "kept"]], "browser": [], "files": list(part["files"])}
+    folder = tmp_path / "entry-replay" / part["head"]
+    folder.mkdir(parents=True)
+    receipt = dict(head=part["head"], ok=True, runs=5, flaky=[], failed=[], logs={})
+    (folder / "replay.json").write_text(json.dumps(receipt | {"changed": covered}))
+    (folder / "replay-windows.json").write_text(json.dumps(receipt | {"environment": "windows"}))   # a Rust test also needs the Windows run
+    seen = []
+    monkeypatch.setattr(plan, "changed_tests", lambda root, base, head: seen.append((base, head)) or
+                        {"python": [], "rust": covered["rust"] + [["rust/pg-spawnd/Cargo.toml", "other"]], "browser": [], "files": covered["files"]})
+    problems = build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok, bases={1: "origin/main"})
+    assert any("another comparison base" in p for p in problems) and seen == [("origin/main", part["head"])]
+    monkeypatch.setattr(plan, "changed_tests", lambda *_a: covered)
+    assert build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok, bases={1: "origin/main"}) == []
+    (folder / "replay-windows.json").unlink()
+    assert any("windows environment" in p for p in build.part_readiness_problems("o/p", {1: part}, [1], attempts_for=ok, bases={1: "origin/main"}))
+
+
+def test_a_stacked_child_is_compared_with_its_own_pull_request_base_not_with_main(tmp_path, monkeypatch):
+    """The child's receipt covers its own tests: readiness recomputes the inventory against the parent's head."""
+    import subprocess
+    root = tmp_path / "r"
+    root.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.invalid", *a],  # noqa: E731
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    run("init", "-q", "-b", "main")
+    (root / "tests").mkdir()
+    (root / "tests/test_base.py").write_text("def test_b():\n    pass\n")
+    run("add", "-A")
+    run("commit", "-qm", "base")
+    main = run("rev-parse", "HEAD")
+    (root / "tests/test_parent.py").write_text("def test_p():\n    pass\n")
+    run("add", "-A")
+    run("commit", "-qm", "parent")
+    parent = run("rev-parse", "HEAD")
+    (root / "tests/test_child.py").write_text("def test_c():\n    pass\n")
+    run("add", "-A")
+    run("commit", "-qm", "child")
+    child = run("rev-parse", "HEAD")
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(tmp_path / "telemetry"))
+    folder = tmp_path / "telemetry/entry-replay" / child
+    folder.mkdir(parents=True)
+    covered = {"python": ["tests/test_child.py"], "rust": [], "browser": [], "files": ["tests/test_child.py"]}   # what GitHub shows for the child
+    (folder / "replay.json").write_text(json.dumps(dict(head=child, ok=True, runs=5, flaky=[], failed=[], logs={}, changed=covered)))
+    part = info(head=child, files=("tests/test_child.py",))
+    ok = lambda *_: [{"attempt": 1, "conclusion": "success"}]  # noqa: E731
+    assert build.part_readiness_problems("o/p", {2: part}, [2], attempts_for=ok, bases={2: parent}) == []
+    wrong = build.part_readiness_problems("o/p", {2: part}, [2], attempts_for=ok, bases={2: main})   # the parent's tests would be included
+    assert any("another comparison base" in p for p in wrong)

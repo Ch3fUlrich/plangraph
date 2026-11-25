@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -378,3 +380,153 @@ def workflow_attempt_jobs(endpoint, run_id, attempt, api):
         if not data["jobs"]:
             raise MergeBatchError("full_ci: incomplete job pagination")
         page += 1
+
+
+# --- entry replay: the tests a part changed run five times on a clean checkout of its head (LE-CI-FLAKE-ENTRY-REPLAY)
+
+_SKIPPED = re.compile(r"^(?:(\S+::.+?) SKIPPED\b.*|\[gw\d+\] \[ *\d+%\] SKIPPED (\S+::.+?)\s*)$", re.M)
+_OUTCOME = re.compile(r"^(?:(PASSED|FAILED|ERROR) (.+)|test (\S+) \.\.\. (ok|FAILED))$", re.M)
+
+
+def _node(rest: str, ids) -> str:
+    """The node id of a short-summary line: a failed one reads ``<id> - <reason>`` and an id may itself hold `` - ``."""
+    return next((i for i in sorted(ids, key=len, reverse=True) if rest == i or rest.startswith(i + " - ")), rest.split(" - ")[0])
+
+
+def changed_tests(root, base: str, head: str) -> dict:
+    """Python test files, browser ones apart, and the Rust ``#[test]`` fns whose lines the part touched (body edits
+    included), as [manifest, name]. A test fn spans from its attribute to the closing brace at its indent."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, check=True, text=True).stdout  # noqa: E731
+    diff = f"{base}...{head}"
+    tests = [p for p in git("diff", "--name-only", "--diff-filter=AMR", diff, "--", "tests").splitlines() if re.fullmatch(r"tests/(?:\w+/)*test_\w+\.py", p)]
+    python, browser = [p for p in tests if not p.startswith("tests/browser/")], [p for p in tests if p.startswith("tests/browser/")]
+    rust = []
+    for path in git("diff", "--name-only", "--diff-filter=AM", diff, "--", "rust").splitlines():
+        hunks = re.findall(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", git("diff", "-U0", diff, "--", path), re.M) if path.endswith(".rs") else []
+        touched = {n for c, d in hunks for n in (range(int(c), int(c) + int(d or 1)) if int(d or 1) else (int(c), int(c) + 1))}
+        text = git("show", f"{head}:{path}") if touched else ""
+        owner = Path(path).parent
+        while not (Path(root) / owner / "Cargo.toml").exists() and owner != owner.parent:
+            owner = owner.parent
+        for m in re.finditer(r"^([ \t]*)#\[(?:\w+::)?test\b.*\n(?:\1#\[.*\n)*\1(?:async )?fn (\w+)(?:.*\{\}|.*\n(?:.*\n)*?\1\})", text, re.M):
+            if touched & set(range(text.count("\n", 0, m.start()) + 1, text.count("\n", 0, m.end()) + 2)):
+                rust.append([f"{owner}/Cargo.toml", m[2]])
+    return {"python": python, "rust": rust, "browser": browser, "files": sorted(git("diff", "--name-only", diff).splitlines())}
+
+
+#: The files the pytest-postgres job runs on Postgres (.github/workflows/tests.yml), besides the keeper modules that never open SQLite.
+_PG_FILES = ("tests/contract/", "tests/test_keeper_pg_unit.py", "tests/test_keeper_pg_parity.py", "tests/test_keeper_pg_copy.py",
+             "tests/test_projector_ddl.py", "tests/test_worker_claim.py", "tests/test_claim_parity_dispatch.py")
+ENVIRONMENTS = ("default", "postgres", "browser", "windows")
+
+
+def postgres_files(root, head: str, files) -> list[str]:
+    """The changed Python test files the Postgres CI job runs: the named ones and the keeper tests that never name sqlite3."""
+    def keeper(path):
+        text = subprocess.run(["git", "show", f"{head}:{path}"], cwd=root, capture_output=True, text=True).stdout
+        return bool(re.search(r"keeper_util|door_util|plangraph\.keeper|from plangraph import", text)) and "sqlite3" not in text
+    return [f for f in files if f.startswith(_PG_FILES) or keeper(f)]
+
+
+def applicable_environments(root, head: str, changed: dict) -> list[str]:
+    """The environments a change's tests belong to: default always, Postgres for the keeper tests, the browser job for
+    tests/browser and the native Windows job for any changed Rust test."""
+    found = {"default": True, "postgres": bool(postgres_files(root, head, changed["python"])),
+             "browser": bool(changed.get("browser")), "windows": bool(changed["rust"])}
+    return [env for env in ENVIRONMENTS if found[env]]
+
+
+def replay_commands(changed: dict, runs: int = 5, workers: bool = True, extra=()) -> list[tuple[list[str], list[str]]]:
+    """``(command, wanted)`` per run: each changed test ``runs`` times on one head. The last Python run uses every worker;
+    each Rust test runs ``runs - 1`` times alone, and the last run is its whole crate (peers, default threads).
+    ``wanted`` names what the run must report an outcome for (a test file prefix or a Rust test name)."""
+    py = [sys.executable, "-m", "pytest", "-v", "-rA", "--no-header", "-p", "no:cacheprovider", *extra, *changed["python"]]
+    commands = [(py + (["-n", "auto"] if workers and i == runs - 1 else []), [f"{f}::" for f in changed["python"]])
+                for i in range(runs)] if changed["python"] else []
+    by_manifest: dict[str, list[str]] = {}
+    for manifest, name in changed["rust"]:
+        by_manifest.setdefault(manifest, []).append(name)
+    for manifest, names in by_manifest.items():
+        commands += [(["cargo", "test", "--manifest-path", manifest, name, "--", "--test-threads=1"], [name]) for name in names for _ in range(runs - 1)]
+        commands.append((["cargo", "test", "--manifest-path", manifest], names))   # the last run: the whole crate, peers and default threads
+    return commands
+
+
+def replay(root, changed: dict, out, workers: bool = True, runs: int = 5, head: str = "", environment: str = "default") -> dict:
+    """Run the replay of one environment in a clean detached checkout of ``head`` (verified to be that commit) and keep
+    every log. FLAKY ids had more than one state (pass, fail, skip) among the runs, a skip on some runs only included;
+    failed: failed every run or no outcome; incomplete: a run that reported no outcome for a changed test, so five
+    invocations that skipped it never make a passing receipt. A test skipped on every run is inapplicable there.
+    Environments: default; postgres (the keeper tests on a server, ``PG_DSN``); browser (``-m browser``); windows (a Windows host)."""
+    if environment == "windows" and sys.platform != "win32":
+        raise MergeBatchError("the windows replay runs on a Windows host")
+    if environment == "postgres" and not os.environ.get("PG_DSN"):
+        raise MergeBatchError("the postgres replay needs a server: PG_DSN is not set")
+    out, git = Path(out), lambda *a, cwd=root: subprocess.run(["git", *a], cwd=cwd, capture_output=True, check=True, text=True).stdout.strip()  # noqa: E731
+    out.mkdir(parents=True, exist_ok=True)
+    sha = git("rev-parse", f"{head or 'HEAD'}^{{commit}}")
+    checkout = tempfile.mkdtemp(prefix="entry-replay-")
+    git("worktree", "add", "--detach", checkout, sha)
+    try:
+        if git("rev-parse", "HEAD", cwd=checkout) != sha:
+            raise MergeBatchError(f"the replay checkout is not {sha}")
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(checkout) / "src"), os.environ.get("PYTHONPATH")])))
+        extra = ["-m", "browser"] if environment == "browser" else []
+        subset = {"python": {"default": changed.get("python", []), "postgres": postgres_files(root, sha, changed.get("python", [])) if environment == "postgres" else [],
+                             "browser": changed.get("browser", []), "windows": []}[environment],
+                  "rust": changed.get("rust", []) if environment in ("default", "windows") else []}
+        if environment == "postgres":
+            env["PG_KEEPER_BACKEND"] = "postgres"
+        seen, failed, incomplete = {}, [], []   # test -> {state: first log}, a state being True (pass), False (fail) or None (skip)
+        ids = []   # every selected Python test id: each needs an outcome on every run, not only one id of its file
+        if subset["python"]:
+            collected = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *extra, *subset["python"]],
+                                       cwd=checkout, env=env, capture_output=True, text=True).stdout
+            ids = [line for line in collected.splitlines() if "::" in line and line.startswith(tuple(subset["python"]))]
+        for n, (command, wanted) in enumerate(replay_commands(subset, runs, workers, extra=extra)):
+            wanted = ids if ids and command[0] != "cargo" else wanted
+            done = subprocess.run(command, cwd=checkout, env=env, capture_output=True, text=True)
+            log = out / f"{'cargo' if command[0] == 'cargo' else 'python'}-run-{n}.log"
+            log.write_text(text := done.stdout + done.stderr, encoding="utf-8")
+            by_test = {}   # one outcome per test per run: a failed teardown after a pass makes the test failed
+            for m in _OUTCOME.finditer(text):
+                test = m[3] or (m[2] if m[1] == "PASSED" else _node(m[2], ids))
+                by_test[test] = by_test.get(test, True) and (m[1] == "PASSED" or m[4] == "ok")
+            outcomes = list(by_test.items())
+            skipped = {m[1] or m[2] for m in _SKIPPED.finditer(text)}   # not applicable on this platform: no outcome expected
+            for test, state in [*outcomes, *((t, None) for t in skipped if t not in by_test)]:
+                seen.setdefault(test, {}).setdefault(state, str(log))
+            incomplete += [f"{w} (run {n})" for w in wanted if w not in skipped
+                           and not any(t.startswith(w) if w.endswith("::") else (t == w or t.split("::")[-1] == w) for t, _ in outcomes)]
+            # A runner error or an interrupted run (pytest 2-5, anything but cargo's 101) is a failure even when it printed passes.
+            if done.returncode not in (0, 1, 101) or (done.returncode and all(ok for _, ok in outcomes)):
+                failed.append(f"{' '.join(command[:6])} (exit {done.returncode}, run {n})")
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", checkout], cwd=root, capture_output=True)
+    flaky = sorted(t for t, r in seen.items() if len(r) > 1)
+    failed += sorted(t for t, r in seen.items() if set(r) == {False})
+    both = lambda r: [r[k] for k in [k for k in (False, None, True) if k in r][::len(r) - 1 or 1]][:2]  # noqa: E731  (first and last state's log)
+    result = {"flaky": flaky, "failed": failed, "incomplete": incomplete, "logs": {t: both(seen[t]) for t in flaky},
+              "ok": not (flaky or failed or incomplete), "runs": runs, "head": sha, "changed": changed, "environment": environment}
+    (out / ("replay.json" if environment == "default" else f"replay-{environment}.json")).write_text(json.dumps(result), encoding="utf-8")
+    return result
+
+
+def replay_dir(head: str) -> Path:
+    """Where the entry replay of a part head is kept: ``<telemetry>/entry-replay/<head>`` (readiness reads it)."""
+    return Path(os.environ.get("PLANGRAPH_TELEMETRY_DIR") or Path.home() / ".local/share/plangraph/telemetry") / "entry-replay" / head
+
+
+def replay_receipt(head: str, environment: str = "default"):
+    try:
+        return json.loads((replay_dir(head) / ("replay.json" if environment == "default" else f"replay-{environment}.json")).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def replay_facts(root, base_ref: str, head: str) -> dict:
+    """What readiness needs of a part: the test inventory of its own diff against its own base, the environments those
+    tests need besides the default one and the receipt of each (None when it was never made)."""
+    expected = changed_tests(root, base_ref, head)
+    environments = [env for env in applicable_environments(root, head, expected) if env != "default"]
+    return {"expected": expected, "environments": environments, "replays": {env: replay_receipt(head, env) for env in environments}}
