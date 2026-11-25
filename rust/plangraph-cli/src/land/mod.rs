@@ -31,6 +31,9 @@ mod push;
 pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;
+pub mod require_migration;
+#[cfg(test)]
+mod require_migration_tests;
 pub mod resolve;
 #[cfg(test)]
 mod resolve_tests;

@@ -10,7 +10,7 @@ pub(super) fn python() -> std::process::Command {
 const ONE: &str = "MIGRATIONS = (Migration(1, \"a\", X),\n              Migration(2, \"b\", Y))\n";
 const THREE: &str = "class Migration(tuple):\n    pass\nMIGRATIONS = (Migration(1, \"a\", X), Migration(2, \"b\", Y),\n  Migration(3, \"c\", Z))\n";
 
-fn commit(fx: &Fx, text: Option<&str>) -> String {
+pub(super) fn commit(fx: &Fx, text: Option<&str>) -> String {
     let p = fx.path();
     g(p, &["checkout", "-q", "--detach", &fx.base()]);
     if let Some(text) = text {

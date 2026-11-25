@@ -72,6 +72,10 @@ regression and a migration brought in by a resolution is found. The evidence col
 `plangraph land-train keeper-schema --repo DIR --base SHA --head SHA [--go-statement TEXT --pr N --slug OWNER/NAME]`; it prints
 `{"keeper_schema": {"base": N, "head": M}, "migration": K|null}` for the evidence file (`migration` is the
 `MIGRATION` field of the GO statement, which must name that pull request and head or the command refuses; the field is the plain decimal, as `land` reads it).
+The required `ci-gate` job runs `plangraph land-train require-migration --repo DIR --base SHA --head SHA --body-file FILE`
+on every full-tier pull request: when the schema version at the head is above the merge base, the pull request body
+must hold exactly one standalone line `MIGRATION <version>` (the line `merge-batch push` writes), or the job fails.
+The GO row itself is still checked by `land` and by `go-verify`.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
