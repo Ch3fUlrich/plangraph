@@ -301,7 +301,7 @@ fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() 
         let record = crate::records::read_record_file(record_path)
             .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
         assert_eq!(record["writer_status_path"], card["writer_status_path"]);
-        let out = std::process::Command::new("python3")
+        let out = crate::test_python::command()
             .env("PYTHONPATH", &src)
             .args([
                 "-c",

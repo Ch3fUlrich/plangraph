@@ -27,7 +27,7 @@ fn launch_paths(registry: &Registry) -> Vec<String> {
 /// The review brief of `record`, rendered by the real Python renderer.
 fn rendered_review(record: &Value) -> String {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-    let out = std::process::Command::new("python3")
+    let out = super::test_python::command()
         .env("PYTHONPATH", src)
         .args([
             "-c",

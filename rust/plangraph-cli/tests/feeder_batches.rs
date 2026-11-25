@@ -722,3 +722,5 @@ fn a_failed_batch_still_reports_the_members_dropped_before_the_failure() {
 
 #[path = "feeder_batches/status.rs"]
 mod status;
+#[path = "../../test_support/python.rs"]
+mod test_python;
