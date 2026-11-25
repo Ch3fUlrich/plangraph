@@ -71,9 +71,6 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-feeder.service",
     "deploy/systemd/pg-keeper-backup.service",
     "deploy/systemd/pg-keeper-backup.timer",
-    "deploy/systemd/pg-merge-close.service",  # merge_close_scheduled pins the scheduled flags.
-    "deploy/systemd/pg-merge-close-continue.service",
-    "deploy/systemd/pg-merge-close-continue.timer",
     "deploy/systemd/pg-reconcile-merged.service",
     "deploy/systemd/pg-reconcile-merged.timer",
     "deploy/systemd/pg-throughput.service",
