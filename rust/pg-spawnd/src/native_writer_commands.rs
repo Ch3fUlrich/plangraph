@@ -63,6 +63,8 @@ impl Host {
             state,
             brief: request["prompt"].as_str().unwrap_or("").into(),
             push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
+            #[cfg(test)]
+            fast_checks_stand_in: None,
             reviews_started: 0,
             review_override: None,
             review_cli: super::review::review_cli()?,

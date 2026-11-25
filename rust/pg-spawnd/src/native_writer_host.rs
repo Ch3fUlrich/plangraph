@@ -54,6 +54,10 @@ struct Host {
     record_path: PathBuf,
     base_ref: String,
     tool_path: String,
+    /// Tests only: runs in place of `plangraph fast-checks --owned-worktree` (a build without
+    /// `cfg(test)` has no way to replace the required command).
+    #[cfg(test)]
+    fast_checks_stand_in: Option<Vec<String>>,
     effort: String,
     /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
     state: PathBuf,
@@ -84,6 +88,31 @@ fn output(command: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }
 impl Host {
+    /// The shared exact-head fast checks: always `plangraph fast-checks --owned-worktree`.
+    #[cfg(not(test))]
+    fn fast_checks_command(&self) -> Command {
+        let mut command = self.command("plangraph");
+        command.args(["fast-checks", "--owned-worktree"]);
+        command
+    }
+    /// The same, or the stand-in a test gave this host, marked for the child process only.
+    #[cfg(test)]
+    fn fast_checks_command(&self) -> Command {
+        match &self.fast_checks_stand_in {
+            Some(argv) => {
+                let mut command = self.command(&argv[0]);
+                command
+                    .args(&argv[1..])
+                    .env(review_tests::STAND_IN_MARKER, "1");
+                command
+            }
+            None => {
+                let mut command = self.command("plangraph");
+                command.args(["fast-checks", "--owned-worktree"]);
+                command
+            }
+        }
+    }
     /// Push `head` to `target` with its receipt in one push (a lane gets its designated receipt
     /// ref, any other branch is pushed alone). The caller holds the mutation guard.
     fn publish_head(&mut self, head: &str, target: &str) -> Result<(), String> {
@@ -356,10 +385,8 @@ impl Driver for Host {
         let (mut log, _) = self.checks_run()?;
         // The shared exact-head fast checks (affected tests, lints, formatting): the same command
         // a human writer runs, and the only producer of the receipt a lane push needs.
-        let argv = review::fast_checks_cli()?;
         let shared = self
-            .command(&argv[0])
-            .args(&argv[1..])
+            .fast_checks_command()
             .current_dir(&self.cwd)
             .output()
             .map_err(|e| format!("plangraph fast-checks: {e}"))?;

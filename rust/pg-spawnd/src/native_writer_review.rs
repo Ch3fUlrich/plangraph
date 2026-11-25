@@ -567,23 +567,6 @@ pub(crate) fn review_verdict(text: &str, head: &str, paths: &[String]) -> Value 
 }
 /// Spawner CLI argv prefix for review runs; PLANGRAPH_NATIVE_REVIEW_CLI (a JSON string
 /// array) replaces the default `python3 -m plangraph.spawner.cli`.
-/// The shared exact-head fast checks the host runs. `PLANGRAPH_NATIVE_FAST_CHECKS_CLI` (a JSON
-/// argv, like `PLANGRAPH_NATIVE_REVIEW_CLI`) replaces the whole command so a test can stand in for
-/// it with a program the platform can run.
-pub(super) fn fast_checks_cli() -> Result<Vec<String>, String> {
-    match std::env::var("PLANGRAPH_NATIVE_FAST_CHECKS_CLI") {
-        Ok(text) => serde_json::from_str::<Vec<String>>(&text)
-            .ok()
-            .filter(|argv| !argv.is_empty())
-            .ok_or_else(|| {
-                "PLANGRAPH_NATIVE_FAST_CHECKS_CLI must be a non-empty JSON string array".into()
-            }),
-        Err(_) => Ok(["plangraph", "fast-checks", "--owned-worktree"]
-            .map(String::from)
-            .into()),
-    }
-}
-
 pub(super) fn review_cli() -> Result<Vec<String>, String> {
     match std::env::var("PLANGRAPH_NATIVE_REVIEW_CLI") {
         Ok(text) => serde_json::from_str::<Vec<String>>(&text)

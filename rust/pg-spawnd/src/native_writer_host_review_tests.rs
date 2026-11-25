@@ -136,6 +136,7 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         state: dir.path().to_path_buf(),
         brief: "the item brief".into(),
         push_ref: None,
+        fast_checks_stand_in: None,
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -233,37 +234,31 @@ fn native_sonnet_pass_requires_reported_tests() {
     }
 }
 
-const FAST_CHECKS_OWNER: &str = "PG_FAKE_FAST_CHECKS_OWNER";
-const FAST_CHECKS_STAND_IN: &str = "native_writer_host::review_tests::fast_checks_stand_in";
+/// Set on the stand-in's child process only (by `Host::fast_checks_command`): the test harness's
+/// own process never has it, so the stand-in test below is a no-op there.
+pub(super) const STAND_IN_MARKER: &str = "PG_FAKE_FAST_CHECKS";
+const STAND_IN_TEST: &str = "native_writer_host::review_tests::fast_checks_stand_in";
 
-/// Stand-in for the shared exact-head fast checks (the real command is tested in plangraph-cli),
-/// on every platform: the host runs this test binary again as its fast-checks command (the way the
-/// policy and umask tests re-run themselves), and that run, below, publishes the receipt through
-/// the same producer the real command uses. Returns the PATH to give the host.
-pub(super) fn fake_plangraph_path(_: &Path) -> String {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let argv = json!([
-            std::env::current_exe().unwrap(),
-            "--exact",
-            FAST_CHECKS_STAND_IN,
-            "--nocapture"
-        ]);
-        std::env::set_var("PLANGRAPH_NATIVE_FAST_CHECKS_CLI", argv.to_string());
-        // The process that set the stand-in up is not the stand-in: a child sees another pid.
-        std::env::set_var(FAST_CHECKS_OWNER, std::process::id().to_string());
-    });
-    std::env::var("PATH").unwrap()
+/// What a test host runs in place of the shared exact-head fast checks (the real command is tested
+/// in plangraph-cli), on every platform: this test executable runs again, as the policy and umask
+/// tests of this module do, and that run publishes the receipt through the real producer.
+pub(super) fn stand_in_argv() -> Option<Vec<String>> {
+    Some(vec![
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--exact".into(),
+        STAND_IN_TEST.into(),
+        "--nocapture".into(),
+    ])
 }
 
-/// The stand-in's own run: publishes the receipt of HEAD in the current directory. Run by the
-/// test harness itself (the owner's pid matches) it does nothing.
+/// The stand-in's own run: publishes the receipt of HEAD in the current directory when the host
+/// marked it; nothing when the harness runs it as an ordinary test.
 #[test]
 fn fast_checks_stand_in() {
-    let Some(owner) = std::env::var_os(FAST_CHECKS_OWNER) else {
-        return;
-    };
-    if owner == std::process::id().to_string().as_str() {
+    if std::env::var_os(STAND_IN_MARKER).is_none() {
         return;
     }
     let cwd = std::env::current_dir().unwrap();
