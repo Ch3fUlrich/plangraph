@@ -9,7 +9,7 @@ use std::{io::Read, path::Path};
 #[path = "round_progress_tests.rs"]
 mod tests;
 
-fn refused(reason: &str) -> ToolError {
+pub(crate) fn refused(reason: &str) -> ToolError {
     crate::placement::parameter(format!("{reason}: writer round admission refused"))
 }
 /// The one owner of the writer review-round stop rule (the Python setting, the batch-writer
@@ -25,27 +25,9 @@ pub(crate) fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Op
     if next > MAX_ROUNDS || used_exception {
         return Some("round_cap");
     }
-    // Round 1 has no earlier count to beat: it is a miss until a later round is strictly lower.
-    let (mut best, mut misses) = (None, 0);
-    for &count in counts {
-        match best {
-            Some(b) if count < b => (best, misses) = (Some(count), 0),
-            _ => {
-                best = best.or(Some(count));
-                misses += 1;
-            }
-        }
-        if misses >= STALL_ROUNDS {
-            return Some("no_progress");
-        }
-    }
-    match (counts.first(), counts.last()) {
-        (Some(&first), Some(&last)) if counts.len() as u64 >= STALL_ROUNDS && last * 2 > first => {
-            Some("slow_progress")
-        }
-        _ => None,
-    }
+    crate::round_escalate::stall_reason(counts, 0)
 }
+
 pub(crate) fn summarize(
     value: &Value,
     run: &str,
@@ -126,7 +108,7 @@ pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, Tool
                 let record = crate::records::read_record(state, &json!(id))
                     .map_err(|_| refused("round_history_unavailable"))?;
                 if record["role"] == "implement"
-                    && record["item_key"] == item
+                    && crate::round_escalate::batch_key(&record) == Some(item)
                     && record["writer_round"].is_u64()
                     && !(record["round_void"] == true
                         && crate::runs::terminal(&record)
@@ -148,11 +130,14 @@ pub(crate) struct Admission {
     // Held until the run record (or refusal) has been persisted, never across wait().
     _lock: Option<LockGuard>,
     pub fields: Value,
+    /// The delivered replan of a stalled loop, appended to the prompt of the resumed writer.
+    pub prompt_addendum: Option<String>,
 }
 pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let untracked = || Admission {
         _lock: None,
         fields: json!({}),
+        prompt_addendum: None,
     };
     if args.get("role").is_some_and(|v| v != "implement") {
         return Ok(untracked());
@@ -177,12 +162,24 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     if card.get("narrow_fix").is_some_and(|v| !v.is_boolean()) {
         return Err(refused("round_exception_invalid"));
     }
+    let key = crate::round_escalate::ledger_key(card, item)?;
+    let item = key.as_str();
     std::fs::create_dir_all(state).map_err(|_| refused("round_history_unavailable"))?;
     let lock_name = format!("writer-rounds-{:x}.lock", Sha256::digest(item.as_bytes()));
     let lock = pg_worker_core::lockfile::try_lock(&state.join(lock_name))
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
     let history = round_history(state, item)?;
+    let (cause, checks) = match crate::round_escalate::start(state, card, item, &history)? {
+        Err(initial) => {
+            return Ok(Admission {
+                _lock: Some(lock),
+                fields: initial,
+                prompt_addendum: None,
+            })
+        }
+        Ok(fix) => fix,
+    };
     let next = history.len() as u64 + 1;
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
     let mut summaries = vec![];
@@ -204,6 +201,13 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
                 return Err(refused("round_history_invalid"));
             }
             saved
+        } else if record["round_verdict_file"].is_null()
+            && record["round_cause"]
+                .as_str()
+                .is_some_and(|c| c != "review_finding")
+        {
+            // A round judged by its failing checks alone; a review round needs its verdict.
+            json!({"confirmed_blockers":0, "narrow_fix_eligible":false, "verdict":null})
         } else {
             let source = record["round_verdict_file"]
                 .as_str()
@@ -218,42 +222,50 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         };
         summaries.push(summary);
     }
-    let counts: Vec<_> = summaries
-        .iter()
-        .map(|s| s["confirmed_blockers"].as_u64().unwrap())
-        .collect();
+    let counts = crate::round_escalate::counts(&history, &summaries, checks);
     if next > MAX_ROUNDS {
         return Err(refused("round_cap"));
     }
-    if summaries
-        .last()
-        .is_some_and(|s| s["verdict"]["verdict"] == "ACCEPT")
+    // An accepted review ends the review loop only; a red-check or moved-main fix still counts.
+    if cause == "review_finding"
+        && summaries
+            .last()
+            .is_some_and(|s| s["verdict"]["verdict"] == "ACCEPT")
     {
         return Err(refused("round_accepted"));
     }
     if used_exception {
         return Err(refused("round_cap"));
     }
-    let reason = stop_reason(&counts, next, false);
+    let (level, since) = crate::round_escalate::level(&history);
+    let reason = crate::round_escalate::stall_reason(&counts, since);
     let narrow = card["narrow_fix"] == true;
     if narrow
         && (reason.is_none()
+            || checks.unwrap_or(0) != 0
             || !summaries
                 .last()
                 .is_some_and(|s| s["narrow_fix_eligible"] == true))
     {
         return Err(refused("round_exception_invalid"));
     }
-    if let Some(reason) = reason {
-        if !narrow {
-            return Err(refused(reason));
-        }
-    }
+    let dry = args.get("dry_run") == Some(&json!(true));
+    // The narrow exception is the alternative to a replan: it does not wait for one.
+    let resume = match narrow {
+        true => None,
+        false => crate::round_escalate::govern(state, item, &pr, level, reason, dry)?,
+    };
+    let (new_level, why, replan, addendum) = match resume {
+        Some(r) => (r.level, json!(r.reason), json!("done"), r.addendum),
+        None => (level, Value::Null, Value::Null, None),
+    };
     Ok(Admission {
         _lock: Some(lock),
-        fields: json!({"writer_round":next,
+        fields: json!({"writer_round":next, "batch_key":item,
         "round_pr":pr, "round_verdict_file":path, "narrow_fix":narrow,
-        "previous_confirmed_blockers":counts}),
+        "previous_confirmed_blockers":counts, "round_cause":cause, "round_failing_checks":checks,
+        "round_escalation":new_level, "round_escalation_reason":why, "round_replan":replan}),
+        prompt_addendum: addendum,
     })
 }
 
@@ -272,8 +284,14 @@ pub(crate) fn record_refusal(
     let mut base = json!({"role":"implement", "reason":reason,
         "refusal":"SpawnRefused", "error":error.message, "exit_code":2});
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
-    // A stop of the round rule starts the durable replan of the PR (round_replan).
-    if let (Some(item), Some(pr)) = (base["item_key"].as_str(), args["card"]["pr"].as_str()) {
+    // A stop of the round rule starts the durable replan of the PR (round_replan), never on a
+    // dry run.
+    let dry = args.get("dry_run") == Some(&json!(true));
+    let key = args["card"]["batch_key"]
+        .as_str()
+        .filter(|s| crate::records::valid_item(s))
+        .or_else(|| base["item_key"].as_str());
+    if let (Some(item), Some(pr), false) = (key, args["card"]["pr"].as_str(), dry) {
         match crate::round_replan::enqueue(state, item, pr, reason) {
             Ok(true) => base["replan"] = json!("queued"),
             Ok(false) => {}

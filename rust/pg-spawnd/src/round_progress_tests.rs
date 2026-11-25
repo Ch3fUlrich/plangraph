@@ -92,10 +92,10 @@ fn reason(result: Result<Admission, ToolError>) -> String {
 #[test]
 fn persisted_history_survives_reload_and_refuses_by_reason() {
     for (counts, expected) in [
-        (vec![3, 3, 4], Some("no_progress")),
+        (vec![3, 3, 4], Some("round_replan_pending")),
         (vec![4, 2, 1], None),
-        (vec![5, 5, 5], Some("no_progress")),
-        (vec![8, 7, 6], Some("slow_progress")),
+        (vec![5, 5, 5], Some("round_replan_pending")),
+        (vec![8, 7, 6], Some("round_replan_pending")),
         (vec![16, 8, 7, 6, 5, 4, 3, 2], Some("round_cap")),
     ] {
         let dir = tempfile::tempdir().unwrap();
@@ -123,7 +123,7 @@ fn narrow_med_exception_is_explicit_and_single_use() {
     for count in [1, 2, 3] {
         let dir = tempfile::tempdir().unwrap();
         let mut args = history(dir.path(), &[count, count, count], true);
-        assert!(reason(admit(dir.path(), &args)).starts_with("no_progress"));
+        assert!(reason(admit(dir.path(), &args)).starts_with("round_replan_pending"));
         args["card"]["narrow_fix"] = json!(true);
         if count == 3 {
             assert!(reason(admit(dir.path(), &args)).starts_with("round_exception_invalid"));
@@ -187,7 +187,7 @@ fn ceiling_refuses_even_with_the_narrow_exception_and_acceptance_ends_the_loop()
     assert!(reason(admit(dir.path(), &args)).starts_with("round_cap"));
     let dir = tempfile::tempdir().unwrap();
     let mut args = history(dir.path(), &[5, 5, 5], true);
-    assert!(reason(admit(dir.path(), &args)).starts_with("no_progress"));
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_replan_pending"));
     args["card"]["narrow_fix"] = json!(true);
     assert!(admit(dir.path(), &args).is_err());
     let dir = tempfile::tempdir().unwrap();

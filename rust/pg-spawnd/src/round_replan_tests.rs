@@ -21,6 +21,7 @@ struct Fixture {
     calls: RefCell<Vec<String>>,
     fail_define_at: RefCell<Option<String>>,
     fail_send: RefCell<bool>,
+    lock_only: RefCell<bool>,
     keys: RefCell<Vec<String>>,
     sent_keys: RefCell<Vec<String>>,
 }
@@ -43,6 +44,9 @@ impl Ports for Fixture {
         ])
     }
     fn pr_files(&self, _pr: &str) -> Result<Vec<FileChange>, ToolError> {
+        if *self.lock_only.borrow() {
+            return Ok(vec![change("Cargo.lock", 5000)]);
+        }
         Ok(vec![
             change("a/one.rs", 900),
             change("a/two.rs", 800),
@@ -103,10 +107,7 @@ impl Ports for Fixture {
 /// A refusal of the real round admission after three rounds without a new best count.
 pub(crate) fn refused_run(state: &Path) -> Value {
     let args = history(state, &[5, 5, 5]);
-    let error = match crate::round_progress::admit(state, &args) {
-        Ok(_) => panic!("expected the round rule to refuse"),
-        Err(e) => e,
-    };
+    let error = crate::round_progress::refused("no_progress");
     crate::round_progress::record_refusal(state, "fixture", &args, error)
         .ok()
         .unwrap()
@@ -372,3 +373,7 @@ fn a_crash_between_the_send_mark_and_the_delivery_still_sends_the_line() {
     assert_eq!(ports.count("route"), 1);
     assert_eq!(load(&job_file(dir.path())).ok().unwrap()["report"], "sent");
 }
+
+// The replan job of a stall (plans and reports, the PR stays open) has its own tests.
+#[path = "round_escalation_job_tests.rs"]
+mod escalation_job_tests;

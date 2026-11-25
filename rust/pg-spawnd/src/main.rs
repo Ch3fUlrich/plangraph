@@ -65,6 +65,8 @@ mod review_health;
 mod review_retry;
 mod review_split;
 mod review_test_evidence;
+mod round_escalate;
+mod round_escalation_job;
 mod round_progress;
 mod round_replan;
 mod round_replan_ports;

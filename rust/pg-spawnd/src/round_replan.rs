@@ -126,18 +126,18 @@ pub(crate) fn group_files(files: &[FileChange], target: u64) -> Vec<Vec<String>>
     groups
 }
 
-fn job_dir(state: &Path) -> PathBuf {
+pub(crate) fn job_dir(state: &Path) -> PathBuf {
     state.join("replans")
 }
 fn job_path(state: &Path, item: &str, pr: &str) -> PathBuf {
     let id = Sha256::digest(format!("{item}\n{pr}").as_bytes());
     job_dir(state).join(format!("replan-{:x}.json", id))
 }
-fn save(path: &Path, job: &Value) -> Result<(), ToolError> {
+pub(crate) fn save(path: &Path, job: &Value) -> Result<(), ToolError> {
     atomic_write_private(path, job.to_string().as_bytes())
         .map_err(|_| parameter("replan_state_unavailable: job file not written"))
 }
-fn load(path: &Path) -> Result<Value, ToolError> {
+pub(crate) fn load(path: &Path) -> Result<Value, ToolError> {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -208,15 +208,19 @@ fn plan_step(job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
                 "lines":group.iter().map(lines).sum::<u64>(), "findings":findings})
         })
         .collect();
-    job["plan"] = json!({"leg":leg.name, "slices":slices});
+    job["plan"] = json!({"leg":leg.name, "slices":slices, "findings":findings});
     Ok(())
 }
 
 /// The idempotency key of the job's routing line: 32 lowercase hex characters, stable per item
 /// and PR, so every retry of the same report carries the same key.
 fn report_key(job: &Value) -> String {
+    let level = job["level"]
+        .as_u64()
+        .map(|l| format!("\n{l}"))
+        .unwrap_or_default();
     let id = Sha256::digest(format!(
-        "replan-report\n{}\n{}",
+        "replan-report\n{}\n{}{level}",
         job["item"].as_str().unwrap_or(""),
         job["pr"].as_str().unwrap_or("")
     ));
@@ -251,7 +255,9 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         .as_array()
         .cloned()
         .unwrap_or_default();
-    for slice in &slices {
+    // A job of a stall plans and reports only: the writer goes on, on the open PR.
+    let keep_open = job["reason"] == crate::round_escalation_job::ESCALATED;
+    for slice in slices.iter().filter(|_| !keep_open) {
         let key = slice["key"].clone();
         if job["defined"].as_array().is_some_and(|d| d.contains(&key)) {
             continue;
@@ -260,15 +266,20 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         job["defined"].as_array_mut().unwrap().push(key);
         save(path, job)?;
     }
-    if job["closed"] != true {
+    if job["closed"] != true && !keep_open {
         ports.close_pr_unmerged(job["pr"].as_str().unwrap_or(""))?;
         job["closed"] = json!(true);
         save(path, job)?;
     }
     if job["report"] == "pending" {
         let keys: Vec<_> = slices.iter().filter_map(|s| s["key"].as_str()).collect();
+        let state = if keep_open {
+            "kept open"
+        } else {
+            "closed unmerged"
+        };
         let line = format!(
-            "REPLAN {} {} | PR {} closed unmerged | slices {}",
+            "REPLAN {} {} | PR {} {state} | slices {}",
             job["item"].as_str().unwrap_or(""),
             job["reason"].as_str().unwrap_or(""),
             job["pr"].as_str().unwrap_or(""),
