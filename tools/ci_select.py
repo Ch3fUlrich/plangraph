@@ -479,6 +479,8 @@ def ready_problems(facts: dict) -> list[str]:
     if (facts.get("truncated") or any(re.fullmatch(r"tests/(?!browser/)(?:\w+/)*test_\w+\.py|rust/.*\.rs", f) for f in facts.get("files", []))) \
             and not (replay.get("ok") and replay.get("head") == facts.get("head") and replay.get("runs", 0) >= 5):
         problems.append("no passing five-run replay of the changed tests bound to this head")
+    if replay and not facts.get("truncated") and sorted(replay.get("changed", {}).get("files", [])) != sorted(facts.get("files", [])):
+        problems.append("the replay receipt was made against another comparison base: its changed-file list differs from this change's")
     problems += [f"FLAKY: {t} (logs {' and '.join(replay['logs'][t])})" for t in replay.get("flaky", [])]
     if facts.get("windows_required"):
         if facts.get("windows") is None:

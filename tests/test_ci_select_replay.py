@@ -68,7 +68,7 @@ def test_a_stable_passing_test_clears_the_entry(tmp_path, monkeypatch):
     root, base, head = tree(tmp_path, {"tests/test_stable.py": STABLE}, BASE)
     result = plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs", workers=False, head=head)
     assert result == {"flaky": [], "failed": [], "incomplete": [], "logs": {}, "ok": True, "runs": 5, "head": head,
-                      "changed": {"python": ["tests/test_stable.py"], "rust": []}}
+                      "changed": {"python": ["tests/test_stable.py"], "rust": [], "files": ["tests/test_stable.py"]}}
 
 
 def test_a_test_that_always_fails_is_a_failure_not_a_flake(tmp_path, monkeypatch):
@@ -136,6 +136,50 @@ def test_c(x):
     assert plan.replay(root, plan.changed_tests(root, base, head), tmp_path / "logs2", head=head)["ok"] is True
 
 
+def test_a_runner_error_or_interrupted_run_is_a_failure_even_when_it_printed_passes(tmp_path, monkeypatch):
+    root, _, head = tree(tmp_path, {"docs/x.md": "x\n"}, BASE)
+    for code in (2, 3, 4, 5):
+        runs = [([sys.executable, "-c", f"print('PASSED tests/test_a.py::t'); raise SystemExit({code})"], []) for _ in range(5)]
+        monkeypatch.setattr(plan, "replay_commands", lambda *_a, runs=runs, **_kw: runs)
+        result = plan.replay(root, {}, tmp_path / f"logs{code}", head=head)
+        assert result["ok"] is False and len(result["failed"]) == 5 and f"exit {code}" in result["failed"][0], code
+    # exit 1 with a parsed failure is an ordinary failure; exit 0 and cargo's 101 with failures stay as before
+    runs = [([sys.executable, "-c", "print('PASSED tests/test_a.py::t')"], []) for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: runs)
+    assert plan.replay(root, {}, tmp_path / "logs-ok", head=head)["ok"] is True
+
+
+def test_a_stable_test_with_a_platform_skip_is_not_incomplete_but_a_missing_one_still_is(tmp_path, monkeypatch):
+    skipping = """import pytest
+
+
+def test_here():
+    pass
+
+
+@pytest.mark.skip(reason='another platform')
+def test_elsewhere():
+    pass
+
+
+def test_never_printed():
+    pass
+"""
+    root, base, head = tree(tmp_path, {"tests/test_skip.py": skipping}, BASE)
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
+    changed = plan.changed_tests(root, base, head)
+    result = plan.replay(root, changed, tmp_path / "logs", workers=False, head=head)
+    assert result["ok"] is True and result["incomplete"] == [] and result["failed"] == []
+    # the full-worker run prints xdist's "[gw0] [ 66%] SKIPPED <id>" form
+    workers = plan.replay(root, changed, tmp_path / "logs-workers", workers=True, head=head)
+    assert workers["ok"] is True and workers["incomplete"] == [], workers["incomplete"]
+    out = [([sys.executable, "-c", "print('PASSED tests/test_skip.py::test_here');print('tests/test_skip.py::test_elsewhere SKIPPED (another platform) [ 66%]')"], [])
+           for _ in range(5)]
+    monkeypatch.setattr(plan, "replay_commands", lambda *_a, **_kw: out)
+    partial = plan.replay(root, changed, tmp_path / "logs2", head=head)
+    assert {i.split(" (run")[0] for i in partial["incomplete"]} == {"tests/test_skip.py::test_never_printed"}
+
+
 def test_the_replay_runs_the_requested_head_in_a_clean_checkout_not_the_working_tree(tmp_path, monkeypatch):
     """A passing working tree and a failing requested commit: the receipt follows the commit, never the checkout."""
     monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
@@ -178,7 +222,8 @@ HEAD = "9" * 40
 
 
 def receipt(**over):
-    return {"head": HEAD, "ok": True, "runs": 5, "flaky": [], "failed": [], "logs": {}, "changed": {"python": ["tests/test_a.py"], "rust": []}} | over
+    return {"head": HEAD, "ok": True, "runs": 5, "flaky": [], "failed": [], "logs": {},
+            "changed": {"python": ["tests/test_a.py"], "rust": [], "files": ["tests/test_a.py"]}} | over
 
 
 def facts(replay, files=("tests/test_a.py",)):
@@ -200,6 +245,15 @@ def test_a_one_in_five_failure_blocks_ready_with_flaky_and_both_logs():
 def test_a_part_that_changes_no_test_needs_no_replay_receipt():
     assert ci_select.ready_problems(facts(None, files=("src/plangraph/planner/provider_stop.py", "docs/x.md"))) == []
     assert any("replay" in p for p in ci_select.ready_problems(facts(None, files=("rust/pg-spawnd/src/lib.rs",))))
+
+
+def test_a_receipt_made_against_another_comparison_base_does_not_make_the_part_ready():
+    """A replay of a different diff (here: zero changed tests, an empty file list) is not this change's replay."""
+    wrong = receipt(changed={"python": [], "rust": [], "files": []})
+    assert any("another comparison base" in p for p in ci_select.ready_problems(facts(wrong)))
+    other = receipt(changed={"python": ["tests/test_a.py"], "rust": [], "files": ["tests/test_a.py", "src/x.py"]})
+    assert any("another comparison base" in p for p in ci_select.ready_problems(facts(other)))
+    assert ci_select.ready_problems(facts(receipt())) == []
 
 
 def test_entry_set_run_writes_the_receipt_where_readiness_reads_it(tmp_path, monkeypatch):

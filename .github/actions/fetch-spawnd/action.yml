@@ -7,7 +7,18 @@ runs:
       with:
         name: pg-spawnd-bin
         path: ${{ github.workspace }}/rust/target/release
-    - name: Make the binaries executable
+    - name: Verify the binaries against the build manifest and stage pg-spawnd for the fleet tests
       shell: bash
       working-directory: ${{ github.workspace }}
-      run: chmod +x rust/target/release/pg-spawnd rust/target/release/ci-flake
+      run: |
+        set -euo pipefail
+        cd rust/target/release
+        chmod +x pg-spawnd ci-flake
+        # The artifact carries no Cargo dep-info, so the fleet fixture cannot judge it: the manifest of the build job does.
+        sha256sum -c pg-spawnd.sha256
+        built=$(cat pg-spawnd.source)
+        if [ "$built" != "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" ]; then
+          echo "pg-spawnd was built from $built, not from this run's checkout" >&2
+          exit 1
+        fi
+        echo "PLANGRAPH_TEST_FLEET_SPAWND=$PWD/pg-spawnd" >> "$GITHUB_ENV"

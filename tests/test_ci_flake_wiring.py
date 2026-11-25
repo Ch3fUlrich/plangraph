@@ -25,7 +25,8 @@ NONBLOCKING = {
     "Quarantined Rust tests (reporting, never blocking)", "Quarantined Rust tests on Windows (reporting, never blocking)",
     "Retry the failed pg-spawnd tests once at the same SHA", "Retry the failed pg-worker-core tests once at the same SHA",
     "Upload the same-SHA retry logs and record (Windows)", "Retry the failed worker tests once at the same SHA",
-    "Quarantined worker tests (reporting, never blocking)", "Carry ci-full evidence to a reworded head",
+    "Quarantined worker tests (reporting, never blocking)", "Retry the failed native writer tests once at the same SHA",
+    "Upload the native writer retry logs and record", "Carry ci-full evidence to a reworded head",
     "Quarantine ledger in the gate summary", "Publish the quarantine ledger", "Download shard timings",
     "Combine shard timings per suite", "Upload the combined shard timings", "Post ci-full evidence",
 }
@@ -367,7 +368,8 @@ def test_ci_pytest_steps_leave_the_classification_to_the_one_retry():
 @pytest.mark.parametrize("job,step", [("rust", "Retry the failed Rust tests once at the same SHA"),
                                        ("rust-worker", "Retry the failed worker tests once at the same SHA"),
                                        ("rust-windows", "Retry the failed pg-spawnd tests once at the same SHA"),
-                                       ("rust-windows", "Retry the failed pg-worker-core tests once at the same SHA")])
+                                       ("rust-windows", "Retry the failed pg-worker-core tests once at the same SHA"),
+                                       ("rust", "Retry the failed native writer tests once at the same SHA")])
 def test_every_rust_runner_path_is_classified_by_the_shared_retry_action(job, step):
     retry = named(job, step)
     assert retry["uses"] == "./.github/actions/cargo-retry" and retry["continue-on-error"] is True
@@ -414,3 +416,78 @@ def test_a_failing_retry_still_reaches_the_classification_in_both_retry_actions(
     calls = (tmp_path / "calls").read_text().splitlines()
     assert calls[0] == "cargo test --no-fail-fast -- --exact tests/t.py::t0 tests/t.py::t1" and calls[1].startswith("classify")
     assert "retry exit status: 101" in (tmp_path / "flake-cargo/second.log").read_text()
+
+
+# --- the downloaded pg-spawnd is verified and staged for the fleet fixture ------------------------------------------
+
+def fetch_fixture(tmp_path):
+    repo = tmp_path / "repo"
+    release = repo / "rust/target/release"
+    release.mkdir(parents=True)
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a],  # noqa: E731
+                                    check=True, capture_output=True, text=True).stdout.strip()
+    run("init", "-q", "-b", "main")
+    (repo / "f").write_text("x")
+    run("add", "-A")
+    run("commit", "-qm", "c")
+    (release / "pg-spawnd").write_bytes(b"spawnd")
+    (release / "ci-flake").write_bytes(b"flake")
+    subprocess.run("sha256sum pg-spawnd ci-flake > pg-spawnd.sha256", shell=True, cwd=release, check=True)
+    (release / "pg-spawnd.source").write_text(run("rev-parse", "HEAD") + "\n")
+    return repo, release
+
+
+def fetch_script():
+    return yaml.safe_load((ROOT / ".github/actions/fetch-spawnd/action.yml").read_text())["runs"]["steps"][1]["run"]
+
+
+def test_the_downloaded_binary_is_verified_and_staged_for_the_fleet_fixture(tmp_path):
+    repo, release = fetch_fixture(tmp_path)
+    env = {"GITHUB_WORKSPACE": str(repo)}
+    done, env_file, _ = run_script(fetch_script(), repo, env, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert f"PLANGRAPH_TEST_FLEET_SPAWND={release / 'pg-spawnd'}" in env_file.read_text()
+    assert os.access(release / "pg-spawnd", os.X_OK)
+    (release / "pg-spawnd").write_bytes(b"tampered")
+    tampered, _, _ = run_script(fetch_script(), repo, env, tmp_path)
+    assert tampered.returncode != 0
+
+
+def test_a_binary_built_from_another_commit_is_not_staged(tmp_path):
+    repo, release = fetch_fixture(tmp_path)
+    (release / "pg-spawnd.source").write_text("0" * 40 + "\n")
+    done, env_file, _ = run_script(fetch_script(), repo, {"GITHUB_WORKSPACE": str(repo)}, tmp_path)
+    assert done.returncode != 0 and "built from" in done.stderr and "PLANGRAPH_TEST_FLEET_SPAWND" not in env_file.read_text()
+
+
+@pytest.mark.parametrize("job", ["pytest", "pytest-postgres"])
+def test_the_real_fleet_fixture_runs_on_the_downloaded_binary_in_every_shard(job):
+    names = [step.get("name") for step in steps(job)]
+    assert names.index("Fetch the fleet projection helper built once for this run") < names.index("Exercise the fleet fixture on the downloaded pg-spawnd")
+    step = named(job, "Exercise the fleet fixture on the downloaded pg-spawnd")
+    assert step["env"]["PYTEST_SHARD"] == "" and step["uses"] == "./.github/actions/bounded-step"
+    assert "test_fleet_samples_and_missing_host" in step["with"]["command"]
+    assert names.index("Install test deps") < names.index("Exercise the fleet fixture on the downloaded pg-spawnd")
+
+
+def test_the_build_job_ships_a_manifest_with_the_binaries():
+    upload = next(step for step in steps("build-spawnd") if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert {"rust/target/release/pg-spawnd.sha256", "rust/target/release/pg-spawnd.source"} <= set(upload["with"]["path"].split())
+    assert index("build-spawnd", "Record the build manifest") < steps("build-spawnd").index(upload)
+
+
+def test_the_python_314_native_writer_run_has_the_quarantine_and_the_retry(tmp_path):
+    target = tmp_path / "target"
+    (target / "debug").mkdir(parents=True)
+    stub(target / "debug/ci-flake", "printf '%s\\n' 'pg-spawnd native::case' 'pg-worker x::y'\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub(bin_dir / "cargo", 'echo "cargo $*" >> "$RUNNER_TEMP/calls"\n')
+    done, _, _ = run_script(named("rust", "Native writer lifecycle (Python 3.14)")["run"], tmp_path, {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "CARGO_TARGET_DIR": str(target), "GITHUB_WORKSPACE": str(tmp_path),
+        "PYTEST_QUARANTINE_FILE": "l", "PYTEST_QUARANTINE_AS_OF": "t"}, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "calls").read_text().strip() == "cargo test --no-fail-fast -p pg-spawnd --test native_writer -- --exact --skip native::case"
+    assert index("rust", "Native writer lifecycle (Python 3.14)") < index("rust", "Retry the failed native writer tests once at the same SHA")
+    # the Python 3.14 setup still comes first
+    assert index("rust", "Native writer lifecycle (Python 3.14)") > max(i for i, step in enumerate(steps("rust")) if step.get("with", {}).get("python-version") == "3.14")
