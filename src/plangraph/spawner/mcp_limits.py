@@ -238,8 +238,9 @@ SERVED_DIR = 'mcp-sessions'
 def publish_served(state, served_sha, identity, error=None):
     """Record the code this MCP process serves, one file per process, for the per-session deploy report."""
     directory = Path(state) / SERVED_DIR
-    row = {'pid': os.getpid(), 'served_sha': served_sha, 'identity': identity,
-           'route_reload_error': error, 'updated': time.time()}
+    from plangraph.mcp_supervise.procutil import process_start_time
+    row = {'pid': os.getpid(), 'start': process_start_time(os.getpid()), 'served_sha': served_sha,
+           'identity': identity, 'route_reload_error': error, 'updated': time.time()}
     try:
         directory.mkdir(parents=True, exist_ok=True)
         tmp = directory / f'.{os.getpid()}.tmp'
@@ -264,7 +265,9 @@ def running_mcp_pids():
     pids = set()
     for line in out.splitlines():
         pid, _, args = line.strip().partition(' ')
-        if pid.isdigit() and 'plangraph.spawner.mcp' in args and '--served-sha' not in args:
+        argv = args.split()
+        # The server invocation itself: `<python> [options] -m plangraph.spawner.mcp` with nothing after it.
+        if pid.isdigit() and argv[-2:-1] == ['-m'] and argv[-1:] == ['plangraph.spawner.mcp']:
             pids.add(int(pid))
     return pids - {os.getpid()}
 
@@ -272,18 +275,19 @@ def running_mcp_pids():
 def served_report(state, checkout=None, running=None):
     """Every live MCP server with the sha it serves and whether that is the checkout head.
 
-    Registered rows come from the per-process files (dead processes are removed with ``pid_alive``, which
-    never signals). Servers found running but unregistered (started before the code that registers)
+    Registered rows come from the per-process files (files of dead or reused pids, or of processes that are no longer
+    an MCP server, are removed; liveness never signals). Servers found running but unregistered (started before the code that registers)
     are listed with ``served_sha`` None and ``current`` False: their code cannot be verified.
     ``running`` defaults to the process inventory; None means the inventory is unavailable."""
-    from plangraph.mcp_supervise.procutil import pid_alive
+    from plangraph.mcp_supervise.procutil import pid_matches
     checkout = checkout_head() if checkout is None else checkout
     running = running_mcp_pids() if running is None else running
     rows, seen = [], set()
     for path in sorted((Path(state) / SERVED_DIR).glob('*.json')):
         try:
             row = json.loads(path.read_text(encoding='utf-8'))
-            alive = pid_alive(row['pid'])
+            # Bound to the process start time: a reused pid is another process, not this session.
+            alive = pid_matches(row['pid'], row.get('start')) and (running is None or row['pid'] in running)
         except (OSError, ValueError, KeyError, TypeError):
             continue
         if not alive:

@@ -124,7 +124,7 @@ def test_a_sandbox_denial_followed_by_a_timeout_is_still_a_probe_defect(tmp_path
             self._tasks, self.jobs, self.cancelled = {}, {}, []
 
         async def spawn(self, **kwargs):
-            job = _job(status='running', exit_code=None, stderr='error: read-only file system: .git/index.lock')
+            job = _job(status='running', exit_code=None, stderr='fatal: Unable to create \'.git/index.lock\': Read-only file system')
             self.jobs[job.job_id] = job
             self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))
             return job
@@ -196,7 +196,7 @@ def test_a_denial_that_scrolled_out_of_the_live_tail_before_the_timeout_is_still
 
 PROSE = r'''
 import sys, time
-sys.stderr.write('I did not encounter a read-only sandbox, the commit task is simply slow.\n')
+sys.stderr.write(sys.argv[1] + '\n')
 for n in range(350):
     sys.stderr.write(f'diagnostic line {n}\n')
 sys.stderr.flush()
@@ -204,13 +204,15 @@ time.sleep(60)
 '''
 
 
-def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize('prose', ['I did not encounter a read-only sandbox, the commit task is simply slow.',
+                                   'No error was caused by the read-only sandbox'])
+def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path, monkeypatch, prose):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **k: '/bin/codex')
     monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
 
     async def factory(exe, *args, **kwargs):
-        return await asyncio.create_subprocess_exec(sys.executable, '-c', PROSE, **kwargs)
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', PROSE, prose, **kwargs)
     runner = SpawnerRunner(process_factory=factory)
     store = LegStateStore(tmp_path / 'legs.sqlite')
     result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=4, store=store))
@@ -220,11 +222,13 @@ def test_model_prose_about_a_read_only_sandbox_is_not_sandbox_evidence(tmp_path,
 
 @pytest.mark.parametrize('line, evidence', [
     ("fatal: Unable to create '/r/.git/index.lock': Read-only file system", True),
-    ('error: read-only file system: .git/index.lock', True),
+    ('Error: Read-only file system (os error 30)', True),
     ("OSError: [Errno 30] Read-only file system: 'ok.txt'", True),
     ("touch: cannot touch 'ok.txt': Read-only file system", True),
     ('I did not encounter a read-only sandbox,', False),
     ('Note: the read-only sandbox blocked nothing', False),
+    ('No error was caused by the read-only sandbox', False),
+    ('error: the read-only file system was not the problem', False),
     ('The sandbox was not blocked or denied', False),
 ])
 def test_only_error_shaped_lines_are_sandbox_evidence(line, evidence):

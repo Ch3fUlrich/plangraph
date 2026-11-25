@@ -164,6 +164,10 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['properties']['leg'] = {'type': 'string', 'description': 'Registered leg reference (explicit override)'}
 
 
+class CheckoutMoved(Exception):
+    """The checkout changed between reading a source snapshot and installing it."""
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
@@ -207,37 +211,44 @@ class MCPSpawnerServer:
         ``plangraph_agent_health``. The served sha is the head captured before the sources were read and
         is trusted only when the checkout did not move meanwhile; otherwise the reload runs again."""
         current = self._source_guard.identity()
-        if current == self._served_identity:
-            return
         for _ in range(3):
-            head = checkout_head()
-            if self._reload_once() is None:
+            if current == self._served_identity:
+                self._reload_error = None
                 return
-            after = self._source_guard.identity()
-            if after == current:
+            head = checkout_head()
+            outcome = self._reload_once(current)
+            if outcome == 'committed':
                 self._served_identity, self._served_head, self._reload_error = current, head, None
                 self.publish_served()
                 return
-            current = after
-        # The checkout kept moving: what is loaded matches no single head, so claim none and retry later.
-        self._served_identity, self._served_head = None, ''
+            if outcome != 'moved':
+                return
+            current = self._source_guard.identity()   # the checkout moved while it was read: read it again
         self._reload_error = 'checkout changed during reload'
         self.publish_served()
 
-    def _reload_once(self):
-        """One transactional reload; returns True when committed, None after a rollback."""
+    def _reload_once(self, expected):
+        """One transactional reload of the snapshot of ``expected``: 'committed', 'moved' (the checkout
+        changed while it was read; nothing was installed) or 'failed' (rolled back)."""
         previous, built = self.service, []
         hooks = {name: getattr(self.runner, name) for name in ('state', 'on_sample') if hasattr(self.runner, name)}
+
+        def commit():
+            if self._source_guard.identity() != expected:
+                raise CheckoutMoved()
+            built.append(self._make_service(previous.state, previous))
         try:
-            reload_spawn_sources(globals(), commit=lambda: built.append(self._make_service(previous.state, previous)))
+            reload_spawn_sources(globals(), commit=commit)
         except Exception as exc:
             for name, value in hooks.items():   # the candidate service had re-pointed the retained runner
                 setattr(self.runner, name, value)
+            if isinstance(exc, CheckoutMoved):
+                return 'moved'
             self._reload_error = f'{type(exc).__name__}: {exc}'[:300]
             self.publish_served()
-            return None
+            return 'failed'
         self.service = built[0]
-        return True
+        return 'committed'
 
     def _sessions(self):
         """Fresh Sessions bound to the service state root (SESSION-SPAWN-MCP)."""

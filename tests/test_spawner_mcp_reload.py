@@ -1,5 +1,6 @@
 """The spawner MCP serves new route code when the checkout head moves, without a process restart."""
 import asyncio
+import json
 import os
 import sys
 from unittest.mock import Mock
@@ -196,7 +197,9 @@ def test_the_report_never_signals_the_sessions_it_inspects(tmp_path, monkeypatch
         mcp_limits.publish_served(tmp_path, 'a' * 40, OLD)
         row = tmp_path / mcp_limits.SERVED_DIR / f'{os.getpid()}.json'
         other = tmp_path / mcp_limits.SERVED_DIR / f'{child.pid}.json'
-        other.write_text(row.read_text().replace(str(os.getpid()), str(child.pid)))
+        from plangraph.mcp_supervise.procutil import process_start_time
+        data = json.loads(row.read_text())
+        other.write_text(json.dumps({**data, 'pid': child.pid, 'start': process_start_time(child.pid)}))
         from plangraph.mcp_supervise import procutil
         asked = []
         real_alive = procutil.pid_alive
@@ -209,7 +212,7 @@ def test_the_report_never_signals_the_sessions_it_inspects(tmp_path, monkeypatch
         child.kill()
         child.wait()
     monkeypatch.undo()
-    assert [r['pid'] for r in mcp_limits.served_report(tmp_path, checkout='a' * 40, running=set())] == [os.getpid()]
+    assert [r['pid'] for r in mcp_limits.served_report(tmp_path, checkout='a' * 40, running={os.getpid()})] == [os.getpid()]
     assert not other.exists()                       # a dead session's file is removed
 
 
@@ -260,22 +263,73 @@ def test_the_served_sha_is_the_head_whose_source_was_loaded(tmp_path, monkeypatc
     assert server._served_head == 'c' * 40 and server._reload_error is None
 
 
-def test_a_checkout_that_never_settles_claims_no_sha(tmp_path, monkeypatch):
+def test_a_checkout_that_never_settles_installs_nothing_and_keeps_the_old_sha(tmp_path, monkeypatch):
     heads = {'n': 0}
-    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: f'{heads["n"]:040d}')
-    identity = Mock(side_effect=lambda: f'{heads["n"]:012d}')
-    heads['n'] = 1
-    identity.side_effect = None
-    identity.return_value = OLD
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'a' * 40)
+    identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    service, before = server.service, sys.modules[SENTINEL]
     real = mcp_limits._spawn_modules
 
     def read(root=None, entries=('plangraph.spawner.mcp',), sources=None):
         names = real(root, entries, sources)
         heads['n'] += 1
-        identity.return_value = f'{heads["n"]:012d}'
+        identity.return_value = f'{heads["n"]:012d}'   # the checkout moves after every read
         return names
     identity.return_value = NEW
     monkeypatch.setattr(mcp_limits, '_spawn_modules', read)
     server.refresh_route_code()
-    assert server._served_head == '' and 'changed during reload' in server._reload_error
+    assert heads['n'] == 3 and 'changed during reload' in server._reload_error
+    assert server.service is service and sys.modules[SENTINEL] is before and server._served_head == 'a' * 40
+    assert json.loads((tmp_path / mcp_limits.SERVED_DIR / f'{os.getpid()}.json').read_text())['served_sha'] == 'a' * 40
+
+
+def test_a_checkout_that_returns_to_the_served_head_installs_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp, 'checkout_head', lambda source=None: 'a' * 40)
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    service, before = server.service, sys.modules[SENTINEL]
+    real = mcp_limits._spawn_modules
+
+    def read(root=None, entries=('plangraph.spawner.mcp',), sources=None):
+        names = real(root, entries, sources)
+        identity.return_value = OLD                    # B was read, then the checkout went back to A
+        return names
+    identity.return_value = NEW
+    monkeypatch.setattr(mcp_limits, '_spawn_modules', read)
+    server.refresh_route_code()
+    assert server.service is service and sys.modules[SENTINEL] is before
+    assert server._reload_error is None and server._served_head == 'a' * 40
+
+
+def test_the_inventory_matches_the_server_invocation_only(monkeypatch):
+    listing = '\n'.join([
+        '10 python3 -m plangraph.spawner.mcp',
+        '11 grep plangraph.spawner.mcp',
+        '12 vim notes on plangraph.spawner.mcp',
+        '13 python3 -m plangraph.spawner.mcp --served-sha',
+        '14 /usr/bin/python3 -u -m plangraph.spawner.mcp',
+        '15 less /tmp/-m plangraph.spawner.mcp.log'])
+    monkeypatch.setattr(mcp_limits.subprocess, 'run', lambda *a, **k: Mock(stdout=listing))
+    assert mcp_limits.running_mcp_pids() == {10, 14}
+
+
+def test_a_registration_of_a_reused_pid_or_a_non_server_is_not_a_session(tmp_path):
+    import subprocess
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        directory = tmp_path / mcp_limits.SERVED_DIR
+        directory.mkdir()
+        stale = directory / f'{child.pid}.json'
+        stale.write_text(json.dumps({'pid': child.pid, 'start': 'another-process', 'served_sha': 'a' * 40,
+                                     'route_reload_error': None}))
+        assert mcp_limits.served_report(tmp_path, checkout='a' * 40, running=set()) == []
+        assert not stale.exists()                       # recycled pid: removed, never counted
+        from plangraph.mcp_supervise.procutil import process_start_time
+        stale.write_text(json.dumps({'pid': child.pid, 'start': process_start_time(child.pid),
+                                     'served_sha': 'a' * 40, 'route_reload_error': None}))
+        assert mcp_limits.served_report(tmp_path, checkout='a' * 40, running={7}) != []  # not in the inventory
+        assert [r for r in mcp_limits.served_report(tmp_path, checkout='a' * 40, running={7}) if r['registered']] == []
+    finally:
+        child.kill()
+        child.wait()
