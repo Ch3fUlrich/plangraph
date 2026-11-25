@@ -11,3 +11,4 @@ estimate_tokens = 100000
 [max_writers]
 coding = 3
 dell = 5
+workstation = 8
