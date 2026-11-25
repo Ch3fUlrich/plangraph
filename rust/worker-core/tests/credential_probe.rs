@@ -1,5 +1,8 @@
 //! The credential probe command against the real Codex sandbox, with fixture files only.
+// Every test of this file runs a shell fixture or the Linux sandbox: the imports follow them.
+#[cfg(unix)]
 use pg_worker_core::credential_isolation::{deny_read_paths, plangraph_config_dirs, probe};
+#[cfg(unix)]
 use std::{fs, path::Path};
 
 /// The fixture config directory opens as `denied` from inside the sandbox, the control as

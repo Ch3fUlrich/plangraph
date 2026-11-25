@@ -123,7 +123,9 @@ pub fn host_deny_read_paths() -> io::Result<Vec<PathBuf>> {
     Ok(deny_read_paths(&home, xdg.as_deref()))
 }
 
-fn toml_string(path: &Path) -> io::Result<String> {
+/// `path` as a TOML basic string: backslashes of a Windows path are escaped, so the rendered form
+/// differs from `Path::display`. Tests build their expected entries with this helper, not by hand.
+pub fn toml_string(path: &Path) -> io::Result<String> {
     let text = path
         .to_str()
         .ok_or_else(|| io::Error::other("sandbox path is not UTF-8"))?;
@@ -131,6 +133,16 @@ fn toml_string(path: &Path) -> io::Result<String> {
     serde_json::to_string(text)
         .map(|quoted| quoted.replace('\u{7f}', "\\u007f"))
         .map_err(io::Error::other)
+}
+
+/// The profile entry that grants write access to `path`.
+pub fn write_entry(path: &Path) -> io::Result<String> {
+    Ok(format!("{}=\"write\"", toml_string(path)?))
+}
+
+/// The profile entry that denies every access to `path`.
+pub fn deny_entry(path: &Path) -> io::Result<String> {
+    Ok(format!("{}=\"none\"", toml_string(path)?))
 }
 
 /// Codex `-c` arguments of the isolated profile: read everywhere except `deny`, write to the
@@ -145,10 +157,10 @@ pub fn profile_args(write_roots: &[PathBuf], deny: &[PathBuf]) -> io::Result<Vec
         "\"/tmp\"=\"write\"".to_owned(),
     ];
     for root in write_roots {
-        entries.push(format!("{}=\"write\"", toml_string(root)?));
+        entries.push(write_entry(root)?);
     }
     for path in deny {
-        entries.push(format!("{}=\"none\"", toml_string(path)?));
+        entries.push(deny_entry(path)?);
     }
     Ok([
         format!("default_permissions=\"{PROFILE}\""),
