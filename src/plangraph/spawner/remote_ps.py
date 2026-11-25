@@ -171,8 +171,10 @@ def query_host(host, timeout):
         command, plan = host_invocation(host, query=True)
     else:
         script = shlex.join(argv)
-        if state_env(host) and 'win_src' not in host:
-            script = f'{STATE_ENV}={shlex.quote(host["state_dir"])} {script}'
+        if state_env(host):
+            script = (f'set "{STATE_ENV}={host["state_dir"].replace("/", chr(92))}"&& {script}'
+                      if 'win_src' in host
+                      else f'{STATE_ENV}={shlex.quote(host["state_dir"])} {script}')
         command, plan = invocation(host, script, [{'argv': argv, 'env': state_env(host)}
                                                    if state_env(host) else {'argv': argv}])
     with subprocess.Popen(
@@ -315,35 +317,40 @@ def configured_hosts():
         entry = None if host.get('invalid') else _registry_entry(host, sources)
         if entry:
             keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro', 'state_dir')}
-            validated[index] = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
-                                          if k in entry}}
+            merged = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
+                                 if k in entry}}
+            # The effective entry is validated, whichever file its values came from.
+            validated[index] = merged if state_dir_ok(merged) else dict(name='invalid-config', invalid=True)
     return validated
 
 
-# Transports in flight (a caller is waiting on them) take a slot, at most MAX_WORKERS across every
-# caller. A transport whose caller gave up is "stuck": it keeps running (a thread cannot be
-# cancelled) but frees its slot, so it cannot starve healthy hosts; one per host, at most
-# STUCK_FACTOR * MAX_WORKERS in total, so a long-lived caller never piles up threads.
-STUCK_FACTOR = 4
+# A host has at most one transport at a time, and at most MAX_WORKERS transports are in flight
+# across every caller; a caller waits for either, up to its budget. A transport whose caller gave
+# up is "stuck": it keeps running (a thread cannot be cancelled) but frees its slot, so it cannot
+# starve other hosts; its host is not queried again until it ends, so threads never exceed the
+# number of configured hosts.
+GRACE = 1  # seconds beyond a host's budget before its caller stops waiting
 _SLOTS = threading.Condition()
-_state = dict(in_flight=0, stuck={})
+_state = dict(in_flight=0, hosts=set(), stuck={})
 
 
 def _claim(name, budget):
-    """Reserve a slot under the lock; False means refused (stuck host, stuck limit, no slot in time)."""
-    deadline = time.monotonic() + budget + 1
+    """Reserve the host and a slot together under the lock; False means refused."""
+    deadline = time.monotonic() + budget + GRACE
     with _SLOTS:
-        stuck = _state['stuck']
-        for key in [key for key, thread in stuck.items() if not thread.is_alive()]:
-            del stuck[key]
-        if name in stuck or len(stuck) >= STUCK_FACTOR * MAX_WORKERS:
-            return False
-        while _state['in_flight'] >= MAX_WORKERS:
+        while True:
+            stuck = _state['stuck']
+            for key in [key for key, thread in stuck.items() if not thread.is_alive()]:
+                del stuck[key]
+            if name in stuck:
+                return False
+            if name not in _state['hosts'] and _state['in_flight'] < MAX_WORKERS:
+                _state['hosts'].add(name)
+                _state['in_flight'] += 1
+                return True
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not _SLOTS.wait(remaining):
                 return False
-        _state['in_flight'] += 1
-        return True
 
 
 def _bounded(host, transport):
@@ -372,10 +379,11 @@ def _bounded(host, transport):
         raise TimeoutError('host query failed')
     try:
         thread.start()
-        thread.join(budget + 1)  # the transport's own deadline answers first when it holds
+        thread.join(budget + GRACE)  # the transport's own deadline answers first when it holds
     finally:
         with _SLOTS:
             _state['in_flight'] -= 1
+            _state['hosts'].discard(name)
             if thread.is_alive():
                 _state['stuck'][name] = thread
             _SLOTS.notify_all()
@@ -441,7 +449,7 @@ def list_runs(local, *, transport=query_host):
         futures = [pool.submit(_fetch, host, transport) for host in hosts]
         # One hung host must not hold the others: past the longest budget it is listed as failed.
         waves = -(-len(hosts) // pool._max_workers)
-        wait(futures, timeout=waves * (max(host_timeout(host) for host in hosts) + 1) + 1)
+        wait(futures, timeout=waves * (max(host_timeout(host) for host in hosts) + GRACE) + GRACE)
         rows = [row for host, future in zip(hosts, futures)
                 for row in (future.result() if future.done() else [dict(
                     host=host['name'], status='unknown', reason='host query failed',

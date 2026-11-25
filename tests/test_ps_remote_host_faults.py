@@ -364,3 +364,80 @@ def test_ps_query_finds_a_run_launched_into_a_nondefault_state_dir(tmp_path):
         return [row['run_id'] for row in json.loads(out.stdout)['runs']]
     assert ask(False) == []
     assert ask(True) == ['run-loop']
+
+
+def test_overlapping_polls_start_one_transport_per_host(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 2)
+    write(config, [dict(name='only', target='only', src='/s/src')])
+    lock, state = threading.Lock(), dict(now=0, most=0)
+
+    def transport(host, timeout):
+        with lock:
+            state['now'] += 1
+            state['most'] = max(state['most'], state['now'])
+        time.sleep(0.2)
+        with lock:
+            state['now'] -= 1
+        return json.dumps({'runs': [dict(run_id='r', host='x', status='running')]})
+    results = []
+    callers = [threading.Thread(target=lambda: results.append(
+        remote_ps.list_runs([], transport=transport))) for _ in range(3)]
+    for caller in callers:
+        caller.start()
+    for caller in callers:
+        caller.join(30)
+    assert state['most'] == 1
+    assert [[r['status'] for r in rows] for rows in results] == [['running']] * 3
+
+
+def test_many_blocked_hosts_never_stop_a_healthy_host_being_queried(config, monkeypatch):
+    monkeypatch.setattr(remote_ps, 'MAX_WORKERS', 1)
+    monkeypatch.setattr(remote_ps, 'TIMEOUT', 0.02)
+    monkeypatch.setattr(remote_ps, 'GRACE', 0.02)
+    hosts = [dict(name=f'bad{i}', target=f'bad{i}', src='/s/src') for i in range(8)]
+    write(config, [*hosts, dict(name='good', target='good', src='/s/src')])
+    release = threading.Event()
+    try:
+        rows = remote_ps.list_runs([], transport=lambda h, t: release.wait(30) if h['name'].startswith('bad')
+                                   else json.dumps({'runs': [dict(run_id='r', host='x', status='running')]}))
+    finally:
+        release.set()
+        for thread in alive_transports():
+            thread.join(5)
+    assert rows[-1]['host'] == 'good' and rows[-1]['status'] == 'running'
+
+
+def capture_ssh(monkeypatch):
+    sent = []
+
+    def popen(argv, **kwargs):
+        sent.append(argv)
+        raise RuntimeError('stop before connecting')
+    monkeypatch.setattr(remote_ps.subprocess, 'Popen', popen)
+    return sent
+
+
+@pytest.mark.parametrize('form', [dict(lifecycle_cursor=3), dict(coverage_day='2026-11-24')])
+def test_every_lifecycle_form_sends_the_state_dir_to_ssh(monkeypatch, form):
+    sent = capture_ssh(monkeypatch)
+    for host in (dict(name='p', target='p', src='/s/src', state_dir='/srv/state'),
+                 dict(name='w', target='w', win_src='C:/s/src', state_dir='C:/spawn/state'),
+                 dict(name='g', target='g', src='/s/src', state_dir='/srv/state', wsl_distro='Ubuntu')):
+        with pytest.raises(RuntimeError):
+            remote_ps.query_host(dict(host, **form), 5)
+    posix, windows, guest = (argv[-1] for argv in sent)
+    assert posix.startswith("PLANGRAPH_SPAWN_STATE=/srv/state pg-spawnd ")
+    assert windows.startswith('set "PLANGRAPH_SPAWN_STATE=C:\\spawn\\state"&& pg-spawnd ')
+    assert guest.startswith('wsl.exe ')
+
+
+def test_registry_overlay_state_dir_is_validated_like_the_configured_one(config):
+    base = {'caps': {'mem_floor_mb': 1}, 'transport': 'ssh', 'os': 'linux',
+            'repos': {'plangraph': {'root': '/srv/pg'}}}
+    write(config, [dict(name='dell', target='dell', src='/s/src')])
+    (config / 'hosts.json').write_text(json.dumps({'version': 1, 'self': 'controller', 'hosts': [
+        dict(base, id='dell', state_dir='relative/state')]}))
+    assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+    write(config, [dict(name='dell', target='dell', src='/s/src', state_dir='relative/state')])
+    (config / 'hosts.json').unlink()
+    assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
