@@ -12,13 +12,14 @@ pub(super) struct Cpu {
     pub psi: bool,
 }
 
-/// Only a missing `pressure/cpu` means "no PSI": a present file that is malformed or cannot
-/// be read still belongs to a PSI kernel, so load must not pace in its place.
+/// Only a missing `pressure/cpu` means "no PSI": a present file that is malformed, or that
+/// cannot be opened (permission denied, a non-directory parent), still belongs to a PSI
+/// kernel, so load must not pace in its place.
+fn psi_present<T>(opened: std::io::Result<T>) -> bool {
+    !matches!(opened, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
 fn has_psi(proc_root: &Path) -> bool {
-    !matches!(
-        std::fs::File::open(proc_root.join("pressure/cpu")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound
-    )
+    psi_present(std::fs::File::open(proc_root.join("pressure/cpu")))
 }
 
 pub(super) fn sample(
@@ -111,4 +112,24 @@ pub(super) fn apply(
         load_paced,
         limit,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn only_a_missing_pressure_file_means_no_psi() {
+        assert!(!psi_present::<()>(Err(ErrorKind::NotFound.into())));
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::InvalidData,
+            ErrorKind::NotADirectory,
+            ErrorKind::Other,
+        ] {
+            assert!(psi_present::<()>(Err(Error::from(kind))), "{kind:?}");
+        }
+        assert!(psi_present(Ok(())));
+    }
 }
