@@ -692,12 +692,12 @@ def _booked_store(tmp_path, leg):
     return store
 
 
-def _committing_runner(status, exit_code, stderr=''):
+def _committing_runner(status, exit_code):
     """A runner whose job commits ok.txt into the probe repo, then ends as given."""
     async def spawn(**kwargs):
         subprocess.run([sys.executable, '-c', COMMIT_OK], cwd=kwargs['cwd'], check=True,
                        env={**os.environ, **{k: v for k, v in kwargs['extra_env'].items() if v is not None}})
-        return SimpleNamespace(job_id='probe', status=status, exit_code=exit_code, stdout='', stderr=stderr,
+        return SimpleNamespace(job_id='probe', status=status, exit_code=exit_code, stdout='', stderr='',
                                events=[], command=['fake'])
 
     async def cancel(job_id):
@@ -705,48 +705,82 @@ def _committing_runner(status, exit_code, stderr=''):
     return SimpleNamespace(spawn=spawn, cancel=cancel, jobs={})
 
 
+def _child_runner(tmp_path, monkeypatch, script, *harnesses):
+    """A SpawnerRunner whose child runs ``script``; ``harnesses`` get a stub binary on PATH.
+
+    The stub binary stands in for the real CLI (not installed on the CI runners).
+    """
+    from plangraph.spawner.runner import SpawnerRunner
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    for harness in harnesses:
+        (binary / harness).write_text('#!/bin/sh\nexit 0\n')
+        (binary / harness).chmod(0o755)
+    monkeypatch.setenv('PATH', str(binary) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
+
+    async def factory(*args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', script, **kwargs)
+    return SpawnerRunner(process_factory=factory)
+
+
+def _writer_leg(leg_id):
+    from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
+    return next(l for l in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if l.id == leg_id)
+
+
 def test_failed_writer_probe_preserves_quota_booking(tmp_path, monkeypatch):
     """A commit from a nonzero exit is no pass: the booking stays and a 503 row is written."""
     from plangraph.spawner import leg_probe
-    from plangraph.spawner.runner import SpawnerRunner
 
     leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy', roles=('implement',), id='probe-leg')
     store = _booked_store(tmp_path, leg)
     before = len(_events(store))
-
-    async def factory(*args, **kwargs):
-        return await asyncio.create_subprocess_exec(sys.executable, '-c', COMMIT_OK + 'sys.exit(3)', **kwargs)
-
-    result = asyncio.run(leg_probe.probe(SpawnerRunner(process_factory=factory), leg, timeout_s=20, store=store))
+    # exit 3 is reached only after the commit succeeded (check=True), so git did not fail here
+    runner = _child_runner(tmp_path, monkeypatch, COMMIT_OK + 'sys.exit(3)')
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20, store=store))
     assert result['ok'] is False and result['infra'] is False, result
-    assert result['reason'].startswith('exit '), result
+    assert result['reason'].startswith('exit 3'), result
     assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
     assert _events(store, 'provider-probe') == []
-    assert [row for row in _events(store)[before:]] == [(503, 'liveness-probe')]
+    assert _events(store)[before:] == [(503, 'liveness-probe')]
 
 
 def test_zero_exit_refused_writer_probe_is_no_pass(tmp_path, monkeypatch):
-    """A job the runner marked failed with exit code 0 must not pass on its commit."""
+    """A Claude refusal the runner marks failed with exit code 0 must not pass on its commit."""
+    from plangraph.spawner import leg_probe
+
+    leg = _writer_leg('claude-sonnet-5-5-xhigh')
+    store = _booked_store(tmp_path, leg)
+    refusal = "print(json.dumps({'type': 'result', 'result': 'no', 'stop_reason': 'refusal'}))"
+    runner = _child_runner(tmp_path, monkeypatch, 'import json; ' + COMMIT_OK + refusal, 'claude')
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20, store=store))
+    assert result['ok'] is False and result['infra'] is False and result['reason'].startswith('failed'), result
+    assert any(j.status == 'failed' and j.exit_code == 0 for j in runner.jobs.values())
+    assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
+    assert _events(store, 'provider-probe') == []
+
+
+def test_completed_writer_probe_without_exit_code_is_no_pass(tmp_path):
     from plangraph.spawner import leg_probe
 
     leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy', roles=('implement',), id='probe-leg')
-    store = _booked_store(tmp_path, leg)
-    result = asyncio.run(leg_probe.probe(_committing_runner('failed', 0), leg, timeout_s=20, store=store))
-    assert result['ok'] is False and result['infra'] is False and result['reason'].startswith('failed'), result
-    assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(_committing_runner('completed', None), leg, timeout_s=20, store=store))
+    assert result['ok'] is False and result['infra'] is False, result
     assert _events(store, 'provider-probe') == []
 
 
 def test_committed_codex_probe_books_usage_limit(tmp_path, monkeypatch):
     """A failed Codex writer that already committed still books the account-wide limit."""
-    from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.spawner import leg_probe
     from plangraph.spawner.exit_outcome import quota_models
 
-    leg = next(l for l in DEFAULT_LEGS if l.harness == 'codex' and 'implement' in l.roles)
+    leg = _writer_leg('cx-gpt-6.2-sol-medium')
     store = LegStateStore(tmp_path / 'legs.sqlite')
-    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **kw: 'fake')
-    result = asyncio.run(leg_probe.probe(_committing_runner('failed', 1, LIMIT_REPLY), leg, timeout_s=20, store=store))
+    script = COMMIT_OK + f"sys.stderr.write({LIMIT_REPLY!r} + '\\n'); sys.exit(7)"
+    runner = _child_runner(tmp_path, monkeypatch, script, 'codex')
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20, store=store))
     assert result['ok'] is False and result['reason'] == 'limited', result
     for model in quota_models(leg_state.leg_key(leg), leg.harness):
         assert store.leg_status(model, harness='codex')['state'] == 'limited', model

@@ -312,7 +312,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                     # The commit alone is not a pass: the writer process must
                     # also have completed with exit code zero.
                     status, code = getattr(job, 'status', None), getattr(job, 'exit_code', None)
-                    ok = changed and 'ok.txt' in files and status == 'completed' and not code
+                    ok = changed and 'ok.txt' in files and status == 'completed' and code == 0
                     reason = ('' if ok else f'exit {code}' if code else
                               'no commit' if not (changed and 'ok.txt' in files) else str(status or 'failed'))
         # Tripwire (D-3465): the writer must never touch the caller's repo.
