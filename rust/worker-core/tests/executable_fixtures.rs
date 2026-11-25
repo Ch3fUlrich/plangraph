@@ -209,23 +209,26 @@ fn copies_a_file(line: &str) -> bool {
 /// The code of the statement that starts at the first line, up to its `;`, without line or block comments.
 fn statement(lines: &[&str]) -> String {
     let mut text = String::new();
-    let mut in_block = false;
+    let mut depth = 0usize; // Rust block comments nest
     for line in lines {
         let mut code = String::new();
         let mut rest: &str = line;
         loop {
-            if in_block {
-                match rest.find("*/") {
-                    Some(end) => {
-                        rest = &rest[end + 2..];
-                        in_block = false;
+            let (open, close) = (rest.find("/*"), rest.find("*/"));
+            if depth > 0 {
+                match (open, close) {
+                    (Some(o), c) if c.is_none_or(|c| o < c) => {
+                        depth += 1;
+                        rest = &rest[o + 2..];
                     }
-                    None => break,
+                    (_, Some(c)) => {
+                        depth -= 1;
+                        rest = &rest[c + 2..];
+                    }
+                    _ => break,
                 }
             } else {
-                let line_comment = rest.find("//");
-                let block = rest.find("/*");
-                match (line_comment, block) {
+                match (rest.find("//"), open) {
                     (Some(l), b) if b.is_none_or(|b| l < b) => {
                         code.push_str(&rest[..l]);
                         break;
@@ -233,7 +236,7 @@ fn statement(lines: &[&str]) -> String {
                     (_, Some(b)) => {
                         code.push_str(&rest[..b]);
                         rest = &rest[b + 2..];
-                        in_block = true;
+                        depth = 1;
                     }
                     _ => {
                         code.push_str(rest);
@@ -301,8 +304,11 @@ fn copy_is_not_an_executable(path: &str, statement: &str) -> bool {
         "pg-hook/tests/status_files.rs" => data(".gitignore"),
         "pg-keeper-backup/tests/units.rs" => data(".timer"),
         "pg-spawnd/tests/toolchain_pin.rs" => data("rust-toolchain.toml"),
-        // A run record JSON, named by where it lands: its source is a variable.
-        "pg-spawnd/src/cli_review_tests.rs" => copy_destination(statement).contains("record.json"),
+        // The one run-record copy: the source is the variable `record`, the destination is `record.json`.
+        "pg-spawnd/src/cli_review_tests.rs" => {
+            copy_source(statement).trim() == "record"
+                && copy_destination(statement).contains("mirror.join(\"record.json\")")
+        }
         // A Python module the hook runs through the interpreter.
         "pg-hook/tests/commit_message.rs" => data("ci_commit_gate.py"),
         // A hook file the test only compares byte for byte.
@@ -436,4 +442,41 @@ fn only_the_copied_source_can_name_a_data_file() {
         "std::fs::copy(root.join(\"tools\").join(\"ci_commit_gate.py\"), to).unwrap();",
     ]);
     assert!(copy_is_not_an_executable(path, &data));
+}
+
+#[test]
+fn a_nested_block_comment_hides_nothing_from_the_copied_source() {
+    let path = "pg-hook/tests/commit_message.rs";
+    let nested = statement(&[
+        "std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), /* outer /* inner */ ci_commit_gate.py */ hook).unwrap();",
+    ]);
+    assert!(
+        !copy_source(&nested).contains("ci_commit_gate.py"),
+        "{nested}"
+    );
+    let multi = statement(&[
+        "std::fs::copy(env!(\"CARGO_BIN_EXE_commit-msg\"), hook)",
+        "/* a /* b */ ci_commit_gate.py",
+        "*/ .unwrap();",
+    ]);
+    assert!(!copy_is_not_an_executable(path, &multi), "{multi}");
+    let tail = statement(&["std::fs::copy(a, b); /* /* */ */ let x = 1;"]);
+    assert_eq!(tail, "std::fs::copy(a, b);");
+}
+
+#[test]
+fn the_record_copy_exemption_names_its_source_and_destination() {
+    let path = "pg-spawnd/src/cli_review_tests.rs";
+    let record = statement(&["std::fs::copy(record, mirror.join(\"record.json\")).unwrap();"]);
+    assert!(copy_is_not_an_executable(path, &record));
+    for line in [
+        "std::fs::copy(env!(\"CARGO_BIN_EXE_tool\"), mirror.join(\"record.json\")).unwrap();",
+        "std::fs::copy(record, tool_dir.join(\"record.json\")).unwrap();",
+        "std::fs::copy(binary, mirror.join(\"record.json\")).unwrap();",
+    ] {
+        assert!(
+            !copy_is_not_an_executable(path, &statement(&[line])),
+            "{line}"
+        );
+    }
 }

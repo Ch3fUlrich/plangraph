@@ -426,3 +426,24 @@ def test_the_age_of_a_row_counts_from_the_named_merge_not_only_the_tagged_one(en
     monkeypatch.setattr(env.store.ctx["git"], "commit_time", lambda repo, sha: now - 48 * 3600)
     row = auto(env, require_seats=False, apply=False)["deployment_pending"][0]
     assert row["age_hours"] >= 47
+
+
+def test_a_landed_unit_keeps_its_row_while_another_lane_of_the_item_is_open(env):  # noqa: F811
+    env.conn.execute("UPDATE items SET note='Deploy-Hosts: host-a' WHERE key='demo:A'")
+    _land_with_unit(env.repo.root)
+    env.repo.land("a-more", "Plan-Item: demo:A", 0, merge=False)  # an unmerged lane of the same item
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    report = env.store.close_merged_auto(env.p("system"), require_seats=False, apply=False, frozen=True)
+    assert "unmerged_work_or_lanes_unknown" in report["listed"][0]["reason"]
+    assert report["deployment_pending"][0]["missing"] == ["host-a:new.service"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_an_unreadable_named_merge_time_makes_the_age_unknown(env, monkeypatch):  # noqa: F811
+    _land_with_unit(env.repo.root, tagged=True)  # a recent tagged merge
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=?, note='Deploy-Hosts: host-a' WHERE key='demo:A'",
+                     (f"Merge-Repo: demo {merge}",))
+    monkeypatch.setattr(env.store.ctx["git"], "commit_time", lambda repo, sha: None)
+    row = env.store.close_merged_auto(env.p("system"), require_seats=False, apply=False)["deployment_pending"][0]
+    assert row["age_hours"] is None and row["merged_at"] is None

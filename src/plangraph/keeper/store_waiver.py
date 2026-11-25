@@ -254,8 +254,12 @@ class WaiverMixin:
             return set()
         return {head} if merged and merged["pr"] == pr else set()
 
-    def _merged_work_commits(self, item):
-        """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
+    def _merged_work_commits(self, item, lanes=True):
+        """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown.
+
+        ``lanes=False`` skips that check: the deployment inventory reports what has landed whether or not
+        the close is allowed.
+        """
         git, project = self._adapter("git"), self._merge_project(item)
         warm = self._warm(project)
         if self.__dict__.get("_frozen_lanes") and not warm:   # the proof never refreshes a frozen scan
@@ -268,7 +272,7 @@ class WaiverMixin:
               if warm or self.__dict__.get("_frozen_lanes") else {})
         if head is not None:
             kw["head"] = head
-        if context_sources.open_lanes(git, project, item["key"], **kw) != []:
+        if lanes and context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         index = self.__dict__.get("_warmed", {}).get(project)
         if self.__dict__.get("_frozen_lanes") and index and head == index.get("target"):
@@ -650,6 +654,7 @@ class WaiverMixin:
         self._assert_unlocked(item)
         if any(proof.get("synthetic") for proof in proofs):
             raise Refused("evidence_unverified", "merged_on_default_missing")
+        self._merged_auto_proofs(pinned)  # the close, unlike the deployment row, waits for every open lane
         seated = tier != "none"
         if pending:
             if apply:
@@ -696,12 +701,13 @@ class WaiverMixin:
         return not any(row["kind"] == "deploy" and row["verified"] and row["epoch"] == item["epoch"]
                        and (as_epoch(row["at"]) or 0) >= cutoff for row in self._evidence(item["key"]))
 
-    def _merged_auto_proofs(self, item):
-        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
+    def _merged_auto_proofs(self, item, lanes=True):
+        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open
+        (unless ``lanes=False``, see :meth:`_merged_work_commits`)."""
         git, project = self._adapter("git"), self._merge_project(item)
         proofs = []
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
-        for commit in self._merged_work_commits(item):
+        for commit in self._merged_work_commits(item, lanes):
             pr, head, date = self._merged_commit_proof(git, project, commit)
             merge = commit.get("merge") or {}
             sha = merge.get("sha")

@@ -361,7 +361,7 @@ $$;
 CREATE FUNCTION pgk_deploy_proof_event(t TEXT, p TEXT) RETURNS boolean
 LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN
-    RETURN t = 'evidence_added' AND (p::jsonb ->> 'kind') = 'deploy';
+    RETURN COALESCE(t = 'evidence_added' AND COALESCE(p::jsonb ->> 'kind', '') = 'deploy', false);
 EXCEPTION WHEN others THEN
     RETURN false;
 END
@@ -373,7 +373,8 @@ CREATE TRIGGER trg_events_locked_insert BEFORE INSERT ON events
     EXECUTE FUNCTION pgk_reject('key is locked');
 DROP TRIGGER trg_evidence_locked_insert ON evidence;
 CREATE TRIGGER trg_evidence_locked_insert BEFORE INSERT ON evidence
-    FOR EACH ROW WHEN (pgk_locked(NEW.key) AND NOT (NEW.kind = 'deploy' AND NOT pgk_cancelled(NEW.key)))
+    FOR EACH ROW WHEN (pgk_locked(NEW.key)
+                       AND NOT COALESCE(NEW.kind = 'deploy' AND NOT pgk_cancelled(NEW.key), false))
     EXECUTE FUNCTION pgk_reject('key is locked');
 """
 

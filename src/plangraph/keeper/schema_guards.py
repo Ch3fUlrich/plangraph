@@ -162,12 +162,13 @@ _LOCKED = (
 
 # A unit that starts after its item closed is proved by one more ``deploy`` evidence row and its
 # ``evidence_added`` event: the only writes the lock lets through, and never for a cancelled item.
+# COALESCE: a missing or null kind is a plain "no", never an unknown that lets the write through.
 _DEPLOY_PROOF_EVENT = (
-    "NOT (NEW.type = 'evidence_added' AND json_extract(NEW.payload, '$.kind') = 'deploy'"
-    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'))")
+    "NOT COALESCE(NEW.type = 'evidence_added' AND COALESCE(json_extract(NEW.payload, '$.kind'), '') = 'deploy'"
+    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'), 0)")
 _DEPLOY_PROOF_ROW = (
-    "NOT (NEW.kind = 'deploy'"
-    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'))")
+    "NOT COALESCE(NEW.kind = 'deploy'"
+    " AND NOT EXISTS (SELECT 1 FROM items i WHERE i.key = NEW.key AND i.state = 'cancelled'), 0)")
 
 TRIGGERS = f"""
 -- Events are append-only, full stop.

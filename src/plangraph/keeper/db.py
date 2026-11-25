@@ -145,7 +145,7 @@ def _upgrade_lock_triggers(conn):
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'"
                        " AND name='trg_events_locked_insert'").fetchone()
     # A body without ``'evidence_added'`` also predates the deploy-proof door of a completed item.
-    if row is None or ("'answered'" in row[0] and "'evidence_added'" in row[0]):
+    if row is None or ("'answered'" in row[0] and "COALESCE(NEW.type = 'evidence_added'" in row[0]):
         return
     found = list(_LOCK_TRIGGER.finditer(TRIGGERS))
     script = "BEGIN IMMEDIATE;\n" + "".join(

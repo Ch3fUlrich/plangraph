@@ -243,6 +243,8 @@ fn the_command_refuses_a_report_at_the_edge_of_the_clock_range_with_exit_2() {
         ("min", json!(i64::MIN), NOW),
         ("late", json!(NOW), i64::MAX),
         ("early", json!(NOW), i64::MIN),
+        ("ahead_overflow", json!(i64::MAX), -1),
+        ("behind_overflow", json!(i64::MIN), 1),
     ] {
         let mut edited = report.clone();
         edited["generated_at"] = made;

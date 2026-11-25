@@ -204,12 +204,10 @@ pub fn validate_report(report: &Value, now: i64) -> Result<(), String> {
         .as_i64()
         .ok_or("report has no generated_at")?;
     // Checked arithmetic: a timestamp at the edge of the range is a refusal, never a panic.
+    // Both bounds hang on one subtraction: an overflow in either direction is not fresh.
     let fresh = now
         .checked_sub(made)
-        .is_some_and(|age| age <= MAX_REPORT_AGE_SECS)
-        && made
-            .checked_sub(now)
-            .is_none_or(|ahead| ahead <= MAX_CLOCK_SKEW_SECS);
+        .is_some_and(|age| (-MAX_CLOCK_SKEW_SECS..=MAX_REPORT_AGE_SECS).contains(&age));
     if !fresh {
         return Err(format!(
             "report was generated at {made}, not within an hour of {now}"

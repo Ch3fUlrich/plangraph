@@ -146,3 +146,40 @@ def test_lock_keeper_is_singleton(tmp_path):
         first.release()
     second = lock_keeper(path)
     second.release()
+
+
+# ----------------------------------------------- deploy proof is the one write a done key takes
+
+def _event(w, key, type_, payload):
+    w.store.conn.execute(
+        "INSERT INTO events(ts,actor,role,model,key,type,payload,prev_hash,hash)"
+        " VALUES('t','x','router',NULL,?,?,?,'','h')", (key, type_, payload))
+
+
+@pytest.mark.parametrize("type_,payload", [
+    ("evidence_added", "{}"),                            # no kind at all
+    ("evidence_added", '{"kind": null}'),                # a null kind is not deploy
+    ("evidence_added", '{"kind": "commit"}'),
+    ("evidence_added", "{\"kind\": 7}"),
+    ("item_defined", '{"kind": "deploy"}'),              # the kind alone is not enough
+])
+def test_a_done_key_refuses_every_event_that_is_not_deploy_proof(w, type_, payload):
+    key = locked_world(w, "done")
+    with pytest.raises(Exception):  # sqlite3.DatabaseError or the Postgres integrity error
+        _event(w, key, type_, payload)
+
+
+def test_a_cancelled_key_refuses_even_deploy_proof(w):
+    key = locked_world(w, "cancelled")
+    with pytest.raises(Exception):
+        _event(w, key, "evidence_added", '{"kind": "deploy"}')
+    with pytest.raises(Exception):
+        w.store.conn.execute(
+            "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at) VALUES(?,0,'deploy','{}',1,'','t')", (key,))
+
+
+def test_a_done_key_refuses_evidence_that_is_not_deploy(w):
+    key = locked_world(w, "done")
+    with pytest.raises(Exception):
+        w.store.conn.execute(
+            "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at) VALUES(?,0,'commit','{}',1,'','t')", (key,))

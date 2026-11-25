@@ -687,7 +687,8 @@ class ContextMixin:
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
         try:
-            proofs = self._merged_auto_proofs(pinned)
+            # What has landed is reported whether or not a lane is still open on the item.
+            proofs = self._merged_auto_proofs(pinned, lanes=False)
         except Refused as exc:
             if token[3] is None or exc.msg != "merged_on_default_missing":
                 raise
@@ -728,7 +729,8 @@ class ContextMixin:
     def _deployment_row(cls, missing, proofs, token, now):
         """How long the work has waited: counted from the earliest landing, the named merge included."""
         stamps = cls._landing_stamps(proofs, token)
-        earliest = None if None in stamps or not stamps else min(stamps)
+        # One landing with an unreadable time (``None`` or the scan's ``inf``) makes the age unknown.
+        earliest = None if not stamps or any(s is None or s == float("inf") for s in stamps) else min(stamps)
         return {"missing": missing, "merged_at": cls._landing_iso(earliest),
                 "age_hours": int(max(0, now - earliest) // 3600) if earliest is not None else None}
 
