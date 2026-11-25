@@ -17,7 +17,7 @@ from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 from .host_ready import harness_path
-from .env_redact import harness_limit_line
+from .env_redact import harness_limit_line, sandbox_denial
 from .exit_outcome import quota_models
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
@@ -271,11 +271,13 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             async def launch():
                 from .probe_cleanup import OWNED
                 OWNED.set(owned_ids)
+                # A Codex writer commits only where its sandbox may write the git dir (as pg-spawnd grants it).
                 return await runner.spawn(
                     prompt=REVIEW_PROMPT if review_mode else PROMPT,
                     role='review' if review_mode else 'implement',
                     model_or_combo=leg.model,
                     client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
+                    writable_dirs=[str(Path(root) / '.git')] if leg.harness == 'codex' and not review_mode else (),
                     watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                   max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
@@ -345,7 +347,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                                          getattr(diagnostic, 'refusal', None))
                 if quota:
                     quota = redact_output(redact_env_values(quota, env))
-            if not quota:
+            if not quota and not leaked and leg.harness == 'codex' and not review_mode and diagnostic is not None \
+                    and (sandbox_denial(stderr, getattr(diagnostic, 'stdout', ''))
+                         or any(e.get('event') == 'sandbox_denied' for e in getattr(diagnostic, 'events', None) or ())):
+                # The probe's sandbox blocked the writer (also when it then ran out of time): never a leg failure.
+                ok, reason, infra, excerpt = False, 'probe infra: sandbox denied a write', True, ''
+            elif not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
             caller = 'review-probe' if review_mode else 'leg-probe'

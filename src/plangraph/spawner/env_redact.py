@@ -412,6 +412,23 @@ def opencode_limit(text):
     return None
 
 
+# Concrete write-denial messages only: the errno text ending a diagnostic line ("...: Read-only file system"),
+# Python's "[Errno 30]" and Rust's "(os error 30)". Prose that merely mentions a read-only sandbox is not evidence.
+SANDBOX_DENIAL = re.compile(
+    r'[\w\'"\]]:[ \t]+Read-only file system[ \t]*$|\[Errno 30\] Read-only file system|Read-only file system \(os error 30\)',
+    re.M)
+
+
+def _lines(text):
+    text = text.decode('utf-8', 'replace') if isinstance(text, bytes) else text or ''
+    return text.replace('\r\n', '\n').replace('\r', '\n')
+
+
+def sandbox_denial(*texts):
+    """True when a harness's own output reports its sandbox denied a write."""
+    return any(SANDBOX_DENIAL.search(_lines(text)) for text in texts)
+
+
 def harness_limit_line(exit_code, stdout, stderr):
     structured = opencode_limit(stderr) or opencode_limit(stdout)
     if structured:

@@ -212,7 +212,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None, reasoning_cap=False, chosen=None,
-        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial', allow_shas=None,  # REMOVE-AT-R10
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial', allow_shas=None, writable_dirs=(),  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -291,7 +291,7 @@ class SpawnerRunner:
             gateway=gateway,
             gateway_online=gateway_online,
             headers=envelope_headers,
-            client=client,
+            client=client, writable_dirs=writable_dirs,
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)

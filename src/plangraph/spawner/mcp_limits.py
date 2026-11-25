@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import uuid
 
 from plangraph.routing_errors import ParameterRefused, SpawnRefused
@@ -78,21 +79,26 @@ def _fingerprint(root):
     return digest.hexdigest()
 
 
-def current_source_identity(source=None):
-    """Identify the ``plangraph`` package tree real runs import: Git HEAD (when
-    available, ignoring cwd and inherited GIT_*) combined with a file fingerprint."""
+def checkout_head(source=None):
+    """Git HEAD of the checkout holding the ``plangraph`` tree ('' when unavailable); ignores cwd and GIT_*."""
     source = Path(source) if source is not None else Path(__file__).resolve().parents[1]
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    head = ''
     try:
         out = subprocess.run(['git', '-C', str(source), 'rev-parse', '--verify', 'HEAD'],
                              env=env, capture_output=True, text=True, encoding='utf-8',
                              errors='replace', check=True, timeout=2).stdout.strip()
         if re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', out):
-            head = out
+            return out
     except (OSError, subprocess.SubprocessError):
         pass
-    return hashlib.sha256((head + _fingerprint(source)).encode()).hexdigest()[:12]
+    return ''
+
+
+def current_source_identity(source=None):
+    """Identify the ``plangraph`` package tree real runs import: Git HEAD (when
+    available, ignoring cwd and inherited GIT_*) combined with a file fingerprint."""
+    source = Path(source) if source is not None else Path(__file__).resolve().parents[1]
+    return hashlib.sha256((checkout_head(source) + _fingerprint(source)).encode()).hexdigest()[:12]
 
 
 def _spawn_modules(root=None, entries=('plangraph.spawner.mcp',), sources=None):
@@ -155,6 +161,174 @@ class _FrozenSpawnImports:
 
 
 sys.meta_path.insert(0, _FrozenSpawnImports())
+
+
+#: Modules a reload keeps: the packages, this server and the shared error classes (identity of caught exceptions).
+RELOAD_KEEP = frozenset(('plangraph', 'plangraph.spawner', 'plangraph.spawner.mcp',
+                         'plangraph.spawner.mcp_limits', 'plangraph.routing_errors'))
+
+
+def _rebind(namespace, purged):
+    """Point every name in ``namespace`` that was bound to a purged module (or one of its top-level
+    classes and functions) at the freshly imported one."""
+    for key, value in list(namespace.items()):
+        if isinstance(value, type(sys)) and value.__name__ in purged:
+            namespace[key] = importlib.import_module(value.__name__)
+        elif getattr(value, '__module__', None) in purged and getattr(value, '__qualname__', None) == getattr(value, '__name__', 0):
+            fresh = getattr(importlib.import_module(value.__module__), value.__name__, None)
+            if fresh is not None:
+                namespace[key] = fresh
+
+
+def reload_spawn_sources(namespace, root=None, commit=None):
+    """Re-read the spawn import closure from disk and import it fresh, without a process restart.
+
+    Sources are read and parsed before any module is dropped. ``commit`` runs after the fresh import
+    and rebinding, still inside the transaction: if it or the import fails, the previous modules,
+    package bindings and snapshot are restored and the error propagates. Returns the reloaded names."""
+    global SPAWN_MODULES
+    fresh = {}
+    modules = _spawn_modules(root=root, sources=fresh)
+    purged = {name for name in set(modules) | set(SPAWN_MODULES) if name not in RELOAD_KEEP}
+    saved_modules = {name: sys.modules[name] for name in purged if name in sys.modules}
+    # A package keeps an attribute per imported submodule: rollback must put those back too.
+    missing = object()
+    saved_bindings = {name: getattr(sys.modules.get(name.rpartition('.')[0]), name.rpartition('.')[2], missing)
+                      for name in purged if '.' in name}
+    saved_sources, saved_names, saved_namespace = dict(_SPAWN_SOURCES), SPAWN_MODULES, dict(namespace)
+    _SPAWN_SOURCES.clear()
+    _SPAWN_SOURCES.update(fresh)
+    SPAWN_MODULES = modules
+    try:
+        for name in saved_modules:
+            del sys.modules[name]
+        for name in purged:  # `from package import module` consults the package attribute before sys.modules
+            parent = sys.modules.get(name.rpartition('.')[0])
+            if parent is not None and '.' in name:
+                parent.__dict__.pop(name.rpartition('.')[2], None)
+        for name in sorted(purged):
+            if name in _SPAWN_SOURCES and name in saved_modules:
+                importlib.import_module(name)
+        _rebind(namespace, purged)
+        if commit is not None:
+            commit()
+    except BaseException:
+        for name in purged:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
+        for name, bound in saved_bindings.items():
+            parent = sys.modules.get(name.rpartition('.')[0])
+            if parent is None:
+                continue
+            if bound is missing:
+                parent.__dict__.pop(name.rpartition('.')[2], None)
+            else:
+                setattr(parent, name.rpartition('.')[2], bound)
+        _SPAWN_SOURCES.clear()
+        _SPAWN_SOURCES.update(saved_sources)
+        SPAWN_MODULES = saved_names
+        namespace.update(saved_namespace)
+        raise
+    return tuple(sorted(purged))
+
+
+SERVED_DIR = 'mcp-sessions'
+
+
+def publish_served(state, served_sha, identity, error=None):
+    """Record the code this MCP process serves, one file per process, for the per-session deploy report."""
+    directory = Path(state) / SERVED_DIR
+    from plangraph.mcp_supervise.procutil import process_start_time
+    row = {'pid': os.getpid(), 'start': process_start_time(os.getpid()), 'served_sha': served_sha,
+           'identity': identity, 'route_reload_error': error, 'updated': time.time()}
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        tmp = directory / f'.{os.getpid()}.tmp'
+        tmp.write_text(json.dumps(row), encoding='utf-8')
+        os.replace(tmp, directory / f'{os.getpid()}.json')
+    except OSError:
+        pass
+
+
+_VALUE_OPTIONS = ('-W', '-X', '--check-hash-based-pycs')
+
+
+def _is_mcp_server(argv):
+    """True for `<python> [interpreter options] -m plangraph.spawner.mcp` with nothing after the module.
+
+    Python's own parsing rules: `-c CODE`, `-` (script on stdin) and a script path end the interpreter options, so a later
+    `-m plangraph.spawner.mcp` is an argument of that program, not the module being run."""
+    if not argv or not re.fullmatch(r'python[\d.]*(?:\.exe)?', re.split(r'[\\/]', argv[0])[-1], re.I):
+        return False
+    i = 1
+    while i < len(argv):
+        option = argv[i]
+        if option == '-m':
+            return argv[i + 1:] == ['plangraph.spawner.mcp']
+        if option in ('-c', '-') or not option.startswith('-'):   # code, stdin script or script path
+            return False
+        i += 2 if option in _VALUE_OPTIONS else 1
+    return False
+
+
+def _split_command(text, windows):
+    """Command-line tokens; on Windows a double-quoted path with spaces is one token."""
+    if windows:
+        return [quoted or bare for quoted, bare in re.findall(r'"([^"]*)"|(\S+)', text)]
+    return text.split()
+
+
+def running_mcp_pids(platform=None):
+    """pids of live ``python -m plangraph.spawner.mcp`` servers, registered or not; None when unavailable."""
+    platform = platform or sys.platform
+    try:
+        if platform == 'win32':
+            out = subprocess.run(['powershell', '-NoProfile', '-Command',
+                                  'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'],
+                                 capture_output=True, text=True, timeout=20, check=True).stdout
+        else:
+            out = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=20,
+                                 check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids = set()
+    for line in out.splitlines():
+        pid, _, args = line.strip().partition(' ')
+        if pid.isdigit() and _is_mcp_server(_split_command(args, platform == 'win32')):
+            pids.add(int(pid))
+    return pids - {os.getpid()}
+
+
+def served_report(state, checkout=None, running=None):
+    """Every live MCP server with the sha it serves and whether that is the checkout head.
+
+    Registered rows come from the per-process files (a file is removed only when its process is dead or its pid was
+    reused; a live server that started after the census stays listed; liveness never signals). Servers found running but unregistered (started before the code that registers)
+    are listed with ``served_sha`` None and ``current`` False: their code cannot be verified.
+    ``running`` defaults to the process inventory; None means the inventory is unavailable."""
+    from plangraph.mcp_supervise.procutil import pid_matches
+    checkout = checkout_head() if checkout is None else checkout
+    running = running_mcp_pids() if running is None else running
+    rows, seen = [], set()
+    for path in sorted((Path(state) / SERVED_DIR).glob('*.json')):
+        try:
+            row = json.loads(path.read_text(encoding='utf-8'))
+            # Bound to the process start time: a reused pid is another process, not this session.
+            alive = pid_matches(row['pid'], row.get('start'))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not alive:
+            path.unlink(missing_ok=True)
+            continue
+        seen.add(row['pid'])
+        rows.append({**row, 'registered': True, 'checkout_sha': checkout,
+                     'current': bool(checkout) and row.get('served_sha') == checkout})
+    for pid in sorted((running or set()) - seen):
+        rows.append({'pid': pid, 'served_sha': None, 'registered': False, 'route_reload_error': None,
+                     'checkout_sha': checkout, 'current': False})
+    return rows
+
+
 GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_agent_probe',
                  'plangraph_session_launch', 'plangraph_session_relaunch')
 
