@@ -70,6 +70,12 @@ Use grep for text that is not a symbol.
    A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
+   When the Run values carry a `PUSH:` line, after every item commit run the one stamp
+   command (`plangraph fast-checks --owned-worktree`), then run the PUSH command exactly as
+   printed: one atomic push of `lane/<NAME>` and its designated receipt ref (one parentless receipt commit), no pull request.
+   For a `lane/*` ref the pre-push hook runs the public scrub, the commit gate and the receipt
+   gate only (seconds, no test, no worktree); it refuses a head whose green receipt is not in
+   the same push, with no bypass. Without a `PUSH:` line the orchestrator or the host pushes.
 6. An item that still fails after two attempts: before any commit of it, discard its
    edits (`git restore` and remove its new files), write `SKIPPED <key> <reason>`, take
    the next item. Skip a later item that needs the skipped one. One failing item never
@@ -78,7 +84,11 @@ Use grep for text that is not a symbol.
 ## When all items are committed
 
 7. Run FAST_CHECKS on WORKTREE (affected tests and lints; it writes the stamp for this
-   exact head). Fix, commit and rerun until green.
+   exact head: `plangraph fast-checks --owned-worktree --base BASE`, one command). Read its
+   exit code and the stamp (`head`, `result`, one `check` line each), never the tail of a
+   log: `affected_tests.py --run` ends with `AFFECTED rc=<n> batches=<k> failed=<m>`.
+   Fix, commit and rerun until green. A head without a green stamp is neither pushed nor
+   reviewed.
 8. Write the review prompt file: the item keys with their Done-when lines, the skipped
    items with their reasons, the range BASE..HEAD. From round 2 on add the previously
    reviewed head and every earlier finding with what you did: `fixed in <sha>` or
@@ -101,14 +111,15 @@ Use grep for text that is not a symbol.
 
 ## Never
 
-- Never push, open a pull request, merge, rebase, switch branches, `git reset` a commit
+- Never push (except the lane push of step 5), open a pull request, merge, rebase, switch branches, `git reset` a commit
   away or touch another worktree. After your ACCEPT the orchestrator pushes your head
   once, opens the draft pull request and merges it with the other batches into one batch
   branch; the full test suite runs once there. A push per round wastes a CI run.
 - Never change git config and never bypass a hook (`--no-verify`, `core.hooksPath`).
   Never work around a refusal of a tool, hook or guard: quote it verbatim in STATUS_FILE.
-- Never run `git push --dry-run` or the push gate yourself: the gate runs once, at the real
-  push of your final head; a gate hit comes back to you as its own short round.
+- Never run `git push --dry-run` or the push gate yourself: the pre-push hook runs on every
+  real push (the lane pushes of step 5 and the final head); a gate hit comes back to you as
+  its own short round.
 - Never weaken or delete a test to make it pass. Never run the full test suite. Never
   commit STATUS_FILE. Never put a hostname, key, real user path or private project name
   into the repository.
@@ -122,8 +133,9 @@ Use grep for text that is not a symbol.
   echo rc=$?`, and you wait for the harness notification. A command that hits its limit is
   ended: write `LESSON <command> hit its limit` and go on with a narrower one.
 - Never run a test selection again that already passed, unless the code under it changed.
-  The one exception is FAST_CHECKS in step 7: it runs on the committed head and writes the
-  stamp for that exact head, also when a pre-commit run chose the same tests.
+  The exceptions are the stamp command of step 5 and FAST_CHECKS in step 7: each runs on the
+  committed head and writes the stamp for that exact head, also when a pre-commit run chose
+  the same tests.
 
 ## Fix round
 

@@ -253,6 +253,25 @@ def test_review_levels():
         assert (r.review_level, r.review_seats, r.cross_family) == ("risky", 2, True)
 
 
+def test_route_card_applies_rule_33_floor():
+    from plangraph.planner.jev_questions import rule_answers
+    from plangraph.planner.legs import LOW_RISK_ONLY_LEGS
+    keeper = card(write_set=["src/plangraph/keeper/api_routes.py"], has_tests=True)
+    r = route_card(keeper)  # untagged, risk omitted: the placed path alone sets two seats
+    assert (r.review_level, r.review_seats) == ("risky", 2)
+    assert rule_answers(r)["review"] == "risky"
+    plain = card(write_set=["src/plangraph/planner/cards.py"], has_tests=True)
+    assert (route_card(plain).review_level, route_card(plain).review_seats) == ("standard", 1)
+    for role in ("implement", "review"):
+        low = route_card(dict(plain, risk="low"), role=role)
+        assert LOW_RISK_ONLY_LEGS & set(ids(low)), role  # a declared low card keeps them
+        placed = route_card(dict(keeper, risk="low"), role=role)
+        assert not LOW_RISK_ONLY_LEGS & set(ids(placed)), role
+        assert placed.review_seats == 2
+        assert not LOW_RISK_ONLY_LEGS & set(ids(route_card(keeper, role=role)))
+    assert not LOW_RISK_ONLY_LEGS & set(ids(route_card(plain, role="implement")))  # omitted: normal
+
+
 def test_tier_order_beats_list_order_in_custom_legs():
     paid_first = (dataclasses.replace(DEFAULT_LEGS[-2]),) + DEFAULT_LEGS[:2]  # D-3605 Haiku leg
     r = route_card(card(), legs=paid_first)

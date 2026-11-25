@@ -1,0 +1,1 @@
+- The keeper takes deploy evidence on an open item whose Plan-Item trailer commit is already on the default branch, from an l1 or worker scoped to the project, and audits the commit in the `evidence_added` event; no `claim --force-stale` is needed to close such an item. Deploy: restart the keeper service after the merge so the new door is served.

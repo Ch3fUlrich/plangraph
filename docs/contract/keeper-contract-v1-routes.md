@@ -169,10 +169,17 @@ Claimant or router. `{key, epoch}`. `200 {key}` [KeyOnly]; the item is `open`.
 ### `POST /v1/add_evidence`
 Claimant, delegate or writer run token. `{key, epoch, kind, ref}` (`kind`
 `commit` is `403`). `200 {key, kind, verified, detail, ref}` [Evidence]; an
-unverified row is still `200`. `400 bad_state` unless `claimed`.
+unverified row is still `200`. `400 bad_state` unless `claimed`, except kind
+`deploy` on an `open` item whose Plan-Item commit trailer is on the default branch (of
+any scanned repository; a decision-only delivery or a merge-body mention does not count):
+an l1 or worker scoped to the project may attach it without a claim; `403` for any other
+principal or a run token; the event carries `merged_open`. The router endpoint and the
+granted batch path keep their own rules and need no trailer.
 
 ### `POST /v1/add_evidence_router`
-Router. `{key, kind, ref}`; item must be `claimed` or `in_review`. [Evidence].
+Router. `{key, kind, ref}`; item must be `claimed` or `in_review`, except kind `deploy`, which
+an `open` item also takes with no Plan-Item trailer check and no `merged_open` audit field. The
+granted batch op `add_evidence` runs the same code and has the same exception. [Evidence].
 
 ### `POST /v1/submit`
 Claimant, delegate or writer run token. `{key, epoch[, source_round]}`. A writer
