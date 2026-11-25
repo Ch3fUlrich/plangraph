@@ -14,6 +14,8 @@ pub mod round_cli;
 #[cfg(test)]
 mod round_cli_tests;
 mod round_host;
+#[cfg(test)]
+mod round_host_tests;
 pub mod round_native;
 #[cfg(test)]
 mod round_native_tests;

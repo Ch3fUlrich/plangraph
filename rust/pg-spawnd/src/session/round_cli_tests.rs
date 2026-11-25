@@ -1,6 +1,6 @@
 use super::{
     round_cli::{run, transcript_path},
-    round_host::{signal_member, LocalHost, Member},
+    round_host::LocalHost,
     round_store,
     round_time_tests::{Transcript, MIN, T0},
     round_watch::{blocked_outcome, state_file, Host},
@@ -27,17 +27,17 @@ fn one_round() -> Transcript {
     t
 }
 
-struct World {
-    _dir: tempfile::TempDir,
-    state: std::path::PathBuf,
-    routing: std::path::PathBuf,
-    home: std::path::PathBuf,
+pub(super) struct World {
+    pub(super) _dir: tempfile::TempDir,
+    pub(super) state: std::path::PathBuf,
+    pub(super) routing: std::path::PathBuf,
+    pub(super) home: std::path::PathBuf,
     /// The epoch millisecond that the relative times of its transcripts and passes count from.
-    origin: i64,
+    pub(super) origin: i64,
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let world = Self {
@@ -52,11 +52,11 @@ impl World {
     }
 
     /// A launched session: its per-session snapshot and, unless `mirror`, its transcript.
-    fn session(&self, name: &str, id: &str, cwd: &str, transcript: Option<&Transcript>) {
+    pub(super) fn session(&self, name: &str, id: &str, cwd: &str, transcript: Option<&Transcript>) {
         self.session_as("writer", name, id, cwd, transcript);
     }
 
-    fn session_as(
+    pub(super) fn session_as(
         &self,
         role: &str,
         name: &str,
@@ -79,14 +79,14 @@ impl World {
     }
 
     /// A world whose times are real: processes started now must fall into launch windows.
-    fn live() -> Self {
+    pub(super) fn live() -> Self {
         Self {
             origin: chrono::Utc::now().timestamp_millis(),
             ..Self::new()
         }
     }
 
-    fn run(&self, at: i64) -> Vec<Value> {
+    pub(super) fn run(&self, at: i64) -> Vec<Value> {
         run(
             &self.state,
             &self.routing,
@@ -97,7 +97,7 @@ impl World {
         )
     }
 
-    fn rows(&self) -> Vec<Value> {
+    pub(super) fn rows(&self) -> Vec<Value> {
         round_store::read(&self.state.join("round-telemetry/rows.jsonl"))
     }
 }
@@ -182,7 +182,12 @@ fn digest_gives_the_median_and_the_shares_per_host_with_between_rounds() {
 
 /// A command shell as the harness starts it: its own process group, the session id in
 /// its environment, and its output going to `.../tasks/<task id>.output`.
-fn command_shell(root: &Path, session_id: &str, task: &str, command: &str) -> std::process::Child {
+pub(super) fn command_shell(
+    root: &Path,
+    session_id: &str,
+    task: &str,
+    command: &str,
+) -> std::process::Child {
     use std::os::unix::process::CommandExt;
     let tasks = root.join("tasks");
     fs::create_dir_all(&tasks).unwrap();
@@ -440,313 +445,4 @@ fn a_native_run_record_books_one_row_from_its_stage_intervals() {
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
-}
-
-fn claude_stub(root: &Path, name: &str, stop_rc: i32, agents_json: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let stub = root.join(name);
-    let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = stop ]; then exit {stop_rc}; fi\ncat <<'EOF'\n{agents_json}\nEOF\n"
-    );
-    fs::write(&stub, script).unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-    stub
-}
-
-#[test]
-fn claude_stop_exit_zero_is_not_a_stopped_session_while_agents_still_lists_it_live() {
-    let dir = tempfile::tempdir().unwrap();
-    let sid = "11111111-2222-3333-4444-555555555555";
-    let end = |stub: std::path::PathBuf| {
-        let mut host = LocalHost::new(dir.path().to_path_buf(), sid.into());
-        host.claude_bin = Some(stub);
-        host.end_session("writer-1")
-    };
-    let live = format!(r#"[{{"sessionId":"{sid}","state":"working"}}]"#);
-    let done = format!(r#"[{{"sessionId":"{sid}","state":"done"}}]"#);
-    let other = r#"[{"sessionId":"other","state":"working"}]"#;
-    assert!(
-        !end(claude_stub(dir.path(), "live", 0, &live)),
-        "exit zero, still live"
-    );
-    assert!(end(claude_stub(dir.path(), "done", 0, &done)));
-    assert!(
-        end(claude_stub(dir.path(), "gone", 0, other)),
-        "an unlisted session is gone"
-    );
-    assert!(
-        end(claude_stub(dir.path(), "empty", 0, "")),
-        "an empty listing lists nobody"
-    );
-    assert!(
-        !end(claude_stub(dir.path(), "failed", 1, &done)),
-        "stop itself failed"
-    );
-    assert!(
-        !end(claude_stub(dir.path(), "junk", 0, "not json")),
-        "an unreadable poll is unconfirmed"
-    );
-}
-
-static RACING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-
-/// The member exits just before the signal arrives: the kernel refuses the signal.
-fn racing_signal(member: &Member, _signal: i32) -> bool {
-    RACING.store(member.pid, std::sync::atomic::Ordering::SeqCst);
-    // SAFETY: kill takes numeric identifiers and dereferences nothing.
-    unsafe { libc::kill(member.pid as i32, libc::SIGKILL) };
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    false
-}
-
-#[test]
-fn a_member_that_exits_before_the_signal_is_no_stop_of_ours() {
-    let world = World::live();
-    let id = "sess-race-0001";
-    let root = world.state.parent().unwrap().to_path_buf();
-    let mut shell = command_shell(&root, id, "bgR", "sleep 308");
-    let path = root.join("tasks/bgR.output");
-    let task = super::round_wait::TaskRef {
-        id: "bgR".into(),
-        output_path: Some(path.display().to_string()),
-        launched_from_ms: world.origin,
-        launched_to_ms: world.origin + 5_000,
-    };
-    let mut host = LocalHost::new(world.state.clone(), id.into());
-    host.send_signal = racing_signal;
-    let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    assert_eq!(host.signal(&owner, &task), super::round_watch::Sent::Gone);
-    assert!(shell.wait().is_ok());
-    assert_ne!(
-        RACING.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "a signal was attempted"
-    );
-}
-
-#[test]
-fn a_telemetry_only_pass_books_rows_and_touches_nothing_else() {
-    let world = World::new();
-    let mut t = Transcript::new();
-    t.prompt(0, "p1");
-    t.request(1_000);
-    t.tool(
-        2_000,
-        "u1",
-        "Bash",
-        json!({"command":"cargo test","run_in_background":true}),
-    );
-    t.result(2_500, "u1", Some("bg1"));
-    t.request(3_000);
-    t.tool(
-        4_000,
-        "w1",
-        "TaskOutput",
-        json!({"task_id": "bg1", "block": true}),
-    );
-    world.session("writer-1", "abc", "/w/telemetry", Some(&t));
-    let log = run(
-        &world.state,
-        &world.routing,
-        &world.home,
-        "ws",
-        T0 + 60 * MIN,
-        false,
-    );
-    assert!(log.is_empty(), "no stop, no notice: {log:?}");
-    assert_eq!(world.rows().len(), 1);
-    assert!(!world.state.join("round-watch").exists());
-    assert!(!world.state.join("watchdog").exists());
-}
-
-fn spawn_leader(task_dir: &Path) -> std::process::Child {
-    let mut shell = command_shell(task_dir, "sess-id-0001", "bgI", "sleep 309");
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let _ = &mut shell;
-    shell
-}
-
-fn member_of(pid: u32) -> Member {
-    let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let (_, group, start_time) = pg_worker_core::run::group_unix::parse_stat(&text).unwrap();
-    Member {
-        pid,
-        start_time,
-        group,
-    }
-}
-
-#[test]
-fn a_signal_goes_only_to_the_member_that_was_seen() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut shell = spawn_leader(dir.path());
-    let seen = member_of(shell.id());
-    // Another start time, or another group: a reused pid or a process that left the group.
-    assert!(!signal_member(
-        &Member {
-            start_time: seen.start_time + 1,
-            ..seen.clone()
-        },
-        libc::SIGTERM
-    ));
-    assert!(!signal_member(
-        &Member {
-            group: seen.group + 1,
-            ..seen.clone()
-        },
-        libc::SIGTERM
-    ));
-    assert!(!signal_member(
-        &Member {
-            pid: 0,
-            ..seen.clone()
-        },
-        libc::SIGTERM
-    ));
-    assert!(
-        shell.try_wait().unwrap().is_none(),
-        "none of those signals reached the process"
-    );
-    assert!(
-        signal_member(&seen, libc::SIGTERM),
-        "the member that was seen is signalled"
-    );
-    assert!(shell.wait().is_ok());
-}
-
-fn refusing_signal(_member: &Member, _signal: i32) -> bool {
-    false
-}
-
-#[test]
-fn when_no_signal_is_accepted_the_stop_is_unsignalled_and_nothing_died() {
-    let world = World::live();
-    let root = world.state.parent().unwrap().to_path_buf();
-    let mut shell = command_shell(&root, "sess-uns-0001", "bgU", "sleep 310");
-    let task = super::round_wait::TaskRef {
-        id: "bgU".into(),
-        output_path: Some(root.join("tasks/bgU.output").display().to_string()),
-        launched_from_ms: world.origin,
-        launched_to_ms: world.origin + 5_000,
-    };
-    let mut host = LocalHost::new(world.state.clone(), "sess-uns-0001".into());
-    host.send_signal = refusing_signal;
-    let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    assert_eq!(
-        host.signal(&owner, &task),
-        super::round_watch::Sent::Refused
-    );
-    assert_eq!(
-        host.signal(&owner, &task),
-        super::round_watch::Sent::Refused
-    );
-    assert!(!host.group_gone(&owner, &task));
-    assert!(shell.try_wait().unwrap().is_none());
-    shell.kill().unwrap();
-    let _ = shell.wait();
-}
-
-#[test]
-fn the_owners_output_carries_one_stop_line_per_action() {
-    let world = World::live();
-    let root = world.state.parent().unwrap().to_path_buf();
-    let mut shell = command_shell(&root, "sess-mark-0001", "bgM", "sleep 311");
-    let task = super::round_wait::TaskRef {
-        id: "bgM".into(),
-        output_path: Some(root.join("tasks/bgM.output").display().to_string()),
-        launched_from_ms: world.origin,
-        launched_to_ms: world.origin + 5_000,
-    };
-    let host = LocalHost::new(world.state.clone(), "sess-mark-0001".into());
-    let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    assert!(
-        owner.output.is_some(),
-        "the output inode is part of the owner"
-    );
-    assert!(host.mark_stop(&owner, &task, "r|bgM|w1"));
-    assert!(host.mark_stop(&owner, &task, "r|bgM|w2"));
-    let text = fs::read_to_string(root.join("tasks/bgM.output")).unwrap();
-    assert_eq!(
-        text.matches("[round-watch] ending this command").count(),
-        2,
-        "{text}"
-    );
-    shell.kill().unwrap();
-    let _ = shell.wait();
-}
-
-#[test]
-fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
-    let world = World::live();
-    let root = world.state.parent().unwrap().to_path_buf();
-    let mut shell = command_shell(&root, "sess-swap-0001", "bgW", "sleep 312");
-    let path = root.join("tasks/bgW.output");
-    let task = super::round_wait::TaskRef {
-        id: "bgW".into(),
-        output_path: Some(path.display().to_string()),
-        launched_from_ms: world.origin,
-        launched_to_ms: world.origin + 5_000,
-    };
-    let host = LocalHost::new(world.state.clone(), "sess-swap-0001".into());
-    let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    // After the owner was found, the path is replaced by an unrelated file.
-    let moved = root.join("tasks/bgW.moved");
-    fs::rename(&path, &moved).unwrap();
-    fs::write(&path, "unrelated\n").unwrap();
-    assert!(
-        host.mark_stop(&owner, &task, "r|bgW|w1"),
-        "written through the owner's descriptor"
-    );
-    assert_eq!(
-        fs::read_to_string(&path).unwrap(),
-        "unrelated\n",
-        "the new file is untouched"
-    );
-    assert!(fs::read_to_string(&moved)
-        .unwrap()
-        .contains("[round-watch]"));
-    // A forged owner whose recorded inode is another file's is refused.
-    let mut forged = owner.clone();
-    forged.output = Some((1, 1));
-    assert!(!host.mark_stop(&forged, &task, "r|bgW|w2"));
-    shell.kill().unwrap();
-    let _ = shell.wait();
-}
-
-#[test]
-fn a_command_that_ignores_terminate_is_killed_by_the_verified_escalation() {
-    use std::os::unix::process::CommandExt;
-    let world = World::live();
-    let root = world.state.parent().unwrap().to_path_buf();
-    let tasks = root.join("tasks");
-    fs::create_dir_all(&tasks).unwrap();
-    let output = fs::File::create(tasks.join("bgH.output")).unwrap();
-    let mut shell = std::process::Command::new("/bin/sh")
-        .args(["-c", "trap '' TERM; sleep 313; true"])
-        .env("CLAUDE_CODE_SESSION_ID", "sess-hup-0001")
-        .stdout(output.try_clone().unwrap())
-        .stderr(output)
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let task = super::round_wait::TaskRef {
-        id: "bgH".into(),
-        output_path: Some(tasks.join("bgH.output").display().to_string()),
-        launched_from_ms: world.origin,
-        launched_to_ms: world.origin + 5_000,
-    };
-    let host = LocalHost::new(world.state.clone(), "sess-hup-0001".into());
-    let owner = host.resolve_owner("writer-9", &task).expect("owner");
-    assert_eq!(
-        host.signal(&owner, &task),
-        super::round_watch::Sent::Accepted
-    );
-    assert_eq!(
-        host.finish_stop(&owner, &task),
-        super::round_watch::Stop::Ended
-    );
-    assert!(host.group_gone(&owner, &task));
-    let status = shell.wait().unwrap();
-    assert!(!status.success(), "ended by a signal, not by itself");
 }

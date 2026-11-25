@@ -664,3 +664,37 @@ fn overlapping_blocking_calls_count_their_union_not_their_sum() {
     // Union: [4 s, 5 min 6 s] plus [5 min 7 s, 8 min 7 s] = 5 min 2 s + 3 min.
     assert_eq!(wait.waited_ms, (5 * MIN + 2_000) + 3 * MIN);
 }
+
+#[test]
+fn a_late_result_of_an_interrupted_episode_does_not_age_the_new_one() {
+    let mut t = explicit_wait("bg1", "echo started");
+    t.0.pop();
+    // c1 starts an episode and is still open when other work interrupts it.
+    t.tool(
+        4_000,
+        "c1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.tool(5 * MIN, "e1", "Edit", json!({"file_path": "a.rs"}));
+    t.result(5 * MIN + 100, "e1", None);
+    // c2 starts a new episode at 5 min 10 s; then c1 returns, late, at 16 min.
+    t.tool(
+        5 * MIN + 10_000,
+        "c2",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    t.result(16 * MIN, "c1", None);
+    let now = T0 + 16 * MIN + 10_000;
+    let wait = t.read().open_wait(now).unwrap();
+    assert_eq!(
+        wait.call_id, "c2",
+        "the new episode is named by its own first call"
+    );
+    assert_eq!(
+        wait.waited_ms,
+        16 * MIN + 10_000 - (5 * MIN + 10_000),
+        "only the new episode's own call counts, not the late call of the old one"
+    );
+}

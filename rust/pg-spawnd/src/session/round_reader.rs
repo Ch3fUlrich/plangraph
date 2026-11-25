@@ -47,6 +47,9 @@ pub(super) struct OpenTool {
     pub(super) structured: bool,
     /// When the call was issued: a wait is as old as its own call.
     pub(super) started_ms: i64,
+    /// The episode the call was part of when it started, named by its first call. A late
+    /// result belongs to that episode, whatever episode the task is in by then.
+    pub(super) episode: Option<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -309,39 +312,19 @@ impl Reader {
                 .find_map(|key| input[*key].as_str())
                 .map(str::to_owned);
             let structured = task_output && blocking && task_ref.is_some();
-            // An episode is a chain of back-to-back blocking calls on one task: a single
-            // call cannot block longer than the harness allows, so the writer that waits
-            // for a command keeps calling. Any other call ends every episode.
-            match (structured, &task_ref) {
-                (true, Some(task)) => {
-                    for (other, episode) in self.episodes.iter_mut() {
-                        episode.interrupted |= other != task;
-                    }
-                    let continues = self
-                        .episodes
-                        .get(task)
-                        .is_some_and(|e| !e.interrupted && ts - e.last_end_ms <= EPISODE_GAP_MS);
-                    if !continues {
-                        let episode = Episode {
-                            first_call: id.clone(),
-                            spans: Vec::new(),
-                            last_end_ms: ts,
-                            interrupted: false,
-                        };
-                        self.episodes.insert(task.clone(), episode);
-                    }
-                }
-                _ => self
-                    .episodes
-                    .values_mut()
-                    .for_each(|e| e.interrupted = true),
-            }
+            self.start_episode(structured, &task_ref, &id, ts);
+            let episode = task_ref
+                .as_ref()
+                .filter(|_| structured)
+                .and_then(|task| self.episodes.get(task))
+                .map(|e| e.first_call.clone());
             self.open.insert(
                 id,
                 OpenTool {
                     class,
                     command,
                     structured,
+                    episode,
                     task_ref,
                     background: input["run_in_background"] == true,
                     started_ms: ts,
@@ -360,7 +343,13 @@ impl Reader {
                 continue;
             };
             if let (true, Some(task)) = (tool.structured, &tool.task_ref) {
-                if let Some(episode) = self.episodes.get_mut(task) {
+                // Only a call of the current episode adds to it; a late result of a call of
+                // an interrupted episode adds to nothing.
+                if let Some(episode) = self
+                    .episodes
+                    .get_mut(task)
+                    .filter(|e| tool.episode.as_deref() == Some(e.first_call.as_str()))
+                {
                     episode
                         .spans
                         .push((tool.started_ms, ts.max(tool.started_ms)));

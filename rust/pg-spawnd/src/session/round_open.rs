@@ -2,12 +2,48 @@
 //! authorise a stop, what still runs, and how a closed round's open gap is booked.
 
 use super::{
-    round_reader::{OpenTool, Prev, Reader, Running, EPISODE_GAP_MS},
+    round_reader::{Episode, OpenTool, Prev, Reader, Running, EPISODE_GAP_MS},
     round_time::{Class, OpenWait},
     round_wait::command_reads,
 };
 
 impl Reader {
+    /// An episode is a chain of back-to-back blocking calls on one task: a single call cannot
+    /// block longer than the harness allows, so the writer that waits for a command keeps
+    /// calling. Any other call ends every episode. Called for each call as it starts.
+    pub(super) fn start_episode(
+        &mut self,
+        structured: bool,
+        task_ref: &Option<String>,
+        id: &str,
+        ts: i64,
+    ) {
+        match (structured, &task_ref) {
+            (true, Some(task)) => {
+                for (other, episode) in self.episodes.iter_mut() {
+                    episode.interrupted |= other != task;
+                }
+                let continues = self
+                    .episodes
+                    .get(task)
+                    .is_some_and(|e| !e.interrupted && ts - e.last_end_ms <= EPISODE_GAP_MS);
+                if !continues {
+                    let episode = Episode {
+                        first_call: id.to_owned(),
+                        spans: Vec::new(),
+                        last_end_ms: ts,
+                        interrupted: false,
+                    };
+                    self.episodes.insert(task.clone(), episode);
+                }
+            }
+            _ => self
+                .episodes
+                .values_mut()
+                .for_each(|e| e.interrupted = true),
+        }
+    }
+
     /// The running task a wait call is bound to: by the structured task id of a
     /// task-output call, or by the task's full output path as a word of the command.
     pub(super) fn named_task(&self, tool: &OpenTool) -> Option<usize> {
@@ -85,7 +121,12 @@ impl Reader {
         spans.extend(
             self.open
                 .values()
-                .filter(|tool| tool.structured && tool.task_ref.as_deref() == Some(task_id))
+                .filter(|tool| {
+                    tool.structured
+                        && tool.task_ref.as_deref() == Some(task_id)
+                        && tool.episode.as_deref()
+                            == self.episodes.get(task_id).map(|e| e.first_call.as_str())
+                })
                 .map(|tool| (tool.started_ms, now_ms.max(tool.started_ms))),
         );
         spans.sort_unstable();

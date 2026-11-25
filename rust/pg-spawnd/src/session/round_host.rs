@@ -80,15 +80,11 @@ impl LocalHost {
     /// The group of the owner when it is still the owner's: a live leader with another start
     /// time or output is a reused pid and owns nothing; a dead leader with members left is
     /// its own group, whose id cannot be reused yet.
-    fn owned_group(&self, owner: &Owner, task: &TaskRef) -> Option<u32> {
-        let dir = self.roots.proc.join(owner.pid.to_string());
+    fn owned_group(&self, owner: &Owner) -> Option<u32> {
         let alive = proc_start_time(&self.roots.proc, owner.pid);
-        let output = task.output_path.as_deref().map(PathBuf::from);
-        let ours = alive.is_some()
-            && alive == owner.start_time
-            && output.is_some()
-            && output_file(&dir) == output;
-        (alive.is_none() || ours).then_some(owner.pid)
+        // The start time is the identity of the leader. Where it writes is not: a command
+        // may redirect its output after a signal and still be the command that was found.
+        (alive.is_none() || alive == owner.start_time).then_some(owner.pid)
     }
 
     /// Signal every member of the group through its pidfd; how many the kernel accepted.
@@ -211,8 +207,8 @@ impl Host for LocalHost {
         (found.len() == 1).then(|| found.remove(0))
     }
 
-    fn signal(&self, owner: &Owner, task: &TaskRef) -> Sent {
-        let Some(group) = self.owned_group(owner, task) else {
+    fn signal(&self, owner: &Owner, _task: &TaskRef) -> Sent {
+        let Some(group) = self.owned_group(owner) else {
             return Sent::Gone;
         };
         if self.scan_members(group).is_empty() {
@@ -230,8 +226,8 @@ impl Host for LocalHost {
         }
     }
 
-    fn finish_stop(&self, owner: &Owner, task: &TaskRef) -> Stop {
-        let Some(group) = self.owned_group(owner, task) else {
+    fn finish_stop(&self, owner: &Owner, _task: &TaskRef) -> Stop {
+        let Some(group) = self.owned_group(owner) else {
             return Stop::Ended;
         };
         // Escalation goes through the same verified signalling, member by member.
@@ -249,8 +245,8 @@ impl Host for LocalHost {
         Stop::Survivors
     }
 
-    fn group_gone(&self, owner: &Owner, task: &TaskRef) -> bool {
-        self.owned_group(owner, task)
+    fn group_gone(&self, owner: &Owner, _task: &TaskRef) -> bool {
+        self.owned_group(owner)
             .is_none_or(|group| self.scan_members(group).is_empty())
     }
 
