@@ -3,6 +3,8 @@
 Portable like test_planner_service: ``World`` follows ``PG_KEEPER_BACKEND``,
 repo trees live under ``tmp_path`` and nothing is executed for real.
 """
+import os
+
 import pytest
 
 from door_util import Doors
@@ -11,7 +13,7 @@ from plangraph.governor import policy
 from plangraph.keeper.api import KeeperHandler
 from plangraph.keeper import api_routes
 from plangraph.keeper.errors import Refused
-from plangraph.planner import phase, shadow
+from plangraph.planner import phase, readiness, shadow
 from plangraph.settings import enforce_review_scope
 from plangraph.planner.legs import DEFAULT_LEGS
 
@@ -51,6 +53,78 @@ def make_phase(w):
 
 def code_of(exc):
     return getattr(exc, "code", None) or exc.args[0]
+
+def test_plan_phase_scopes_resolve_against_the_repo_for_rule_33(w, repo):
+    (repo / "src" / "plangraph" / "keeper").mkdir(parents=True)
+    (repo / "src" / "plangraph" / "keeper" / "api_routes.py").write_text("X = 1\n", encoding="utf-8")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "ci_commit_gate.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/plangraph/keeper"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["tools/*.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert [c["route"]["review_seats"] for c in plan["cards"]] == [2, 2]
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/a.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert [c["route"]["review_seats"] for c in plan["cards"]] == [2, 1]  # src holds keeper/; src/a.py is one plain file
+
+
+@pytest.mark.parametrize("scope", ["src/plangraph/review/gatewa?.py", "src/plangraph/review/./gatewa?.py",
+                                   "./src/plangraph/review/gatewa?.py", "src/./plangraph/review"])
+def test_plan_phase_one_rule_33_answer_for_every_scope_spelling(w, repo, scope):
+    # The glob names no gateway file as written: only the files it resolves to place it.
+    (repo / "src" / "plangraph" / "review").mkdir(parents=True)
+    (repo / "src" / "plangraph" / "review" / "gateway.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["cards"][0]["route"]["review_seats"] == 2
+
+
+@pytest.mark.parametrize("scope", [".", "./", "pkg.v1/", "pkg.v1"])
+def test_plan_phase_root_and_dotted_directory_scopes_count_for_rule_33(w, repo, scope):
+    keeper = repo / "pkg.v1" / "src" / "plangraph" / "keeper"
+    keeper.mkdir(parents=True)
+    (keeper / "api_routes.py").write_text("X = 1\n", encoding="utf-8")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["cards"][0]["route"]["review_seats"] == 2
+
+
+@pytest.mark.parametrize("scope", ["/", "/.", "//", "\\"])
+def test_plan_phase_does_not_walk_an_absolute_root_scope(w, repo, monkeypatch, scope):
+    walked = []
+    monkeypatch.setattr(readiness.os, "walk", lambda top, *a, **k: walked.append(str(top)) or iter(()))
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=[scope]))
+    phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert walked == []
+
+
+def test_plan_phase_symlink_loop_scope_fails_that_card_only(w, repo):
+    (repo / "loop").symlink_to(repo / "loop")
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["loop/*.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    first, second = plan["cards"]
+    assert first["route"] is None and "loop" in first["route_error"]
+    assert second["route"] is not None
+
+
+def test_plan_phase_does_not_walk_a_parent_relative_scope(w, repo, monkeypatch):
+    (repo.parent / "outside").mkdir()
+    walked = []
+    real_walk = os.walk
+    monkeypatch.setattr(readiness.os, "walk", lambda top, *a, **k: (walked.append(str(top)), real_walk(top, *a, **k))[1])
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["../outside/*.py"]))
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert walked == []
+    assert any(f["code"] == "bad_path" for f in plan["cards"][0]["findings"])
+
 
 PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",
              "overlaps", "skipped", "busy"}
