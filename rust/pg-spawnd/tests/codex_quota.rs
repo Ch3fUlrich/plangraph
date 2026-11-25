@@ -57,8 +57,30 @@ except LaunchRefused as exc:
 else:
     raise AssertionError('stale plan passed launch admission')
 
+# The stated reset passes while the snapshot is still the last word: no clock brings the pool back.
 write('UPDATE quota_snapshots SET next_reset_at=? WHERE id=2', now - 1)
+pending = service.route(card)
+assert not any(leg.id.startswith('cx-gpt-') for leg in pending.legs), [leg.id for leg in pending.legs]
+skips = {row['leg']: row['reason'] for row in pending.skipped}
+for leg in ('cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra'):
+    assert skips[leg] == 'quota_probe_pending', skips
+try:
+    build(dict(state=state, cwd=state, role='implement', dry_run=False,
+               leg={'id': initial.first_leg.id}, card=card, prompt='run the card',
+               run_id='run-' + 'b' * 32, job_id='fixture'))
+except LaunchRefused as exc:
+    assert 'quota_probe_pending' in str(exc), exc
+else:
+    raise AssertionError('launch admission passed after the reset without a probe')
+
+# A successful probe newer than the snapshot is the recovery fact: route and launch admission return.
+from plangraph.routing_support import leg_state
+from plangraph.routing_support.liveness import require_available
+from plangraph.planner.legs import DEFAULT_LEGS
+chosen = next(leg for leg in DEFAULT_LEGS if leg.id == initial.first_leg.id)
+leg_state.record_probe_pass(chosen.model, 'review-probe')
 assert service.route(card).first_leg.id == initial.first_leg.id
+require_available(chosen, service.leg_reader, card)
 os.unlink(database)
 assert service.route(card).first_leg.id == initial.first_leg.id
 "#])
