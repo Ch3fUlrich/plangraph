@@ -56,3 +56,11 @@ def test_inheritance_stats_count_raised_items_and_the_longest_chain():
 def test_brief_shows_the_source_of_a_raised_priority():
     items = [_it("LOW", 8), _it("TOP", 10, ["LOW"])]
     assert "prio 8->10 via d:TOP" in views.brief(items)
+
+
+def test_a_tie_keeps_the_smallest_source_key_also_through_a_longer_chain():
+    # ROOT blocks A (which blocks Z) and B; Z and B are both 10, B is the smaller source key.
+    items = [_it("ROOT", 1), _it("A", 1, ["ROOT"]), _it("Z", 10, ["A"]), _it("B", 10, ["ROOT"])]
+    eff, _ = views.effective_priorities(items)
+    assert eff["d:ROOT"]["effective"] == 10 and eff["d:ROOT"]["via"] == "d:B"
+    assert eff["d:A"]["via"] == "d:Z"

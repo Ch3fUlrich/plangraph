@@ -45,7 +45,7 @@ used only by import/export, never by views or the keeper core. Import validates 
 - `validate(items) -> list[Problem]` — Problem = `{code, key, msg}`: `dup_key`, `unknown_dep`, `cycle` (list the cycle),
   `depends_on_cancelled`, `no_goal`, `unreachable_goal` (only NON-terminal items must reach a goal; done/cancelled exempt),
   `bad_state`, `corrects_not_done`, `self_dep`, `loop_no_exit`, `loop_many_exits`.
-- `ready(items, project=None) -> list[item]` — state `open`, every dep `done`; sorted by (-priority, -unblocks, estimate_h, key).
+- `ready(items, project=None) -> list[item]` — state `open`, every dep `done`; sorted by (-effective priority, -unblocks, estimate_h, key); the effective priority of an item is the highest priority among itself and the open items that depend on it, transitively (`effective_priorities(items) -> ({key: {effective, via, hops}}, cycles)`; `via` is the smallest source key at a tie).
 - `blocked(items, project=None) -> dict[key, list[key]]` — open/claimed items → their unmet dependency keys.
 - `waves(items) -> list[list[key]]` — graphlib layers over non-terminal items; done deps count as satisfied; wave 0 = ready-now.
 - `critical_path(items, project=None) -> {"keys": [...], "hours": float}` — longest remaining path by `estimate_h` over non-terminal items.
