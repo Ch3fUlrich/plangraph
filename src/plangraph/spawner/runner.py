@@ -16,14 +16,13 @@ import math
 import os
 import re
 import sqlite3  # tests patch runner.sqlite3.connect (test_opencode_served_witness)
-import subprocess
 import sys  # noqa: F401 -- compatibility: callers patch runner.sys.platform
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from plangraph.spawner.clients import STDIN_PROMPT_HARNESSES, build_child_env, build_command, build_routing_envelope_headers
 from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
@@ -39,7 +38,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, origin_refusal, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
@@ -58,38 +57,9 @@ def _is_nt() -> bool:
     return os.name == "nt"
 
 
-def _resolve_launch(
-    exe: str,
-    argv: Sequence[str] = (),
-    *,
-    is_nt: bool | None = None,
-) -> tuple[str, str | None]:
-    """Resolve executable path and enforce Windows launch constraints (I11, I12)."""
-    nt = _is_nt() if is_nt is None else is_nt
-    if not nt:
-        return exe, None
-
-    exe_path = Path(exe)
-    ext = exe_path.suffix.lower()
-    is_batch = ext in (".cmd", ".bat")
-
-    if is_batch and exe_path.stem.lower() == "opencode":
-        sibling = exe_path.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
-        if sibling.is_file():
-            exe = str(sibling)
-            exe_path = sibling
-            ext = exe_path.suffix.lower()
-            is_batch = False
-
-    is_opencode = exe_path.stem.lower() == "opencode"
-    if not is_opencode:
-        from plangraph.routing_support.clients import WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT
-        limit = WINDOWS_BATCH_ARGV_LIMIT if is_batch else WINDOWS_ARGV_LIMIT
-        cmdline = subprocess.list2cmdline([exe, *argv])
-        if len(cmdline) > limit:
-            return exe, f"command_line_too_long: {len(cmdline)} chars"
-
-    return exe, None
+def _resolve_launch(exe, argv=(), *, is_nt=None):
+    from .prompt_input import resolve_platform_launch
+    return resolve_platform_launch(exe, argv, is_nt=_is_nt() if is_nt is None else is_nt)
 
 
 def is_terminal(status):
@@ -124,6 +94,7 @@ class JobInfo:
     cwd: str | None = None
     last_activity_ts: float | None = None
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
+    max_request_tokens: int | None = None
     allow_shas: frozenset[str] = field(default_factory=frozenset)
 
     def to_dict(self) -> dict[str, Any]:
@@ -234,6 +205,13 @@ class SpawnerRunner:
         from .prompt_input import TOOLLESS_MODES, compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          tool_mode=getattr(leg, 'tool_mode', None))
+        request_bound = getattr(leg, 'max_request_tokens', None)
+        if leg is not None and leg.harness == 'opencode':
+            from .context_pack import bound_prompt
+            from .target import effective_leg
+            request_bound = (leg if prepare_launch else effective_leg(leg)).max_request_tokens
+            if request_bound is not None:
+                bound_prompt(prompt, request_bound)
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -319,8 +297,19 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
-            from .opencode_overlay import prepare_gateway_env
-            child_env, render_reason = prepare_gateway_env(child_env, model_or_combo)
+            from .opencode_overlay import ProviderView, prepare_gateway_env
+
+            def validate_provider_env(env):
+                nonlocal request_bound
+                from .context_pack import bound_prompt
+                from .target import effective_leg
+                current = effective_leg(leg, view=ProviderView(env, overlaid=True)).max_request_tokens
+                if current is not None:
+                    request_bound = current if request_bound is None else min(current, request_bound)
+                    bound_prompt(prompt, request_bound)
+
+            child_env, render_reason = prepare_gateway_env(
+                child_env, model_or_combo, validate=validate_provider_env if leg is not None else None)
             if render_reason is None:
                 # Overlay only copies an env name through when the parent already
                 # holds it; hand the child the host keys from the AutoOS keys file
@@ -409,6 +398,7 @@ class SpawnerRunner:
                     served_family=served_family,
                     dry_run=True,
                     cwd=work_dir,
+                    max_request_tokens=request_bound,
                 )
                 if render_reason:
                     job.events.append({'event': 'render_refused', 'reason': render_reason})
@@ -879,7 +869,7 @@ def spawn_service(*args, **kwargs):
                 if record.get('status') == 'needs_input':
                     record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
-            if terminal:
+            if terminal and not origin_refusal(record):
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
@@ -922,7 +912,7 @@ def spawn_service(*args, **kwargs):
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
                     markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
                 pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
-                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg'):
+                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg') and not origin_refusal(record):
                     try:
                         self._save(record, retry=True)
                     except Exception:

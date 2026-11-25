@@ -20,6 +20,7 @@ from plangraph.fleet_sync.genconfig import config_dir, generate
 from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
+from .run_refusal import remote_refusal_fields
 
 
 def __getattr__(name):
@@ -36,7 +37,11 @@ class Decision(NamedTuple):
 
 
 class RemoteRefusal(ValueError):
-    """Safe, value-free remote failure reason."""
+    """Safe remote failure reason with an optional masked admission receipt."""
+
+    def __init__(self, reason, *, receipt=None):
+        super().__init__(reason)
+        self.receipt = receipt
 
 
 def failure_reason(exc):
@@ -400,6 +405,8 @@ def stage_review_diff(diff, directory):
 
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # a wider card never leaves this host
     options = list(options)
     if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
         raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
@@ -517,12 +524,9 @@ def remote_spawn(name, host, card, prompt, options):
         except ValueError:
             receipt = None
         if isinstance(receipt, dict) and receipt.get('status') == 'refused':
-            reason = receipt.get('reason')
-            if card.get('run_kind') == 'native-codex' and isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
-                raise RemoteRefusal(reason)
-            if isinstance(receipt.get('error'), str) and receipt['error'].startswith(LANE_REFUSALS):
-                raise RemoteRefusal(receipt['error'])  # the target's lane reason and holder, kept
-            raise RemoteRefusal('target rejected admission')
+            reason, retained = remote_refusal_fields(
+                receipt, card.get('run_kind') == 'native-codex', SANDBOX_UNAVAILABLE)
+            raise RemoteRefusal(reason, receipt=retained)
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):
             return receipt
@@ -545,9 +549,6 @@ def native_repo(card):
     if not isinstance(repo, str) or not repo.strip() or not Path(repo).is_absolute():
         raise ValueError('native-codex requires an absolute card.repo')
     return Path(repo).resolve()
-
-
-LANE_REFUSALS = ('lane_unreadable:', 'lane_collision:', 'lane_too_many_keys:')
 
 
 def lane_admit(service, card, prompt):
@@ -590,26 +591,10 @@ def native_queue_card(service, card, options):
     return lane_admit(service, card, options.get('prompt', ''))
 
 
-def keep_lane(held, name, refusal):
-    """Note a host's refusal in `held`; a lane refusal is not replaced by a later generic failure of that host."""
-    if refusal.startswith(LANE_REFUSALS) or name not in held:
-        held[name] = refusal
-    return refusal
-
-
-def lane_text(refusals, text):
-    """`text` after the lane refusals that hosts reported (`refusals`: host -> refusal), which keep their holders."""
-    lanes = [why for why in refusals.values() if str(why).startswith(LANE_REFUSALS)]
-    return '; '.join([*lanes, text])
-
-
-def lane_error(refusals, text):
-    """The `error` of a final refusal when a host refused the launch as a lane; nothing otherwise."""
-    return {'error': lane_text(refusals, text)} if lane_text(refusals, '') else {}
-
-
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # before the binary lookup and the sandbox probe
     import asyncio, time
     from plangraph.fleet_snapshot import _projection_binary
     from .private_io import atomic_write_private
@@ -723,6 +708,17 @@ def main(argv=None):
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
         options.extend(['--role', args.role])
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        refuse_card_sandbox(json.loads(Path(args.card).read_text()))
+    except SpawnRefused as exc:
+        # Before any resource, host or placement read; saved like every other refusal.
+        cli.SpawnService(state=args.state).save_refusal(exc, args.role)
+        print(exc, file=sys.stderr)
+        return 2
+    except (OSError, ValueError):
+        pass  # Local CLI owns malformed input diagnostics.
     try:
         registry = registry_caps()
         config = placement_config(registry, args.role)

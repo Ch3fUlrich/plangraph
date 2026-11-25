@@ -233,3 +233,22 @@ def codex_leg_effort(leg, card):
                 or not isinstance(decision, str) or not re.fullmatch(r'D-[0-9]+', decision)):
             raise SpawnRefused('effort_needs_decision: elevated GPT effort requires matching card.effort and card.effort_decision D-<n>')
     return replace(leg, effort=effort)
+
+
+def refuse_card_sandbox(card):
+    """Admission contract for ``card.sandbox``; mirrors ``card_sandbox::refuse`` in pg-spawnd.
+
+    Absent, null and ``workspace-write`` pass; ``danger-full-access`` has its own reason; any
+    other value is refused without echoing it (the card is untrusted input).
+    """
+    from plangraph.routing_errors import SpawnRefused
+    if not isinstance(card, Mapping):
+        return
+    mode = card.get('sandbox')
+    if mode is None or mode == 'workspace-write':
+        return
+    if mode == 'danger-full-access':
+        raise SpawnRefused('sandbox_refused: danger-full-access is never granted to a spawned run; '
+                           'only workspace-write is granted')
+    raise SpawnRefused('sandbox_refused: card.sandbox is not a supported value; '
+                       'only workspace-write is granted')

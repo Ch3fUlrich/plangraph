@@ -253,6 +253,8 @@ def test_real_oversized_diff_refusal(review_payload, monkeypatch, enabled):
 def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
     from plangraph.spawner import inline_diff, launch_spec
     root, seat, card, _ = review_payload
+    # A path-scoped review cannot defer splitting to the daemon.
+    card['diff_ref']['paths'] = ['large.py']
     monkeypatch.setattr('plangraph.planner.seats.head_writer_families', lambda card: [])   # git is stubbed below
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
     monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:

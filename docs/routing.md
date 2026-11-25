@@ -266,7 +266,12 @@ GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
 of the form `D-<number>`. Native Codex package sessions pass
 `model_reasoning_effort=medium` by default. Other families keep their own effort.
-A 1M spawn route uses the declared request bound of a leg that supports that class.
+A 1M spawn route uses the effective request bound of a leg that supports that class.
+For OpenCode, the active provider file supplies the selected model's context and output
+reserve, including any inherited effort variant and mandatory MiMo output cap. Declared
+route ceilings still apply. A missing limit uses the leg's compatibility bound and an
+invalid limit refuses that leg. Launch preparation checks the provider file again and
+passes the bound to the daemon for diff assembly and final prompt admission.
 Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
 After the required OpenCode seats, the standard review order prefers
@@ -377,6 +382,10 @@ Keeper attempts retain the routed profile, plan hash and selected leg alongside
 the captured eligibility, rejected legs, top five, pin and benchmark baselines.
 The watchdog delivers one terminal record per spawner run, including runs that
 fell through to a different leg. Missing benchmark evidence stays null.
+## Card sandbox
+
+A card whose `sandbox` is not absent, `null` or `workspace-write` is refused with `sandbox_refused:` before routing, placement or forwarding; `danger-full-access` is never granted. See [card sandbox admission](spawner/PR8-CARD-SANDBOX.md).
+
 ## Worker claim bases
 
 A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.

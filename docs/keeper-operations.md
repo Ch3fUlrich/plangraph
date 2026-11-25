@@ -206,6 +206,11 @@ overrides the local state directory; otherwise `PG_SWEEP_STATE` from the sweep i
 accepted. An active claim with neither a resolved local path nor open lanes is
 incomplete and refuses cleanup. Unreadable existing local records also refuse.
 
+`sweep-claims` also lists in `branches` every `branch`/`publish_ref`/`pushed` ref a local run record names, and adds
+`"unbound_runs": N` (only when N > 0) for active runs with no local record (another host's runs):
+their publish ref is unknown, so `plangraph lane-cleanup` then deletes only merged heads
+([lane lifetime](lane-lifetime.md)).
+
 ### Cancelled dependencies and new children
 
 Cancelling an item removes its incoming `depends_on` edges from live gates and

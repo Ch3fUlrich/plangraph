@@ -8,6 +8,7 @@ mod tests {
             review_leg_activity: None,
             host_idle_capacity: Default::default(),
             idle_messages: Vec::new(),
+            disks: Vec::new(),
             hosts: Vec::new(),
             stuck: Default::default(),
             session_activity: Default::default(),

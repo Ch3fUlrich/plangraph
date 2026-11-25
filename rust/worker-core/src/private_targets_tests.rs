@@ -28,6 +28,7 @@ fn report() -> Report {
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     }
 }
 

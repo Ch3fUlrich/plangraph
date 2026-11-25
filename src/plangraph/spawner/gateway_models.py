@@ -1,10 +1,7 @@
 """Pure model identity admission and response-side call-log row parsing."""
 from __future__ import annotations
 
-import types
-
-# Rows come from the gateway's own call log, so xiaomi-mimo is its connection, never a direct leg.
-PROVIDER_ALIASES = types.MappingProxyType({'xiaomi-mimo': 'mimo'})
+from plangraph.routing_support.catalog_seed import local_provider_id
 
 
 def model_segment(model):
@@ -36,11 +33,16 @@ def served_models(rows, tag):
             ok = False
         model = str(row.get('model') or '').strip()
         if ok and model:
+            # Rows carry the gateway slug; the catalog row maps it back to the local prefix.
+            # A slug two catalog rows claim names no provider: the row attests nothing.
             provider = str(row.get('provider') or '').strip()
-            provider = PROVIDER_ALIASES.get(provider, provider)
             head, sep, rest = model.partition('/')
-            if sep and head in PROVIDER_ALIASES:
-                model = PROVIDER_ALIASES[head] + '/' + rest
+            provider = local_provider_id(provider) if provider else provider
+            head = local_provider_id(head) if sep else head
+            if provider is None or head is None:
+                continue
+            if sep:
+                model = head + '/' + rest
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
 

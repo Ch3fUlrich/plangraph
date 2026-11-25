@@ -38,6 +38,7 @@ from .. import views
 from . import context_sources as src, timing
 from .brief import ensure_cap, superseded_contract
 from .errors import Refused
+from .item_fields import CLOCK_PREMISE_FIELDS
 from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
@@ -84,6 +85,83 @@ def _graph(index):
     return dependents, corrected
 
 
+class _ClockReader:
+    """Replays definition events into the shared decision clock's premise facts.
+
+    Per item it keeps the last recorded description, the D-ids a migrated description
+    carried over from its note, and the anchor: the seq of its creation or of its last
+    *recorded* premise change.  A rehome copies all three from ``rehomed_from``.  Evidence is
+    read only where an event records a value: a creation's description, the ``after`` side of
+    an audit pair that differs from its ``before``, a top-level description (a recorded null
+    clears it) that differs from the last recorded one, and the criteria ledger row of the
+    event's seq and key.  A ``fields`` entry alone, a note and metadata prove no change; a
+    migrated description moves neither anchor nor clock, and its carried ids stay out of a
+    later description edit until that edit drops them.
+    """
+
+    def __init__(self, amendments):
+        self.amendments = amendments
+        self.description, self.anchor, self.carried = {}, {}, {}
+
+    def read(self, kind, key, seq, payload):
+        """The D-id numbers one event's recorded premise changes publish."""
+        if kind == "item_created":
+            origin = payload.get("rehomed_from")
+            text = payload.get("description")
+            self.description[key] = text if isinstance(text, str) else ""
+            if origin:
+                self.carried[key] = set(self.carried.get(origin, ()))
+                if origin in self.anchor:
+                    self.anchor[key] = self.anchor[origin]
+                return []
+            self.anchor[key] = seq
+            return [_num(did) for did in src.decision_ids(text)]
+        if payload.get("migrated"):
+            text = payload.get("description")
+            if isinstance(text, str):
+                self.description[key] = text
+                self.carried.setdefault(key, set()).update(src.decision_ids(text))
+            return []
+        changes = self._changes(key, seq, payload)
+        if changes:
+            self.anchor[key] = seq
+        found = set()
+        for name, after in changes:
+            ids = set(src.decision_ids(after))
+            if name == "description":
+                self.description[key] = after
+                carried = self.carried.get(key, set())
+                found |= ids - carried
+                self.carried[key] = carried & ids
+            else:
+                found |= ids
+        return [_num(did) for did in found]
+
+    def _changes(self, key, seq, payload):
+        """``[(field, new text)]`` the event records as an actual change."""
+        before, after = payload.get("before"), payload.get("after")
+        pair = isinstance(before, dict) and isinstance(after, dict)
+        out = {}
+        for name in CLOCK_PREMISE_FIELDS:
+            if pair and name in before and name in after:
+                old, new = before[name] or "", after[name] or ""
+                if isinstance(old, str) and isinstance(new, str) and old != new:
+                    out[name] = new
+        covered = {name for name in CLOCK_PREMISE_FIELDS if pair and name in before and name in after}
+        if "description" in payload and "description" not in covered:
+            text = payload["description"] or ""
+            if isinstance(text, str):
+                if key not in self.description:
+                    self.description[key] = text          # no earlier value to compare with
+                elif self.description[key] != text:
+                    out["description"] = text
+        if "done_criteria" not in covered:
+            row = self.amendments.get(seq)
+            if row and row[0] == key and (row[1] or "") != (row[2] or ""):
+                out["done_criteria"] = row[2] or ""
+        return list(out.items())
+
+
 class ContextMixin:
     """Task-context reads and the stale-claim guard."""
 
@@ -126,8 +204,9 @@ class ContextMixin:
     def _decision_clock(self):
         """``{"seqs", "marks", "last"}``: running max D-id over definition events.
 
-        ``marks[i]`` is the highest D-id cited by any item definition up to
-        ``seqs[i]``; ``last`` maps a key to its newest definition seq.  Kept on
+        ``marks[i]`` is the highest D-id a recorded premise value introduced up to
+        ``seqs[i]`` (see :class:`_ClockReader`); ``last`` maps a key to the seq of its
+        creation or last recorded premise change, inherited on a rehome.  Kept on
         the store and rebuilt whenever the (count, max, sum of seq) of definition
         events changes, so a rollback or an out-of-order commit never leaves
         it behind.
@@ -140,17 +219,20 @@ class ContextMixin:
         if clock is not None and clock["stamp"] == stamp:
             return clock
         clock = {"seqs": [], "marks": [], "last": {}, "stamp": stamp}
+        reader = _ClockReader({
+            row["seq"]: (row["key"], row["original_text"], row["new_text"])
+            for row in self.conn.execute(
+                "SELECT seq, key, original_text, new_text FROM criteria_amendments")})
         mark = -1
         for row in self.conn.execute(
-                f"SELECT seq, key, payload FROM events WHERE {DEFINITION_EVENTS}"
+                f"SELECT seq, key, type, payload FROM events WHERE {DEFINITION_EVENTS}"
                 " ORDER BY seq"):
-            raw = row["payload"]
-            ids = src.decision_ids(raw if isinstance(raw, str) else json.dumps(raw))
+            ids = reader.read(row["type"], row["key"], row["seq"], _payload(row["payload"]))
             if ids:
-                mark = max(mark, _num(ids[-1]))
+                mark = max(mark, *ids)
             clock["seqs"].append(row["seq"])
             clock["marks"].append(mark)
-            clock["last"][row["key"]] = row["seq"]
+        clock["last"] = reader.anchor
         self._ctx_clock = clock
         return clock
 
@@ -158,8 +240,8 @@ class ContextMixin:
         """The newest decision the item's premise knew of, as a number.
 
         The highest D-id cited in the item text; failing that, the decision
-        clock at its last definition (the highest D-id any definition had
-        cited by then).  ``None`` = unknown, which never refuses.
+        clock at its creation or last recorded premise change (the highest D-id
+        any premise value had introduced by then).  ``None`` = unknown, which never refuses.
         """
         cited = src.decision_ids(*self._texts(item)) if cited is None else cited
         if cited:

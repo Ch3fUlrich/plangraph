@@ -20,10 +20,13 @@ from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item, batch_members, valid_item
 from .base_fresh import admit_base
 def remote_native_running(record):
-    """True for a running native Codex run placed on another host; only these need a remote refresh."""
+    """True for a native Codex run placed on another host that is not settled yet; only these need a remote refresh.
+
+    A receipt saved with a terminal status but no `ended` is unsettled too: the target writes the status first."""
     return ((record.get('run_kind') == 'native-codex' or record.get('role') == 'review')
             and bool(record.get('overflow_remote'))
-            and record.get('status') == 'running')
+            and (record.get('status') == 'running'
+                 or (record.get('ended') is None and record.get('status') not in ('queued', 'dry_run'))))
 
 
 def claim_first_dispatch(prompt_record):
@@ -252,7 +255,8 @@ class SpawnService(SeatSpawnMixin):
             raise
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
-        from plangraph.planner.route_policy import train_delta_document
+        from plangraph.planner.route_policy import refuse_card_sandbox, train_delta_document
+        refuse_card_sandbox(card)   # before review_of or writer-trailer reads
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
@@ -352,6 +356,7 @@ class SpawnService(SeatSpawnMixin):
             import logging
             logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
             exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
+        vars(exc).setdefault('run_id', record['run_id'])   # callers reload this exact record, never match error text
         return record
 
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),

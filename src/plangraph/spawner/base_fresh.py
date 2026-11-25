@@ -247,11 +247,48 @@ def spawn_runs(record):
     children = record.get('seats') or record.get('writers')
     return [run for child in children for run in spawn_runs(child)] if children else [record]
 
+def usable_exit_code(code):
+    """A usable failure code is a nonzero integer; zero, None, a bool or a string is not."""
+    return code if isinstance(code, int) and not isinstance(code, bool) and code != 0 else None
+
+def run_settled(run):
+    """True once a leaf run is final: the durable `ended` field is set and the run no longer runs.
+
+    A native writer saves its terminal status before the finisher records `ended`, so a status
+    alone is provisional. A planned or queued run has no end to wait for."""
+    if run.get('status') in ('dry_run', 'queued'):
+        return True
+    return run.get('status') != 'running' and run.get('ended') is not None
+
+def run_exit_code(run):
+    """The one exit rule of a leaf record: 0 for running/planned/completed, else its nonzero code or 1."""
+    if run.get('status') in ('running', 'dry_run', 'completed', 'queued'):
+        return 0
+    return usable_exit_code(run.get('exit_code')) or 1
+
 def spawn_exit_code(record):
     for run in spawn_runs(record):
-        if run.get('status') not in ('running', 'dry_run', 'completed', 'queued'):
-            return run.get('exit_code') or 1
+        code = run_exit_code(run)
+        if code:
+            return code
     return 0
+
+async def settle_runs(service, record, wait):
+    """Bounded durable wait for the leaves of `record`; a leaf still unsettled at the bound keeps its latest saved state.
+
+    SpawnService.wait owns terminal waiting and the remote refresh of forwarded runs."""
+    deadline = time.monotonic() + max(0, wait)
+    for run in spawn_runs(record):
+        if run_settled(run):
+            continue
+        try:
+            run.update(await service.wait(run['run_id'], timeout=max(0, deadline - time.monotonic())))
+        except (TimeoutError, ValueError):
+            try:
+                run.update(service.result(run['run_id']))
+            except (OSError, ValueError):
+                pass
+    return record
 
 async def admitted_spawn(service, payload):
     """The detached handshake acknowledges admission, not mere task creation."""

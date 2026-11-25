@@ -1,0 +1,9 @@
+[Unit]
+Description=Delete finished lane branches daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

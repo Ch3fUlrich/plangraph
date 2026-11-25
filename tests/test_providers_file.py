@@ -140,3 +140,59 @@ def test_omniroute_leg_models_do_not_drift():
     extra = providers['omniroute']['models'].keys() - models
     assert extra == EXPECTED_EXTRA.keys(), (
         f'extra model drift: {sorted(extra ^ EXPECTED_EXTRA.keys())}; owner: {OWNER_ITEM}')
+
+
+def test_malformed_limits_keep_imports_working(tmp_path, monkeypatch):
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    root = SHIPPED_FILE.parents[2]
+    shipped = tmp_path / 'configuration/opencode/providers.json'
+    shipped.parent.mkdir(parents=True)
+    providers = o.load_root_providers(SHIPPED_FILE)
+    providers['omniroute']['models']['cx-gpt-6.2-sol']['limit']['context'] = 'malformed'
+    shipped.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+    shutil.copytree(root / 'src/plangraph', tmp_path / 'src/plangraph',
+                    ignore=shutil.ignore_patterns('__pycache__'))
+    monkeypatch.delenv('PLANGRAPH_PROVIDERS_FILE', raising=False)
+    result = subprocess.run([sys.executable, '-c', """
+from plangraph.planner.legs import _codex_context, opencode_counterpart, spawnable_legs
+from plangraph.planner.route_policy import RoutePolicy
+from plangraph.planner.routing import plan_spawn
+
+assert _codex_context('cx-gpt-6.2-sol') == 1_000_000
+leg = next(row for row in spawnable_legs() if row.id == 'cx-gpt-6.2-sol-medium')
+plan = plan_spawn({'estimate_tokens': 100_000}, role='implement', legs=(opencode_counterpart(leg),),
+                  policy=RoutePolicy(), leg_reader=lambda *a, **kw: {'state': 'up', 'evidence': None})
+assert plan.error and any(r['reason'] == 'request_bound_malformed' for r in plan.skipped), plan
+"""], cwd=tmp_path, env={**os.environ, 'PYTHONPATH': str(tmp_path / 'src')},
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_cx_counterpart_uses_effective_registry_reserve(tmp_path, monkeypatch):
+    from plangraph.planner.legs import opencode_counterpart
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import plan_spawn
+
+    providers = o.load_root_providers(SHIPPED_FILE)
+    models = providers['omniroute']['models']
+    base = models['cx-gpt-6.2-sol']
+    base['limit'] = {'context': 500_000, 'output': 100_000}
+    models['cx-gpt-6.2-sol-medium'] = {**base, 'limit': {'context': 220_000, 'output': 60_000}}
+    path = tmp_path / 'active.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(path))
+    leg = opencode_counterpart(next(row for row in spawnable_legs() if row.id == 'cx-gpt-6.2-sol'))
+
+    def plan():
+        path.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+        return plan_spawn({'estimate_tokens': 200_000, 'effort': 'medium'}, role='implement',
+                          legs=(leg,), policy=RoutePolicy(),
+                          leg_reader=lambda *args, **kwargs: {'state': 'up', 'evidence': None})
+
+    assert plan().error
+    del models['cx-gpt-6.2-sol-medium']
+    planned = plan()
+    assert planned.legs[0].max_request_tokens == 400_000

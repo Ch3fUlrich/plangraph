@@ -3,15 +3,10 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
-fn catalog() -> Vec<Value> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = test_python::command()
-        .args([
-            "-c",
-            r#"
+const CATALOG_SCRIPT: &str = r#"
 import json
 from dataclasses import replace
 from unittest.mock import patch
@@ -44,8 +39,13 @@ with patch.object(resolver, 'host_probe_env', lambda env: overlay_env(env)), \
                      'declared': leg.model in served,
                      'reason': render_reason or reason})
 print(json.dumps(rows))
-"#,
-        ])
+"#;
+
+/// Run a script in the checkout against the shipped provider file; it prints one JSON value.
+fn python_json<T: serde::de::DeserializeOwned>(script: &str) -> T {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = test_python::command()
+        .args(["-c", script])
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .env(
@@ -53,13 +53,17 @@ print(json.dumps(rows))
             root.join("configuration/opencode/providers.json"),
         )
         .output()
-        .expect("run catalog renderer");
+        .expect("run python script");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).expect("catalog JSON")
+    serde_json::from_slice(&output.stdout).expect("script JSON")
+}
+
+fn catalog() -> Vec<Value> {
+    python_json(CATALOG_SCRIPT)
 }
 
 // D-6054: named exclusions for externally supplied catalogs; no provider-wide bypass.
@@ -135,4 +139,148 @@ fn unknown_model_check_names_the_leg() {
     let error = check(unknown).unwrap_err();
     assert!(error.contains("leg unknown-model-regression:"), "{error}");
     assert!(error.contains("omniroute/unknown-model"), "{error}");
+}
+
+// The catalog row owns the local prefix -> gateway provider slug pair. Both scripts replace
+// the slug of the `mimo` row, so a hard-coded `xiaomi-mimo` anywhere would fail them.
+const MIMO_PRELUDE: &str = r#"
+import json, tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.routing_support import catalog_seed, leg_state
+
+MODELS = ('mimo/mimo-v2.6-pro', 'mimo/mimo-v2.6-flash')
+SLUG = 'gateway-mimo-slug'
+state = lambda **kw: SimpleNamespace(**{**dict(available=True, stale=False, reason='', until=''), **kw})
+
+def with_slug(slug, extra=()):
+    rows = [dict(r, omniroute_id=slug) if r['provider_id'] == 'mimo' else r
+            for r in catalog_seed.SEED_PROVIDERS]
+    return patch.object(catalog_seed, 'SEED_PROVIDERS', rows + list(extra))
+
+def status(snapshot, leg):
+    store = leg_state.LegStateStore(tempfile.mkdtemp())
+    adapter = leg_state.LegAdapter(store, SimpleNamespace(snapshot=lambda: snapshot),
+                                   lambda: list(MODELS), enabled=True, clock=lambda: 0)
+    return adapter.leg_status(leg)
+
+from plangraph.spawner import gateway_witness as gw
+class Runner:
+    def __init__(self): self._adapter_tokens, self.calls = {'j': object()}, []
+    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
+        self.calls.append(model)
+
+def witnessed(rows):
+    cfg = {'providers': {'omniroute': {'options': {}}}}
+    gw.tag_session(cfg, 'j')
+    job = SimpleNamespace(model_or_combo='omniroute/cx-gpt-6-luna', served_model=None, served_family=None,
+                          served_witness_reason=None, witness_kind=None, events=[])
+    runner = Runner()
+    env = {'OPENCODE_CONFIG_CONTENT': json.dumps(cfg), 'XDG_CONFIG_HOME': tempfile.mkdtemp()}
+    gw.witness(runner, 'j', job, env, delay=0, attempts=1, fetch=lambda tag, env: rows)
+    return runner.calls
+
+tag = gw.session_tag('j')
+"#;
+
+fn mimo_script(body: &str) -> String {
+    format!("{MIMO_PRELUDE}\n{body}")
+}
+
+#[test]
+fn mimo_snapshot_and_tagged_call_log_share_provider_identity() {
+    let got: Value = python_json(&mimo_script(
+        r#"
+out = {'quota': {}, 'witness': {}}
+with with_slug(SLUG):
+    for leg in MODELS:
+        name = leg.split('/')[1]
+        out['quota'][leg] = [status({SLUG: state()}, leg)['state'],
+                             status({'mimo': state(), 'xiaomi-mimo': state()}, leg)['reason']]
+        row = lambda **kw: dict(sessionTag=tag, status=200, **kw)
+        out['witness'][leg] = [witnessed([row(model=name, provider=SLUG)]),
+                               witnessed([row(model=SLUG + '/' + name)]),
+                               witnessed([row(model=name, provider='xiaomi-mimo')])]
+print(json.dumps(out))
+"#,
+    ));
+    for (leg, name) in [
+        ("mimo/mimo-v2.6-pro", "mimo-v2.6-pro"),
+        ("mimo/mimo-v2.6-flash", "mimo-v2.6-flash"),
+    ] {
+        let local = format!("mimo/{name}");
+        // The substituted slug is found; the old hard-coded one is not.
+        assert_eq!(got["quota"][leg], json!(["ok", "unreachable"]), "{leg}");
+        // Bare and qualified rows give the exact local model; an unclaimed slug stays itself.
+        assert_eq!(
+            got["witness"][leg],
+            json!([[local], [local], [format!("xiaomi-mimo/{name}")]]),
+            "{leg}"
+        );
+    }
+}
+
+#[test]
+fn mimo_provider_identity_preserves_quota_state() {
+    let got: Value = python_json(&mimo_script(
+        r#"
+import time
+future = '2999-01-01T00:00:00+00:00'
+decoy = state()   # a healthy row under the local prefix must never answer for the leg
+cases = {
+    'stale': state(stale=True),
+    'limited': state(available=False, reason='rate_limited', until=future),
+    'inactive': state(available=False, reason='inactive'),
+}
+out = {}
+for leg in MODELS:
+    for name, row in cases.items():
+        got = status({'mimo': decoy, 'xiaomi-mimo': row}, leg)
+        out[leg + ' ' + name] = [got['state'], got['reason'], bool((got['evidence'] or {}).get('reset_at'))]
+    got = status({'mimo': decoy, 'other': state()}, leg)
+    out[leg + ' missing'] = [got['state'], got['reason'], got['evidence']]
+print(json.dumps(out))
+"#,
+    ));
+    for leg in ["mimo/mimo-v2.6-pro", "mimo/mimo-v2.6-flash"] {
+        assert_eq!(
+            got[format!("{leg} stale")],
+            json!(["unknown", "stale", false])
+        );
+        assert_eq!(
+            got[format!("{leg} limited")],
+            json!(["limited", "rate_limited", true])
+        );
+        assert_eq!(
+            got[format!("{leg} inactive")],
+            json!(["down", "provider_inactive", false])
+        );
+        assert_eq!(
+            got[format!("{leg} missing")],
+            json!(["down", "unreachable", {"looked_up_provider": "xiaomi-mimo"}])
+        );
+    }
+}
+
+#[test]
+fn mimo_ambiguous_provider_slug_stays_unwitnessed() {
+    let got: Value = python_json(&mimo_script(
+        r#"
+twin = dict(provider_id='mimo-twin', omniroute_id=SLUG)
+row = lambda **kw: dict(sessionTag=tag, status=200, **kw)
+out = {}
+with with_slug(SLUG, [twin]):
+    for name in ('mimo-v2.6-pro', 'mimo-v2.6-flash'):
+        out[name] = [witnessed([row(model=name, provider=SLUG)]),
+                     witnessed([row(model=SLUG + '/' + name)]),
+                     witnessed([row(model=SLUG + '/' + name, provider=SLUG)])]
+with with_slug(SLUG):   # the same row is witnessed once one catalog row owns the slug
+    out['owned'] = witnessed([row(model='mimo-v2.6-pro', provider=SLUG)])
+print(json.dumps(out))
+"#,
+    ));
+    for name in ["mimo-v2.6-pro", "mimo-v2.6-flash"] {
+        assert_eq!(got[name], json!([[], [], []]), "{name}");
+    }
+    assert_eq!(got["owned"], json!(["mimo/mimo-v2.6-pro"]));
 }

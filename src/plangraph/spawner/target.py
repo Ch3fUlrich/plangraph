@@ -4,19 +4,23 @@ import os
 from pathlib import Path
 import re
 
-from plangraph.planner.legs import leg_active, opencode_counterpart
+from plangraph.planner.legs import launch_model, leg_active, opencode_counterpart
 from plangraph.routing_errors import SpawnRefused
 
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
 
 
-def launch_model(leg):
-    """Keep the route identity stable while sending the selected GPT variant."""
-    from plangraph.planner.legs import CX_EFFORTS
-    if not leg.model.startswith('omniroute/cx-gpt-') or leg.effort not in CX_EFFORTS:
-        return leg.model
-    base, _, suffix = leg.model.rpartition('-')
-    return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
+def effective_leg(leg, card=None, role=None, *, view=None):
+    """``leg`` with the request bound of the registry the launch overlay uses; refuses a malformed entry.
+
+    The one door of the spawner paths (service, runner, launch spec) to ``bound_legs``: a read of the
+    active provider file per request, so a changed registry is seen by the prompt checks that follow.
+    """
+    from plangraph.planner.legs import bound_legs
+    kept, refused = bound_legs((leg,), view, card, role)
+    if refused:
+        raise SpawnRefused('request_bound: ' + refused[0][1])
+    return kept[0]
 
 
 def quota_paused(state=None, role=None, leg=None):

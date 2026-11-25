@@ -73,7 +73,8 @@ def test_equal_score_review_siblings_preserve_input_order(as_list, monkeypatch):
 
 def test_absent_explicit_operator_order():
     p = plan()
-    assert p.legs == WRITERS
+    # Request bounds reflect the active providers fixture, so compare operator order by leg ID.
+    assert tuple(leg.id for leg in p.legs) == tuple(leg.id for leg in WRITERS)
     assert p.p_source == "operator-order"
     assert {g["leg"] for g in p.gaps} == {l.id for l in POLICY if 'implement' in l.roles and not l.disabled}
     assert "benchmark data absent" in p.reasons

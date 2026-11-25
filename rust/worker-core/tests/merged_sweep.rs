@@ -96,6 +96,7 @@ fn merged_sweep_nested_merge_live_facts_and_safe_removal() {
         claims: Claims {
             paths: vec![],
             branches: vec![],
+            unbound_runs: 0,
         },
         units: vec![],
         unit_refs: vec![],
@@ -274,4 +275,65 @@ fn sha_shaped_branches_keep_branch_pr_authority() {
     let args = detached_args.unwrap();
     assert!(args.contains("--state\nopen\n"));
     assert!(!args.contains("--search") && !args.contains("--head"));
+}
+
+/// The sweeper path and the cleanup verb share one delete door: an open PR that uses the ref as
+/// its BASE (a stacked child of a closed parent) blocks the push; once it closes the push goes.
+#[test]
+#[serial_test::serial]
+fn lane_delete_refuses_a_ref_that_is_the_base_of_an_open_pull() {
+    use pg_worker_core::lane_delete::{delete, Outcome};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let bare = root.join("origin.git");
+    fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    let work = root.join("work");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "base"]);
+    git(
+        &work,
+        &["push", "-q", "origin", "HEAD:refs/heads/lane/parent"],
+    );
+    let sha = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
+    let record = root.join("restore.tsv");
+    fs::write(&record, "repo\tpath\tbranch\tsha\tPR\n").unwrap();
+    let gh = root.join("bin/gh");
+    fs::create_dir_all(gh.parent().unwrap()).unwrap();
+    let child = r#"[{"number":6,"headRefName":"lane/child","baseRefName":"lane/parent","headRefOid":"1111111111111111111111111111111111111111"}]"#;
+    fs::write(gh.with_extension("base"), child).unwrap();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &gh,
+        "#!/bin/sh\ncase \"$*\" in *--base*) cat \"$0.base\" ;; *) echo '[]' ;; esac\n",
+    );
+    let original = std::env::var_os("PATH");
+    let mut paths = vec![gh.parent().unwrap().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        original.as_deref().unwrap_or_default(),
+    ));
+    std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+    let reference = "refs/heads/lane/parent";
+    let blocked = delete(&work, "origin", reference, &sha, &record);
+    let still = git(&bare, &["rev-parse", reference]);
+    fs::write(gh.with_extension("base"), "[]").unwrap();
+    let freed = delete(&work, "origin", reference, &sha, &record);
+    match original {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+    let error = blocked.unwrap_err().to_string();
+    assert!(error.contains("protected: open-pr-base"), "{error}");
+    assert_eq!(still.trim(), sha);
+    assert_eq!(freed.unwrap(), Outcome::Deleted);
+    assert!(fs::read_to_string(&record).unwrap().contains(&sha));
 }

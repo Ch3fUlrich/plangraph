@@ -396,6 +396,7 @@ def cmd_snapshot(args, session):
 def _sweep_claim_paths(card, state):
     """Keeper run_ids bind local spawner metadata to an authoritative active claim."""
     metadata = [card.get("claim"), card.get("claim_metadata")]
+    unbound = 0
     ids = card.get("run_ids")
     if not isinstance(ids, list):
         raise ValueError("claim run metadata unavailable")
@@ -408,7 +409,8 @@ def _sweep_claim_paths(card, state):
         except FileNotFoundError:
             if record.parent.exists():
                 raise ValueError("claim run record unavailable") from None
-            continue  # Runs belonging to another host have no local metadata.
+            unbound += 1  # Runs belonging to another host have no local metadata.
+            continue
         if not isinstance(row, dict) or not isinstance(row.get("status"), str):
             raise ValueError("invalid claim run record")
         metadata.append(row)
@@ -423,12 +425,17 @@ def _sweep_claim_paths(card, state):
         if not isinstance(attempts, list) or any(not isinstance(a, dict) or not isinstance(a.get("path"), str) for a in attempts):
             raise ValueError("invalid claim worktree attempts")
         metadata.extend(attempts)
-    paths = set()
+    paths, branches = set(), set()
     for meta in metadata:
         if meta is None:
             continue
         if not isinstance(meta, dict):
             raise ValueError("invalid claim metadata")
+        # A run's recorded publish ref or worktree branch binds the claim to its lane.
+        for field in ("branch", "publish_ref", "pushed"):
+            value = meta.get(field)
+            if isinstance(value, str) and value:
+                branches.add(value.removeprefix("refs/heads/"))
         for field in ("path", "worktree", "checkout", "cwd"):
             value = meta.get(field)
             if isinstance(value, dict) and field in ("worktree", "checkout"):
@@ -439,7 +446,7 @@ def _sweep_claim_paths(card, state):
                 if not isinstance(value, str) or not Path(value).is_absolute():
                     raise ValueError("invalid claim path")
                 paths.add(value)
-    return paths
+    return paths, branches, unbound
 
 
 def cmd_sweep_claims(args, session):
@@ -458,7 +465,7 @@ def cmd_sweep_claims(args, session):
         snap = session.call("GET", "snapshot")
         if not isinstance(snap.get("items"), list) or "filter" in snap or type(snap.get("head_seq")) is not int:
             raise ValueError("incomplete snapshot")
-        paths, branches = set(), set()
+        paths, branches, unbound_runs = set(), set(), 0
         for item in snap["items"]:
             if (not isinstance(item, dict) or item.get("state") not in STATES
                     or not isinstance(item.get("key"), str) or not item["key"]):
@@ -478,14 +485,19 @@ def cmd_sweep_claims(args, session):
                 # Open lanes may include a remote prefix; export its local name too.
                 if not lane.startswith("refs/") and "/" in lane:
                     branches.add(lane.split("/", 1)[1])
-            claim_paths = _sweep_claim_paths({**item, **card}, state)
-            if not claim_paths and not lanes:
+            claim_paths, run_branches, unbound = _sweep_claim_paths({**item, **card}, state)
+            branches.update(run_branches)
+            unbound_runs += unbound
+            if not claim_paths and not lanes and not run_branches:
                 raise ValueError("active claim has no resolved path or lane")
             paths.update(claim_paths)
         # Refuse a claim set that changed while per-item authority was collected.
         if session.call("GET", "snapshot").get("head_seq") != snap.get("head_seq") or "head_seq" not in snap:
             raise ValueError("keeper changed during claims read")
-        print(json.dumps({"paths": sorted(paths), "branches": sorted(branches)}, separators=(",", ":")))
+        answer = {"paths": sorted(paths), "branches": sorted(branches)}
+        if unbound_runs:  # Active runs without a local record: their publish ref is unknown.
+            answer["unbound_runs"] = unbound_runs
+        print(json.dumps(answer, separators=(",", ":")))
         return EXIT_OK
     except RefusedCli as exc:
         return _refuse(exc)

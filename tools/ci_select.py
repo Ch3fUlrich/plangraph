@@ -87,6 +87,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/planner/benchmarks.py",
     "src/plangraph/planner/route_policy.py",
     "src/plangraph/routing_support/catalog_db.py",
+    "src/plangraph/routing_support/catalog_seed.py",
     "src/plangraph/routing_support/clients.py",
     "src/plangraph/planner/measured_down.py",
     # D-6054: native/agy quota isolation regressions exercise these boundaries.

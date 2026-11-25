@@ -56,9 +56,34 @@ pub fn check(launcher: &Launcher) {
             .unwrap();
         s.expect(&out, 0, &expected, &stderr);
         s.no_launch();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_fixed_permission_mode(case.name.as_str(), text.split_whitespace());
     }
     if matches!(launcher, Launcher::Pinned(_) | Launcher::Rust(_)) {
         check_pinned_profile(launcher);
+    }
+}
+
+/// Fleet seats are attended operator sessions launched in `bypassPermissions` by decision; the
+/// launcher owns that flag, a card cannot widen it, and no wider flag is ever added.
+pub(super) fn assert_fixed_permission_mode<'a>(name: &str, args: impl Iterator<Item = &'a str>) {
+    let args: Vec<&str> = args.collect();
+    let modes: Vec<&&str> = args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| arg.starts_with("--permission-mode"))
+        .map(|(at, _)| &args[at + 1])
+        .collect();
+    assert_eq!(
+        modes,
+        [&"bypassPermissions"],
+        "{name}: one pinned permission mode"
+    );
+    for wider in ["danger-full-access", "--dangerously-skip-permissions"] {
+        assert!(
+            !args.iter().any(|arg| arg.contains(wider)),
+            "{name} launches with {wider}"
+        );
     }
 }
 

@@ -25,6 +25,10 @@ pub(crate) struct LaunchSpec {
     pub prompt: Option<String>,
     pub warnings: Option<Vec<String>>,
     pub events: Option<Vec<serde_json::Map<String, Value>>>,
+    #[serde(default)]
+    pub max_request_tokens: Option<u64>,
+    #[serde(default)]
+    pub split_inline_diff: bool,
 }
 fn internal(message: &str) -> ToolError {
     ToolError::Internal(message.into())

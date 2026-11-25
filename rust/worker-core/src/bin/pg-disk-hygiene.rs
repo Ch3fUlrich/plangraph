@@ -103,6 +103,7 @@ fn execute_with(
         actions: vec![],
         skipped: vec![],
         error: None,
+        projected: Default::default(),
     };
     let mut available = std::collections::BTreeMap::new();
     for root in roots.into_iter().collect::<std::collections::BTreeSet<_>>() {
@@ -197,6 +198,10 @@ fn execute_with(
             live: guards.live.clone(),
         };
         private_guards.pinned.extend(shared.iter().cloned());
+        // Pool slots look like private Cargo targets; only the guarded pool trimmer may reach them.
+        private_guards
+            .pinned
+            .extend(pool_roots(shared.first().map(PathBuf::as_path)));
         let worktrees = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
             .lines()
             .filter_map(|line| line.strip_prefix("worktree "))
@@ -275,21 +280,64 @@ fn execute_with(
             }
         }
         // Pool slots are guarded by their own leases, so idle ones are trimmed even while
-        // another build runs; the primary target also waits for the process scan.
+        // another build runs; the primary target also waits for the process scan. Review slots
+        // are one per seat run: they have their own fixed budget.
         if let Some(primary) = shared.first() {
-            let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
+            let (mut slots, review) =
+                pg_worker_core::cargo_pool::pool_slot_sets(primary, &mut report);
             if building {
                 slots.remove(0);
             }
-            if let Err(error) =
-                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
-            {
-                report.alarm = true;
-                report.error = Some(error.to_string());
-            }
+            trim_pool(primary, &slots, &review, cap, apply, &mut report);
+        }
+    }
+    // Review seats whose shared target sits under the system temp directory build in the default
+    // pool; its review slots are trimmed to the same cap (the pool's other slots are not ours).
+    if let (Some(primary), Some(home)) = (shared.first(), env::var_os("HOME")) {
+        if let Some(fallback) =
+            pg_worker_core::cargo_cache::review_fallback_primary(primary, Path::new(&home))
+        {
+            let (_, review) = pg_worker_core::cargo_pool::pool_slot_sets(&fallback, &mut report);
+            trim_pool(&fallback, &[], &review, cap, apply, &mut report);
         }
     }
     Ok(report)
+}
+/// The pool root of the configured primary target and of the fallback pool review seats use.
+fn pool_roots(primary: Option<&Path>) -> Vec<PathBuf> {
+    let Some(primary) = primary else {
+        return vec![];
+    };
+    let fallback = env::var_os("HOME").and_then(|home| {
+        pg_worker_core::cargo_cache::review_fallback_primary(primary, Path::new(&home))
+    });
+    std::iter::once(primary.to_path_buf())
+        .chain(fallback)
+        .filter_map(|target| pg_worker_core::cargo_pool::pool_root(&target).ok())
+        .collect()
+}
+
+/// Trims the ordinary and the review slots of the pool at `primary`; a failure is the run's alarm.
+fn trim_pool(
+    primary: &Path,
+    ordinary: &[PathBuf],
+    review: &[PathBuf],
+    cap: u64,
+    apply: bool,
+    report: &mut Report,
+) {
+    let alarm = |report: &mut Report, result: io::Result<u64>| {
+        if let Err(error) = result {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
+    };
+    let result =
+        pg_worker_core::cargo_pool::enforce_pool_cap(primary, ordinary, cap, apply, report);
+    alarm(report, result);
+    let result =
+        pg_worker_core::cargo_pool::enforce_review_slots(primary, review, cap, apply, report);
+    alarm(report, result);
 }
 fn run() -> io::Result<()> {
     let args: Vec<_> = env::args().skip(1).collect();
@@ -439,5 +487,116 @@ mod tests {
         assert_eq!(fs::read_to_string(&stamp).unwrap(), head);
         let listing = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"]).unwrap();
         assert!(!listing.contains("check-stranded-fast"), "{listing}");
+    }
+    /// A cargo target slot of 802 bytes: a stale build unit and a newer one that stays.
+    fn slot(path: &Path) {
+        let old = SystemTime::now() - Duration::from_secs(2 * 86_400);
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join(".rustc_info.json"), "{}").unwrap();
+        for (name, extra) in [("1111111111111111", 10_000), ("2222222222222222", 0)] {
+            let unit = path.join("debug/build").join(format!("foo-{name}"));
+            fs::create_dir_all(&unit).unwrap();
+            fs::write(unit.join("output"), [0u8; 400]).unwrap();
+            for file in [unit.join("output"), unit.clone()] {
+                let at = old - Duration::from_secs(extra);
+                fs::File::open(file).unwrap().set_modified(at).unwrap();
+            }
+        }
+        for file in [path.join(".rustc_info.json"), path.to_path_buf()] {
+            fs::File::open(file).unwrap().set_modified(old).unwrap();
+        }
+    }
+
+    #[test]
+    fn execute_with_trims_configured_and_fallback_review_pools() {
+        // `HOME` places the fallback pool; no other test of this binary may read it meanwhile.
+        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let fixture = tempfile::tempdir().unwrap();
+        let path = |name: &str| fixture.path().join(name);
+        let repo = path("repo");
+        fs::create_dir(&repo).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["commit", "-qm", "x", "--allow-empty"],
+        ] {
+            pg_worker_core::host_command::output(
+                pg_worker_core::git_test_support::command(&repo)
+                    .args(["-c", "user.name=F", "-c", "user.email=f@example.invalid"])
+                    .args(args),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        }
+        fs::write(path("pins.json"), "[]").unwrap();
+        fs::create_dir(path("first")).unwrap();
+        let home = path("home");
+        let primary = path("cache/cargo-target");
+        let fallback = home.join(".cache/plangraph/cargo-target");
+        fs::create_dir_all(&primary).unwrap();
+        fs::write(primary.join("file"), [0u8; 100]).unwrap();
+        let pools: Vec<_> = [&primary, &fallback]
+            .map(|target| pg_worker_core::cargo_pool::pool_root(target).unwrap())
+            .into();
+        for pool in &pools {
+            for id in ["a", "b", "c", "d"] {
+                slot(&pool.join(format!("slot-review-{id}")));
+            }
+            // An ordinary slot below its cap: only the review budget is this run's business.
+            slot(&pool.join("slot-1"));
+        }
+        std::env::set_var("HOME", &home);
+        let mut report = None;
+        for flag in ["--dry-run", "--apply"] {
+            let args = [
+                "--repo",
+                repo.to_str().unwrap(),
+                "--pins",
+                path("pins.json").to_str().unwrap(),
+                "--root",
+                path("first").to_str().unwrap(),
+                "--alarm-free-bytes",
+                "1",
+                "--cleanup-free-bytes",
+                "2",
+                "--shared-target-cap-bytes",
+                "1000",
+                flag,
+            ]
+            .map(str::to_owned);
+            let scratch = vec![path("cache")];
+            let shared = vec![primary.clone()];
+            let result = execute_with(
+                &args,
+                fixture.path(),
+                vec![],
+                || Ok((vec![], false)),
+                || Ok((scratch, shared)),
+            )
+            .unwrap();
+            let evictions = result
+                .actions
+                .iter()
+                .filter(|a| a.contains("pool_evict"))
+                .count();
+            assert_eq!(evictions, 2, "one per review pool: {result:?}");
+            report = Some(result);
+        }
+        let report = report.unwrap();
+        assert!(report.freed_bytes >= 800, "{report:?}");
+        for pool in &pools {
+            let left = fs::read_dir(pool)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("slot-review-"))
+                .map(|e| pg_worker_core::disk_hygiene::scan(&e.path()).unwrap().0)
+                .sum::<u64>();
+            assert!(left <= 3000, "{left} bytes kept in {}", pool.display());
+            assert!(pool.join("slot-1/debug").is_dir(), "ordinary slot kept");
+            assert!(
+                fs::read_dir(pool.join("slot-review-a")).is_ok(),
+                "slot directories are the launch owner's"
+            );
+        }
     }
 }

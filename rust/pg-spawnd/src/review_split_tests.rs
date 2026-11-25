@@ -156,6 +156,8 @@ fn a_refused_later_group_keeps_the_started_run_ids_and_never_reads_as_a_pass() {
             });
         }
         Ok(LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null".into()],
             cwd: work.path().into(),
             env: Default::default(),
@@ -222,6 +224,8 @@ fn a_fallback_seat_gets_one_transition_and_fails_its_group_with_its_started_ids(
             });
         }
         Ok(LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec!["/bin/sh".into(), "-c".into(), "cat >/dev/null".into()],
             cwd: work.path().into(),
             env: Default::default(),

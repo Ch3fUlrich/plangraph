@@ -43,6 +43,7 @@ fn cargo_output(root: &Path) -> bool {
 }
 
 /// Recognize debug output by Cargo's target and profile markers before whole-profile eviction.
+/// A mounted profile is listed too: the removal guard refuses it and reports why.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
     if !cargo_output(root) {
@@ -61,7 +62,6 @@ pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
                 fs::symlink_metadata(profile.join(name)).is_ok_and(|meta| meta.is_file())
             })
             || !crate::private_targets::owned(&profile)?
-            || crate::reap_journal::check_mounts(&profile.canonicalize()?).is_err()
         {
             continue;
         }

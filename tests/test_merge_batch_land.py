@@ -545,12 +545,19 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
                      f"with Path({str(log)!r}).open('a') as f: print(json.dumps(sys.argv[1:]), file=f)\n"
                      f"sys.exit({exit_code})\n")
     sweep.chmod(0o755)
+    lane_log = env.tmp / "lane-cleanup.json"
+    lane = env.stubs / "plangraph"
+    lane.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                    "if sys.argv[1:2] == ['lane-cleanup']:\n"
+                    f"    with Path({str(lane_log)!r}).open('a') as f: print(json.dumps(sys.argv[1:]), file=f)\n")
+    lane.chmod(0o755)
     result = land(env, approval)
     assert result.returncode == 0
     assert ("cleanup sweep failed" in result.stderr) == bool(exit_code)
     invocation, = log.read_text().splitlines()
     args = json.loads(invocation)
-    assert "--apply" in args and "--delete-remote" in args
+    # No host verification means no writer-stop evidence: the lane refs stay out of the remote delete.
+    assert "--apply" in args and "--delete-remote" not in args and "--remote-target" not in args
     assert args.count("--include-merged") == 1
     assert args[args.index("--target") + 1] == (
         f"{saved['worktree']}:refs/heads/{saved['branch']}:{saved['head']}")
@@ -560,8 +567,9 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
                        f"{part_branch}:refs/heads/{saved['prs']['3']['ref']}:{saved['prs']['3']['head']}"]
     assert all(str(unrelated) not in target for target in targets)
     assert unrelated.exists()
-    remote = [args[i + 1] for i, arg in enumerate(args) if arg == "--remote-target"]
-    assert remote == [f"{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
+    assert not lane_log.exists()  # and no lane verb runs
+    holds = (env.home / ".local/state/plangraph/lane-cleanup/lane-holds.txt").read_text().splitlines()
+    assert {f"refs/heads/{saved['prs'][str(n)]['ref']}" for n in (1, 3)} <= {row.split("\t")[0] for row in holds}
 
 
 def test_land_cleanup_metadata_failure_is_nonfatal(env):

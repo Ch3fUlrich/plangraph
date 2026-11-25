@@ -564,9 +564,11 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
-        provider = self._states.get(leg.split('/')[0])
-        if provider is None:
-            return dict(state='down', reason='unreachable', evidence=None)
+        from .catalog_seed import omniroute_provider_id
+        wanted = omniroute_provider_id(leg.split('/')[0])
+        provider = self._states.get(wanted)
+        if provider is None:   # name the slug looked up: the snapshot lists providers by gateway slug
+            return dict(state='down', reason='unreachable', evidence=dict(looked_up_provider=wanted))
         if provider.stale:
             return dict(state='unknown', reason='stale', evidence=None)
         if not provider.available:

@@ -28,7 +28,8 @@ def build_case(tmp_path, monkeypatch):
 
         async def spawn(self, **kwargs):
             self.runner._child_envs['job'] = {'PATH': '/hermetic'}
-            return SimpleNamespace(events=[], command=['test'], job_id='job', task_prompt=kwargs['prompt'])
+            return SimpleNamespace(events=[], command=['test'], job_id='job',
+                                   task_prompt=kwargs['prompt'], max_request_tokens=None)
 
     monkeypatch.setattr(spec, 'SpawnService', Service)
     monkeypatch.setattr(spec, '_sweep', lambda *a: None)

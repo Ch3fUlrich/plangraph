@@ -1,6 +1,11 @@
 """Transport completion evidence; deliberately knows nothing about seat verdicts."""
 import json
 
+from plangraph.routing_support.opencode_overlay import (
+    catalog_output_maximum,
+    launch_output_reserve as launch_output_reserve,
+)
+
 from .env_redact import normalize
 
 
@@ -52,7 +57,6 @@ def record_steps(job, stdout, stderr, env):
 def configure_launch_output(env, model, role, reasoning_cap):
     """Apply the review output ceiling after dropping inherited OpenCode overrides."""
     from .mimo_policy import is_mimo_id
-    from plangraph.catalog_data import SEED_MODELS
     from plangraph.routing_errors import SpawnRefused
     mimo = is_mimo_id(model)
     retry = role == 'review' and reasoning_cap
@@ -63,9 +67,8 @@ def configure_launch_output(env, model, role, reasoning_cap):
         except SpawnRefused as exc:
             return str(exc)
     if role == 'review' and model == 'opencode-go/deepseek-v4.1-flash':
-        maximum = next((row.get('max_output_tokens') for row in SEED_MODELS
-                        if row['model_id'] == model), None)
-        if type(maximum) is int and maximum > 0:
+        maximum = catalog_output_maximum(model)
+        if maximum is not None:
             env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
     return None
 
@@ -77,7 +80,6 @@ def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap
     reasons; neither path invents providers/models or changes unrelated entries.
     """
     from .mimo_policy import ACCEPTED_MIMO_IDS
-    from plangraph.catalog_data import SEED_MODELS
     from plangraph.routing_errors import SpawnRefused
     try:
         if model not in ACCEPTED_MIMO_IDS:
@@ -104,9 +106,8 @@ def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap
             for field in ('limit', 'body'):
                 if not isinstance(owner.get(field, {}), dict):
                     raise SpawnRefused('reasoning_output_limit: malformed_' + field)
-        maximum = next((row.get('max_output_tokens') for row in SEED_MODELS
-                        if row.get('model_id') == model), None)
-        if type(maximum) is not int or maximum <= 0:
+        maximum = catalog_output_maximum(model)
+        if maximum is None:
             raise SpawnRefused('reasoning_output_limit: invalid_catalog_output')
         if thinking_off and entry.get('body', {}).get('thinking') == {'type': 'disabled'}:
             return False

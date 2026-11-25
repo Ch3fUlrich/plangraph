@@ -59,7 +59,8 @@ def journal(env):
     add_principal(db, "lander", "router", [])
     db.close()
     env.env.update(PLANGRAPH_ENV_FILE=str(env.tmp / "keeper.env"), JOURNAL_DB=str(path),
-                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"))
+                   JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"), JOURNAL_LANE_LOG=str(env.tmp / "lane"),
+                   PG_LANE_STATE=str(env.tmp / "lanestate"))
     binary = env.stubs / "plangraph"
     binary.write_text("""#!/usr/bin/env python3
 import json, os, subprocess, sys
@@ -89,8 +90,13 @@ if args == ['landing', 'journal']:
     db.close()
 elif args[:2] == ['landing', 'verify-hosts']:
     head = args[-1]
-    print(json.dumps(dict(verified=[dict(host=str(n), head=head, checkout=head,
-        hooks=head, build=head, synced=False) for n in range(3)])))
+    rows = [dict(host=str(n), head=head, checkout=head, hooks=head, build=head, synced=False) for n in range(3)]
+    if os.environ.get('WRITER_REPORT'):  # every host reports its writer-stop result
+        rows = [dict(row, writers=[dict(status='stopped', run_id='r%s' % row['host'])]) for row in rows]
+    print(json.dumps(dict(verified=rows)))
+elif args[:1] == ['lane-cleanup']:
+    with open(os.environ['JOURNAL_LANE_LOG'], 'a') as log:
+        print(json.dumps(args), file=log)
 else:
     assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
 """)
@@ -164,11 +170,39 @@ def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keep
         assert journal("consumed", parts=frozen)["consumed"] == frozen
 
 
+@pytest.mark.parametrize("reported", [False, True])
+def test_settlement_runs_the_lane_verb_only_after_a_recorded_writer_stop_report(env, journal, reported):
+    """merge_batch.py land/settle: host verification without a writer report holds the lane refs."""
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    if reported:
+        env.env["WRITER_REPORT"] = "1"
+    res = land(env, approval)
+    assert res.returncode == 0, res.stderr
+    train = journal()["train"]
+    assert train["open_steps"] == [] and all(("writers" in host) == reported for host in train["host_verification"])
+    sweep = (env.tmp / "sweep").read_text().splitlines()
+    lane_remote = {s for s in sweep if s.startswith("lane/")}
+    frozen = {f"{part['ref']}:{part['head']}" for part in train["parts"] if part["pr"] in train["included"]}
+    holds = [row.split("\t")[0] for row in (env.tmp / "lanestate/lane-holds.txt").read_text().splitlines()]
+    if reported:
+        assert not [hold for hold in holds if hold.removeprefix("refs/heads/") in {p["ref"] for p in train["parts"]}]
+        (call,) = [json.loads(line) for line in (env.tmp / "lane").read_text().splitlines()]
+        refs = call[call.index("--refs") + 1].split(",")
+        assert set(refs) == {f"refs/heads/{pair}" for pair in frozen} and "--apply" in call
+        assert lane_remote == frozen
+    else:  # held from before the merge until a writer-stop report is recorded
+        assert {f"refs/heads/{p['ref']}" for p in train["parts"] if p["pr"] in train["included"]} <= set(holds)
+        assert not (env.tmp / "lane").exists() and lane_remote == set()
+        assert "--delete-remote" not in sweep
+
+
 @pytest.mark.parametrize("local_state", [True, False])
 def test_tested_ff_recovers_after_push_before_part_outcomes_are_saved(env, request, local_state):
     approval = pushed(env)
     journal = request.getfixturevalue("journal")
     mode(env, "tested-ff")
+    env.env["WRITER_REPORT"] = "1"  # the hosts report their writer-stop result, so landed lane refs may go
     head = head_of(env)
     env.env["INTERRUPT_LANDING"] = "1"
     interrupted = land(env, approval)

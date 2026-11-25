@@ -34,7 +34,13 @@ def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, c
     seen = []
     monkeypatch.setattr(cli, '_start_supervisor', _fake_supervisor(envelope, seen))
     monkeypatch.setattr(SpawnService, 'route', lambda self, *a, **kw: None)
-    monkeypatch.setattr(SpawnService, 'result', lambda self, run_id: {'run_id': run_id, 'status': 'completed'})
+    reads = []
+
+    def result(self, run_id):
+        reads.append(run_id)
+        return {'run_id': run_id, 'status': 'completed'}
+
+    monkeypatch.setattr(SpawnService, 'result', result)
     rc = cli.main(['--state', str(tmp_path), 'spawn', 'x', '--card', '{"estimate_tokens":1000}',
                    '--role', 'review', '--writer-family', 'claude', '--seats', '--wait', '0.05'])
     out = json.loads(capsys.readouterr().out)
@@ -43,6 +49,7 @@ def test_cli_spawn_seats_prints_group(tmp_path, monkeypatch, capsys, statuses, c
     # --wait polls each running seat; refused seats keep their record.
     # r2 seat (qwen run-9ee7830a): a planned (dry_run) group exits 0 like a single dry run.
     assert [r['status'] for r in out['seats']] == ['completed' if s == 'running' else s for s in statuses]
+    assert reads == [f'run-{i}' for i, status in enumerate(statuses) if status == 'running']
 
 
 def test_excluded_writer_family_override_leaves_no_audit_line(tmp_path):

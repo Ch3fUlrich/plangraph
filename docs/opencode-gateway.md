@@ -7,6 +7,15 @@ The spawner reads its provider block from plangraph's shipped
 gateway config into a `{"providers": {...}}` file, omitting unrelated providers;
 credentials must remain environment-variable references, never secret values.
 
+Routing and launch preparation use the resulting overlay to read the requested
+provider and model's context limit and effective output reserve. Effort variants
+inherit the base model's limits when the renderer supplies the variant. The
+request bound is the context limit minus the effective output reserve, subject
+to the route's ceiling. A missing limit uses the leg's compatibility bound. A
+malformed model limit refuses the leg. Launch preparation reads the current
+overlay again and passes the bound to the daemon for final prompt admission,
+including any diff the daemon adds.
+
 The per-run overlay and renderer route both `mimo` and `omniroute` through
 the configured gateway. Witness-required review routing applies the same
 overlay and renderer to each gateway candidate before checking eligibility.

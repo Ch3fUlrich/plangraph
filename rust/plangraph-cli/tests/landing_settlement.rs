@@ -4,6 +4,7 @@
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
+use pg_worker_core::executable_test_support::write_script;
 use std::path::Path;
 
 #[test]
@@ -113,7 +114,7 @@ with TemporaryDirectory() as tmp:
         assert args[:2] == ('pr', 'view'), args
         return (dict(state='MERGED', headRefOid='c'*40) if args[2] == '5'
                 else dict(state='OPEN', headRefOid='f'*40))
-    def sweep(state, parts, *, strict):
+    def sweep(state, parts, *, strict, writers=None):
         assert strict
         assert [part['pr'] for part in parts] == [5]
         assert journal(identity['repo'], 'show', pr=17)['train']['included'] == [5]
@@ -149,6 +150,201 @@ with TemporaryDirectory() as tmp:
     except Refused as exc:
         assert exc.code == 'conflict'
 "#,
+    );
+}
+
+#[test]
+fn settle_retries_deferred_lane_cleanup() {
+    keeper_fixture(
+        r#"
+from pathlib import Path
+import json
+from tempfile import TemporaryDirectory
+from plangraph.keeper.auth import Principal, add_principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.store import Store
+from unittest.mock import patch, Mock
+import merge_batch_build as build
+import merge_batch_land as landing
+import merge_batch_util as util
+import merge_batch_plan as plan
+
+with TemporaryDirectory() as tmp:
+    import os
+    os.environ['PG_LANE_STATE'] = tmp + '/lane'
+    path = Path(tmp) / 'keeper.db'
+    db = open_db(path, create=True, backend='sqlite')
+    add_principal(db, 'lander', 'router', [])
+    principal = Principal('lander', 'router', [])
+    identity = dict(repo='example/repo', pr=17)
+    lease = Store(db).land(principal, dict(repo=identity['repo'], action='acquire', owner='test'))
+    identity.update(lease)
+    train = dict(identity, base='a'*40, head='b'*40, parts=[{'pr': 5, 'head': 'c'*40, 'ref': 'lane/landed-r3'}])
+    Store(db).land(principal, dict(train, action='prepare'))
+    db.close()
+    db = open_db(path, backend='sqlite')
+    store = Store(db)
+    pending = store.land(principal, dict(repo=identity['repo'], action='pending'))['trains']
+    def journal(repo, action, **fields):
+        return store.land(principal, dict(fields, repo=repo, action=action))
+    journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)
+    proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1, writers=[])
+             for i in range(3)]
+    lane_calls, rcs = [], [3, 0]
+    def effect(args, **kwargs):
+        return Mock(stdout=json.dumps({'verified': proof}) if 'verify-hosts' in args else '', stderr='')
+    def cleanup_run(argv, **kwargs):
+        if argv[:2] == ['plangraph', 'lane-cleanup']:
+            lane_calls.append(argv)
+            return Mock(returncode=rcs.pop(0), stdout='lane refused\n', stderr='')
+        return Mock(returncode=0, stdout='', stderr='')
+    def live_part(*args):
+        return dict(state='MERGED', headRefOid='c'*40)
+    fork = []
+    def head_identity(*args):
+        return dict(isCrossRepository=bool(fork), headRefName='lane/landed-r3')
+    def settle():
+        with (patch.object(landing, 'landing_journal', journal),
+              patch.object(build, 'landing_journal', journal),
+              patch.object(build, 'gh_json', side_effect=live_part),
+              patch.object(build, 'git', return_value=Mock(returncode=0)),
+              patch.object(landing, 'write_landing', Mock()),
+              patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
+              patch.object(landing, 'run', effect),
+              patch.object(plan, 'gh_json', side_effect=head_identity),
+              patch.object(plan, 'run', cleanup_run),
+              patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')),
+              patch.object(plan, 'worktrees', return_value=[])):
+            landing.settle_train(pending[0], lease)
+    try:
+        settle()
+    except util.MergeBatchError as exc:
+        assert 'deferred' in str(exc), exc
+    else:
+        raise AssertionError('a refused lane delete must hold the cleanup step open')
+    assert 'cleanup' in journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)['open_steps']
+    settle()
+    assert journal(identity['repo'], 'landed', pr=17, merge='d'*40, **lease)['open_steps'] == []
+    assert len(lane_calls) == 2 and lane_calls[0] == lane_calls[1], lane_calls
+    argv = lane_calls[0]
+    assert argv[argv.index('--refs') + 1] == 'refs/heads/lane/landed-r3:' + 'c'*40, argv
+    assert '--stems' not in argv and '--apply' in argv, argv
+    assert argv[argv.index('--gh-repo') + 1] == 'example/repo', argv
+    # A part whose head lives in a fork reaches neither the legacy sweeper nor the lane cleanup.
+    fork.append(True)
+    lane_calls.clear()
+    sweeps = []
+    def sweep_run(argv, **kwargs):
+        if argv[0] == 'pg-worktree-sweep':
+            sweeps.append(argv)
+        if argv[:2] == ['plangraph', 'lane-cleanup']:
+            lane_calls.append(argv)
+        return Mock(returncode=0, stdout='', stderr='')
+    forked = dict(repo='example/repo', worktree='', branch='', head='b'*40, prs={'5': dict(ref='lane/landed-r3')})
+    part = [dict(pr=5, head='c'*40)]
+    with (patch.object(plan, 'gh_json', side_effect=head_identity), patch.object(plan, 'run', sweep_run),
+          patch.object(plan, 'git', return_value=Mock(stdout='/repo\n')), patch.object(plan, 'worktrees', return_value=[])):
+        plan.cleanup_landed(forked, part, strict=True, writers=True)   # fork: local-only sweep, no verb
+        fork.clear()
+        plan.cleanup_landed(forked, part, strict=False, writers=True)  # same repo, writers stopped
+        plan.cleanup_landed(forked, part, strict=False, writers=False) # writer-stop not recorded: held
+        plan.cleanup_landed(forked, part, strict=False)                # no host verification: no verb
+    assert '--delete-remote' not in sweeps[0] and '--remote-target' not in sweeps[0], sweeps[0]
+    assert '--delete-remote' in sweeps[1] and sweeps[1][sweeps[1].index('--remote-target') + 1] == 'lane/landed-r3:' + 'c'*40, sweeps[1]
+    assert '--delete-remote' not in sweeps[2] and '--remote-target' not in sweeps[2], sweeps[2]
+    assert '--delete-remote' not in sweeps[3] and '--remote-target' not in sweeps[3], sweeps[3]  # legacy: no evidence
+    assert len(lane_calls) == 1, lane_calls
+    # Only a host verification with a writers report and no kept writer counts as writer-stop evidence.
+    stop = plan.writers_stopped
+    assert stop([dict(writers=[])]) and stop([dict(writers=[dict(status='stopped')])])
+    assert not stop(None) and not stop([]) and not stop([dict(writers=None)]) and not stop([dict()])
+    assert not stop([dict(writers=[dict(status='kept')])]) and not stop([dict(writers=[]), dict()])
+"#,
+    );
+}
+
+#[path = "lane_support/mod.rs"]
+mod lane_support;
+
+/// The settlement cleanup (`cleanup_landed`, the keeper settle's cleanup step) against a real hooked fixture remote: the hook refuses a remote that is not
+/// the App's, the step fails, and the retry sends the same frozen ref and SHA and deletes it.
+#[test]
+fn settle_retries_a_real_hook_refusal_with_the_same_frozen_sha() {
+    let f = lane_support::Fixture::new();
+    let sha = f.lane("lane/landed", "main", "m.txt", "m\n");
+    f.main_ff("lane/landed");
+    f.set(
+        "pr-9.json",
+        r#"{"isCrossRepository":false,"headRefName":"lane/landed"}"#,
+    );
+    f.hook_on(false);
+    // The legacy sweeper is not under test here: a stub that succeeds stands in for it.
+    write_script(&f.bin, "pg-worktree-sweep", "#!/bin/sh\nexit 0\n");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let binary = Path::new(env!("CARGO_BIN_EXE_plangraph"));
+    let step = || {
+        let script = r#"
+import json, os, sys
+sys.path.insert(0, os.environ['TOOLS'])
+import merge_batch_plan as plan
+calls = []
+real = plan.run
+def recording(argv, **kwargs):
+    calls.append(list(argv))
+    return real(argv, **kwargs)
+plan.run = recording
+st = dict(repo='fixture/origin', worktree='', branch='', head='b'*40, prs={'9': dict(ref='lane/landed')})
+try:
+    plan.cleanup_landed(st, [dict(pr=9, head=os.environ['FROZEN'])], strict=True, writers=True)
+    outcome = 'done'
+except plan.MergeBatchError as exc:
+    outcome = 'deferred' if 'deferred' in str(exc) else 'other: ' + str(exc)
+print(json.dumps([outcome, calls]))
+"#;
+        let path = format!(
+            "{}:{}:/usr/bin:/bin",
+            f.bin.display(),
+            binary.parent().unwrap().display()
+        );
+        let output = test_python::command()
+            .current_dir(&f.work)
+            .env("PYTHONPATH", repo.join("src"))
+            .env("TOOLS", repo.join("tools"))
+            .env("PATH", path)
+            .env("FAKE_GH_DIR", &f.gh)
+            .env("FROZEN", &sha)
+            .env("WORK", &f.work)
+            .env("PG_LANE_STATE", &f.state)
+            .env("PG_LANE_GH_HOST", "local")
+            .env(
+                "PG_SWEEP_CLAIMS_READER",
+                format!("cat {}", f.gh.join("claims.json").display()),
+            )
+            .args(["-c", script])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let first = step();
+    assert!(first.starts_with(r#"["deferred""#), "{first}");
+    assert_eq!(f.heads(), ["landed"], "a refused delete leaves the ref");
+    // The operator marks the App's remote; the retry carries the same frozen pair.
+    lane_support::git(
+        &f.work,
+        &["config", "remote.origin.plangraph-lane-delete", "app"],
+    );
+    let second = step();
+    assert!(second.starts_with(r#"["done""#), "{second}");
+    assert!(f.heads().is_empty());
+    let frozen = format!("refs/heads/lane/landed:{sha}");
+    assert!(
+        first.contains(&frozen) && second.contains(&frozen),
+        "{first} {second}"
     );
 }
 
@@ -350,7 +546,7 @@ import merge_batch_util as util
 
 repo, base, head = 'example/repo', 'a'*40, 'b'*40
 state = dict(repo=repo, status='pushed', pr=17, name='train', base_head=base, head=head,
-             branch='batch/train', worktree='fixture',
+             branch='batch/train', worktree='fixture', prs={'5': {'ref': 'lane/part'}},
              merged=[dict(pr=5, head='c'*40, merge='d'*40, items=['example:PART'])])
 args = SimpleNamespace(batch_pr=17, approval='approval.txt', checks='', go_row=None)
 lease = {'token': 42, 'owner': 'test'}
@@ -369,6 +565,10 @@ for refused in (False, True):
         calls.append('host merge')
         raise land.MergeBatchError('host merge boundary')
 
+    def hold(refs):
+        assert refs == ['lane/part']
+        calls.append('hold lane')
+
     with ExitStack() as stack:
         stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
         for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
@@ -378,6 +578,7 @@ for refused in (False, True):
         stack.enter_context(patch.object(land, 'require_full_run', return_value=[]))
         stack.enter_context(patch.object(land, 'landing_journal', journal))
         stack.enter_context(patch.object(land, 'gh', gh))
+        stack.enter_context(patch.object(land, 'hold_lane_refs', hold))
         stack.enter_context(patch.object(land, 'gh_json', side_effect=[
             dict(state='OPEN', headRefOid=head, isDraft=False, baseRefName='main'), {'object': {'sha': base}}
         ]))
@@ -387,7 +588,7 @@ for refused in (False, True):
             assert str(exc) == ('demo:C cannot land before demo:D' if refused else 'host merge boundary')
         else:
             raise AssertionError('expected the dependency refusal or simulated host boundary')
-    assert calls == (['dependency check'] if refused else ['dependency check', 'host merge'])
+    assert calls == ['hold lane', 'dependency check'] + ([] if refused else ['host merge'])
 "#,
     );
 }

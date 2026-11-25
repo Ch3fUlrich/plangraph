@@ -23,7 +23,7 @@ from plangraph.routing_support.opencode_render import (  # management token load
     _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
 )
 from .gateway_models import (  # compatibility re-exports for callers
-    PROVIDER_ALIASES, model_segment, served_family, served_models,
+    model_segment, served_family, served_models,
 )
 
 SESSION_HEADER = 'x-omniroute-session-id'

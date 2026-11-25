@@ -1,10 +1,12 @@
 import io
 import json
 import os
+from pathlib import Path
 import time
 
 import pytest
 
+from plangraph.routing_support.opencode_overlay import overlay_env as real_provider_overlay
 from plangraph.spawner.prompt_input import header
 
 from plangraph.spawner import launch_spec as spec
@@ -596,3 +598,64 @@ def test_review_launch_resolves_latest_nvm_harness_under_user_manager_path(
     assert str(node / 'v24.19.0/bin') in launch['env']['PATH'].split(os.pathsep)
     assert launch['argv'][0] == expected
     assert shutil.which(harness, path=launch['env']['PATH']) == expected
+
+
+def test_launch_spec_danger_full_access_precedes_client_lookup(request_data, monkeypatch):
+    from plangraph.routing_support import clients
+    def lookup(*args, **kwargs):
+        raise AssertionError('client looked up before the sandbox refusal')
+    monkeypatch.setattr(clients, 'codex_review_client', lookup)
+    monkeypatch.setattr(spec, 'quota_paused', lookup, raising=False)
+    request_data['card'] = {'sandbox': 'danger-full-access'}
+    code, out, err = invoke(request_data)
+    assert (code, out) == (2, '')
+    assert err.startswith('sandbox_refused: danger-full-access')
+
+
+def test_fresh_launch_spec_danger_full_access_precedes_run_tree(request_data, monkeypatch, capsys):
+    from plangraph.spawner import git_guard
+    def tree(*args, **kwargs):
+        raise AssertionError('run tree leased before the sandbox refusal')
+    monkeypatch.setattr(git_guard, 'run_tree', tree)
+    request_data['card'] = {'sandbox': 'danger-full-access'}
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(request_data)))
+    assert spec.fresh_main() == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith('sandbox_refused: danger-full-access') and captured.out == ''
+
+
+@pytest.mark.parametrize('card', [{'sandbox': 'unknown-sentinel-mode'}, {'sandbox': 7}])
+def test_launch_spec_unsupported_sandbox_is_named_without_echo(request_data, card):
+    request_data['card'] = card
+    code, _, err = invoke(request_data)
+    assert code == 2 and err.startswith('sandbox_refused: ') and 'sentinel' not in err
+
+
+def test_configured_provider_file_binds_route_and_launch(request_data, tmp_path, monkeypatch):
+    from plangraph.planner.legs import spawnable_legs
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import opencode_overlay
+
+    monkeypatch.setattr(opencode_overlay, 'overlay_env', real_provider_overlay)
+    shipped = Path(spec.__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
+    providers = opencode_overlay.load_root_providers(shipped)
+    path = tmp_path / 'providers.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(path))
+    path.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+    leg = next(leg for leg in spawnable_legs() if leg.id == 'mimo-v2.6-flash')
+    card = {'estimate_tokens': 200_000}
+
+    def plan():
+        return plan_spawn(card, role='implement', legs=(leg,), policy=RoutePolicy(),
+                          leg_reader=lambda *args, **kwargs: {'state': 'up', 'evidence': None})
+
+    assert plan().legs[0].max_request_tokens == 868928
+    request_data.update(role='implement', dry_run=True, leg={'id': leg.id},
+                        card=card, prompt='a' * 500_000)
+    assert spec.build(request_data)['max_request_tokens'] == 868928
+    providers['mimo']['models']['mimo-v2.6-flash']['limit']['context'] = 291072
+    path.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+    assert plan().error
+    with pytest.raises(spec.LaunchRefused, match='max_request_tokens 160000'):
+        spec.build(request_data)
