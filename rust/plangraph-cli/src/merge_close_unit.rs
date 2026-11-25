@@ -60,19 +60,21 @@ fn refresh_wait(env: &Env) -> Result<Duration, String> {
 }
 
 /// The lock file beside the state: `<state file name>.lock`, never the state file itself, whose
-/// inode a streak write replaces.
-pub fn lock_path(state: &Path) -> std::path::PathBuf {
-    let mut name = state.file_name().unwrap_or_default().to_owned();
+/// inode a streak write replaces. A path with no file name (`""`, `/`, `..`) has none.
+pub fn lock_path(state: &Path) -> Option<std::path::PathBuf> {
+    let mut name = state.file_name()?.to_owned();
     name.push(".lock");
-    state.with_file_name(name)
+    Some(state.with_file_name(name))
 }
 
 fn lock_runs(state: &Path) -> Result<Option<pg_worker_core::lockfile::LockGuard>, String> {
+    let lock =
+        lock_path(state).ok_or_else(|| format!("--state {} names no file", state.display()))?;
     if let Some(parent) = state.parent().filter(|p| !p.as_os_str().is_empty()) {
         pg_worker_core::run::record_io::ensure_private_dir(parent)
             .map_err(|err| format!("create merge-close state dir {}: {err}", parent.display()))?;
     }
-    pg_worker_core::lockfile::try_lock(&lock_path(state))
+    pg_worker_core::lockfile::try_lock(&lock)
         .map_err(|err| format!("lock merge-close state {}: {err}", state.display()))
 }
 
