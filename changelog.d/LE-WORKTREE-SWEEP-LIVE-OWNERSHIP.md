@@ -2,4 +2,14 @@ pg-worktree-sweep and the reaper now report `live-run` only for a tree owned by 
 
 Ownership evidence is the set of distinct `(record.json run_id, canonical worktree path)` pairs of unfinished runs, using the same `finished` and `paths` rules as the code, not a count of pins. On the development host that host's run state held 2979 readable records, 1 unfinished run (`running`), giving 1 pair and 1 distinct worktree. The earlier claim that the workstation's 153 of 245 `live-run` rows were pins is withdrawn. On the workstation (609 readable records, 0 unreadable, 0 with survivors; completed 251, failed 194, refused 129, dry_run 23, cancelled 11, limited 1) the join gives 1 unfinished run, 1 `(run_id, path)` pair and 1 distinct worktree: the single `limited` run, because `run/record.rs::releases_ownership` (line 86) keeps `limited` from releasing ownership. The 23 `dry_run` records (23 pairs on 19 paths) are finished: `sweep_runs.rs::finished` uses `releases_ownership`, and `dry_run` parses as a terminal status.
 
+The join that produced these counts, run against a run-state directory `$STATE` (the unfinished test is the code's: status outside the releasing set, or any survivor):
+
+```sh
+for r in "$STATE"/runs/*/record.json; do
+  jq -r --arg id "$(basename "$(dirname "$r")")" 'select(((.status|IN("completed","failed","cancelled","stalled","stalled_no_leg","timeout","refused","dry_run","timed_out","killed","succeeded","skipped","terminated_after_answer")) and ((.survivors//[])|length==0))|not)|(.run_id//$id) as $rid|[.checkout,.cwd,.run_worktree.path?,(.worktree_attempts[]?.path)]|.[]|select(type=="string")|[$rid,.]|@tsv' "$r"
+done | while IFS=$'\t' read -r id p; do printf '%s\t%s\n' "$id" "$(realpath -m "$p")"; done | sort -u
+```
+
+Each output line is one `(run_id, canonical worktree path)` pair; the distinct worktree count is the number of distinct second fields. On the development host the one line is `run-cb32…<32 hex> <home>/.local/share/<app>/native-reviews/<job>/checkout-<id>-1` (a `running` run whose `cwd` is that checkout); `limited` stays unfinished and `dry_run` is finished, as the status set above encodes.
+
 Deploy: no deploy needed beyond the normal rebuild of `pg-worktree-sweep` and the reaper binaries.
