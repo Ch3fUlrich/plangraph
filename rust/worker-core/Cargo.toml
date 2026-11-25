@@ -14,7 +14,7 @@ test = false
 required-features = ["test-support"]
 
 [package.metadata.plangraph]
-host-binaries = ["pg-disk-hygiene", "turn-budget-hook"]
+host-binaries = ["flow-watchdog", "pg-disk-hygiene", "pg-worktree-sweep", "turn-budget-hook"]
 
 [features]
 test-support = []

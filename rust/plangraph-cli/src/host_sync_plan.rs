@@ -286,17 +286,25 @@ mod tests {
     fn the_workspace_marks_every_host_binary() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let metadata = workspace_metadata(&repo, Path::new("cargo")).unwrap();
-        let plan = plan(&metadata, true).unwrap();
+        let regular = plan(&metadata, false).unwrap();
         for name in [
             "pg-spawnd",
             "plangraph",
             "pg-disk-hygiene",
+            "flow-watchdog",
+            "pg-worktree-sweep",
             "turn-budget-hook",
             "pg-telemetry",
-            "pg-keeper-backup",
         ] {
-            assert!(plan.iter().any(|(_, bin)| bin == name), "{name} not marked");
+            assert!(
+                regular.iter().any(|(_, bin)| bin == name),
+                "{name} not marked"
+            );
         }
-        check_build(&metadata, &build_args(&plan), true).unwrap();
+        check_build(&metadata, &build_args(&regular), false).unwrap();
+
+        let with_keeper = plan(&metadata, true).unwrap();
+        assert!(with_keeper.iter().any(|(_, bin)| bin == "pg-keeper-backup"));
+        check_build(&metadata, &build_args(&with_keeper), true).unwrap();
     }
 }
