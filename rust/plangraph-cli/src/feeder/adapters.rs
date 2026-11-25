@@ -30,9 +30,10 @@ pub(super) fn output(mut cmd: Command) -> Result<Value, String> {
 pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
     snapshot_rows(env, repo, "id")
 }
-/// The same read-only source keeping the newest observation per key (id breaks a tie).
-pub(super) fn quota_snapshots_by_observation(env: &Env, repo: &Path) -> Result<Value, String> {
-    snapshot_rows(env, repo, "observed")
+/// The same read-only source with every stored row, oldest id first, for readers that pick
+/// the newest observation themselves.
+pub(super) fn quota_snapshot_history(env: &Env, repo: &Path) -> Result<Value, String> {
+    snapshot_rows(env, repo, "all")
 }
 fn snapshot_rows(env: &Env, repo: &Path, latest: &str) -> Result<Value, String> {
     let mut cmd = python(env, repo);

@@ -28,19 +28,44 @@ type Row = (
 );
 
 fn database(directory: &Path, rows: &[Row]) -> std::path::PathBuf {
-    let db = directory.join("quota.sqlite");
-    let mut script = String::from(
-        "CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id,
-          window_key, remaining_percentage, is_exhausted, next_reset_at, created_at);",
-    );
     let sql = |value: Option<&str>| value.map_or("NULL".into(), |v| format!("'{v}'"));
-    for (id, provider, connection, window, left, at, reset) in rows {
-        let left = left.map_or("NULL".into(), |v| v.to_string());
-        script.push_str(&format!(
-            "INSERT INTO quota_snapshots VALUES ({id}, '{provider}', {}, '{window}', {left}, 0, {reset}, {at});",
-            sql(*connection)
-        ));
-    }
+    let inserts: String = rows
+        .iter()
+        .map(|(id, provider, connection, window, left, at, reset)| {
+            let left = left.map_or("NULL".into(), |v| v.to_string());
+            insert(
+                *id,
+                provider,
+                &sql(*connection),
+                window,
+                &left,
+                &at.to_string(),
+                *reset,
+            )
+        })
+        .collect();
+    database_sql(directory, &inserts)
+}
+
+/// One INSERT whose connection, remaining and observation are raw SQL literals.
+fn insert(
+    id: i64,
+    provider: &str,
+    connection: &str,
+    window: &str,
+    left: &str,
+    at: &str,
+    reset: f64,
+) -> String {
+    format!("INSERT INTO quota_snapshots VALUES ({id}, '{provider}', {connection}, '{window}', {left}, 0, {reset}, {at});")
+}
+
+fn database_sql(directory: &Path, inserts: &str) -> std::path::PathBuf {
+    let db = directory.join("quota.sqlite");
+    let script = format!(
+        "CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id,
+          window_key, remaining_percentage, is_exhausted, next_reset_at, created_at);{inserts}"
+    );
     let fixture = test_python::command()
         .args([
             "-c",
@@ -52,6 +77,14 @@ fn database(directory: &Path, rows: &[Row]) -> std::path::PathBuf {
         .unwrap();
     assert!(fixture.success());
     db
+}
+
+/// A zone-less ISO text of whole `secs` plus `nanos`, `sep` between date and time and `digits`
+/// fractional digits; integers keep differences f64 seconds cannot hold.
+fn iso(secs: f64, nanos: u32, sep: char, digits: usize) -> String {
+    let t = chrono::DateTime::from_timestamp(secs as i64, nanos).unwrap();
+    let format = format!("%Y-%m-%d{sep}%H:%M:%S%.{digits}f");
+    format!("'{}'", t.naive_utc().format(&format))
 }
 
 fn pool(db: Option<&Path>) -> Value {
@@ -242,4 +275,128 @@ fn quota_pool_with_an_unreadable_store_is_an_explicit_unknown() {
     assert_eq!(report["status"], "unknown");
     assert_eq!(report["reason"], "snapshots unreadable");
     assert!(!db.exists());
+}
+
+#[test]
+fn quota_pool_orders_zone_less_t_timestamps_and_sub_microsecond_ties() {
+    let t = now() - 100.0;
+    let reset = now() + 3.0 * 86_400.0;
+    let directory = tempfile::tempdir().unwrap();
+    let inserts = [
+        // Account a: T-separated, no zone; the winner differs from the older row by 100 ns.
+        insert(
+            1,
+            "codex:a",
+            "NULL",
+            "weekly",
+            "40",
+            &iso(t, 123_456_800, 'T', 9),
+            reset,
+        ),
+        insert(
+            2,
+            "codex:a",
+            "NULL",
+            "weekly",
+            "90",
+            &iso(t, 123_456_700, 'T', 9),
+            reset,
+        ),
+        // Account b: the only row is T-separated and must still be usable.
+        insert(
+            3,
+            "codex:b",
+            "NULL",
+            "weekly",
+            "80",
+            &iso(t, 0, 'T', 3),
+            reset,
+        ),
+    ]
+    .concat();
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&account(&weekly, "a")["used_pct"], 60.0);
+    near(&account(&weekly, "b")["used_pct"], 20.0);
+    assert_eq!(weekly["coverage"]["usable_accounts"], 2, "{weekly}");
+}
+
+#[test]
+fn quota_pool_isolates_malformed_sqlite_values_per_row() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    let directory = tempfile::tempdir().unwrap();
+    let inserts = [
+        insert(1, "codex:a", "NULL", "weekly", "50", &t.to_string(), reset),
+        // An infinite percentage and a BLOB on other providers' rows must not hide account a.
+        insert(2, "claude", "'x'", "weekly", "9e999", &t.to_string(), reset),
+        insert(
+            3,
+            "claude",
+            "'y'",
+            "weekly",
+            "x'00ff'",
+            &t.to_string(),
+            reset,
+        ),
+        insert(
+            4,
+            "codex:b",
+            "NULL",
+            "weekly",
+            "x'00ff'",
+            &t.to_string(),
+            reset,
+        ),
+    ]
+    .concat();
+    let report = pool(Some(&database_sql(directory.path(), &inserts)));
+    let weekly = window(&report, "weekly");
+    near(&weekly["used_pct"], 50.0);
+    assert_eq!(weekly["coverage"]["observed_accounts"], 2, "{weekly}");
+    assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
+}
+
+#[test]
+fn quota_pool_empty_connection_id_keeps_the_provider_suffix_identity() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    let directory = tempfile::tempdir().unwrap();
+    let inserts = insert(1, "codex:a", "''", "weekly", "70", &t.to_string(), reset);
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&account(&weekly, "a")["used_pct"], 30.0);
+    assert_eq!(weekly["coverage"]["unidentified"], 0, "{weekly}");
+}
+
+#[test]
+fn quota_pool_leaves_out_an_observation_made_before_its_window_began() {
+    let t = now();
+    let directory = tempfile::tempdir().unwrap();
+    // Account a is fresh but was observed an hour before the week its reset implies began;
+    // b is inside its week.
+    let inserts = [
+        insert(
+            1,
+            "codex",
+            "'a'",
+            "weekly",
+            "10",
+            &(t - 100.0).to_string(),
+            t - 100.0 + WEEK + 3_600.0,
+        ),
+        insert(
+            2,
+            "codex",
+            "'b'",
+            "weekly",
+            "60",
+            &(t - 60.0).to_string(),
+            t + 86_400.0,
+        ),
+    ]
+    .concat();
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&weekly["used_pct"], 40.0);
+    assert_eq!(weekly["coverage"]["observed_accounts"], 2, "{weekly}");
+    assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
+    assert_eq!(weekly["accounts"].as_array().unwrap().len(), 1);
 }
