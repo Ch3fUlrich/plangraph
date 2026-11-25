@@ -558,8 +558,11 @@ def declared_pools(leg):
     """
     import json
     from .opencode_overlay import effective_model_id
-    from .quota_snapshots import ALIASES
-    target = effective_model_id(leg) or leg.partition('/')[2]
+    from .quota_snapshots import ALIASES, pool_of
+    model_id = effective_model_id(leg)
+    if model_id is None and (pool := pool_of(identity_model(leg))) is not None:
+        return pool, ()   # a known alias decides only a leg that declares no launch target
+    target = model_id or leg.partition('/')[2]
     if '/' in target:
         head = target.split('/')[0]
         return ALIASES.get(head, head), ()
@@ -575,13 +578,10 @@ def _gateway_pool(states, leg, declared):
 
     The snapshot is keyed by upstream provider, not by the gateway prefix. The declared pool
     (direct provider, else the combo's pools) decides by exact provider id, with the explicit
-    ``POOL_ALIASES``; a declared pool with no row is no state, never another pool's. Only a
+    ``POOL_ALIASES``; a known alias (``cx``, ``gc``) only names the pool of a leg with no launch target; a declared pool with no row is no state, never another pool's. Only a
     model that declares no pool takes the gateway's own ``omniroute`` row. Among a combo's
     rows an available one wins.
     """
-    from .quota_snapshots import pool_of
-    if (pool := pool_of(identity_model(leg))) is not None:
-        return states.get(pool)   # a known alias pool never borrows another pool's state
     direct, combo = declared
     wanted = [direct] if direct is not None else list(combo)
     if not wanted:
