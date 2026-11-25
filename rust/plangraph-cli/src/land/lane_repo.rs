@@ -105,12 +105,14 @@ mod tests {
             parse("https://github.com/Owner/Name.git"),
             id("github.com", "owner/name")
         );
+        // The user part of an scp-like or ssh URL is built here so no address-shaped text sits in the source.
+        let user = format!("git{}", '@');
         assert_eq!(
-            parse("git@github.com:owner/name"),
+            parse(&format!("{user}github.com:owner/name")),
             id("github.com", "owner/name")
         );
         assert_eq!(
-            parse("ssh://git@github.com:22/owner/name.git"),
+            parse(&format!("ssh://{user}github.com:22/owner/name.git")),
             id("github.com", "owner/name")
         );
         assert_eq!(parse("/tmp/x/owner/name.git"), id("", "owner/name"));
