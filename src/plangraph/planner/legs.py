@@ -29,7 +29,7 @@ __all__ = ["OWN_HARNESS", "CLIENT_MISSING", "HarnessChoice", "client_installed",
            "resolve_legs", "own_harness_legs", "harness_skips", "refuse_foreign_pin", "own_harness_enabled", "service_probe",
            "TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
            "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
-           "CX_EFFORTS"]
+           "CX_EFFORTS", "bound_legs", "POLICY_REQUEST_CAPS", "LEAD_WRITER_RESEARCH_CAP"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
@@ -71,10 +71,16 @@ CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 def _codex_context(model):
+    """A native Codex leg's window from the shipped registry; a missing, unreadable or malformed
+    entry keeps the 1M default, so importing this module never fails on a bad registry."""
     from plangraph.routing_support.opencode_overlay import load_root_providers
     shipped = Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
-    models = (load_root_providers(shipped) or {}).get('omniroute', {}).get('models', {})
-    return models.get(model, {}).get('limit', {}).get('context', 1_000_000)
+    providers = load_root_providers(shipped)
+    try:
+        context = providers['omniroute']['models'][model]['limit']['context']
+    except (KeyError, TypeError):
+        return 1_000_000
+    return context if type(context) is int and context > 0 else 1_000_000
 
 
 _SOL_CONTEXT = _codex_context('cx-gpt-6.2-sol')
@@ -365,7 +371,7 @@ def research_route_pool(legs) -> tuple[Leg, ...]:
     """Research uses declared legs and reserves headroom on the default Sol leg."""
     if legs is not DEFAULT_LEGS:
         return tuple(leg for leg in legs if "research" in leg.roles)
-    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, 900_000))
+    return tuple(_replace(leg, max_request_tokens=min(leg.max_request_tokens, LEAD_WRITER_RESEARCH_CAP))
                  if leg.id == LEAD_WRITER else leg
                  for leg in review_route_pool(legs) if "research" in leg.roles)
 
@@ -542,16 +548,67 @@ def service_probe(service) -> Callable[[str], bool] | None:
     return client_installed if own_harness_enabled() else None
 
 
-def opencode_counterpart(leg: Leg) -> Leg | None:
-    """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged."""
+def opencode_counterpart(leg: Leg, view=None) -> Leg | None:
+    """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged.
+
+    Its request bound is the OmniRoute registry's, not the native client's: ``bound_legs`` reads it
+    from ``view``.  A bound the registry cannot give stays the native one (explicit compatibility)."""
     if leg.family != "gpt":
         return None
     model = "omniroute/cx-" + leg.model.removeprefix("omniroute/").removeprefix("cx-")
     if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
         return None
     tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
-    return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
-                               harness_fallback=None, web_access=False)
+    counterpart = dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode,
+                                      harness_fallback=None, web_access=False)
+    kept, _ = bound_legs((counterpart,), view)
+    return kept[0] if kept else counterpart
+
+
+#: Routing-policy ceilings on a request bound, one reason each; nothing else lowers a registry bound.
+#: ``deepseek``: the paid pay-as-you-go leg, used only if really needed.
+POLICY_REQUEST_CAPS = {"deepseek": 100_000}
+#: Research keeps headroom under the lead writer's 1M window.
+LEAD_WRITER_RESEARCH_CAP = 900_000
+
+
+def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role: str | None = None) -> tuple[tuple[Leg, ...], tuple[tuple[Leg, str], ...]]:
+    """The legs with the request bound of the active provider registry, and the legs it refuses.
+
+    ``view`` is one ``ProviderView`` shared by every check of a request (None reads a fresh one).  Only an
+    OpenCode leg is registry-bound; the identity looked up is the launch model, with the card's effort
+    variant (``codex_leg_effort``, ``launch_model``).  A leg the registry does not list keeps its declared
+    bound; a malformed entry refuses the leg.  Declared policy ceilings apply last.
+    """
+    from plangraph.routing_support.opencode_overlay import ProviderView, RequestBoundError
+    view = ProviderView() if view is None else view
+    kept, refused = [], []
+    for leg in legs:
+        if not isinstance(leg, Leg) or leg.harness != "opencode":
+            kept.append(leg)
+            continue
+        identity = leg
+        if card is not None and role in ("implement", "review"):
+            from plangraph.routing_errors import SpawnRefused
+            from .route_policy import codex_leg_effort
+            try:
+                identity = codex_leg_effort(leg, card)
+            except SpawnRefused:
+                pass    # the effort refusal belongs to its owner, after admission
+        from plangraph.spawner.target import launch_model
+        try:
+            bound = view.request_bound(launch_model(identity))
+        except RequestBoundError as exc:
+            refused.append((leg, str(exc)))
+            continue
+        if bound is None:
+            bound = leg.max_request_tokens
+        if bound is not None:
+            bound = min(bound, POLICY_REQUEST_CAPS.get(leg.id, bound))
+            if role == "research" and leg.id == LEAD_WRITER:
+                bound = min(bound, LEAD_WRITER_RESEARCH_CAP)
+        kept.append(leg if bound == leg.max_request_tokens else _replace(leg, max_request_tokens=bound))
+    return tuple(kept), tuple(refused)
 
 
 def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:

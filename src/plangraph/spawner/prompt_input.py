@@ -5,6 +5,7 @@ import json
 import re
 import os
 import subprocess
+from typing import Sequence
 
 from plangraph.planner.routing import SpawnRefused
 from plangraph.routing_errors import ParameterRefused
@@ -221,3 +222,36 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     if block and not inline_review:
         body = block + '\n\n' + body
     return head + '\n\n' + body
+
+
+def resolve_platform_launch(
+    exe: str,
+    argv: Sequence[str] = (),
+    *,
+    is_nt: bool,
+) -> tuple[str, str | None]:
+    """Resolve executable path and enforce Windows launch constraints (I11, I12)."""
+    if not is_nt:
+        return exe, None
+
+    exe_path = Path(exe)
+    ext = exe_path.suffix.lower()
+    is_batch = ext in (".cmd", ".bat")
+
+    if is_batch and exe_path.stem.lower() == "opencode":
+        sibling = exe_path.parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+        if sibling.is_file():
+            exe = str(sibling)
+            exe_path = sibling
+            ext = exe_path.suffix.lower()
+            is_batch = False
+
+    is_opencode = exe_path.stem.lower() == "opencode"
+    if not is_opencode:
+        from plangraph.routing_support.clients import WINDOWS_ARGV_LIMIT, WINDOWS_BATCH_ARGV_LIMIT
+        limit = WINDOWS_BATCH_ARGV_LIMIT if is_batch else WINDOWS_ARGV_LIMIT
+        cmdline = subprocess.list2cmdline([exe, *argv])
+        if len(cmdline) > limit:
+            return exe, f"command_line_too_long: {len(cmdline)} chars"
+
+    return exe, None

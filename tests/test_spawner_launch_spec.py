@@ -1,10 +1,12 @@
 import io
 import json
 import os
+from pathlib import Path
 import time
 
 import pytest
 
+from plangraph.routing_support.opencode_overlay import overlay_env as real_provider_overlay
 from plangraph.spawner.prompt_input import header
 
 from plangraph.spawner import launch_spec as spec
@@ -627,3 +629,33 @@ def test_launch_spec_unsupported_sandbox_is_named_without_echo(request_data, car
     request_data['card'] = card
     code, _, err = invoke(request_data)
     assert code == 2 and err.startswith('sandbox_refused: ') and 'sentinel' not in err
+
+
+def test_configured_provider_file_binds_route_and_launch(request_data, tmp_path, monkeypatch):
+    from plangraph.planner.legs import spawnable_legs
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import opencode_overlay
+
+    monkeypatch.setattr(opencode_overlay, 'overlay_env', real_provider_overlay)
+    shipped = Path(spec.__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
+    providers = opencode_overlay.load_root_providers(shipped)
+    path = tmp_path / 'providers.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(path))
+    path.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+    leg = next(leg for leg in spawnable_legs() if leg.id == 'mimo-v2.6-flash')
+    card = {'estimate_tokens': 200_000}
+
+    def plan():
+        return plan_spawn(card, role='implement', legs=(leg,), policy=RoutePolicy(),
+                          leg_reader=lambda *args, **kwargs: {'state': 'up', 'evidence': None})
+
+    assert plan().legs[0].max_request_tokens == 868928
+    request_data.update(role='implement', dry_run=True, leg={'id': leg.id},
+                        card=card, prompt='a' * 500_000)
+    assert spec.build(request_data)['max_request_tokens'] == 868928
+    providers['mimo']['models']['mimo-v2.6-flash']['limit']['context'] = 291072
+    path.write_text(json.dumps({'providers': providers}), encoding='utf-8')
+    assert plan().error
+    with pytest.raises(spec.LaunchRefused, match='max_request_tokens 160000'):
+        spec.build(request_data)

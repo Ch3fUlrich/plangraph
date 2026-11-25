@@ -70,35 +70,32 @@ impl Runs {
             "review_of":args.get("review_of"),
             "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
         });
-        let mut launch = match launch_adapter(state, &launch_req) {
-            Ok(spec) => spec,
-            Err(ToolError::Refused {
-                kind: crate::errors::RefusalKind::Spawn,
-                ref message,
-                ..
-            }) if role == "review"
-                && message.contains("prompt_too_large:")
-                && args["card"]["diff_ref"].get("repo").is_some()
-                && args["card"]["diff_ref"].get("repo_id").is_none()
-                && args["card"]["diff_ref"].get("paths").is_none()
-                && leg["review_mode"] != "inline_only" =>
+        let mut launch = launch_adapter(state, &launch_req)?;
+        if launch.split_inline_diff {
+            let diff = &args["card"]["diff_ref"];
+            if role != "review"
+                || diff.get("repo").is_none()
+                || diff.get("repo_id").is_some()
+                || diff.get("paths").is_some()
             {
-                drop(admission);
-                return crate::review_split::spawn_adapter_split_groups(
-                    self,
-                    state,
-                    args,
-                    host,
-                    &role,
-                    &plan,
-                    &leg,
-                    &cwd,
-                    dry,
-                    &mut launch_adapter,
-                );
+                return Err(internal("invalid inline-diff split preparation"));
             }
-            Err(err) => return Err(err),
-        };
+            crate::pre_review::prepare(args, &mut launch)?;
+            drop(admission);
+            return crate::review_split::spawn_adapter_split_groups(
+                self,
+                state,
+                args,
+                host,
+                &role,
+                &plan,
+                &leg,
+                &cwd,
+                dry,
+                &launch,
+                &mut launch_adapter,
+            );
+        }
         let review = match crate::prompt::prepare_launch(args, &leg, &mut launch, dry) {
             Ok(dispatch) => dispatch,
             Err(ToolError::Refused {
@@ -407,6 +404,12 @@ pub(crate) fn store_prompt(
         return Err(internal("launch prompt must not be in argv or env"));
     }
     let prompt = pg_worker_core::redact::redact_with_allowlist(raw, allow_shas);
+    if launch.split_inline_diff {
+        return Err(internal(
+            "a split preparation cannot be dispatched directly",
+        ));
+    }
+    crate::prompt::check_prepared_prompt(launch, &prompt)?;
     match launch.stdin.as_mut() {
         Some(stdin) if stdin == raw => *stdin = prompt.clone(),
         Some(stdin) => {

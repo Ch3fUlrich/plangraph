@@ -67,6 +67,8 @@ pub(crate) fn plan_review_groups(
     repos: &BTreeMap<String, RepoEntry>,
     enabled: bool,
 ) -> Result<Option<Vec<Vec<String>>>, InlineDiffError> {
+    let effective = crate::prompt::effective_prompt_leg(leg, launch);
+    let leg = effective.as_ref();
     let Some((diff, repo, text, mandatory)) =
         resolve_inline_diff_target(args, leg, launch, repos, enabled)?
     else {
@@ -393,6 +395,7 @@ pub(crate) fn spawn_adapter_split_groups(
     leg: &Value,
     cwd: &Path,
     dry: bool,
+    prepared: &LaunchSpec,
     launch: &mut impl FnMut(&Path, &Value) -> Result<LaunchSpec, ToolError>,
 ) -> Result<Value, ToolError> {
     use pg_worker_core::run::record::{new_job_id, new_run_id};
@@ -428,11 +431,17 @@ pub(crate) fn spawn_adapter_split_groups(
         paths: None,
     };
     let prompt = args["prompt"].as_str().unwrap_or("");
+    let composed = prepared
+        .prompt
+        .as_deref()
+        .ok_or_else(|| ToolError::Internal("split preparation has no composed prompt".into()))?;
+    let effective = crate::prompt::effective_prompt_leg(leg, prepared);
+    let leg = effective.as_ref();
     let groups = plan_groups_for_repo(
         &repo_entry,
         &diff,
         leg,
-        prompt,
+        composed,
         crate::prompt::is_inline_only(leg),
     )
     .map_err(|e| match e {

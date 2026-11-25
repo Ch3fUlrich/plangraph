@@ -19,6 +19,19 @@ def launch_model(leg):
     return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
 
 
+def effective_leg(leg, card=None, role=None, *, view=None):
+    """``leg`` with the request bound of the registry the launch overlay uses; refuses a malformed entry.
+
+    The one door of the spawner paths (service, runner, launch spec) to ``bound_legs``: a read of the
+    active provider file per request, so a changed registry is seen by the prompt checks that follow.
+    """
+    from plangraph.planner.legs import bound_legs
+    kept, refused = bound_legs((leg,), view, card, role)
+    if refused:
+        raise SpawnRefused('request_bound: ' + refused[0][1])
+    return kept[0]
+
+
 def quota_paused(state=None, role=None, leg=None):
     """The usage owner creates quota-pause at USAGE >=95%, unlinks at reset.
 

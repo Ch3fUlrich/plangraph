@@ -164,10 +164,12 @@ def overlay_env(base_env):
     return env
 
 
-def prepare_gateway_env(base_env, model):
+def prepare_gateway_env(base_env, model, *, validate=None):
     """Apply the launch overlay and render the selected model's provider."""
     from .opencode_render import render_gateway_providers
     env = overlay_env(base_env)
+    if validate is not None:
+        validate(env)
     return env, render_gateway_providers(env, model)
 
 
@@ -197,3 +199,73 @@ def _child_settings(env):
             return _ABSENT
         node = node[key]
     return node
+
+
+class RequestBoundError(ValueError):
+    """A registry entry that names a limit no request can honour (not a positive context minus reserve)."""
+
+
+class ProviderView:
+    """One consistent read of the providers the launch overlay hands a child (a request-bound snapshot).
+
+    ``providers`` is None when no registry is readable (file absent or unparsable); every bound is then
+    the compatibility value its leg declares. Only the providers node is kept.
+    """
+
+    __slots__ = ("providers",)
+
+    def __init__(self, base_env=None, *, overlaid=False):
+        base_env = os.environ if base_env is None else base_env
+        env = base_env if overlaid else overlay_env(base_env)
+        providers = None
+        if OVERLAY_UNKNOWN not in env:
+            try:
+                node = json.loads(env.get('OPENCODE_CONFIG_CONTENT') or '{}').get('providers')
+            except (ValueError, TypeError, AttributeError):
+                node = None
+            providers = node if isinstance(node, dict) else None
+        self.providers = providers
+
+    def request_bound(self, model):
+        """Largest request the registry lets ``model`` take, or None for a compatibility case.
+
+        None: no registry, no entry, no limit, or a limit the renderer synthesises (a cx effort variant
+        whose base entry declares none).  A supported model has a positive context minus its effective
+        reserved output (``launch_output_reserve``: the catalog maximum for MiMo, else ``limit.output``).
+        Raises ``RequestBoundError`` for an entry whose limit is malformed.
+        """
+        from .opencode_render import _declare_cx_effort_model
+        model = model.split('#', 1)[0].strip() if isinstance(model, str) else ''
+        provider, _, key = model.partition('/')
+        block = (self.providers or {}).get(provider)
+        models = block.get('models') if isinstance(block, dict) else None
+        if not key or not isinstance(models, dict):
+            return None
+        entry = models.get(key)
+        if entry is None and provider == 'omniroute':
+            scratch = {'omniroute': {'models': dict(models)}}
+            _declare_cx_effort_model(scratch, model)    # the renderer's effort-variant rule, not a copy of it
+            entry = scratch['omniroute']['models'].get(key)
+            base = models.get(key.rpartition('-')[0])
+            if entry is not None and not (isinstance(base, dict) and isinstance(base.get('limit'), dict)):
+                return None                             # renderer default: compatibility, not a measured window
+        if entry is None:
+            return None
+        if not isinstance(entry, dict):
+            raise RequestBoundError(f'{model}: entry is not an object')
+        limit = entry.get('limit')
+        if limit is None:
+            return None
+        if not isinstance(limit, dict):
+            raise RequestBoundError(f'{model}: limit is not an object')
+        if 'context' not in limit:
+            return None
+        context, output = limit['context'], limit.get('output', 0)
+        for name, value in (('context', context), ('output', output)):
+            if type(value) is not int or value < 0:
+                raise RequestBoundError(f'{model}: limit.{name} is not a non-negative integer')
+        from plangraph.spawner.opencode_answer import launch_output_reserve
+        bound = context - launch_output_reserve(model, output)
+        if bound <= 0:
+            raise RequestBoundError(f'{model}: context {context} leaves no room after its output reserve')
+        return bound

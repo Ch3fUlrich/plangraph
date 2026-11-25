@@ -21,7 +21,7 @@ from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
 from .host_ready import harness_path
-from .inline_diff import InlineDiffError
+from .inline_diff import InlineDiffError, needs_inline_diff
 from .resolver import host_skip_reason_async, admitted_by_render
 from .service import SpawnService
 
@@ -149,6 +149,13 @@ def build(request: dict) -> dict:
         raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    from .target import effective_leg
+    from plangraph.routing_support.opencode_overlay import ProviderView
+    try:
+        view = ProviderView() if leg.harness == 'opencode' else None
+        leg = effective_leg(leg, request['card'], request['role'], view=view)
+    except SpawnRefused as exc:
+        raise LaunchRefused('request_bound', str(exc)) from None
     if request['role'] == 'research' and request['card'].get('web_required') and not leg.has_web_tools:
         raise LaunchRefused('web_access_unavailable', leg.id)
     service = SpawnService(state=request['state'])
@@ -202,16 +209,37 @@ def build(request: dict) -> dict:
             raise LaunchRefused('context', str(exc)) from None
         except context_pack.ContextError as exc:
             raise LaunchRefused('context', str(exc)) from None
+        card = request['card']
+        role = request['role']
+        reference = card.get('diff_ref')
+        registered_diff = role == 'review' and isinstance(reference, dict) and 'repo_id' in reference
+        can_split = (role == 'review' and isinstance(reference, dict) and 'repo' in reference
+                     and not registered_diff and 'paths' not in reference and needs_inline_diff(leg, card))
+        split_inline_diff = False
+
+        def prepare(defer_inline_diff):
+            prompt = service._leg_prompt(request['prompt'], card, role, leg, pack,
+                                         document_review=request['leg'].get('explicit') is True,
+                                         prepared=True, defer_inline_diff=defer_inline_diff)
+            prompt, writer_env = writer_launch(prompt, role, leg.model, request['run_id'])
+            return asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
+                role=role, dry_run=True, client=leg.harness, chosen=leg, extra_env=writer_env,
+                prepare_launch=True, headers=headers))
+
         try:
-            prompt = service._leg_prompt(request['prompt'], request['card'], request['role'], leg, pack,
-                                         document_review=request['leg'].get('explicit') is True)
+            try:
+                job = prepare(registered_diff)
+            except context_pack.PromptBoundError:
+                if not can_split:
+                    raise
+                # Splitting is useful only when the composed prompt without the diff fits.
+                job = prepare(True)
+                split_inline_diff = True
+        except context_pack.PromptBoundError as exc:
+            shutil.rmtree(current, ignore_errors=True)
+            raise LaunchRefused('inline_diff_failed', str(exc)) from None
         except InlineDiffError as exc:
             raise LaunchRefused('inline_diff_failed', str(exc)) from None
-        prompt, writer_env = writer_launch(prompt, request['role'], leg.model, request['run_id'])
-        try:
-            job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
-                role=request['role'], dry_run=True, client=leg.harness, chosen=leg, extra_env=writer_env,
-                prepare_launch=True, headers=headers))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:
@@ -245,7 +273,8 @@ def build(request: dict) -> dict:
         return dict(argv=argv, cwd=os.path.abspath(request['cwd']), env=env,
                     prompt=job.task_prompt,  # REMOVE-AT-R10: Rust redacts the final prompt.
                     stdin=payload.decode('utf-8') if payload is not None else None,
-                    warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events)
+                    warnings=[w for w in rec['warnings'] if isinstance(w, str)], events=events,
+                    max_request_tokens=job.max_request_tokens, split_inline_diff=split_inline_diff)
     finally:
         tempfile.tempdir = previous
 

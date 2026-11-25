@@ -453,16 +453,6 @@ def admit(service, options, *, card=None, preview=False):
 
 
 # These children expose skill tools, but no repository/shell tools (D-4681).
-INLINE_DIFF_HARNESSES = frozenset({'opencode'})
-
-
-def _needs_inline_diff(leg, card):
-    from plangraph.planner.route_policy import opencode_repository_review
-    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
-            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
-            or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
-                and card.get('diff_ref') is not None and not opencode_repository_review(leg)))
-
 
 def annotate_review_warning(record):
     from plangraph.planner.legs import REVIEW_UNFIT_SEATS
@@ -474,12 +464,6 @@ def annotate_review_warning(record):
             record['warnings'].append(warning)
 
 
-def _refuse_oversized_diff(exc, leg):
-    from .context_pack import PromptBoundError
-    if exc.chars is not None:
-        raise PromptBoundError(
-            f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
-            f'max_request_tokens {leg.max_request_tokens}') from None
 
 class SeatSpawnMixin:
 
@@ -698,17 +682,23 @@ class SeatSpawnMixin:
         self._save(record)  # terminal evidence must survive even if the caller never saves again
         return job
 
-    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
+    def _leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60,
+                    *, prepared=False, defer_inline_diff=False):
         """Assemble one leg's payload, then enforce its request limit."""
         from .target import quota_paused
         from plangraph.routing_errors import SpawnRefused
         if quota_paused(getattr(self, 'state', None) or getattr(self, '_state', None), role, leg):
             raise SpawnRefused('quota pause')
         from . import context_pack
-        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout)
+        from .target import effective_leg
+        if not prepared:
+            leg = effective_leg(leg, card, role)
+        prompt = self._unbounded_leg_prompt(prompt, card, role, leg, pack, document_review, diff_timeout,
+                                            defer_inline_diff=defer_inline_diff)
         return context_pack.bound_prompt(prompt, leg.max_request_tokens)
 
-    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60):
+    def _unbounded_leg_prompt(self, prompt, card, role, leg, pack=None, document_review=False, diff_timeout=60,
+                              *, defer_inline_diff=False):
         """The prompt one leg gets: an inline-only leg gets the card's context pack (D-3622), a review leg its diff.
 
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
@@ -726,15 +716,16 @@ class SeatSpawnMixin:
             prompt = context_pack.pack_prompt(
                 prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(),
                 pack, review=role == 'review')
-        if ((role == 'review' or role == 'judge' and card.get('diff_ref') is not None
+        from .inline_diff import needs_inline_diff, refuse_oversized_diff
+        if (not defer_inline_diff and (role == 'review' or role == 'judge' and card.get('diff_ref') is not None
              and getattr(leg, 'tool_mode', 'tools') in ('prompt-only', 'inline-only'))
-                and _needs_inline_diff(leg, card)):
+                and needs_inline_diff(leg, card)):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
                                             allow_document=document_review, timeout=diff_timeout)
             except InlineDiffError as exc:
-                _refuse_oversized_diff(exc, leg)
+                refuse_oversized_diff(exc, leg)
                 raise
         admit_toolless(prompt, role, leg, SpawnRefused)
         return prompt

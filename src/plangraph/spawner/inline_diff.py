@@ -199,3 +199,22 @@ async def review_sonnet_diff_prompt(prompt: str, card, role: str, leg, *, deadli
         inline_diff_prompt, prompt, card["diff_ref"], max_chars=leg.max_request_tokens * 3,
         timeout=min(60, remaining), repository_tools=True)
     return bound_prompt(prompt, leg.max_request_tokens)
+
+
+INLINE_DIFF_HARNESSES = frozenset({'opencode'})
+
+
+def needs_inline_diff(leg, card):
+    from plangraph.planner.route_policy import opencode_repository_review
+    return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
+            or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
+                and card.get('diff_ref') is not None and not opencode_repository_review(leg)))
+
+
+def refuse_oversized_diff(exc, leg):
+    from .context_pack import PromptBoundError
+    if exc.chars is not None:
+        raise PromptBoundError(
+            f'prompt_too_large: inline_diff_oversized: chars {exc.chars} estimated_tokens {(exc.chars + 2) // 3} '
+            f'max_request_tokens {leg.max_request_tokens}') from None

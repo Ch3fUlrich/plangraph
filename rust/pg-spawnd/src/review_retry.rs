@@ -437,6 +437,8 @@ mod tests {
         let args = json!({"role":"review","card":{}});
         let args = args.as_object().unwrap().clone();
         let mut launch = crate::launch::LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec!["opencode".into()],
             cwd: state.path().into(),
             env: Default::default(),
@@ -544,6 +546,8 @@ mod tests {
             .unwrap()
             .clone();
         let mut launch = crate::launch::LaunchSpec {
+            max_request_tokens: None,
+            split_inline_diff: false,
             argv: vec!["opencode".into()],
             cwd: state.path().into(),
             env: Default::default(),
