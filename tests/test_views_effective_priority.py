@@ -64,3 +64,12 @@ def test_a_tie_keeps_the_smallest_source_key_also_through_a_longer_chain():
     eff, _ = views.effective_priorities(items)
     assert eff["d:ROOT"]["effective"] == 10 and eff["d:ROOT"]["via"] == "d:B"
     assert eff["d:A"]["via"] == "d:Z"
+
+
+def test_an_intermediate_item_with_the_same_priority_does_not_hide_the_smallest_source():
+    # ROOT blocks M and Z, Z blocks A; M, Z and A are all 10, A is the smallest source key.
+    items = [_it("ROOT", 1), _it("M", 10, ["ROOT"]), _it("Z", 10, ["ROOT"]), _it("A", 10, ["Z"])]
+    eff, _ = views.effective_priorities(items)
+    assert eff["d:ROOT"] == {"effective": 10, "via": "d:A", "hops": 2}
+    assert eff["d:Z"] == {"effective": 10, "via": None, "hops": 0}     # its own value already is 10
+    assert eff["d:M"]["via"] is None
