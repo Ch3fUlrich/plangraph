@@ -14,7 +14,7 @@ from .evidence_types import Result
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 
 
-def _passing_review(text, *, require_explicit_accept=False):
+def _passing_review(text, *, require_explicit_accept=False, accept_only=False):
     from ..review.verdict import _FIRST_WORD, _VERDICT_LINE, parse_verdict
     if not isinstance(text, str) or parse_verdict(text) != "pass":
         return False
@@ -23,7 +23,7 @@ def _passing_review(text, *, require_explicit_accept=False):
                 if (m := _VERDICT_LINE.match(line))]
     if require_explicit_accept and verdicts:
         word = _FIRST_WORD.match(verdicts[-1][1].lstrip("*_`"))
-        if word is None or word[1] not in ("pass", "accept"):
+        if word is None or word[1] not in (("accept",) if accept_only else ("pass", "accept")):
             return False
     gaming = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I)
     answers = [m[1].strip().lower() for line in lines if (m := gaming.match(line))]
@@ -73,6 +73,48 @@ def _record_names_item(record, key):
     keys = record.get("item_keys")
     return record.get("item_key") == key or (
         record.get("item_key") is None and isinstance(keys, list) and key in keys)
+
+
+#: D-6857: the in-force operator and router decisions an override or pin of a completed seat may name.
+OVERRIDE_DECISIONS = ("D-4487", "D-5903", "D-6804")
+
+
+def _names_allowlisted_decisions(value):
+    """True when *value* names at least one decision id and every id it names is on the allowlist."""
+    named = re.findall(r"(?<![\w-])D-[0-9]+(?![\w-])", value) if isinstance(value, str) else []
+    return bool(named) and all(did in OVERRIDE_DECISIONS for did in named)
+
+
+def _override_state(record):
+    """``(present, valid)`` for the override of a seat: an ``override_reason``, a ``plan.p_source`` of
+    ``override`` or a pin. A reason must name allowlisted decisions; a pin is valid when it names one
+    itself or rides on a valid reason; an override plan needs a valid reason."""
+    reason = record.get("override_reason")
+    reason_present = reason not in (None, False, "")
+    reason_valid = reason_present and _names_allowlisted_decisions(reason)
+    present, valid = reason_present, (reason_valid if reason_present else True)
+    plan = record.get("plan")
+    if isinstance(plan, dict) and plan.get("p_source") == "override":
+        present, valid = True, valid and reason_valid
+    for part in (record, plan, record.get("chosen_leg")):
+        if not isinstance(part, dict):
+            continue
+        for key in ("pin", "pinned", "spawn_pin"):
+            if key in part and part[key] is not False:
+                present = True
+                valid = valid and (_names_allowlisted_decisions(part[key]) or (part[key] is True and reason_valid))
+    return present, valid
+
+
+def _recorded_identity(record):
+    """True when the record names a harness, the chosen leg's family and a served model (D-6857)."""
+    from ..review.family import model_family
+    leg = record.get("chosen_leg")
+    harness = record.get("harness") or (leg.get("harness") if isinstance(leg, dict) else None)
+    model = record.get("served_model")
+    return (isinstance(leg, dict) and isinstance(harness, str) and harness not in ("", "unknown")
+            and leg.get("harness") in (None, harness) and bool(leg.get("family"))
+            and isinstance(model, str) and model != "unwitnessed" and bool(model_family(model)))
 
 
 def _recorded_harness_seat(record, completion, text, head):
@@ -167,7 +209,7 @@ class SpawnerRecordAdapter:
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
                      require_diff_head=False, require_explicit_accept=False, train_delta=None,
-                     allow_unwitnessed=False):
+                     allow_unwitnessed=False, allow_override=False):
         """Read cited review witnesses without inferring a served model."""
         from ..review.family import model_family
         from ..review.verdict import has_files_read
@@ -194,7 +236,11 @@ class SpawnerRecordAdapter:
             if (record.get("run_id") != run_id or record.get("host") != host
                     or not _record_names_item(record, item["key"])):
                 raise ValueError(f"{run_id}: record identity mismatch")
-            if require_diff_head and record.get("head_sha") != head:
+            present, valid = _override_state(record)
+            # D-6857: an override naming an allowlisted decision is admitted for a part the caller cleared;
+            # the verdict is then bound by the completion head and a recorded harness, family and model.
+            override = allow_override and present and valid and _recorded_identity(record)
+            if require_diff_head and record.get("head_sha") != head and not override:
                 raise ValueError(f"{run_id}: review diff head mismatch")
             model = record.get("served_model")
             family = model_family(model) if isinstance(model, str) else None
@@ -222,7 +268,7 @@ class SpawnerRecordAdapter:
                         if isinstance(part, dict) and "finish_reason" in part]
             pinned = any(isinstance(part, dict) and any(
                 k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
-                for part in (record, record.get("plan"), record.get("chosen_leg")))
+                for part in (record, record.get("plan"), record.get("chosen_leg"))) and not override
             cli = record.get("witness_kind") == "cli_reported"
             serving = next((a for a in reversed(attempts or []) if isinstance(a, dict)
                             and a.get('status') != 'skipped'), {}) if isinstance(attempts, list) else {}
@@ -260,8 +306,10 @@ class SpawnerRecordAdapter:
                         if allow_unwitnessed and model == "unwitnessed" and isinstance(completion, dict) else None)
             if recorded:
                 family = model_family(recorded["model"])
-            if (not family or (model == "unwitnessed" and not recorded) or pinned or record.get("override_reason")
+            if (not family or (model == "unwitnessed" and not recorded) or pinned
+                    or (record.get("override_reason") and not override)
                     or isinstance(record.get("plan"), dict) and record["plan"].get("p_source") == "override"
+                    and not override
                     or record.get("status") != "completed"
                     or type(record.get("exit_code")) is not int or record["exit_code"] != 0
                     or not isinstance(completion, dict)
@@ -269,7 +317,8 @@ class SpawnerRecordAdapter:
                     or finish not in ("stop", "end_turn")
                     or any(value not in ("stop", "end_turn") for value in finishes)
                     or not _one_serving_attempt(attempts, model)
-                    or not _passing_review(text, require_explicit_accept=require_explicit_accept)
+                    or not _passing_review(text, require_explicit_accept=require_explicit_accept or override,
+                                         accept_only=override)
                     or (_required_seat(record) and not has_files_read(text))
                     or (not recorded and record.get("served_family", family) != family)):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")

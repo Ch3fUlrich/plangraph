@@ -62,13 +62,32 @@ def _land_manifest(body):
 
 
 
-def require_train_review(adapter, key, head, run_id):
-    """Require one passing seat bound to this item and exact part head."""
-    seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
-                                 allow_cli_reported=True, require_diff_head=True,
-                                 require_explicit_accept=True) if adapter is not None else []
-    if len(seats) != 1 or seats[0]["verdict"] != "pass":
+def require_train_review(adapter, key, head, run_id, *, override_ok=None):
+    """Require one passing seat bound to this item and exact part head.
+
+    A seat whose override or pin names an allowlisted decision (D-6857) counts only when
+    ``override_ok()`` clears the part (outside authentication, secrets and gate files).
+    """
+    def seats(allow_override):
+        return adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
+                                    allow_cli_reported=True, require_diff_head=True,
+                                    require_explicit_accept=True,
+                                    allow_override=allow_override) if adapter is not None else []
+    try:
+        found = seats(False)
+    except ValueError:
+        if override_ok is None or not override_ok():
+            raise
+        found = seats(True)
+    if len(found) != 1 or found[0]["verdict"] != "pass":
         raise ValueError(f"{run_id}: expected one passing review seat")
+
+
+def _gate_patterns():
+    """The gate-file globs of the commit gate (one list, tools/ci_commit_gate.py)."""
+    from pathlib import Path
+    from runpy import run_path
+    return tuple(run_path(str(Path(__file__).resolve().parents[3] / "tools" / "ci_commit_gate.py"))["GATE_PATHS"])
 
 
 def _saved_manifest(row):
@@ -195,7 +214,7 @@ class MergeLocksMixin:
                 previous = self.conn.execute(select, identity).fetchone()
                 previous_data = _landing_data(previous) if previous else None
                 if previous_data is None or previous_data["parts"] != parts:
-                    self._verify_train_reviews(parts)
+                    self._verify_train_reviews(parts, base=body.get("base"))
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
                 mode = body.get("mode", "train-pr-merge")
                 if mode not in LANDING_MODES:
@@ -282,15 +301,37 @@ class MergeLocksMixin:
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())
 
-    def _verify_train_reviews(self, parts):
+    def _verify_train_reviews(self, parts, base=None):
         adapter = self._adapter("spawner_records")
         for part in parts:
             for key, run in part.get("review_runs", {}).items():
                 try:
-                    require_train_review(adapter, key, part["head"], run)
+                    require_train_review(adapter, key, part["head"], run,
+                                         override_ok=lambda key=key, part=part: self._override_seat_part_ok(
+                                             key, part["head"], base))
                 except (ValueError, OSError):
                     raise Refused("evidence_unverified",
                                   f"{key}: no explicit ACCEPT for part #{part['pr']}") from None
+
+    def _override_seat_part_ok(self, key, head, base):
+        """D-6857: true when the part outside authentication, secrets and gate files; any doubt is false."""
+        import fnmatch
+        try:
+            if self._card_requires_non_anthropic_seats({"key": key}):
+                return False
+            git = self._adapter("git")
+            repo = git.repo_path(key.partition(":")[0])
+            if not repo or not (isinstance(base, str) and isinstance(head, str)):
+                return False
+            proc = git._run(repo, ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
+                                   f"{base}...{head}"])
+            if proc.returncode != 0:
+                return False
+            patterns = _gate_patterns()
+            return not any(fnmatch.fnmatchcase(path, pattern)
+                           for path in proc.stdout.split("\0") if path for pattern in patterns)
+        except Exception:  # noqa: BLE001 - an unreadable repository or card never clears a part
+            return False
 
     def _landing_timing(self, principal, repo, action, body):
         roles = ("router", "system", "spawner") if action == "stage" else ("router", "system")

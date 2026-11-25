@@ -142,3 +142,68 @@ def test_a_non_auth_lane_closes_on_an_unwitnessed_agy_seat(unseated_w, tmp_path)
     w.store.ctx["spawner_records"] = SpawnerRecordAdapter(root)
     w.decision_path.write_text(f"| D-5504 | demo | GO {HEAD}; Review-Runs: run-one, run-two |\n", encoding="utf-8")
     assert w.store.close_merged(w.p("router"), "demo:H", "D-5504", None)["state"] == "done"
+
+
+# --- SEAT-GATE-UNWITNESSED-HARNESS-DECISION (D-6857): a completed override seat on an allowlisted D-id ---
+CODEX = {"id": "codex-gpt-6.2-sol-high", "harness": "codex", "model": "gpt-6.2-sol", "family": "openai"}
+ACCEPT = f"HEAD: {HEAD}\nTESTS: pytest -q tests/test_fixture.py: 3 passed\nFILES READ: src/lib.rs:3\nTEST_GAMING: no\nVERDICT: ACCEPT\n"
+
+
+def codex_record(tmp_path, *, text=ACCEPT, leg=CODEX, harness="codex", **changes):
+    """A bin/review.sh style seat: a real served model, an override naming D-6804, a diff head that is not the part head."""
+    base = {"served_model": "gpt-6.2-sol", "served_family": "openai", "finish_reason": "stop",
+            "override_reason": "D-6804 gpt seat on a Claude head", "head_sha": "c" * 40}
+    base.update(changes)
+    return mirror(tmp_path, leg=leg, harness=harness, text=text, **base)
+
+
+def train_review(root, override_ok=lambda: True):
+    from plangraph.keeper.store_merge_locks import require_train_review
+    require_train_review(SpawnerRecordAdapter(root), "demo:H", HEAD, "run-one", override_ok=override_ok)
+
+
+def test_a_completed_override_seat_on_an_allowlisted_decision_is_admitted(tmp_path):
+    train_review(codex_record(tmp_path))
+
+
+def test_the_same_override_seat_is_refused_when_the_part_is_sensitive_or_the_check_is_absent(tmp_path):
+    root = codex_record(tmp_path)
+    with pytest.raises(ValueError, match="not a passing witnessed seat|review diff head mismatch"):
+        train_review(root, override_ok=lambda: False)
+    from plangraph.keeper.store_merge_locks import require_train_review
+    with pytest.raises(ValueError):   # today's call, without the override check
+        require_train_review(SpawnerRecordAdapter(root), "demo:H", HEAD, "run-one")
+
+
+@pytest.mark.parametrize("changes", [
+    {"override_reason": "D-9999 not on the list"},
+    {"override_reason": "D-6804 and D-9999"},
+    {"override_reason": "no decision named"},
+    {"override_reason": "D-68041 is another id"},
+    {"completion": {"head_sha": "d" * 40}},                         # the verdict is on another head
+    {"completion": {}},
+    {"harness": None, "leg": {k: v for k, v in CODEX.items() if k != "harness"}},   # no recorded harness
+    {"harness": "unknown"},
+    {"leg": {**CODEX, "family": ""}},                               # no recorded family
+    {"served_model": "unwitnessed", "served_family": "unwitnessed"},   # no served model
+    {"served_model": None},
+    {"status": "failed"},
+    {"pinned": True, "override_reason": None},                      # a pin without a decision
+    {"pin": "D-9999"},
+])
+def test_an_override_seat_outside_the_rule_is_refused(tmp_path, changes):
+    with pytest.raises(ValueError):
+        train_review(codex_record(tmp_path, **changes))
+
+
+def test_an_override_seat_without_an_explicit_accept_is_refused(tmp_path):
+    root = codex_record(tmp_path, text=ACCEPT.replace("VERDICT: ACCEPT", "VERDICT: PASS"))
+    with pytest.raises(ValueError):
+        train_review(root)
+
+
+@pytest.mark.parametrize("changes", [
+    {"pinned": "D-5903"}, {"pin": "D-4487"}, {"plan": {"p_source": "override"}},
+])
+def test_a_pin_or_plan_override_naming_an_allowlisted_decision_is_admitted(tmp_path, changes):
+    train_review(codex_record(tmp_path, **changes))

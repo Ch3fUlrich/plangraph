@@ -275,3 +275,25 @@ def test_a_nested_merge_carrying_the_item_must_be_covered_by_a_cited_part(batch)
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
     assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+def test_an_override_seat_clears_only_a_part_outside_authentication_secrets_and_gate_files(batch):
+    """SEAT-GATE-UNWITNESSED-HARNESS-DECISION (D-6857): any doubt keeps today's refusal."""
+    root = batch.repo.root
+    base = git(root, "rev-parse", "main")
+    clear = batch.store._override_seat_part_ok
+    assert clear("demo:A", batch.parts["A"], base) is True
+    assert clear("demo:A", batch.parts["A"], None) is False            # no base to diff against
+    assert clear("demo:A", "e" * 40, base) is False                    # a head the repository lacks
+    git(root, "checkout", "-q", "-b", "gate", "main")
+    (root / ".github/workflows").mkdir(parents=True)
+    (root / ".github/workflows/tests.yml").write_text("on: push\n")
+    git(root, "add", ".")
+    git(root, "commit", "-q", "-m", "gate file")
+    gate_head = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    assert clear("demo:A", gate_head, base) is False                   # a gate file
+    batch.store.put_card(batch.p("router"), "demo:A", dict(outcome="fixture", risk_tags=["auth"]))
+    assert clear("demo:A", batch.parts["A"], base) is False            # an authentication part
+    batch.store.put_card(batch.p("router"), "demo:A", dict(outcome="fixture", risk_tags=["secrets"]))
+    assert clear("demo:A", batch.parts["A"], base) is False
