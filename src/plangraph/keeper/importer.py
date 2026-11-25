@@ -21,9 +21,12 @@ from pathlib import Path
 import yaml
 
 from .errors import Refused
-from .note_fold import DESCRIPTION_CAP, METADATA_FIELDS, fold_checked as _fold_note
+from .note_fold import (DESCRIPTION_CAP, METADATA_FIELDS, fold_checked as _fold_note,
+                        split_legacy_metadata)
 from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_design_ref, check_host, check_kind,
-                          check_metadata, check_model_fields, check_wait, creation_metadata, kind_defaults)
+                          check_metadata, check_model_fields, check_wait, creation_metadata, creation_payloads,
+                          kind_defaults,
+                          move_legacy_metadata)
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
@@ -82,6 +85,7 @@ def _normalise_item(raw, where):
         raise Refused("validation",
                       f"{where}: item in {project!r} needs an id string")
     key = f"{project}:{identifier}"
+    raw = move_legacy_metadata(raw, key)
     declared = raw.get("key")
     if declared is not None and declared != key:
         raise _bad(key, f"key {declared!r} != {key!r}")
@@ -139,8 +143,8 @@ def _normalise_item(raw, where):
     else:
         review_tier = default_review_tier(project, identifier, title, track)
 
-    metadata = check_metadata(raw, key)      # carried on the creation event, never folded into the note
     unknown = {name: raw[name] for name in raw if name not in _FIELDS and name not in METADATA_FIELDS}
+    metadata = check_metadata(raw, key, unknown)    # carried on the creation event, never folded into the note
     note = _fold_note(raw.get("note"), unknown, key)
 
     values = {
@@ -254,11 +258,19 @@ def export_yaml(conn_or_store, dir):
     out = Path(dir)
     out.mkdir(parents=True, exist_ok=True)
     groups = {}
-    metadata = creation_metadata(getattr(conn_or_store, "conn", conn_or_store))
+    conn = getattr(conn_or_store, "conn", conn_or_store)
+    metadata = creation_metadata(conn)
+    authored = {key for key, payload in creation_payloads(conn) if "note" in payload}
     for item in _read_items(conn_or_store):
         if item.get("state") not in _IMPORT_STATES:
             continue
         item = {**item, "metadata": metadata.get(item["key"], {})}
+        if item["key"] not in authored:
+            # An older Keeper folded metadata into this note: export it as the fields it was.
+            note, found = split_legacy_metadata(item.get("note"), whole=True)
+            if found:
+                item = {**item, "note": note,
+                        "metadata": {**found, **item["metadata"]}}
         track = item.get("track") or "untracked"
         groups.setdefault(str(track), []).append(item)
     written = []
