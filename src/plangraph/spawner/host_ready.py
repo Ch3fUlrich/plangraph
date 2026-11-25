@@ -562,7 +562,8 @@ async def collect_with_disk_guard(runner, job_id, proc):
         try:
             while True:
                 await asyncio.sleep(1)
-                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd, job.role)
+                launched = (getattr(runner, '_child_envs', {}).get(job_id) or {}).get('CARGO_TARGET_DIR')
+                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd, job.role, launched)
                 if reason and job.status not in ('cancelled', 'timeout', 'stalled'):
                     job.refusal = reason
                     job.status, job.exit_code = 'failed', 7
@@ -598,12 +599,13 @@ async def collect_with_disk_guard(runner, job_id, proc):
             raise result
 
 
-def running_disk_refusal(worktree, role='implement'):
+def running_disk_refusal(worktree, role='implement', target=None):
     """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run of a building role."""
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
-        target = _target_for(policy, floors=False)  # the stop floor below is the runtime limit
+        # The target the run was launched with, not a new ranking; the 2 GiB stop floor is the limit.
+        target = Path(target) if target else _target_for(policy, floors=False)
         paths = [worktree, target]
         if policy.get('worktree_root'):
             paths.append(policy['worktree_root'])

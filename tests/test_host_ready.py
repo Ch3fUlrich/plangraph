@@ -726,6 +726,28 @@ def test_an_existing_directory_on_an_unmounted_drive_does_not_qualify(monkeypatc
     assert h.shared_cargo_target({'build_drives': [entry]}) == tmp_path / 'g' / 'cargo-target'
 
 
+def test_a_dotdot_path_is_not_inside_the_mount_it_names(monkeypatch, tmp_path):
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
+    (tmp_path / 'm').mkdir()
+    (tmp_path / 'other').mkdir()
+    monkeypatch.setattr(os.path, 'ismount', lambda path: True)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 500.0)
+    entry = {'path': str(tmp_path / 'm' / '..' / 'other'), 'mount': str(tmp_path / 'm'),
+             'disk_floor_gb': 20}
+    with pytest.raises(OSError, match='not mounted'):
+        h.shared_cargo_target({'build_drives': [entry]})
+
+
+def test_the_running_guard_monitors_the_target_the_run_was_launched_with(monkeypatch, tmp_path):
+    launched, other = tmp_path / 'launched', tmp_path / 'other'
+    free = {str(launched): 1.0, str(other): 400.0}
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free.get(str(path), 400.0))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    reason = h.running_disk_refusal(tmp_path, 'implement', launched)
+    assert reason == 'disk_low: free 1.00 GB, stop 2 GB'
+    assert h.running_disk_refusal(tmp_path, 'implement', other) is None
+
+
 def test_the_running_guard_keeps_the_target_below_the_admission_floor(monkeypatch, tmp_path):
     monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_DIR', raising=False)
     (tmp_path / 'g').mkdir()

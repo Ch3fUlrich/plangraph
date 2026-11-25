@@ -24,6 +24,8 @@ pub(super) fn register(
             "run_kind":"fleet-session", "fleet_session_name":name, "host":host, "role":role,
             "harness":"claude", "requested_model":args.model, "effort":args.effort,
             "item_key":admission.fields["card"],
+            // The Keeper client's own epoch variable: the claim this session works under.
+            "claim_epoch":std::env::var("PG_EPOCH").ok().and_then(|v| v.parse::<u64>().ok()),
         }),
     )
 }

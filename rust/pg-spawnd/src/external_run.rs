@@ -173,8 +173,18 @@ pub fn recover(state: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn fleet_outcome(record: &Value, agents: &[Value], observed: f64) -> Option<Value> {
-    let row = agents.iter().find(|row| {
+/// What the fleet roster says about a registered fleet session.
+pub enum FleetState {
+    /// The roster lists the session and it has not ended.
+    Running,
+    /// The session ended; the terminal record the daemon would publish.
+    Ended(Value),
+    /// The roster does not show the session: neither running nor proven ended.
+    Unknown,
+}
+
+fn fleet_row<'a>(record: &Value, agents: &'a [Value]) -> Option<&'a Value> {
+    agents.iter().find(|row| {
         row["kind"] == "background"
             && if let Some(sid) = record["session_id"].as_str() {
                 row["sessionId"] == sid
@@ -184,7 +194,27 @@ fn fleet_outcome(record: &Value, agents: &[Value], observed: f64) -> Option<Valu
                         started / 1000.0 >= record["started"].as_f64().unwrap_or_default() - 1.0
                     })
             }
-    });
+    })
+}
+
+/// The fleet roster of this host (`claude agents --json --all`).
+pub fn roster() -> io::Result<Vec<Value>> {
+    crate::session::agent_roster()
+}
+
+/// A fleet session outlives its launcher process, so its state comes from the roster.
+pub fn fleet_state(record: &Value, agents: &[Value], observed: f64) -> FleetState {
+    if let Some(finished) = fleet_outcome(record, agents, observed) {
+        FleetState::Ended(finished)
+    } else if fleet_row(record, agents).is_some() {
+        FleetState::Running
+    } else {
+        FleetState::Unknown
+    }
+}
+
+fn fleet_outcome(record: &Value, agents: &[Value], observed: f64) -> Option<Value> {
+    let row = fleet_row(record, agents);
     let Some(row) = row else {
         return (record["session_id"].is_null()
             && observed - record["started"].as_f64()? >= 60.0

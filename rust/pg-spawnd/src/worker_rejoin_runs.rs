@@ -9,6 +9,23 @@ use std::{io, process::Command, time::Duration};
 
 use super::now;
 
+/// The Keeper refuses a mismatched epoch in either direction ("epoch A != current B"). Only a
+/// newer current epoch shows the original claim was replaced; an older one means the
+/// original claim is not what the Keeper holds, which settles nothing.
+fn superseded(stderr: &str, asked: u64) -> bool {
+    let words: Vec<_> = stderr.split_whitespace().collect();
+    words.windows(5).any(|w| {
+        w[0] == "epoch"
+            && w[1].parse::<u64>().ok() == Some(asked)
+            && w[2] == "!="
+            && w[3] == "current"
+            && w[4]
+                .trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse::<u64>()
+                .is_ok_and(|current| current > asked)
+    })
+}
+
 impl Ssh<'_> {
     /// The host's view of its runs: sessions verified, terminal records read from disk.
     fn inventory(&mut self) -> io::Result<&Inventory> {
@@ -96,7 +113,7 @@ impl Ssh<'_> {
                 )))
             };
         }
-        if stderr.contains("not claimed") || stderr.contains("epoch_stale") {
+        if stderr.contains("not claimed") || superseded(&stderr, epoch) {
             return Ok(());
         }
         Err(io::Error::other(format!(
@@ -197,5 +214,31 @@ impl Ssh<'_> {
             }))
             .and_then(|()| record.save())
             .map_err(|error| io::Error::other(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::superseded;
+
+    #[test]
+    fn only_a_newer_current_epoch_shows_the_claim_was_superseded() {
+        assert!(superseded(
+            "refused: epoch_stale: epoch 11 != current 12",
+            11
+        ));
+        assert!(!superseded(
+            "refused: epoch_stale: epoch 12 != current 11",
+            12
+        ));
+        assert!(!superseded(
+            "refused: epoch_stale: epoch 11 != current 11",
+            11
+        ));
+        assert!(!superseded(
+            "refused: epoch_stale: epoch 9 != current 12",
+            11
+        ));
+        assert!(!superseded("keeper unreachable", 11));
     }
 }
