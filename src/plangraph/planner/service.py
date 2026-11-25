@@ -171,27 +171,24 @@ def route_for_card(store: Any, principal: Any, key: str, **route_kw: Any) -> rou
 
 def pack_for_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
                   window_class: str | None = None, max_request_tokens: int | None = None,
-                  route: routing.Route | None = None, check_tail: str | None = None,
-                  **route_kw: Any) -> context_pack.Pack:
+                  route: routing.Route | None = None,
+                  check_tail: str | None = None) -> context_pack.Pack:
     """Build the context pack of the stored card of ``key``.
 
     The budget comes from ``window_class`` or, failing that, the given ``route``'s class or the
-    card's own (``ValueError`` when none is set), capped at ``max_request_tokens``.  Without an
-    explicit limit the cap is the first leg of ``route`` (the :class:`GateResult` route of the
-    admission) or, when no route is given, of the card routed again with ``route_kw`` (``legs``,
-    ``subtasks``, ``unavailable``): a ``check_tail`` retry is packed under the same leg cap the
-    gate admitted the card under.  A card that cannot be routed is capped by its class alone.
+    card's own (``ValueError`` when none is set), capped at ``max_request_tokens`` or, without
+    it, at the first leg of ``route``: the route the gate admitted the card under
+    (:attr:`GateResult.route`).  A ``check_tail`` retry needs one of the two, because routing the
+    card again can pick a wider leg than admission did (an unavailable leg, a different leg
+    list) and pack past the admitted cap; without either, ``ValueError``.
     """
     card = store.get_card(principal, key)
-    window = window_class or (route.window_class if route is not None else None) \
-        or card.get("window_class")
-    if route is None and max_request_tokens is None:
-        try:
-            route = routing.route_card(card, **route_kw)
-        except ValueError:  # RouteError is a ValueError
-            route = None
+    if check_tail is not None and route is None and max_request_tokens is None:
+        raise ValueError("a check_tail retry needs the admission route or max_request_tokens")
     if route is not None and max_request_tokens is None:
         max_request_tokens = route.first_leg.max_request_tokens
+    window = window_class or (route.window_class if route is not None else None) \
+        or card.get("window_class")
     if window is None:
         raise ValueError("window_class is required: neither given nor set on the card")
     return context_pack.build_pack(

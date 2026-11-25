@@ -102,8 +102,9 @@ exports, forbid, smoke; never `heldout_check`), then `# FILE <path> (write)` blo
 `(read)` blocks, each in a fenced block, then the optional `# CHECK OUTPUT` tail (last 40-60
 lines) last. Stable material comes first so a retry keeps a byte-identical prefix
 (`Pack.prefix_chars`) for prompt-cache reuse. Budget = 0.55 x window - 8000 tokens, capped at the selected leg's `max_request_tokens`
-(`leg_budget`; `gate_card` uses it, and `pack_for_card` takes the admission `route=` or
-re-routes with the same `legs`, so a retry is packed under the leg cap the gate admitted), of which up to 2000 (one eighth of a small
+(`leg_budget`; `gate_card` uses it, and `pack_for_card` takes the admission `route=` (or an explicit
+`max_request_tokens`); a `check_tail` retry without either is refused, since routing again can
+pick a wider leg than admission did), of which up to 2000 (one eighth of a small
 budget) are held back for the tail on every pack, tail or not, so the files chosen never
 depend on the tail and an admitted card plus any tail stays within the budget (a header that alone leaves no room
 for the tail raises `PackTooBig`, whose message gives the effective budget, the limit and the
