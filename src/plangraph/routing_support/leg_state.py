@@ -489,22 +489,21 @@ def routing_status(status):
 
 
 def gateway_url(leg):
-    """Endpoint a direct provider prefix is launched against, or None when none is known.
+    """Endpoint a provider prefix is launched against, or None when none is known.
 
-    The mimo gateway provider is launched against the child config the runner builds
-    (child env, launch overlay, renderer), so admission reads the endpoint from that same
+    The gateway providers (mimo, omniroute) are launched against the child config the runner
+    builds (child env, launch overlay, renderer), so admission reads the endpoint from that same
     pipeline, never from the raw root config. Any other direct provider names its own
-    ``settings.baseURL``. The shared ``omniroute`` prefix has no entry: its snapshot already
-    proves the gateway answers. A missing or malformed provider config, a refused render or
-    an invalid URL names no endpoint.
+    ``settings.baseURL``. A missing or malformed provider config, a refused render or an invalid
+    URL names no endpoint.
     """
     import json
     from .opencode_overlay import load_root_providers
     from .opencode_render import _is_valid_url, _normalize_gateway_url
     prefix = leg.split('/')[0] if '/' in leg else ''
-    if prefix in ('', 'omniroute'):
+    if not prefix:
         return None
-    if prefix == 'mimo':
+    if prefix in ('mimo', 'omniroute'):
         from .opencode_overlay import review_child_env
         try:
             block = json.loads(review_child_env(leg)['OPENCODE_CONFIG_CONTENT'])['providers'][prefix]
@@ -602,6 +601,15 @@ def identity_model(model):
     return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
 
 
+def _origin(url):
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        return parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80)
+    except ValueError:
+        return None
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -643,6 +651,26 @@ class LegAdapter:
         if self.enabled:
             self.leg_status(leg)
             self._quarantined.add(self.identity(leg))
+    def _launch_endpoint_closed(self, leg):
+        """True when the leg's resolved launch endpoint has no listener.
+
+        A successful provider snapshot is listener evidence only for the endpoint it was read
+        from; any other launch endpoint is probed, once per leg per snapshot window.
+        """
+        if not self.gateway_probe:
+            return False
+        if leg not in self._urls:   # the endpoint is resolved once per leg per snapshot window
+            self._urls[leg] = self.gateway_url(leg)
+        url = self._urls[leg]
+        if url is None:
+            return False
+        management = getattr(self.provider, 'base_url', None)
+        if not self._error and management and _origin(url) == _origin(management):
+            return False
+        if url not in self._gateway:
+            self._gateway[url] = bool(self.gateway_probe(url))
+        return not self._gateway[url]
+
     def leg_status(self, leg, **kwargs):
         if (not self.enabled or kwargs.get('harness') == 'codex' or leg.startswith((
                 "agy:", "agy/", "gemini-4-hydrogen-", "gemini-4-argon-", "gemini-4-neon-", "claude-sonnet-5-5"))):
@@ -654,6 +682,9 @@ class LegAdapter:
         if self._at is None or now - self._at >= self.ttl_s:
             from .quota_snapshots import OmniRouteAuthRefused
             self._auth_error = None
+            self._gateway.clear()   # listener evidence never outlives a refresh, failed or not
+            self._urls.clear()
+            self._pools.clear()
             try:
                 states = self.provider.snapshot()
                 served = set()
@@ -665,9 +696,6 @@ class LegAdapter:
                     served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._quarantined.clear()
-                self._gateway.clear()
-                self._urls.clear()
-                self._pools.clear()
                 self._error = None if states else 'unreachable'   # an empty provider list names no pool
             except OmniRouteAuthRefused as exc:
                 self._error = str(exc)
@@ -675,6 +703,8 @@ class LegAdapter:
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
+        if self._launch_endpoint_closed(leg):   # before any snapshot-error recovery can spawn a probe
+            return dict(state='down', reason='gateway_unreachable', evidence=None)
         if self._error:
             # A valid empty snapshot excludes the leg explicitly; only a failed read stays unknown.
             return dict(state='down' if self._auth_error or self._error == 'unreachable' else 'unknown',
@@ -687,14 +717,6 @@ class LegAdapter:
                 return stored
         if identity not in self._served or identity in self._quarantined:
             return dict(state='down', reason='not_listed', evidence=None)
-        url = None
-        if self.gateway_probe:   # the endpoint is resolved once per leg per snapshot window
-            url = self._urls[leg] if leg in self._urls else self._urls.setdefault(leg, self.gateway_url(leg))
-        if url is not None:
-            if url not in self._gateway:
-                self._gateway[url] = bool(self.gateway_probe(url))
-            if not self._gateway[url]:
-                return dict(state='down', reason='gateway_unreachable', evidence=None)
         # A gateway model resolves its own pool before the generic gateway row.
         if identity.startswith('omniroute/'):
             if leg not in self._pools:

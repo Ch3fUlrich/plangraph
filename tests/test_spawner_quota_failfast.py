@@ -275,6 +275,7 @@ def test_production_reader_applies_the_snapshot_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(flag, 'default_reader', _production_reader)
     flag.default_reader.cache_clear()
     monkeypatch.setattr(leg_state, '_default_store', lambda: LegStateStore(tmp_path / 'state'))
+    monkeypatch.setattr(leg_state, 'tcp_gateway_probe', lambda url: True)   # the launch endpoint listens
     # A provider list that names the pools: an empty one is an explicit exclusion, not a fallback.
     pools = {name: quota_snapshots.ProviderState(name, True, '', '') for name in ('codex', 'openrouter')}
     monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: pools))

@@ -535,7 +535,7 @@ def test_gateway_url_reads_the_provider_base_url(tmp_path, launch_env):
     assert leg_state.gateway_url('mimo/mimo-v2.6-pro') == 'http://127.0.0.1:8080/v1'
     assert leg_state.gateway_url('opencode/big-pickle') is None
     assert leg_state.gateway_url('claude-sonnet-5-5') is None
-    assert leg_state.gateway_url('omniroute/deepseek-v4.1-flash') is None
+    assert leg_state.gateway_url('omniroute/deepseek-v4.1-flash') == 'http://127.0.0.1:8080/v1'   # the launch endpoint
 
 
 def test_tcp_gateway_probe_refuses_a_closed_port():
