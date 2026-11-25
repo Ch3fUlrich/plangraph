@@ -94,6 +94,8 @@ def _add_reads(sub):
     show.add_argument("key")
     show.add_argument("--brief", action="store_true",
                       help="short task brief instead of the full item")
+    show.add_argument("--live", action="store_true",
+                      help="no snapshot fallback: an unreachable keeper is exit 3, never stale data")
 
     blocked = _p(sub, "blocked", help="open items and their unmet deps")
     blocked.add_argument("--project")

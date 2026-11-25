@@ -336,7 +336,8 @@ def cmd_show(args, session):
             data = brief_mod.build(data, data.get("depends_on"))
         return _emit(session, data, render)
     params = {"key": args.key, "brief": 1 if args.brief else None}
-    return read(session, "show", params, lambda r: render(r), local)
+    # A caller that acts on the answer (a claim cleanup) must not read a stale snapshot.
+    return read(session, "show", params, lambda r: render(r), None if args.live else local)
 
 
 def cmd_blocked(args, session):

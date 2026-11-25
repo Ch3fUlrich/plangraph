@@ -71,7 +71,8 @@ impl<R: CommandRunner> KeeperCli<R> {
         let Err(error) = self.runner.run(&self.dir, &argv) else {
             return Ok(());
         };
-        let show = self.argv("show", &[key.to_owned()]);
+        // `--live`: an unreachable keeper is an error here, never the stale snapshot copy.
+        let show = self.argv("show", &[key.to_owned(), "--live".to_owned()]);
         let shown = self
             .runner
             .run_lenient(&self.dir, &show)

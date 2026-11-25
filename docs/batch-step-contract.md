@@ -100,3 +100,6 @@ longer claimed at that epoch, so the claim key is dropped. The draft-part lookup
 the head being classified: a pull request whose head moved on gets no exception for a run of
 the old head. The `.inputs` binding is linked into place without overwriting, so two calls on
 one steps path cannot both establish it.
+
+The cleanup reads the item with `show KEY --live`: with the keeper unreachable that exits 3
+instead of answering from the stale snapshot, so only a live answer can clear the claim key.

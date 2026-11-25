@@ -5,3 +5,5 @@ The claim keeps its keeper idempotency key in a file beside the steps file, so a
 `ci_class` keeps the latest run per workflow and event, so a failed run of another event is not hidden by a newer pass, and it asks the pull request itself (`gh api pulls/N`) whether it is a draft `lane/*` part before it accepts a skipped `pull_request` run. A claim refused in part keeps its keeper key until every granted epoch is released.
 
 A failed release of a partial claim is confirmed against the item (`show`): a grant the keeper no longer holds at that epoch counts as given back, so a lost release answer no longer keeps the claim key forever. The draft-part lookup is bound to the head being classified.
+
+The claim cleanup confirms a failed release with `show KEY --live`, which never falls back to the stale snapshot: a keeper outage keeps the claim key. `pg show` gains `--live` (exit 3 when the keeper is unreachable).

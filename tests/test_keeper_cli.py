@@ -125,6 +125,14 @@ def test_cli_unreachable_read_falls_back(live, capsys):
         assert out_json(capsys)["design_ref"] == ref
 
 
+def test_cli_show_live_never_falls_back_to_the_snapshot(live):
+    server, w, tokens, cfg, _ = live
+    cfg.snapshot.write_text(json.dumps(w.store.snapshot(w.p("router"))), encoding="utf-8")
+    server.shutdown(), server.server_close()
+    assert run(tokens["reader"], "show", "demo:A") == 0
+    assert run(tokens["reader"], "show", "demo:A", "--live") == 3
+
+
 def test_cli_unreachable_write_exits_3(live, capsys):
     server, w, tokens, cfg, _ = live
     server.shutdown()
