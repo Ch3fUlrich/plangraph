@@ -119,6 +119,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         # Forge records of landings, kept for good: a merge-index scan works on a shallow copy of the
         # store, so the dict has to exist before the copy for the scan's answers to reach the server.
         self._landings = {}
+        self._named_landings = {}   # (key, default commit) -> the named merge's landed sha, read by the scan
 
     # ------------------------------------------------------------ time
     def now(self):

@@ -268,8 +268,8 @@ def test_apply_closes_the_merged_code_item_and_leaves_the_unmerged_in_review(
     items = {i["key"]: i for i in live_items(world)}
     assert items["demo:CODE-1"]["state"] == "done"
     assert items["demo:CODE-2"]["state"] == "in_review"
-    assert items["demo:CODE-1"]["note"] == f"D-505 {SEG_A}"
-    assert items["demo:CODE-2"]["note"] == f"D-506 {SEG_B}"
+    assert items["demo:CODE-1"]["note"] == f"no deploy needed: test fixture | D-505 {SEG_A}"
+    assert items["demo:CODE-2"]["note"] == f"no deploy needed: test fixture | D-506 {SEG_B}"
     commit_rows = world.conn.execute(
         "SELECT kind, ref, verified FROM evidence WHERE key='demo:CODE-1'"
         " AND kind='commit'").fetchall()

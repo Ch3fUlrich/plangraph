@@ -258,3 +258,18 @@ def test_bare_references_qualify_with_the_project_of_the_resolved_target(w, monk
     keys = w.store._op_keys({"op": "edit", "key": "demo:A",
                              "fields": {"depends_on": {"add": ["B"]}}})
     assert keys == ["third:A", "third:B"]               # not "demo:B"
+
+
+def test_a_granted_l1_cannot_add_the_no_deploy_reason_to_a_review_item_the_router_can(w):
+    """The in-place reason edit is the authenticated router's: a granted L1 runs as role router inside
+    apply_ops, and the audit role keeps it out."""
+    from keeper_util import to_in_review
+
+    to_in_review(w, "demo:A")
+    w.conn.execute("UPDATE items SET note='plain note' WHERE key='demo:A'")
+    edit = [{"op": "edit", "key": "demo:A", "fields": {"note": "plain note\nno deploy needed: docs only"}}]
+    with pytest.raises(Refused):
+        apply(w, edit)
+    assert w.store._item("demo:A")["note"] == "plain note"
+    assert apply(w, edit, who="router")["applied"] == 1
+    assert w.store._item("demo:A")["note"].endswith("no deploy needed: docs only")

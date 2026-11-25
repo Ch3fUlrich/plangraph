@@ -47,7 +47,7 @@ def test_create_keeps_explicit_note_then_folds(w, tmp_path):
 
 
 def test_apply_ops_create_folds_too(w, tmp_path):
-    item = defn("X", intent="via a batch")
+    item = defn("X", intent="via a batch", note=None)
     w.store.apply_ops(w.p("router"), [
         {"op": "create", "item": item},
         {"op": "edit", "key": "demo:GOAL", "fields": {"depends_on": ["A", "X"]}}])
@@ -79,7 +79,7 @@ def test_known_fields_unchanged(w):
     item = w.store._item("demo:X")
     assert item["note"] == "plain" and item["owner_family"] == "google"
     assert item["priority"] == 2
-    w.store.create_items(w.p("router"), [defn("Y"), defn("G3", ["Y"],
+    w.store.create_items(w.p("router"), [defn("Y", note=None), defn("G3", ["Y"],
                                                           kind="goal")])
     assert _note(w, "demo:Y") is None
 

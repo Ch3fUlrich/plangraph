@@ -63,6 +63,8 @@ def test_brief_wait_included_when_set(w):
 def test_brief_deps_carry_states(w):
     before = w.store.show(w.p("reader"), "demo:B", brief=True)
     assert before["depends_on"] == [{"key": "demo:A", "state": "open"}]
+    w.store.edit_definition(w.p("router"), "demo:A",
+                            {"note": "no deploy needed: dependency-state fixture"})
     to_done(w, "demo:A")
     after = w.store.show(w.p("reader"), "demo:B", brief=True)
     assert after["depends_on"] == [{"key": "demo:A", "state": "done"}]

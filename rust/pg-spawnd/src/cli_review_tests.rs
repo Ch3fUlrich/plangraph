@@ -248,6 +248,7 @@ store = Store(conn, clock=lambda: 1700000000.0,
 store.create_items(router, [dict(
     project='demo', id=name, title=name, kind=kind, track='T0', owner='tester',
     estimate_h=1, depends_on=deps, done_criteria='criteria', evidence_kinds=['any'],
+    note='no deploy needed: the fixture provisions no runtime targets',
     operator=False, review_tier='standard'
 ) for name, kind, deps in [('A', 'lane', []), ('G', 'goal', ['demo:A'])]])
 epoch = store.claim(writer, 'demo:A')['epoch']

@@ -59,7 +59,7 @@ def test_the_manual_close_counts_the_merge_a_merge_repo_note_names(w, monkeypatc
     head = _git(repo, "rev-parse", "main^2")
     w.decision_path.write_text(
         HEADER + f"| D-5504 | demo | GO #166 demo:A; GO-HEAD {head} | ROUTER | 2026-11-05 |\n")
-    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"no deploy needed: test fixture\nMerge-Repo: other {landed}"})
     out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
     assert out["closed"] is False and out["reason"] == "deploy_pending"
     assert w.store._item("demo:A")["state"] == "in_review"
@@ -194,7 +194,7 @@ def test_a_squash_merged_hosted_pr_is_scanned_at_its_landed_commit_not_its_topic
 
     monkeypatch.setattr(subprocess, "run", hosted)
     router = w.p("router")
-    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #166"})
+    w.store.edit_definition(router, "demo:A", {"note": "no deploy needed: test fixture\nMerge-Repo: other #166"})
     out = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
     assert out["closed"] is False and out["reason"] == "deploy_pending"
     assert out["missing"] == ["(hosts unnamed)"]
@@ -541,7 +541,7 @@ def test_direct_pr_deploy_gate_ignores_main_sync_and_other_keys(
         empty = tmp_path / "primary"
         merged_repo(empty, [])
         env.store.ctx["git"] = GitAdapter({"demo": str(empty), "other": str(root)})
-        env.store.edit_definition(env.p("router"), "demo:A", {"note": "Merge-Repo: other"})
+        env.store.edit_definition(env.p("router"), "demo:A", {"note": "no deploy needed: test fixture\nMerge-Repo: other"})
 
     preview = env.store.close_merged(env.p("router"), "demo:A", "D-5504", ["google"],
                                      from_open=True, require_seats=False)
@@ -607,7 +607,7 @@ def test_train_part_merge_commit_own_unit_counts_for_the_part_key(env):  # noqa:
 def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
     from plangraph.keeper.evidence_types import as_epoch
 
-    env.store.edit_definition(env.p("router"), "demo:A", {"note": "Deploy-Hosts: fixture"})
+    env.store.edit_definition(env.p("router"), "demo:A", {"note": "no deploy needed: test fixture\nDeploy-Hosts: fixture"})
     env.store.edit_definition(env.p("router"), "demo:B", {
         "done_criteria": "Live: merge-close finishes under 120 seconds.",
         "criteria_reason": "Require live timing evidence",
@@ -622,16 +622,16 @@ def test_merge_close_reports_the_age_of_unproven_unit_and_live_work(env):
     assert pending["demo:B"]["missing"] == ["live_evidence_missing"]
     assert all(row["age_hours"] >= 26 and row["merged_at"] for row in pending.values())
     assert preview["merged_not_done"] == 2
-    assert [row["key"] for row in preview["would_close"]] == ["demo:B"]
+    assert preview["would_close"] == [], "a Live: clause without live evidence holds the item like an unproven unit"
     assert all(env.store._item(key)["state"] == "open" for key in pending)
     applied = frozen(env, require_seats=False)
-    assert [row["key"] for row in applied["closed"]] == ["demo:B"]
-    assert [row["key"] for row in applied["listed"]] == ["demo:A"]
+    assert applied["closed"] == []
+    assert sorted(row["key"] for row in applied["listed"]) == ["demo:A", "demo:B"]
     assert applied["deployment_pending"] == preview["deployment_pending"]
-    assert applied["merged_not_done"] == 1
-    assert env.store._item("demo:B")["state"] == "done"
-    assert [(row["key"], row["code"]) for row in env.store.alerts(env.p("reader"))["findings"]
-            if row["code"] == "deploy_pending"] == [("demo:A", "deploy_pending")]
+    assert applied["merged_not_done"] == 2
+    assert env.store._item("demo:B")["state"] == "open"
+    assert sorted((row["key"], row["code"]) for row in env.store.alerts(env.p("reader"))["findings"]
+                  if row["code"] == "deploy_pending") == [("demo:A", "deploy_pending"), ("demo:B", "deploy_pending")]
 
 
 def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
@@ -653,7 +653,145 @@ def test_a_live_clause_requires_verified_evidence_from_after_the_merge(env):
     env.clock.t = merged + 60
     preview = frozen(env, require_seats=False, apply=False)
     assert preview["deployment_pending"][0]["key"] == key
-    assert preview["would_close"][0]["key"] == key
+    assert preview["would_close"] == [], "evidence from before the merge does not prove it"
     assert env.store.add_evidence_router(env.p("router"), key, "deploy", proof)["verified"]
     result = frozen(env, require_seats=False, apply=False)
     assert result["deployment_pending"] == [] and result["would_close"][0]["key"] == key
+
+
+LIVE_CLAUSE = {
+    "done_criteria": "Live: observe the service in use.",
+    "criteria_reason": "Require a live service observation",
+    "criteria_evidence": "Service deployment fixture",
+}
+JAN1, JAN2 = "2026-01-01T00:00:00+0000", "2026-01-02T00:00:00+0000"
+
+
+def _land_at(env, monkeypatch, when, name, key, pr):
+    """Land ``key`` as a merged PR committed at ``when``; returns the head and the landing time (epoch)."""
+    from plangraph.keeper.evidence_types import as_epoch
+
+    monkeypatch.setenv("GIT_COMMITTER_DATE", when)
+    monkeypatch.setenv("GIT_AUTHOR_DATE", when)
+    head = env.repo.land(name, f"Plan-Item: {key}", pr)
+    return head, as_epoch(git(env.repo.root, "show", "-s", "--format=%cI", "main"))
+
+
+def _deploy_row(env, key, unit, at, host="fixture", **extra):
+    """Record a verified deploy row at clock time ``at`` (the verifier is a fake: the row is the proof)."""
+    from keeper_util import FakeVerifier
+
+    env.store.verifiers.setdefault("deploy", FakeVerifier())
+    env.clock.t = at
+    ref = {"host": host, "unit": unit, **extra}
+    assert env.store.add_evidence_router(env.p("router"), key, "deploy", ref)["verified"]
+
+
+def _live_item(env, key, to_state=True):
+    from keeper_util import to_in_review
+
+    env.store.edit_definition(env.p("router"), key, LIVE_CLAUSE)
+    if to_state:
+        to_in_review(env, key)
+
+
+def _refused_verdict(env, key):
+    from plangraph.keeper.store import Refused
+
+    with pytest.raises(Refused) as refused:
+        env.store.verdict(env.p("reviewer"), key, True, "passed")
+    assert refused.value.code == "evidence_unverified" and "live_evidence_missing" in refused.value.msg
+    assert env.store._item(key)["state"] == "in_review"
+
+
+ONESHOT = {"type": "oneshot", "result": "success"}
+
+
+def test_a_oneshot_row_closes_a_verdict_only_beside_its_active_timer_on_its_own_host(env, monkeypatch):  # noqa: F811
+    """A timer row is no proof of its own once a oneshot service row of the same job is in the set: the
+    pair is one proof, and only a same-host, post-merge timer completes it."""
+    _live_item(env, "demo:B")
+    _, landed = _land_at(env, monkeypatch, JAN1, "job", "demo:B", 81)
+    after = landed + 60
+    _deploy_row(env, "demo:B", "job.service", after, **ONESHOT)
+    _refused_verdict(env, "demo:B")                                               # a lone oneshot row
+    _deploy_row(env, "demo:B", "job.timer", after + 1, host="elsewhere", is_active="active")
+    _refused_verdict(env, "demo:B")                                               # the timer of another host
+    _deploy_row(env, "demo:B", "job.timer", after + 2, is_active="active")
+    assert env.store.verdict(env.p("reviewer"), "demo:B", True, "passed")["state"] == "done"
+
+
+def test_a_timer_recorded_before_the_merge_does_not_complete_a_oneshot_pair(env, monkeypatch):  # noqa: F811
+    _live_item(env, "demo:B")
+    _, landed = _land_at(env, monkeypatch, JAN1, "job", "demo:B", 82)
+    _deploy_row(env, "demo:B", "job.timer", landed - 60, is_active="active")      # before the merge
+    _deploy_row(env, "demo:B", "job.service", landed + 60, **ONESHOT)
+    _refused_verdict(env, "demo:B")
+    _deploy_row(env, "demo:B", "job.timer", landed + 61, is_active="active")
+    assert env.store.verdict(env.p("reviewer"), "demo:B", True, "passed")["state"] == "done"
+
+
+def test_close_uses_the_latest_item_landing(env, monkeypatch):  # noqa: F811
+    """Two landings of one item: a same-epoch row between them proves only the first. The automatic close, the
+    review pass and the router GO close all refuse it, and accept a row from the latest landing on."""
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+
+    router = env.p("router")
+    heads = {}
+    for key in ("demo:A", "demo:B", "demo:C"):
+        _live_item(env, key, to_state=key != "demo:A")   # claimed work is stale once landed: submit first
+    for key, pr in (("demo:A", 90), ("demo:B", 92), ("demo:C", 94)):
+        heads[key], first = _land_at(env, monkeypatch, JAN1, f"w1{key[-1]}", key, pr)
+        _, last = _land_at(env, monkeypatch, JAN2, f"w2{key[-1]}", key, pr + 1)
+    assert last > first
+    env.store.record_run(env.p("spawner"), "demo:C", {"run_id": "fixture-seats", "phase": "finished", "rc": 0,
+                                                     "seats": [{"model": "gemini-test", "verdict": "pass"}]})
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-1 | demo | GO {heads['demo:C']} |\n", encoding="utf-8")
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    for key in ("demo:A", "demo:B", "demo:C"):
+        _deploy_row(env, key, "test.service", first + 60, is_active="active")     # between the two landings
+    assert auto(env, require_seats=False, project="demo")["closed"] == []
+    _refused_verdict(env, "demo:B")
+    out = env.store.close_merged(router, "demo:C", "D-1", ["google"])
+    assert out["closed"] is False and "live_evidence_missing" in out["missing"], out
+    for key in ("demo:A", "demo:B", "demo:C"):
+        _deploy_row(env, key, "test.service", last + 60, is_active="active")      # at the latest landing
+    assert env.store.verdict(env.p("reviewer"), "demo:B", True, "passed")["state"] == "done"
+    assert env.store.close_merged(router, "demo:C", "D-1", ["google"])["state"] == "done"
+    assert [c["key"] for c in auto(env, require_seats=False, project="demo")["closed"]] == ["demo:A"]
+
+
+@pytest.mark.parametrize("env", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
+    not os.environ.get("PG_DSN"), reason="PG_DSN not set"))], indirect=True)
+def test_the_automatic_close_waits_for_deploy_proof_in_preview_and_apply(env, monkeypatch):  # noqa: F811
+    key = "demo:A"
+    env.store.edit_definition(env.p("router"), key, LIVE_CLAUSE)
+    _, landed = _land_at(env, monkeypatch, JAN1, "live", key, 98)
+    _deploy_row(env, key, "test.service", landed - 60, is_active="active")
+    env.clock.t = landed + 60
+    for apply in (False, True):
+        held = frozen(env, require_seats=False, apply=apply)
+        assert held["deployment_pending"][0]["key"] == key and held["would_close" if not apply else "closed"] == []
+        assert env.store._item(key)["state"] == "open"
+    _deploy_row(env, key, "test.service", landed + 120, is_active="active")
+    assert frozen(env, require_seats=False, apply=False)["would_close"][0]["key"] == key
+    assert [c["key"] for c in frozen(env, require_seats=False)["closed"]] == [key]
+
+
+def test_a_no_deploy_line_never_excuses_a_live_clause_and_an_empty_reason_holds(env):  # noqa: F811
+    from keeper_util import to_in_review
+    from plangraph.keeper.store import Refused
+
+    env.store.edit_definition(env.p("router"), "demo:B", {**LIVE_CLAUSE, "note": "no deploy needed: docs only"})
+    env.store.edit_definition(env.p("router"), "demo:C", {"note": "no deploy needed:"})
+    env.store.edit_definition(env.p("router"), "demo:P", {"note": "plain note"})
+    for key in ("demo:B", "demo:C", "demo:P"):
+        to_in_review(env, key)
+    _refused_verdict(env, "demo:B")
+    for key, code in (("demo:C", "no_deploy_reason_empty"), ("demo:P", "live_evidence_missing")):
+        with pytest.raises(Refused) as refused:
+            env.store.verdict(env.p("reviewer"), key, True, "passed")
+        assert code in refused.value.msg
+    env.store.edit_definition(env.p("router"), "demo:C", {"note": "No deploy needed: docs only"})
+    assert env.store.verdict(env.p("reviewer"), "demo:C", True, "passed")["state"] == "done"

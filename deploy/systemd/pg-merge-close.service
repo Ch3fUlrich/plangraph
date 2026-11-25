@@ -6,8 +6,12 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=%h/code/plangraph
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
+StateDirectory=pg-merge-close
+StateDirectoryMode=0700
 # PG_URL and PG_TOKEN_FILE name a keeper token of role `system`; the closed and the flagged keys go to the journal.
 # PG_MERGE_CLOSE_REQUIRE_SEATS unset follows the keeper setting require_seats (off: a missing seat is flagged); 1 demands seats, 0 flags.
-ExecStart=%h/.local/bin/plangraph merge-close
+# --scheduled: a keeper scan still running after the wait ends the pass as a `refresh_pending` line with exit 0;
+# the third pending pass in a row (count kept in --state) exits 1. pg-merge-close-continue.timer retries a pending scan in time.
+ExecStart=%h/.local/bin/plangraph merge-close --scheduled --state %S/pg-merge-close/pending.json
 TimeoutStartSec=420
 UMask=0077

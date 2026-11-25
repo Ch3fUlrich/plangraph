@@ -383,3 +383,23 @@ def test_sync_md_import_questions_are_question_kind_and_land_in_answers(world, s
     snap = {i["key"]: i for i in world.store.snapshot(reader)["items"]}
     assert snap["routing:Q-ALPHA"]["answer"]["decision_id"] == alpha["decision_id"]
     assert snap["routing:Q-GHOST"]["answer"] is None
+
+
+def test_a_close_the_keeper_gate_would_refuse_is_held_and_the_rest_of_the_import_goes_on():
+    """The keeper refuses the close of an item with neither a deploy row nor a no-deploy reason, which would
+    roll the whole batch back: the importer reports the close as held and plans no op that needs it."""
+    import md_sync_plan
+
+    def planned(item):
+        plan = SimpleNamespace(skipped=[], ops=[])
+        plan.add = plan.ops.append
+        md_sync_plan._close(plan, dict(item, key="demo:Q", state="in_review", review_tier="none",
+                                       evidence_kinds=["decision"], evidence=[]), ["D-1"])
+        return plan
+
+    held = planned({"note": "plain note"})
+    assert held.ops == [] and "held: live_evidence_missing" in held.skipped[0][1]
+    live = planned({"note": "no deploy needed: decision only", "done_criteria": "Live: it runs."})
+    assert live.ops == [] and "held" in live.skipped[0][1], "a no-deploy line never excuses a Live clause"
+    ok = planned({"note": "no deploy needed: decision only"})
+    assert [op["op"] for op in ok.ops] == ["add_evidence", "close_on_decision"] and ok.skipped == []

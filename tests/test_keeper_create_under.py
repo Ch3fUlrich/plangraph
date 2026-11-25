@@ -73,7 +73,7 @@ def test_a_bare_new_item_still_needs_a_path_to_a_goal(w):
 
 
 def test_router_attaches_under_a_goal_in_another_project(w):
-    out = w.store.create_items(w.p("router"), [defn("NEW", under="other:OG")])
+    out = w.store.create_items(w.p("router"), [defn("NEW", under="other:OG", note=None)])
     assert out["created"] == ["demo:NEW"]
     assert out["attached"] == [{"key": "demo:NEW", "under": "other:OG"}]
     assert ("other:OG", "demo:NEW", "depends_on") in _edges(w)   # G -> N

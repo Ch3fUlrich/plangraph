@@ -18,7 +18,7 @@ def _fixture_item(kp, ident, **fields):
     if kp.get(f"/v1/show?key={key}&fmt=json", "reader").status == 200:
         pytest.skip(f"fixture item {key} was already used on this keeper")
     item = {"project": "demo", "id": ident, "kind": "lane", "title": ident, "description": "d", "done_criteria": "c",
-            "evidence_kinds": ["decision"] if fields.get("review_tier") == "none" else ["any"], **fields}
+            "note": "no deploy needed: contract fixture", "evidence_kinds": ["decision"] if fields.get("review_tier") == "none" else ["any"], **fields}
     goal = {"project": "demo", "id": ident + "-GOAL", "kind": "goal", "title": ident + " goal",
             "depends_on": [ident]}
     ok(kp.post("create_items", "router", {"items": [item, goal]}), "Created")

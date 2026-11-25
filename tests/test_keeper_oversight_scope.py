@@ -968,6 +968,7 @@ def test_applied_op_writes_audit_row_with_event_link(w, monkeypatch):
 
 
 def test_denied_audit_row_survives_the_batch_rollback(w, monkeypatch):
+    prior_note = w.store._item("plangraph:OTHER")["note"]
     token, principal = live(w, monkeypatch)
     err = refusal(apply, w, principal, [
         op("edit", key="plangraph:OTHER", fields={"note": "first"},
@@ -977,7 +978,7 @@ def test_denied_audit_row_survives_the_batch_rollback(w, monkeypatch):
            finding=FINDING),
     ])
     assert has("field_denied", err.msg)
-    assert w.store._item("plangraph:OTHER")["note"] is None
+    assert w.store._item("plangraph:OTHER")["note"] == prior_note
     rows = list(w.conn.execute("SELECT * FROM oversight_ops"
                                " ORDER BY id"))
     denied = [r for r in rows if r["outcome"] == "denied"]
@@ -1599,6 +1600,7 @@ def test_oversight_dry_run_checks_the_gate_and_writes_nothing(w, monkeypatch):
     row survives, so the applied budget is untouched too.
     """
     _, principal = live(w, monkeypatch)
+    prior_note = w.store._item("plangraph:OTHER")["note"]
     before = snap(w)
     out = w.store.apply_ops(
         principal,
@@ -1608,7 +1610,7 @@ def test_oversight_dry_run_checks_the_gate_and_writes_nothing(w, monkeypatch):
     assert out["applied"] == 2 and out["dry_run"] is True
     assert len(out["results"]) == 2
     assert snap(w) == before
-    assert w.store._item("plangraph:OTHER")["note"] is None
+    assert w.store._item("plangraph:OTHER")["note"] == prior_note
     assert w.store._item("plangraph:HOST")["priority"] == 0
     assert _applied_rows(w) == []                  # no persisted audit/budget
     assert _denied_rows(w) == []                   # success is not a denial

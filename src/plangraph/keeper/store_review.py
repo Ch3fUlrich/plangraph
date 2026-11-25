@@ -37,8 +37,9 @@ from __future__ import annotations
 import json
 import re
 
-from . import auth
+from . import auth, context_sources
 from .errors import Refused
+from .evidence_types import as_epoch, live_evidence_status, no_deploy_declaration
 from .store_outbox import _StoredReceipt
 from .store_waiver import _known_family
 
@@ -201,7 +202,8 @@ class ReviewMixin:
         # which evidence rows it considered so the transaction can prove that set
         # is unchanged.  It runs for the first verdict too, so a stale-evidence
         # refusal never depends on a peer showing up first.
-        considered = self._reverify_all(item, now)
+        floor = self._landing_floor(item)   # git and forge reads stay outside the write lock
+        considered = self._reverify_all(item, now, floor)
         with self._write():
             fresh = self._get_or_refuse(key)
             self._seat_delivery(principal, key, ok, reason, binding, fresh)
@@ -224,6 +226,7 @@ class ReviewMixin:
             if self._verified_evidence_ids(fresh) != considered:
                 raise Refused("conflict",
                               f"{key} evidence changed under the transaction")
+            fresh["_live_floor"] = floor
             self._require_project(principal, fresh["project"])
             self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now),
                                      change_request=not ok)
@@ -304,6 +307,88 @@ class ReviewMixin:
                 "family": auth.norm_family(principal.family),
                 "ok": True, "epoch": item["epoch"], "round": item["round"]}
 
+    @staticmethod
+    def _only_no_deploy_line_added(old, new):
+        """True when ``new`` is ``old`` (an empty ``no deploy needed:`` line dropped) plus one such line with a reason."""
+        if not isinstance(new, str):
+            return False
+        before = [line for line in (old or "").splitlines() if no_deploy_declaration({"note": line}) != ""]
+        after = new.splitlines()
+        return len(after) == len(before) + 1 and any(
+            after[:i] + after[i + 1:] == before and no_deploy_declaration({"note": after[i]})
+            for i in range(len(after)))
+
+    def _live_status(self, item, since):
+        """The code that holds ``item`` from closing (``live_evidence_status``), or ``None``."""
+        return live_evidence_status(item, self._evidence(item["key"]), since)
+
+    def _require_live_evidence(self, item):
+        """The one close gate; every path ends here under the write lock with the floor it pinned.
+
+        The floor rides in ``item["_live_floor"]`` (``_landing_floor``); an item without one counts
+        no deploy row at all."""
+        if code := self._live_status(item, item.get("_live_floor", float("inf"))):
+            raise Refused("evidence_unverified",
+                          f"{code}: {item['key']} needs a verified deploy evidence row recorded at or after its "
+                          "latest merge, or a 'no deploy needed: <reason>' line (D-6790)")
+
+    def _sha_landed_at(self, project, sha, ref):
+        """When *sha* landed on *ref* (epoch): the forge record, the merge that brought it in, else its own date."""
+        git = self._adapter("git")
+        repo = git.repo_path(project)
+        if record := self._landing_for(project, sha):
+            return as_epoch(record["merged_at"])
+        merged = git.merge_commit_of(repo, sha, ref)
+        return as_epoch(git.merge_proof_fields(repo, merged[0])[-1]) if merged else git.commit_time(repo, sha)
+
+    def _landing_floor(self, item, shas=(), proofs=None):
+        """When the item's work last landed on its pinned default ref (epoch seconds).
+
+        ``None``: confirmed no landed work (no repository to ask, no tagged commit, named merge or verified
+        sha). Infinity: work is there but a landing date cannot be read, so no deploy row counts. The latest of
+        the tagged commits (``proofs`` of the automatic close when given), the named merge, the partial
+        deliveries of the warm index, the commit evidence of the epoch and ``shas`` (a GO-bound head) decides.
+        Reads git and the forge: call it outside the write lock. An ``apply_ops`` batch reads the
+        tagged, named and partial landings before its lock (``OpBatch.floors``); inside it only the
+        evidence rows are added to that pinned floor."""
+        if self._adapter("git") is None:
+            return None
+        pinned = getattr(getattr(self, "_batch", None), "floors", {})
+        try:
+            item = self._with_merge_repo(item) if item["key"] not in pinned else item
+            git, project, key = self._adapter("git"), self._merge_project(item), item["key"]
+            if not git.repo_path(project):
+                return None
+            ref = item.get("_close_head") or git.repo_ref(project)
+            stamps, landed = ([pinned[key]] if pinned.get(key) is not None else []), list(shas)
+            if key not in pinned:
+                commits = (context_sources.plan_item_commits(git, project, key, fetch=False, limit=None,
+                                                             head=item.get("_close_head"))
+                           if proofs is None else [])
+                if commits is None:
+                    return float("inf")
+                stamps += [as_epoch(self._commit_landing(project, c)[2]) for c in commits]
+                stamps += [as_epoch(p["merged_at"]) for p in proofs or ()]
+                seen = self._named_landings
+                if (key, item.get("_close_head")) in seen:
+                    named_sha = seen[(key, item.get("_close_head"))]
+                else:
+                    named_sha = (self._named_merge_proof(item) or {}).get("landed")
+                if named_sha:
+                    landed.append(named_sha)
+                index = self.__dict__.get("_warmed", {}).get(project)
+                landed += [part["sha"] for part in context_sources.indexed_parts(index, key)]
+            for row in self._evidence(key):
+                if (row["kind"] in ("commit", "commit+ci") and row["verified"] and row["epoch"] == item["epoch"]
+                        and row["ref"].get("sha")):
+                    where = row["ref"].get("repo")
+                    stamps.append(self._sha_landed_at(where if where and git.repo_path(where) else project,
+                                                      row["ref"]["sha"], ref))
+            stamps += [self._sha_landed_at(project, sha, ref) for sha in landed]
+        except Exception:  # noqa: BLE001 - an unreadable landing never lets a stale row through
+            return float("inf")
+        return None if not stamps else float("inf") if None in stamps else max(stamps)
+
     def _pass(self, principal, key, reason, item, now, reviews_passed, release=False, flags=None):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
 
@@ -312,6 +397,7 @@ class ReviewMixin:
         peer verdict that slipped in between the pre-read and here loses.
         ``release`` ends the claim with the item (the automatic merge close).
         """
+        self._require_live_evidence(item)
         cursor = self.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=?"
             + (", claimed_by=NULL, delegate=NULL, lease_until=NULL" if release else "")

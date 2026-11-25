@@ -24,6 +24,7 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 from plangraph.keeper.item_fields import CHOICE_KINDS  # noqa: E402
 
 import md_sync_dclose  # noqa: E402  (D-505: router D-rows with Closes key@sha)
+import md_sync_gates  # noqa: E402  (the keeper's close gate, read before the batch)
 
 # Defaults only: build_plan resolves these through the snapshot's rehome
 # aliases (and an optional --gate override) onto the Plan below, so a rehomed
@@ -187,7 +188,8 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                     "kind": "operator_task" if want_create == "task" else "question",
                     "track": "QUESTIONS", "owner": "operator",
                     "operator": True, "evidence_kinds": ["decision"],
-                    "review_tier": "none", "depends_on": [], "source": SOURCE}
+                    "review_tier": "none", "depends_on": [], "source": SOURCE,
+                    "note": md_sync_gates.NO_DEPLOY_NOTE}
             if want_create is not None:
                 lane["wait"] = want_create
             if desc:
@@ -515,7 +517,8 @@ def _answers(plan, answers, decision_ids, by_id, pending, view=None,
             continue
         if ident in pending:
             item = {"key": pending[ident], "state": "open", "review_tier": "none",
-                    "evidence_kinds": ["decision"], "evidence": []}
+                    "evidence_kinds": ["decision"], "evidence": [],
+                    "note": md_sync_gates.NO_DEPLOY_NOTE}
         else:
             item = _find(by_id, plan.project, ident)
         if item is None:
@@ -553,6 +556,10 @@ def _close(plan, item, decisions):
                   "note": "md-sync: answered by " + ", ".join(decisions)})
     elif not decision_only:
         plan.skipped.append((ident, f"blocked: {key} is {st}"))
+        return
+    if code := md_sync_gates.live_hold(item):
+        plan.skipped.append((ident, f"held: {code} for {key}; add a 'no deploy needed: <reason>' line, "
+                             "or deploy proof of the new epoch"))
         return
     have = _decision_ids(item)
     for dec in decisions:
