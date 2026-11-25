@@ -2,7 +2,7 @@
 //! so a crash between the two writes leaves the event in the queue and the key out of `active`.
 //! `reconcile` commits such an event's key first; `recovered` and `settle` retire the events of a
 //! crossing the watchdog saw recover, so a later crossing is a new transition with a new id.
-use super::{disks::Row, key::Key, names::Names};
+use super::{key::Key, names::Names};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -26,33 +26,6 @@ pub fn canonical(previous: &str, names: &Names) -> String {
                     key.render()
                 }
                 None => line.to_owned(),
-            })
-            .collect(),
-    )
-}
-
-/// An aggregate `host-disk` line from before filesystems were keyed becomes the keyed line of its
-/// filesystem, but only when the host's row shows exactly one hot filesystem and nothing anonymous.
-pub fn migrate(previous: &str, rows: &[Row]) -> String {
-    join(
-        previous
-            .lines()
-            .map(|line| {
-                let Some(key) =
-                    Key::parse(line).filter(|k| k.disk && k.fs.is_none() && !k.measured)
-                else {
-                    return line.to_owned();
-                };
-                let Some(row) = rows.iter().find(|row| row.host == key.host) else {
-                    return line.to_owned();
-                };
-                let mut hot = row.groups.iter().filter(|(_, group)| group.hot());
-                match (hot.next(), hot.next(), row.anonymous_hot) {
-                    (Some((device, _)), None, false) => {
-                        Key::disk(&key.host, Some(device), false).render()
-                    }
-                    _ => line.to_owned(),
-                }
             })
             .collect(),
     )
@@ -122,9 +95,30 @@ pub fn queued(queue: &[Value], key: &str) -> bool {
         .any(|queued| queued.render() == key)
 }
 
-/// The durable id of a disk transition: its key and the time it was first queued.
-pub fn transition(key: &str) -> Option<String> {
-    Key::parse(key)
-        .filter(|key| key.disk)
-        .map(|key| format!("{}#{}", key.render(), super::local::now()))
+/// Whether a queued event and its pending copy are the same event. Disk events are matched by
+/// their transition id: recovery marks the queued copy `recovered`, so the two no longer compare
+/// equal as whole values.
+pub fn same_event(queued: &Value, pending: &Value) -> bool {
+    queued == pending
+        || (queued["transition"].is_string() && queued["transition"] == pending["transition"])
+}
+
+pub fn is_disk_key(key: &str) -> bool {
+    Key::parse(key).is_some_and(|key| key.disk)
+}
+
+/// A new transition id: the key and the next number of a counter kept in the state directory, so
+/// two crossings never share an id, whatever the clock says. A crash after the counter moved
+/// leaves a gap, never a repeat.
+pub fn next_transition(state: &std::path::Path, key: &str) -> std::io::Result<String> {
+    let path = state.join("disk-transition-seq");
+    let last: u64 = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0);
+    let next = last + 1;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, next.to_string())?;
+    std::fs::rename(tmp, path)?;
+    Ok(format!("{key}#{next}"))
 }

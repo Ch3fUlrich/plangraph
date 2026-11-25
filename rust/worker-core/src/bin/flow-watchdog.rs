@@ -167,14 +167,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => return Err(e.into()),
     };
     let names = hosts::Names::load();
-    let mut stored = fs::read_to_string(dir.join("active")).unwrap_or_default();
+    let stored = fs::read_to_string(dir.join("active")).unwrap_or_default();
     let mut previous = hosts::canonical(&stored, &names);
     // A disk event queued before its key reached `active` (a crash between the two writes) is
     // committed first, so neither this snapshot nor the queue drain can lose it or queue it again.
     previous = hosts::reconcile(&previous, &queue);
     if previous != stored {
         atomic(&dir.join("active"), &previous)?;
-        stored.clone_from(&previous);
     }
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
         let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
@@ -193,12 +192,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })();
     if let Err(e) = &validated {
         eprintln!("FLOW-WATCHDOG: invalid snapshot: {e}");
-    }
-    if let Ok(s) = &validated {
-        previous = hosts::migrate(&previous, &s.disks);
-        if previous != stored {
-            atomic(&dir.join("active"), &previous)?;
-        }
     }
     let mut messages = match &validated {
         Ok(s) => {
@@ -330,11 +323,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let recipient = alert.recipient.as_deref().unwrap_or("routing");
             let mut event = serde_json::json!({"kind":"alert", "recipient":recipient,
                 "message":line, "active":message});
-            if let Some(id) = hosts::transition(message) {
+            if hosts::is_disk_key(message) {
                 if hosts::queued(&queue, message) {
                     continue;
                 }
-                event["transition"] = id.into();
+                event["transition"] = hosts::next_transition(dir, message)?.into();
             }
             queue.push(event);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
@@ -404,7 +397,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Remove pending first: interruption can repeat delivery, never lose it.
         fs::remove_file(&pending)?;
         let delivered: serde_json::Value = serde_json::from_str(&event)?;
-        if queue.first().is_some_and(|v| *v == delivered) {
+        if queue
+            .first()
+            .is_some_and(|v| hosts::same_event(v, &delivered))
+        {
             queue.remove(0);
             atomic(&queue_path, &serde_json::to_string(&queue)?)?;
         }

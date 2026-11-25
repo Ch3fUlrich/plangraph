@@ -37,12 +37,17 @@ impl Group {
 
     /// The largest directories, any input order, each path once.
     pub fn top(&self) -> String {
-        let mut rows = self.consumers.clone();
-        rows.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
-        rows.dedup_by(|later, kept| later.path == kept.path);
+        // A directory reported by two samples keeps its largest size, then the ranking runs.
+        let mut largest = BTreeMap::<&str, u64>::new();
+        for row in &self.consumers {
+            let bytes = largest.entry(&row.path).or_default();
+            *bytes = (*bytes).max(row.bytes);
+        }
+        let mut rows: Vec<_> = largest.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         rows.iter()
             .take(TOP_CONSUMERS)
-            .map(|row| format!("{}={}", row.path, row.bytes))
+            .map(|(path, bytes)| format!("{path}={bytes}"))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -54,6 +59,9 @@ pub struct Row {
     /// Sampled filesystems; a device missing here is unknown, not recovered.
     pub groups: BTreeMap<String, Group>,
     pub anonymous_hot: bool,
+    /// Whether the row observed every kind of sample an aggregate alert can come from: a keyed list
+    /// has no anonymous samples, a legacy row has them only when it lists `work_used_percent`.
+    pub complete: bool,
 }
 
 impl Row {
@@ -95,6 +103,7 @@ pub fn row(host: &Host, names: &Names, state: &Path) -> Row {
         host: canonical,
         groups: BTreeMap::new(),
         anonymous_hot: false,
+        complete: host.disks.is_some() || host.work_used_percent.is_some(),
     };
     let local_device = |path: &Path| local.then(|| device_of(path)).flatten();
     if let Some(samples) = &host.disks {

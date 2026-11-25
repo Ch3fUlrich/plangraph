@@ -9,7 +9,9 @@ mod transitions;
 
 pub use disks::Row;
 pub use names::Names;
-pub use transitions::{canonical, migrate, queued, reconcile, recovered, settle, transition};
+pub use transitions::{
+    canonical, is_disk_key, next_transition, queued, reconcile, recovered, same_event, settle,
+};
 
 const DISK_USED_PERCENT: f64 = 85.0;
 const CHECKOUT_BEHIND_COMMITS: u64 = 10;
@@ -65,8 +67,9 @@ pub fn is_host_line(line: &str) -> bool {
 
 /// An `active` line of a host alert that this snapshot does not settle: a missing sample is not a
 /// recovery. A host that has no row keeps all its lines. A filesystem with no sample in its host's
-/// row keeps its line. An aggregate line, which names no filesystem, ends only when the row has no
-/// hot filesystem at all.
+/// row keeps its line. An aggregate line, which names no filesystem, ends only when the row is
+/// complete (see `Row::complete`: a legacy row that omits `work_used_percent` did not observe the
+/// work mounts) and has no hot filesystem at all; a keyed line is never inferred from it.
 pub fn retained(line: &str, rows: &[Row]) -> bool {
     let Some(key) = key::Key::parse(line) else {
         return false;
@@ -77,7 +80,7 @@ pub fn retained(line: &str, rows: &[Row]) -> bool {
     match (key.disk, key.fs) {
         (false, _) => false,
         (true, Some(device)) => !row.groups.contains_key(&device),
-        (true, None) => row.any_hot() && !row.anonymous_hot,
+        (true, None) => !row.anonymous_hot && (row.any_hot() || !row.complete),
     }
 }
 

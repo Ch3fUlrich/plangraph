@@ -563,42 +563,120 @@ fn aliases_resolve_to_the_canonical_host_for_keys_retention_and_the_local_lookup
 }
 
 #[test]
-fn a_legacy_aggregate_key_migrates_only_when_one_filesystem_is_hot() {
-    let fx = Fx::new();
-    fs::create_dir_all(fx.state()).unwrap();
+fn a_legacy_aggregate_key_is_never_assigned_to_a_filesystem_by_guess() {
     let legacy_line = "host-disk: host=\"fixture\"";
-    fs::write(fx.state().join("active"), legacy_line).unwrap();
-    // One hot filesystem: the old alert already covered it, so nothing is queued again.
+    let seeded = || {
+        let fx = Fx::new();
+        fs::create_dir_all(fx.state()).unwrap();
+        fs::write(fx.state().join("active"), legacy_line).unwrap();
+        fx
+    };
+    // The old alert may have come from a filesystem that has since cooled: the one hot filesystem
+    // now still queues its own first alert, and the aggregate stays until the row has no hot sample.
+    let fx = seeded();
     let active = fx.run(json!([row(
         "fixture",
         json!([disk("7", 90.0), disk("8", 10.0)])
     )]));
-    assert_eq!(active, bare("fixture", "7"));
-    assert!(fx.queue().is_empty());
-    // Two hot filesystems: the line cannot be attributed, it stays until the host is cool.
-    let fx = Fx::new();
-    fs::create_dir_all(fx.state()).unwrap();
-    fs::write(fx.state().join("active"), legacy_line).unwrap();
-    let hot = json!([row("fixture", json!([disk("7", 90.0), disk("8", 91.0)]))]);
-    let active = fx.run(hot);
     assert_eq!(
         sorted(active.lines().map(str::to_owned).collect()),
-        sorted(vec![
-            legacy_line.into(),
-            bare("fixture", "7"),
-            bare("fixture", "8")
-        ])
+        sorted(vec![legacy_line.into(), bare("fixture", "7")])
     );
+    assert_eq!(fx.queued(), [bare("fixture", "7")]);
     let active = fx.run(json!([row(
         "fixture",
         json!([disk("7", 10.0), disk("8", 10.0)])
     )]));
     assert_eq!(active, "");
-    // A legacy row with no hot sample ends the aggregate.
+    // A complete legacy row with no hot sample ends the aggregate.
+    assert_eq!(
+        seeded().run(json!([legacy("fixture", 1.0, 1.0, json!([]))])),
+        ""
+    );
+}
+
+#[test]
+fn an_omitted_work_list_does_not_recover_an_anonymous_work_crossing() {
     let fx = Fx::new();
+    let aggregate = "host-disk: host=\"fixture\"";
+    assert_eq!(
+        fx.run(json!([legacy("fixture", 1.0, 1.0, json!([95.0]))])),
+        aggregate
+    );
+    // Root and temp are cool and the work mounts were not sampled: that is no recovery.
+    let mut omitted = legacy("fixture", 1.0, 1.0, json!([]));
+    omitted.as_object_mut().unwrap().remove("work_used_percent");
+    assert_eq!(fx.run(json!([omitted.clone()])), aggregate);
+    assert_eq!(
+        fx.run(json!([legacy("fixture", 1.0, 1.0, json!([96.0]))])),
+        aggregate
+    );
+    assert_eq!(fx.queued(), [aggregate]);
+    // Only a complete observation ends it, and the next hot sample is a new alert.
+    assert_eq!(
+        fx.run(json!([legacy("fixture", 1.0, 1.0, json!([10.0]))])),
+        ""
+    );
+    assert_eq!(
+        fx.run(json!([legacy("fixture", 1.0, 1.0, json!([95.0]))])),
+        aggregate
+    );
+    assert_eq!(fx.queued().len(), 2);
+}
+
+#[test]
+fn a_directory_reported_twice_takes_one_top_five_slot() {
+    let fx = Fx::new();
+    // Root and temp share device 7 and both report /a, with other directories ranking between.
+    let first = json!([{"path":"/a","bytes":50},{"path":"/b","bytes":40},{"path":"/c","bytes":20}]);
+    let second = json!([{"path":"/a","bytes":30},{"path":"/d","bytes":10},{"path":"/e","bytes":5},
+        {"path":"/f","bytes":1}]);
+    fx.run(json!([row(
+        "fixture",
+        json!([measured("7", 90.0, first), measured("7", 91.0, second)])
+    )]));
+    assert_eq!(
+        fx.queue()[0]["message"],
+        "FLOW-WATCHDOG: host-disk: host=\"fixture\" fs=\"7\" measured top=/a=50 /b=40 /c=20 /d=10 /e=5"
+    );
+}
+
+#[test]
+fn transition_ids_differ_with_the_clock_held_constant() {
+    let fx = Fx::new().at(100);
+    for used in [90.0, 10.0, 90.0] {
+        fx.run(json!([row("fixture", json!([disk("5", used)]))]));
+    }
+    let queue = fx.queue();
+    assert_eq!(queue.len(), 2);
+    assert_ne!(queue[0]["transition"], queue[1]["transition"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_while_the_push_is_pending_acknowledges_the_event_by_transition() {
+    let fx = Fx::new();
+    let push = fx.dir.path().join("push.log");
+    let hook = json!(["/bin/sh", "-c", "cat >> \"$1\"; echo >> \"$1\"", "sh", push]).to_string();
+    let fx = fx.set("PLANGRAPH_FLOW_PUSH", hook);
+    let key = bare("fixture", "5");
+    let event = json!({"kind":"alert","recipient":"routing","message":"FLOW-WATCHDOG: queued",
+        "active":key,"transition":format!("{key}#1"),"routing_done":true});
     fs::create_dir_all(fx.state()).unwrap();
-    fs::write(fx.state().join("active"), legacy_line).unwrap();
-    assert_eq!(fx.run(json!([legacy("fixture", 1.0, 1.0, json!([]))])), "");
+    fs::write(fx.state().join("queue.json"), json!([event]).to_string()).unwrap();
+    fs::write(fx.state().join("pending.json"), event.to_string()).unwrap();
+    fs::write(fx.state().join("routing.ok"), "ok").unwrap();
+    fs::write(fx.state().join("active"), &key).unwrap();
+    // The tick that sees the recovery marks the queued copy; the pending copy stays as published.
+    fx.run(json!([row("fixture", json!([disk("5", 10.0)]))]));
+    fx.run(json!([row("fixture", json!([disk("5", 10.0)]))]));
+    let pushed = fs::read_to_string(&push).unwrap();
+    assert_eq!(
+        pushed.lines().filter(|l| !l.is_empty()).count(),
+        1,
+        "{pushed}"
+    );
+    assert!(fx.queue().is_empty());
 }
 
 #[test]

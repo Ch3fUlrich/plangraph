@@ -91,7 +91,7 @@ effective wrapper, cache directory and cap with a small spawned Cargo build.
 NOTE Watchdog host session. Give each host's `disks` array one `{device, used_percent,
 consumers}` sample per configured work mount, root and temp filesystem: `device` is the `st_dev`
 of the sampled path, `consumers` the five largest directories on that filesystem. The legacy
-`work_used_percent` array names no filesystem and only raises a bare alert. On the single-disk worker, inspect the
+`work_used_percent` array names no filesystem and only raises a bare alert; a collector that still sends it must send it on every row (`[]` when there are no work mounts), because an omitted list does not end an alert. On the single-disk worker, inspect the
 worktree and cache reports, reclaim eligible data and measure usage below 85%.
 
 ## WSL cache guard

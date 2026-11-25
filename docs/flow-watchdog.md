@@ -75,9 +75,11 @@ supplies keyed consumers.
 
 Recovery needs a sample of the same filesystem at or below 85%. A host missing from a snapshot
 keeps all its `host-disk` and `host-code` keys, and a filesystem missing from its host's keyed
-list keeps its key. An aggregate key from before filesystems were keyed ends when the host's row
-has no hot sample; it is replaced by the keyed key (and not queued again) only when exactly one
-filesystem is hot and nothing anonymous is. Each queued disk event carries a `transition` id. The
+list keeps its key. An aggregate key names no filesystem, so it is never assigned to one: it ends
+only when the host's row is complete (a keyed `disks` list, or a legacy row that lists
+`work_used_percent`, even as `[]`) and has no hot sample, and the keyed crossings of the same row
+queue their own alerts meanwhile. A legacy row that omits `work_used_percent` did not observe the
+work mounts and does not end an aggregate. Each queued disk event carries a unique `transition` id (a counter in `disk-transition-seq`), by which its pending copy is acknowledged. The
 watchdog commits the key of a queued disk event to `active` before it evaluates a snapshot or
 drains the queue, so a crash between the two writes never queues the event twice; an observed
 recovery retires the queued events of that crossing and the next crossing gets a new id.
