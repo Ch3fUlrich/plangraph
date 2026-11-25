@@ -1,0 +1,11 @@
+[Unit]
+Description=Check once a minute for a pending merge-close scan to continue
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=pg-merge-close-continue.service
+
+[Install]
+WantedBy=timers.target
