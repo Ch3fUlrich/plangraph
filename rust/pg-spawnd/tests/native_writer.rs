@@ -378,6 +378,48 @@ async def check():
     assert again['resume_request_id'] == 'ab' * 16 and 'resume_request_id' not in fixed, again
     assert again['resume_from']['head'] == fixed['final_head'], again
     assert subprocess.check_output(['git','-C',again['cwd'],'rev-parse','HEAD'], text=True).strip() == again['final_head']
+    # The same fix round through the origin spawner route: the origin host keeps only a receipt and
+    # the Python CLI carries the prompt over (fake) ssh to `pg-spawnd resume-local` on the owner,
+    # which resumes the saved session with the fake codex; the origin then follows that round.
+    import contextlib, io, sys
+    from plangraph.spawner import cli as spawn_cli, remote_ps
+    real_run = subprocess.run
+    shim = root/'target-bin'
+    shim.mkdir()
+    (shim/'pg-spawnd').symlink_to(os.environ['NATIVE_BINARY'])
+    target_env = dict(os.environ, PATH=os.pathsep.join([str(shim), str(pathlib.Path(sys.executable).parent), os.environ['PATH']]))
+    def fake_ssh(argv, **kwargs):
+        if argv[0] != 'ssh':
+            return real_run(argv, **kwargs)
+        return real_run(['bash', '-c', argv[-1]], env=target_env, **kwargs)
+    origin_state = root/'origin'
+    run_id = run['run_id']
+    (origin_state/'runs'/run_id).mkdir(parents=True)
+    (origin_state/'runs'/run_id/'record.json').write_text(json.dumps(dict(
+        run_id=run_id, run_kind='native-codex', role='implement', host=again['host'],
+        status='completed', started=again['started'], ended=again['ended'], overflow_remote=True,
+        origin_receipt=True, final_head=again['final_head'], resume_number=again['resume_number'])))
+    routes = {'hosts': {again['host']: dict(repo=card['repo'], ssh='fixture', spawner_src=os.environ['PYTHONPATH'],
+                                            state_dir=str(root/'state'))}}
+    origin = SpawnService(state=origin_state)
+    with patch('plangraph.spawner.overflow.registry_caps', return_value={}), \
+         patch('plangraph.spawner.overflow.placement_config', return_value=routes), \
+         patch.object(remote_ps.subprocess, 'run', side_effect=fake_ssh):
+        out = io.StringIO()
+        with patch('sys.stdin', io.StringIO('brief marker external fix via origin')), contextlib.redirect_stdout(out):
+            spawn_cli.main(['--state', str(origin_state), 'resume', run_id, '--host', again['host']])
+        origin_receipt = json.loads(out.getvalue())
+        assert origin_receipt['resumed'] is True and origin_receipt['resume_number'] == 3, origin_receipt
+        for _ in range(600):
+            via_origin = await origin.refresh_result(run_id)
+            if via_origin['status'] in ('completed', 'failed') and via_origin.get('resume_number') == 3:
+                break
+            await asyncio.sleep(0.1)
+    assert via_origin['status'] == 'completed' and via_origin['final_head'] != again['final_head'], via_origin
+    assert via_origin['session_id'] == again['session_id'] and via_origin['cwd'] == again['cwd'], via_origin
+    assert via_origin['resume_request_id'] == origin_receipt['request_id'], via_origin
+    assert 'resume_requested' not in origin.result(run_id)
+    assert subprocess.check_output(['git','-C',via_origin['cwd'],'rev-parse','HEAD'], text=True).strip() == via_origin['final_head']
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
     for ref, exit_code in [('refs/heads/local-only', 0), ('refs/heads/absent', 5)]:
         card['base_ref'] = ref
