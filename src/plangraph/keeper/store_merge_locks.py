@@ -213,7 +213,9 @@ class MergeLocksMixin:
                 parts = _land_manifest(body)
                 previous = self.conn.execute(select, identity).fetchone()
                 previous_data = _landing_data(previous) if previous else None
-                if previous_data is None or previous_data["parts"] != parts:
+                # An override seat is cleared against the train base, so a new base re-checks every part.
+                if (previous_data is None or previous_data["parts"] != parts
+                        or previous["base"] != _land_sha(body.get("base"))):
                     self._verify_train_reviews(parts, base=body.get("base"))
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
                 mode = body.get("mode", "train-pr-merge")
@@ -307,24 +309,25 @@ class MergeLocksMixin:
             for key, run in part.get("review_runs", {}).items():
                 try:
                     require_train_review(adapter, key, part["head"], run,
-                                         override_ok=lambda key=key, part=part: self._override_seat_part_ok(
-                                             key, part["head"], base))
+                                         override_ok=lambda part=part: self._override_seat_part_ok(
+                                             part.get("items", []), part["head"], base))
                 except (ValueError, OSError):
                     raise Refused("evidence_unverified",
                                   f"{key}: no explicit ACCEPT for part #{part['pr']}") from None
 
-    def _override_seat_part_ok(self, key, head, base):
-        """D-6857: true when the part outside authentication, secrets and gate files; any doubt is false."""
+    def _override_seat_part_ok(self, items, head, base):
+        """D-6857: true when no item of the part is tagged authentication or secrets and the part's
+        diff against the train base touches no gate file; any doubt is false."""
         import fnmatch
         try:
-            if self._card_requires_non_anthropic_seats({"key": key}):
+            if not items or any(self._card_requires_non_anthropic_seats({"key": key}) for key in items):
                 return False
             git = self._adapter("git")
-            repo = git.repo_path(key.partition(":")[0])
-            if not repo or not (isinstance(base, str) and isinstance(head, str)):
+            repos = {git.repo_path(key.partition(":")[0]) for key in items}
+            if len(repos) != 1 or None in repos or not (isinstance(base, str) and isinstance(head, str)):
                 return False
-            proc = git._run(repo, ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
-                                   f"{base}...{head}"])
+            proc = git._run(repos.pop(), ["diff", "--name-only", "--no-renames", "-z", "--end-of-options",
+                                          f"{base}...{head}"])
             if proc.returncode != 0:
                 return False
             patterns = _gate_patterns()

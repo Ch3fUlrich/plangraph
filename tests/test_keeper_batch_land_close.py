@@ -282,9 +282,9 @@ def test_an_override_seat_clears_only_a_part_outside_authentication_secrets_and_
     root = batch.repo.root
     base = git(root, "rev-parse", "main")
     clear = batch.store._override_seat_part_ok
-    assert clear("demo:A", batch.parts["A"], base) is True
-    assert clear("demo:A", batch.parts["A"], None) is False            # no base to diff against
-    assert clear("demo:A", "e" * 40, base) is False                    # a head the repository lacks
+    assert clear(["demo:A"], batch.parts["A"], base) is True
+    assert clear(["demo:A"], batch.parts["A"], None) is False            # no base to diff against
+    assert clear(["demo:A"], "e" * 40, base) is False                    # a head the repository lacks
     git(root, "checkout", "-q", "-b", "gate", "main")
     (root / ".github/workflows").mkdir(parents=True)
     (root / ".github/workflows/tests.yml").write_text("on: push\n")
@@ -292,8 +292,51 @@ def test_an_override_seat_clears_only_a_part_outside_authentication_secrets_and_
     git(root, "commit", "-q", "-m", "gate file")
     gate_head = git(root, "rev-parse", "HEAD")
     git(root, "checkout", "-q", "main")
-    assert clear("demo:A", gate_head, base) is False                   # a gate file
+    assert clear(["demo:A"], gate_head, base) is False                   # a gate file
     batch.store.put_card(batch.p("router"), "demo:A", dict(outcome="fixture", risk_tags=["auth"]))
-    assert clear("demo:A", batch.parts["A"], base) is False            # an authentication part
+    assert clear(["demo:A"], batch.parts["A"], base) is False            # an authentication part
     batch.store.put_card(batch.p("router"), "demo:A", dict(outcome="fixture", risk_tags=["secrets"]))
-    assert clear("demo:A", batch.parts["A"], base) is False
+    assert clear(["demo:A"], batch.parts["A"], base) is False
+
+
+def test_a_part_is_cleared_only_when_every_item_of_it_is(batch):
+    """One auth item in a mixed part keeps today's refusal for the whole part."""
+    base = git(batch.repo.root, "rev-parse", "main")
+    clear = batch.store._override_seat_part_ok
+    assert clear(["demo:A", "demo:B"], batch.parts["A"], base) is True
+    batch.store.put_card(batch.p("router"), "demo:B", dict(outcome="fixture", risk_tags=["auth"]))
+    assert clear(["demo:A", "demo:B"], batch.parts["A"], base) is False
+    assert clear(["demo:A"], batch.parts["A"], base) is True
+    assert clear([], batch.parts["A"], base) is False
+
+
+def test_a_train_prepared_again_on_another_base_checks_the_override_seats_again(batch):
+    """An override cleared against one base is not reused for a base whose diff touches a gate file."""
+    from types import SimpleNamespace
+    router, repo = batch.p("router"), "example/repo"
+    gate = {"1" * 40: "", "2" * 40: ".github/workflows/tests.yml\0"}
+
+    class Git:
+        def repo_path(self, project):
+            return "fixture"
+
+        def _run(self, path, args):
+            return SimpleNamespace(returncode=0, stdout=gate[args[-1].split("...")[0]])
+
+    class Seats:
+        def review_seats(self, item, head, text, **options):
+            if not options.get("allow_override"):
+                raise ValueError("override seat")
+            return [{"verdict": "pass"}]
+
+    batch.store.ctx = {"git": Git(), "spawner_records": Seats()}
+    lease = batch.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+
+    def prepare(base):
+        return batch.store.land(router, dict(
+            lease, repo=repo, action="prepare", pr=10, base=base, head="c" * 40,
+            parts=[dict(pr=1, head="b" * 40, items=["demo:A"], review_runs={"demo:A": "run-" + "1" * 32})]))
+
+    assert prepare("1" * 40)["base"] == "1" * 40
+    with pytest.raises(Refused, match="no explicit ACCEPT"):
+        prepare("2" * 40)
