@@ -119,3 +119,87 @@ fn a_mixed_review_with_a_real_finding_still_costs_a_round_and_a_fix_turn() {
     assert_eq!(record["round_counts"], json!([1]));
     assert!(record["process_hold"].is_null());
 }
+
+/// A `Fake` whose first reviews answer base_stale (the review route found the base moved).
+struct StaleFirst<'a> {
+    inner: &'a mut Fake,
+    stale: usize,
+}
+impl Driver for StaleFirst<'_> {
+    fn prepare(&mut self) -> Result<String, String> {
+        self.inner.prepare()
+    }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        self.inner.refresh_base()
+    }
+    fn prepare_review(&mut self, head: &str) -> Result<Option<ReviewBase>, String> {
+        self.inner.prepare_review(head)
+    }
+    fn disk_gb(&mut self) -> Result<u64, String> {
+        self.inner.disk_gb()
+    }
+    fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        self.inner.execute(session, prompt)
+    }
+    fn head(&mut self) -> Result<String, String> {
+        self.inner.head()
+    }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        self.inner.has_commits_beyond(base, head)
+    }
+    fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        self.inner.fast_checks(head)
+    }
+    fn stamped(&mut self, head: &str) -> bool {
+        self.inner.stamped(head)
+    }
+    fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
+        if self.stale > 0 {
+            self.stale -= 1;
+            return Ok(
+                json!({"status": "base_stale", "head": head, "reason": "base_stale: main moved"}),
+            );
+        }
+        self.inner.review(head, previous)
+    }
+    fn gates(&mut self) -> Result<(), String> {
+        self.inner.gates()
+    }
+    fn save(&mut self, record: &Value) -> Result<(), String> {
+        self.inner.save(record)
+    }
+}
+
+#[test]
+fn the_held_head_stays_pinned_across_base_stale_retries_of_the_continuation() {
+    let mut fake = Fake {
+        process_only: true,
+        head_script: vec!["final-head"],
+        ..fake()
+    };
+    let held = run(&mut fake, json!({"host": "h"}), "brief");
+    let prepares = fake.prepares;
+    let mut record = held.clone();
+    record.as_object_mut().unwrap().remove("exit_code");
+    let mut driver = StaleFirst {
+        inner: &mut fake,
+        stale: 2,
+    };
+    let resumed = run_resume(&mut driver, record, "same-session", "ignored");
+    assert_eq!(resumed["exit_code"], 0, "{resumed}");
+    assert_eq!(fake.prepares, prepares, "no retry rebased the held head");
+    assert!(resumed["process_hold"].is_null());
+}
+
+#[test]
+fn only_a_pass_of_the_recorded_held_sha_releases_the_hold() {
+    let mut driver = fake();
+    let record = json!({"host": "h", "process_hold": {"head": "older-held-head", "lines": ["PROCESS x"]},
+        "base_sha": "base", "session_id": "same-session"});
+    let done = run(&mut driver, record, "brief");
+    assert_eq!(done["exit_code"], 0);
+    assert_eq!(
+        done["process_hold"]["head"], "older-held-head",
+        "another head's pass does not release it"
+    );
+}

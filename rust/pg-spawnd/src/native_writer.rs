@@ -470,7 +470,7 @@ fn writer_attempt(
             && driver
                 .has_commits_beyond(&base, &head)
                 .map_err(|e| (7, e))?;
-        if has_commits && !std::mem::take(&mut pinned) {
+        if has_commits && !pinned {
             let preparation = driver
                 .prepare_review(&head)
                 .map_err(|e| (if e == STOPPED { 10 } else { 7 }, e))?;
@@ -548,6 +548,8 @@ fn writer_attempt(
             continue;
         }
         base_retries = 0;
+        // Only a review that was dispatched (not a base-stale retry) ends the head pin.
+        pinned = false;
         if review["status"] == REVIEW_DEFERRED {
             final_gates(driver, &head)?;
             record["review_status"] = json!(REVIEW_DEFERRED);
@@ -600,7 +602,10 @@ fn writer_attempt(
             record["review"]["verdict"] = json!("REQUEST_CHANGES");
         }
         if record["review"]["verdict"] == "ACCEPT" {
-            record.as_object_mut().unwrap().remove("process_hold");
+            // Only a passing review of the recorded held SHA releases the hold.
+            if record["process_hold"]["head"].as_str() == Some(head.as_str()) {
+                record.as_object_mut().unwrap().remove("process_hold");
+            }
             if !driver.pending_steer(record).map_err(|e| (7, e))?.is_empty() {
                 if round_cap(record) || session.is_empty() {
                     return Err((7, "steer pending after the final review round".into()));

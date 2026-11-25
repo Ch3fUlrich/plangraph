@@ -159,6 +159,12 @@ def findings(text, idx, limit=600):
     after = "\n".join(lines[idx + 1:]).strip()
     return (after or "\n".join(lines[:idx]).strip())[:limit]
 
+def _register_pass(identity, head, run_id):
+    """The one registration step of a delivered passing verdict (first send and saved retry)."""
+    _classifier().record_pass(identity.get("cwd") if isinstance(identity.get("cwd"), str) else None,
+                              str(head or ""), str(run_id), identity.get("started"))
+
+
 def _classifier():
     try:
         from plangraph.review import verdict
@@ -267,7 +273,7 @@ def read_record_identity(seat_dir, key=None):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
-    identity = {field: record[field] for field in ("item_key", "head_sha", "cwd") if field in record}
+    identity = {field: record[field] for field in ("item_key", "head_sha", "cwd", "started") if field in record}
     request = record.get("request")
     if isinstance(request, dict) and "verdict_binding" in request:
         identity["binding"] = request["verdict_binding"]
@@ -287,8 +293,10 @@ def send_saved_verdict(directory, key, url, token_dir, head=None):
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"seat_verdict: refused, {exc}", file=sys.stderr)
         return EXIT_REFUSED
-    return dispatch_verdict(key, url, token_dir, decision, send, KNOWN_FAMILIES)
-
+    code = dispatch_verdict(key, url, token_dir, decision, send, KNOWN_FAMILIES)
+    if code == 0 and decision["payload"].get("ok") is True:
+        _register_pass(identity, binding.get("head"), binding.get("seat_run"))
+    return code
 
 
 def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
@@ -473,7 +481,7 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     decision = save_verdict_payload(args.seat_dir, family, payload)
     code = dispatch_verdict(args.key, args.url, args.token_dir, decision, send, KNOWN_FAMILIES)
     if code == 0 and ok:  # a passing run after a hold is what lets the head's approval land
-        _classifier().record_pass(cwd, str(evidence.get("head_sha") or ""), str(evidence.get("run_id")))
+        _register_pass(identity, evidence.get("head_sha"), evidence.get("run_id"))
     return code
 
 if __name__ == "__main__":
