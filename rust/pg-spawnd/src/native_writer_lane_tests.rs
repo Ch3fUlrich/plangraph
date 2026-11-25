@@ -19,7 +19,9 @@ fn lane_state(role: &str) -> tempfile::TempDir {
 }
 
 fn lane_args(card_extra: Value) -> serde_json::Map<String, Value> {
-    let mut card = json!({"run_kind":"native-codex","repo":"/repo-without-git"});
+    // An absolute path on every platform: a drive-less POSIX path is relative on Windows.
+    let repo = std::env::temp_dir().join("repo-without-git");
+    let mut card = json!({"run_kind":"native-codex","repo":repo});
     card.as_object_mut()
         .unwrap()
         .extend(card_extra.as_object().unwrap().clone());
