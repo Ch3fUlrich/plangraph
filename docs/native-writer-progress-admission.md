@@ -62,10 +62,14 @@ findings. A card that omits `failing_checks` keeps the round's own start count (
 credit), and the last observed count is carried over any number of omissions. A stall without
 a PR refuses `no_progress` or `slow_progress` and queues a return job (one routing line with the
 open findings, nothing planned): the batch goes back. The replan keeps the findings at plan
-level, so a diff with no counted file still hands them to the writer. A routing line is cut to what the fleet bus takes (2000 characters, and the whole signed 4096-byte POST with 600 bytes kept for the envelope) with a pointer to the job file that keeps the full text; a saved line the bus can take is
-resent byte for byte under its message id. A return job releases the keeper claims named by `card.claims` (item -> epoch, the claim
-receipts), each at its saved epoch (`keeper release --epoch`), never one looked up later; a
-retry after a committed release reads the claim with `keeper show --authoritative` (no local
+level, so a diff with no counted file still hands them to the writer. A routing line is cut to the bus's 2000-character text cap with a pointer to the job file that
+keeps the full text; a saved line is replayed unchanged under its message id (the bus may hold it
+already), and only a refusal for size (`bus cap`, `too_large`) shortens it by a quarter, saved
+each time, down to 300 characters, whatever the identifiers of the signed envelope are. A return job releases the keeper claims of its receipts (item -> epoch), each at its saved epoch
+(`keeper release --epoch`), never one looked up later. The receipts are `card.claims`, validated
+as a whole, else the keeper's own answer (`keeper show --authoritative`) for `card.item_keys` (or
+the item key) read when the refusal is recorded; a later retry with valid `card.claims` attaches
+them to the pending job. A retry after a committed release reads the claim with `keeper show --authoritative` (no local
 snapshot), finds the epoch gone and goes on, and a replaced claim is left alone. A return
 without receipts, or a job of the earlier schema, stays pending with `replan_claims_unbound`.
 `card.batch_key` names one ledger for several

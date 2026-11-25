@@ -27,6 +27,24 @@ pub(crate) fn batch_key(value: &Value) -> Option<&str> {
         .or_else(|| value["item_key"].as_str())
 }
 
+/// A claim-receipt map (item -> epoch or null) checked whole: one invalid entry, and the
+/// map is not a binding at all.
+pub(crate) fn receipts(value: &Value) -> Option<std::collections::BTreeMap<String, Option<u64>>> {
+    value
+        .as_object()?
+        .iter()
+        .map(|(item, epoch)| {
+            if !crate::records::valid_item(item) {
+                return None;
+            }
+            match epoch {
+                Value::Null => Some((item.clone(), None)),
+                other => other.as_u64().map(|e| (item.clone(), Some(e))),
+            }
+        })
+        .collect()
+}
+
 /// The cause of the round the card starts; a card without one is a review finding.
 pub(crate) fn cause(card: &Value) -> Result<&'static str, ToolError> {
     match card.get("round_cause").filter(|v| !v.is_null()) {

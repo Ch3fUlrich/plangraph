@@ -16,29 +16,17 @@ fn change(path: &str, lines: u64) -> FileChange {
     }
 }
 
-/// The fleet bus's caps, written out apart from the production helper: 2000 characters of
-/// text, and the whole signed POST of at most 4096 bytes in ASCII-only JSON (DEL and every
-/// non-ASCII UTF-16 unit take six bytes), with each identifier at its length limit.
-fn bus_accepts(text: &str) -> bool {
-    let fixed = format!(
-        "{{\"body\":{{\"text\":\"\"}},\"envelope\":{{\"host\":\"{}\",\"msg_id\":\"{}\",\"nonce\":\"{}\",\"sig\":\"{}\",\"ts\":9999999999}},\"from\":\"{}\",\"to\":\"{}\"}}",
-        "h".repeat(64),
-        "m".repeat(32),
-        "n".repeat(128),
-        "s".repeat(64),
-        "h".repeat(64),
-        "t".repeat(64)
-    );
-    let mut wire = fixed.len();
-    for unit in text.encode_utf16() {
-        wire += match unit {
+/// The bytes `text` takes in the bus body as ASCII-only JSON (DEL and every non-ASCII UTF-16
+/// unit take six bytes); the rest of the signed POST is the fixture's `overhead`.
+fn wire(text: &str) -> usize {
+    text.encode_utf16()
+        .map(|unit| match unit {
             0x22 | 0x5c | 0x0a | 0x0d | 0x09 | 0x08 | 0x0c => 2,
             0x00..=0x1f | 0x7f => 6,
             0x20..=0x7e => 1,
             _ => 6,
-        };
-    }
-    text.chars().count() <= 2000 && wire <= 4096
+        })
+        .sum()
 }
 
 #[derive(Default)]
@@ -48,6 +36,8 @@ struct Fixture {
     fail_send: RefCell<bool>,
     lock_only: RefCell<bool>,
     fail_release: RefCell<bool>,
+    overhead: RefCell<usize>,
+    taken: RefCell<std::collections::BTreeMap<String, String>>,
     crash_after_release: RefCell<bool>,
     claimed: RefCell<std::collections::BTreeMap<String, u64>>,
     keys: RefCell<Vec<String>>,
@@ -144,9 +134,28 @@ impl Ports for Fixture {
         if *self.fail_send.borrow() {
             return Err(parameter("routing_down: send refused"));
         }
-        if !bus_accepts(line) {
-            return Err(parameter("bus_refused: text or body over the cap"));
+        // A key already taken is a repeat only when the text is the same.
+        if let Some(held) = self.taken.borrow().get(key) {
+            return if held == line {
+                Ok(())
+            } else {
+                Err(parameter(
+                    "bus_refused: msg_id reused with different content",
+                ))
+            };
         }
+        let overhead = match *self.overhead.borrow() {
+            0 => 500,
+            set => set,
+        };
+        if line.chars().count() > 2000 || wire(line) + overhead > 4096 {
+            return Err(parameter(format!(
+                "{TOO_LARGE}: message body exceeds the 4096-byte bus cap"
+            )));
+        }
+        self.taken
+            .borrow_mut()
+            .insert(key.to_string(), line.to_string());
         // A receiver drops a repeat of a key it has already taken.
         if self.keys.borrow().iter().any(|k| k == key) {
             return Ok(());
@@ -573,7 +582,7 @@ fn an_oversized_findings_list_is_cut_to_the_bus_limit_with_a_pointer_to_the_job(
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let line = ports.calls.borrow().last().unwrap().clone();
-    assert!(bus_accepts(line.trim_start_matches("route ")));
+    assert!(line.trim_start_matches("route ").chars().count() <= 2000);
     assert!(line.contains(" ... (full text in replans/replan-"));
     // The job file keeps every finding.
     let job = jobs(dir.path()).pop().unwrap();
@@ -610,8 +619,10 @@ fn a_legacy_job_keeps_one_date_across_retries() {
     assert_eq!(jobs(dir.path())[0]["queued_at"].as_f64(), Some(1_000_000.0));
 }
 
-fn claims(list: &[(&str, u64)]) -> std::collections::BTreeMap<String, u64> {
-    list.iter().map(|(k, e)| (k.to_string(), *e)).collect()
+fn claims(list: &[(&str, u64)]) -> std::collections::BTreeMap<String, Option<u64>> {
+    list.iter()
+        .map(|(k, e)| (k.to_string(), Some(*e)))
+        .collect()
 }
 
 #[test]
@@ -716,53 +727,45 @@ fn a_return_without_saved_receipts_stays_pending_with_an_explicit_error() {
 }
 
 #[test]
-fn a_deliverable_saved_line_is_resent_unchanged_and_only_an_oversized_one_is_cut() {
-    // 1200 non-ASCII characters are under the character cap and far over the bus body cap.
-    let long = "é".repeat(1200);
-    let line = bounded(
-        format!("REPLAN p:I x | {long}"),
-        Path::new("replan-ab.json"),
-    );
-    assert!(bus_accepts(&line));
-    assert!(line.ends_with("(full text in replans/replan-ab.json)"));
-    assert_eq!(bounded("short".into(), Path::new("x.json")), "short");
-    let saved = |dir: &Path, name: &str, text: &str| {
+fn a_saved_line_is_replayed_unchanged_and_only_a_refusal_for_size_shortens_it() {
+    let saved = |dir: &Path, name: &str, text: &str| -> String {
         std::fs::create_dir_all(job_dir(dir)).unwrap();
-        std::fs::write(
-            job_dir(dir).join(name),
-            json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"escalated", "level":1,
-            "queued_at":5.0, "plan":{"leg":"strong", "slices":[]}, "defined":[],
-            "closed":false, "report":"sending", "report_line":text, "error":null})
-            .to_string(),
-        )
-        .unwrap();
+        let job = json!({"item":"p:Old", "pr":"https://forge/p/1", "reason":"escalated",
+            "level":1, "queued_at":5.0, "plan":{"leg":"strong", "slices":[]}, "defined":[],
+            "closed":false, "report":"sending", "report_line":text, "error":null});
+        std::fs::write(job_dir(dir).join(name), job.to_string()).unwrap();
+        report_key(&job)
     };
-    // A 3,3xx-byte body the bus accepted before is resent byte for byte, once.
-    let deliverable = format!("REPLAN p:Old {}", "é".repeat(550));
-    assert!(bus_accepts(&deliverable) && deliverable.len() < 1200);
+    // A 3,786-byte body the bus took before its ack was lost: replayed byte for byte, once.
+    let deliverable = format!("REPLAN p:Old {}", "x".repeat(3_700));
     let dir = tempfile::tempdir().unwrap();
-    saved(dir.path(), "replan-ok.json", &deliverable);
+    let key = saved(dir.path(), "replan-ok.json", &deliverable);
     let ports = Fixture::default();
+    *ports.overhead.borrow_mut() = 300;
+    ports
+        .taken
+        .borrow_mut()
+        .insert(key.clone(), deliverable.clone());
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
-    assert_eq!(ports.count(&format!("route {deliverable}")), 1);
-    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
-    assert_eq!(ports.count("route"), 1);
-    // An oversized one is cut to what the bus validator takes and sent once.
+    assert_eq!(ports.taken.borrow().get(&key), Some(&deliverable));
+    // The same job against a bus with long identifiers (4,4xx-byte envelope) is refused for
+    // size, then shortened until the bus takes it; the worker run twice delivers once.
     let dir = tempfile::tempdir().unwrap();
     saved(
         dir.path(),
         "replan-old.json",
-        &format!("REPLAN p:Old {long}"),
+        &format!("REPLAN p:Old {}", "x".repeat(3_000)),
     );
     let ports = Fixture::default();
+    *ports.overhead.borrow_mut() = 2_500;
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     let sent = ports.calls.borrow().last().unwrap().clone();
-    assert!(bus_accepts(sent.trim_start_matches("route ")));
     assert!(sent.contains("(full text in replans/replan-old.json)"));
-    // The worker ran twice and the bus took exactly one accepted delivery.
+    assert!(wire(sent.trim_start_matches("route ")) + 2_500 <= 4096);
     assert_eq!(ports.count("route"), 1);
-    // A line of DEL characters costs six bytes each and is cut to what the bus takes.
+    assert!(ports.sent_keys.borrow().len() >= 3);
+    // A line of DEL characters costs six bytes each; it is shortened the same way.
     let dir = tempfile::tempdir().unwrap();
     saved(
         dir.path(),
@@ -772,4 +775,137 @@ fn a_deliverable_saved_line_is_resent_unchanged_and_only_an_oversized_one_is_cut
     let ports = Fixture::default();
     assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
     assert_eq!(ports.count("route"), 1);
+    // A bus that refuses even the shortest line fails the job with its refusal, kept pending.
+    let dir = tempfile::tempdir().unwrap();
+    saved(
+        dir.path(),
+        "replan-tiny.json",
+        &format!("REPLAN p:Old {}", "x".repeat(900)),
+    );
+    let ports = Fixture::default();
+    *ports.overhead.borrow_mut() = 4_000;
+    assert!(run_pending(dir.path(), &ports)[0].1.contains(TOO_LARGE));
+    assert_eq!(ports.count("route"), 0);
+}
+
+#[test]
+fn claim_receipts_are_validated_whole_and_a_later_retry_attaches_them() {
+    use crate::round_escalate::receipts;
+    assert!(receipts(&json!({"p:One":3, "p:Two":null})).is_some());
+    for bad in [
+        json!({"p:One":3, "p:Two":"x"}),
+        json!({"p:One":3, "not a key":4}),
+        json!([3]),
+    ] {
+        assert!(receipts(&bad).is_none());
+    }
+    // A return queued without receipts is pending; the validated retry attaches them under the lock.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        enqueue_return(dir.path(), "p:Batch", "round_cap", &[], None)
+            .ok()
+            .unwrap()
+    );
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:One".into(), 3);
+    assert!(run_pending(dir.path(), &ports)[0]
+        .1
+        .contains("replan_claims_unbound"));
+    let given = receipts(&json!({"p:One":3})).unwrap();
+    assert!(
+        enqueue_return(dir.path(), "p:Batch", "round_cap", &[], Some(&given))
+            .ok()
+            .unwrap()
+    );
+    assert!(
+        !enqueue_return(dir.path(), "p:Batch", "round_cap", &[], Some(&given))
+            .ok()
+            .unwrap()
+    );
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.claimed.borrow().get("p:One"), None);
+    assert_eq!(ports.count("route"), 1);
+    // A receipt map with a member that has no epoch releases nothing at all.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(job_dir(dir.path())).unwrap();
+    std::fs::write(
+        job_dir(dir.path()).join("replan-half.json"),
+        json!({"item":"p:B", "pr":"", "reason":"round_cap", "kind":"return", "queued_at":5.0,
+        "claims_bound":true, "claims":{"p:One":{"epoch":3, "released":false},
+        "p:Two":{"epoch":null, "released":false}},
+        "plan":{"leg":null, "slices":[], "findings":[]}, "defined":[], "closed":false,
+        "report":"pending", "error":null})
+        .to_string(),
+    )
+    .unwrap();
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:One".into(), 3);
+    assert!(run_pending(dir.path(), &ports)[0]
+        .1
+        .contains("nothing was released"));
+    assert_eq!(ports.claimed.borrow().get("p:One"), Some(&3));
+}
+
+#[test]
+fn a_refusal_without_receipts_takes_them_from_the_keeper_and_releases_through_it() {
+    use crate::round_replan_ports::{Exec, Tool};
+    struct Keeper(std::cell::RefCell<Vec<String>>);
+    impl Exec for Keeper {
+        fn run(&self, tool: Tool, args: &[String]) -> Result<String, ToolError> {
+            assert_eq!(tool, Tool::Keeper);
+            self.0.borrow_mut().push(args.join(" "));
+            let item = &args[2];
+            Ok(match item.as_str() {
+                "p:One" => json!({"state":"claimed", "epoch":3}),
+                "p:Two" => json!({"state":"open", "epoch":9}),
+                _ => return Err(parameter("replan_keeper_failed: unreachable")),
+            }
+            .to_string())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = crate::placement::Args::new();
+    args.insert(
+        "card".into(),
+        json!({"item_key":"p:One", "item_keys":["p:One", "p:Two"]}),
+    );
+    let keeper = Keeper(Default::default());
+    let refusal = crate::round_progress::record_refusal_with(
+        dir.path(),
+        "fixture",
+        &args,
+        crate::round_progress::refused("round_cap"),
+        &keeper,
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(refusal["replan"], "returned");
+    assert!(keeper
+        .0
+        .borrow()
+        .iter()
+        .all(|c| c.ends_with("--authoritative")));
+    let job = jobs(dir.path()).pop().unwrap();
+    assert_eq!(job["claims_bound"], true);
+    assert_eq!(job["claims"]["p:One"]["epoch"], 3);
+    assert_eq!(job["claims"]["p:Two"]["released"], true);
+    let ports = Fixture::default();
+    ports.claimed.borrow_mut().insert("p:One".into(), 3);
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count("release p:One at 3"), 1);
+    assert_eq!(ports.count("release p:Two"), 0);
+    // An unreachable keeper binds nothing: the job is pending with the explicit error.
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = crate::placement::Args::new();
+    args.insert("card".into(), json!({"item_key":"p:Gone"}));
+    crate::round_progress::record_refusal_with(
+        dir.path(),
+        "fixture",
+        &args,
+        crate::round_progress::refused("round_cap"),
+        &Keeper(Default::default()),
+    )
+    .ok()
+    .unwrap();
+    assert_eq!(jobs(dir.path())[0]["claims_bound"], false);
 }

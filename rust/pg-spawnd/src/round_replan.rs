@@ -218,18 +218,41 @@ pub(crate) fn enqueue_return(
     item: &str,
     reason: &str,
     findings: &[String],
-    claims: Option<&std::collections::BTreeMap<String, u64>>,
+    claims: Option<&std::collections::BTreeMap<String, Option<u64>>>,
 ) -> Result<bool, ToolError> {
     std::fs::create_dir_all(job_dir(state))
         .map_err(|_| parameter("replan_state_unavailable: job directory missing"))?;
     let id = Sha256::digest(format!("{item}\nreturn\n{reason}").as_bytes());
     let path = job_dir(state).join(format!("replan-{id:x}.json"));
+    // A claim with no epoch is not held by the batch: nothing to release.
+    let receipts: serde_json::Map<String, Value> = claims
+        .map(|c| {
+            c.iter()
+                .map(|(k, e)| (k.clone(), json!({"epoch":e, "released":e.is_none()})))
+                .collect()
+        })
+        .unwrap_or_default();
     if path.exists() {
-        return Ok(false);
+        // A validated retry attaches its receipts to the pending job that has none.
+        let Some(lock) = pg_worker_core::lockfile::try_lock(&path.with_extension("lock"))
+            .ok()
+            .flatten()
+        else {
+            return Ok(false);
+        };
+        let mut job = load(&path)?;
+        if claims.is_none() || job["claims_bound"] == true || job["report"] != "pending" {
+            return Ok(false);
+        }
+        job["claims_bound"] = json!(true);
+        job["claims"] = Value::Object(receipts);
+        job["error"] = Value::Null;
+        save(&path, &job)?;
+        drop(lock);
+        return Ok(true);
     }
     let job = json!({"item":item, "pr":"", "reason":reason, "kind":"return", "queued_at":now(),
-        "claims_bound":claims.is_some(),
-        "claims":claims.map(|c| c.iter().map(|(k, e)| (k.clone(), json!({"epoch":e, "released":false}))).collect::<serde_json::Map<_, _>>()).unwrap_or_default(),
+        "claims_bound":claims.is_some(), "claims":receipts,
         "plan":{"leg":null, "slices":[], "findings":findings}, "defined":[], "closed":false,
         "report":"pending", "error":null});
     save(&path, &job)?;
@@ -453,14 +476,30 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
         };
         // Saved before the send and kept when the process dies in between: the next run sends
         // the same line under the same key and the receiver drops the repeat.
-        job["report_line"] = json!(bounded(line, path));
+        job["report_full"] = json!(line);
+        job["report_line"] = json!(cut(&line, LINE_MAX, path));
         job["report"] = json!("sending");
         save(path, job)?;
     }
     if job["report"] == "sending" {
-        // A line saved before the cutoff existed is cut again, never retried oversized.
-        let line = bounded(job["report_line"].as_str().unwrap_or("").to_string(), path);
-        ports.send_routing(&report_key(job), &line)?;
+        // The saved line is replayed unchanged: the receiver may already hold it under this id.
+        // Only a definitive refusal for size shortens it, and then nothing is held under the id.
+        let key = report_key(job);
+        loop {
+            let line = job["report_line"].as_str().unwrap_or("").to_string();
+            match ports.send_routing(&key, &line) {
+                Ok(()) => break,
+                Err(ToolError::Refused { message, .. })
+                    if message.starts_with(TOO_LARGE)
+                        && line.chars().count() * 3 / 4 >= LINE_FLOOR =>
+                {
+                    let full = job["report_full"].as_str().unwrap_or(&line).to_string();
+                    job["report_line"] = json!(cut(&full, line.chars().count() * 3 / 4, path));
+                    save(path, job)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
         // `sent` only after the delivery was acknowledged.
         job["report"] = json!("sent");
         save(path, job)?;
@@ -485,15 +524,19 @@ fn release_claims(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(),
         .flatten()
         .map(|(item, _)| item.clone())
         .collect();
+    // The whole receipt map is checked before any claim is released.
+    if items.iter().any(|item| {
+        job["claims"][item]["released"] != true && job["claims"][item]["epoch"].as_u64().is_none()
+    }) {
+        return Err(parameter(
+            "replan_claims_unbound: a claim receipt has no epoch; nothing was released",
+        ));
+    }
     for item in &items {
         if job["claims"][item]["released"] == true {
             continue;
         }
-        let Some(epoch) = job["claims"][item]["epoch"].as_u64() else {
-            return Err(parameter(
-                "replan_claims_unbound: a claim receipt has no epoch",
-            ));
-        };
+        let epoch = job["claims"][item]["epoch"].as_u64().unwrap_or(0);
         if let Err(error) = ports.release_claim(item, epoch) {
             if ports.claim_epoch(item)? == Some(epoch) {
                 return Err(error);
@@ -508,47 +551,24 @@ fn release_claims(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(),
 
 /// The most characters of a routing line the fleet bus takes (its text cap).
 const LINE_MAX: usize = 2000;
-/// The bus caps the whole signed POST at 4096 bytes: this much is kept for everything around
-/// the text (identifiers up to their 64- and 128-character limits, the signature, the keys);
-/// tests/fleet_bus/test_report_budget.py proves it against the client's own serialization.
-const ENVELOPE_RESERVE: usize = 600;
-/// The most JSON bytes the text of a line may take.
-const LINE_JSON_MAX: usize = 4096 - ENVELOPE_RESERVE;
+/// A line is never shortened below this many characters; a bus that still refuses it fails the
+/// job with the refusal.
+const LINE_FLOOR: usize = 300;
 
-/// The JSON bytes of `c` as the bus client encodes it (ASCII-only JSON).
-fn json_cost(c: char) -> usize {
-    match c {
-        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
-        c if c.is_ascii() && !c.is_ascii_control() => 1,
-        c if c.len_utf16() == 2 => 12,
-        _ => 6,
-    }
-}
+/// The marker the sender port puts on a refusal for size (see `round_replan_ports`).
+pub(crate) const TOO_LARGE: &str = "replan_bus_too_large";
 
-/// `line` cut to `LINE_MAX` characters with a pointer to the job file that keeps the full text.
-fn bounded(line: String, path: &Path) -> String {
-    if line.chars().count() <= LINE_MAX
-        && line.chars().map(json_cost).sum::<usize>() <= LINE_JSON_MAX
-    {
-        return line;
+/// `full` cut to `keep` characters with a pointer to the job file that keeps the full text.
+fn cut(full: &str, keep: usize, path: &Path) -> String {
+    if full.chars().count() <= keep {
+        return full.to_string();
     }
     let name = path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let tail = format!(" ... (full text in replans/{name})");
-    let (mut chars, mut bytes) = (
-        tail.chars().count(),
-        tail.chars().map(json_cost).sum::<usize>(),
-    );
-    let mut kept = String::new();
-    for c in line.chars() {
-        if chars + 1 > LINE_MAX || bytes + json_cost(c) > LINE_JSON_MAX {
-            break;
-        }
-        (chars, bytes) = (chars + 1, bytes + json_cost(c));
-        kept.push(c);
-    }
-    format!("{kept}{tail}")
+    let room = keep.saturating_sub(tail.chars().count());
+    format!("{}{tail}", full.chars().take(room).collect::<String>())
 }
 
 /// Drive one job to its end; on failure the step and the reason stay in the file for the next run.

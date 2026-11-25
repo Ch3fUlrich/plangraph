@@ -376,6 +376,21 @@ pub(crate) fn record_refusal(
     args: &Args,
     error: ToolError,
 ) -> Result<Value, ToolError> {
+    #[cfg(not(test))]
+    let exec = crate::round_replan_ports::SystemExec(state);
+    // The unit tests never reach a keeper.
+    #[cfg(test)]
+    let exec = crate::round_replan_ports::NoKeeper;
+    record_refusal_with(state, host, args, error, &exec)
+}
+
+pub(crate) fn record_refusal_with(
+    state: &Path,
+    host: &str,
+    args: &Args,
+    error: ToolError,
+    exec: &dyn crate::round_replan_ports::Exec,
+) -> Result<Value, ToolError> {
     let error = error.into_error_data();
     let reason = error
         .message
@@ -398,15 +413,26 @@ pub(crate) fn record_refusal(
             let findings =
                 crate::round_replan_ports::last_round_findings_of(state, item, &Value::Null)
                     .unwrap_or_default();
-            // The keeper claims are the receipts the card carries (item -> epoch), never the
-            // ledger key; a card without them leaves the job pending with an explicit error.
-            let claims: Option<std::collections::BTreeMap<String, u64>> =
-                args["card"]["claims"].as_object().map(|map| {
-                    map.iter()
-                        .filter(|(k, v)| crate::records::valid_item(k) && v.is_u64())
-                        .map(|(k, v)| (k.clone(), v.as_u64().unwrap()))
-                        .collect()
-                });
+            // The claim receipts (item -> epoch): the card's own, validated whole, else the
+            // keeper's authoritative answer for the card's member items right now. A card
+            // with neither leaves the job pending with an explicit error.
+            let claims = match args["card"].get("claims").filter(|v| !v.is_null()) {
+                Some(given) => crate::round_escalate::receipts(given),
+                None => {
+                    let members: Vec<String> = match args["card"]["item_keys"].as_array() {
+                        Some(list) => list
+                            .iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect(),
+                        None => base["item_key"]
+                            .as_str()
+                            .map(String::from)
+                            .into_iter()
+                            .collect(),
+                    };
+                    crate::round_replan_ports::capture_claims(exec, &members)
+                }
+            };
             match crate::round_replan::enqueue_return(
                 state,
                 item,

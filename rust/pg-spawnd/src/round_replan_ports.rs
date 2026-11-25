@@ -71,6 +71,41 @@ impl Exec for SystemExec<'_> {
     }
 }
 
+/// The keeper's authoritative claim state of `items` now: item -> epoch, null when not claimed.
+/// None when any answer is missing: a half-known map is not a binding.
+pub(crate) fn capture_claims(
+    exec: &dyn Exec,
+    items: &[String],
+) -> Option<std::collections::BTreeMap<String, Option<u64>>> {
+    let mut map = std::collections::BTreeMap::new();
+    for item in items {
+        let out = exec
+            .run(
+                Tool::Keeper,
+                &strings(&["--json", "show", item, "--authoritative"]),
+            )
+            .ok()?;
+        let shown: Value = serde_json::from_str(&out).ok()?;
+        let epoch = if shown["state"] == "claimed" {
+            Some(shown["epoch"].as_u64()?)
+        } else {
+            None
+        };
+        map.insert(item.clone(), epoch);
+    }
+    Some(map)
+}
+
+/// An `Exec` for the unit tests that reach no tool.
+#[cfg(test)]
+pub(crate) struct NoKeeper;
+#[cfg(test)]
+impl Exec for NoKeeper {
+    fn run(&self, _tool: Tool, _args: &[String]) -> Result<String, ToolError> {
+        Err(parameter("replan_keeper_failed: no keeper in a unit test"))
+    }
+}
+
 pub(crate) struct CommandPorts<'a> {
     pub exec: &'a dyn Exec,
     pub state: &'a Path,
@@ -304,10 +339,21 @@ impl Ports for CommandPorts<'_> {
     }
 
     fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError> {
-        let out = self.exec.run(
-            Tool::Bus,
-            &strings(&["send", "--msg-id", key, "routing", line]),
-        )?;
+        let out = self
+            .exec
+            .run(
+                Tool::Bus,
+                &strings(&["send", "--msg-id", key, "routing", line]),
+            )
+            .map_err(|error| match error {
+                // The client and the bus name a size refusal "bus cap" or "too_large".
+                ToolError::Refused { message, .. }
+                    if message.contains("bus cap") || message.contains("too_large") =>
+                {
+                    parameter(format!("{}: {message}", replan::TOO_LARGE))
+                }
+                other => other,
+            })?;
         // `fleet-msg` exits 0 for a line it only queued locally ("queued <id> (will retry)");
         // the receiver's receipt is "sent <id> seq=<n>" with the id we sent and a numeric
         // sequence. Anything else is not an acknowledgment.
