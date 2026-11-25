@@ -552,7 +552,7 @@ import merge_batch_util as util
 
 repo, base, head = 'example/repo', 'a'*40, 'b'*40
 state = dict(repo=repo, status='pushed', pr=17, name='train', base_head=base, head=head,
-             branch='batch/train', worktree='fixture',
+             branch='batch/train', worktree='fixture', prs={'5': {'ref': 'lane/part'}},
              merged=[dict(pr=5, head='c'*40, merge='d'*40, items=['example:PART'])])
 args = SimpleNamespace(batch_pr=17, approval='approval.txt', checks='', go_row=None)
 lease = {'token': 42, 'owner': 'test'}
@@ -571,6 +571,10 @@ for refused in (False, True):
         calls.append('host merge')
         raise land.MergeBatchError('host merge boundary')
 
+    def hold(refs):
+        assert refs == ['lane/part']
+        calls.append('hold lane')
+
     with ExitStack() as stack:
         stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
         for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
@@ -580,6 +584,7 @@ for refused in (False, True):
         stack.enter_context(patch.object(land, 'require_full_run', return_value=[]))
         stack.enter_context(patch.object(land, 'landing_journal', journal))
         stack.enter_context(patch.object(land, 'gh', gh))
+        stack.enter_context(patch.object(land, 'hold_lane_refs', hold))
         stack.enter_context(patch.object(land, 'gh_json', side_effect=[
             dict(state='OPEN', headRefOid=head, isDraft=False, baseRefName='main'), {'object': {'sha': base}}
         ]))
@@ -589,7 +594,7 @@ for refused in (False, True):
             assert str(exc) == ('demo:C cannot land before demo:D' if refused else 'host merge boundary')
         else:
             raise AssertionError('expected the dependency refusal or simulated host boundary')
-    assert calls == (['dependency check'] if refused else ['dependency check', 'host merge'])
+    assert calls == ['hold lane', 'dependency check'] + ([] if refused else ['host merge'])
 "#,
     );
 }
