@@ -55,12 +55,18 @@ def estimate_tokens(text: str) -> int:
 class PackTooBig(ValueError):
     """A write-set file does not fit the budget; the caller should use a bigger window."""
 
-    def __init__(self, needed: int, budget: int, path: str = "") -> None:
+    def __init__(self, needed: int, budget: int, path: str = "", reserve: int = 0) -> None:
         self.needed = needed
-        self.budget = budget
+        self.budget = budget          # the leg / class limit the caller asked for
+        self.reserve = reserve        # tokens held back for the check-output tail
+        self.effective = budget - reserve  # what files and header are packed against
         self.path = path
-        super().__init__(f"pack needs {needed} tokens, budget {budget}"
-                         + (f" (at {path})" if path else ""))
+        where = f" (at {path})" if path else ""
+        if reserve:
+            super().__init__(f"pack needs {needed} tokens, budget {self.effective} "
+                             f"(limit {budget} less tail reserve {reserve}){where}")
+        else:
+            super().__init__(f"pack needs {needed} tokens, budget {budget}{where}")
 
 
 @dataclass(frozen=True)
@@ -301,7 +307,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
     files: list[PackFile] = []
     cur = _header(card, key)
     if estimate_tokens(cur) > budget_tokens:  # the header alone must leave room for the tail
-        raise PackTooBig(estimate_tokens(cur), limit)
+        raise PackTooBig(estimate_tokens(cur), limit, reserve=tail_cap)
     over = False
     todo = [(rel, "write") for rel in sorted(set(writes) | new_writes)]
     todo += [(rel, "read") for rel in sorted(reads)]
@@ -315,7 +321,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
             loaded = _load((writes if role == "write" else reads)[rel], max_file_tokens)
             if loaded == "too_large" and role == "write":
                 size = (writes[rel]).stat().st_size
-                raise PackTooBig(size // CHARS_PER_TOKEN, limit, rel)
+                raise PackTooBig(size // CHARS_PER_TOKEN, limit, rel, tail_cap)
             if isinstance(loaded, str):
                 skipped.append((rel, loaded))
                 continue
@@ -325,7 +331,7 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
         need = estimate_tokens(cur + "\n" + block)
         if need > budget_tokens:
             if role == "write":
-                raise PackTooBig(need, limit, rel)
+                raise PackTooBig(need, limit, rel, tail_cap)
             over = True
             skipped.append((rel, "over_budget"))
             continue

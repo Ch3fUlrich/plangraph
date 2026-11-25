@@ -358,3 +358,15 @@ def test_header_only_pack_counts_the_header_against_the_file_budget(tmp_path):
         assert retry.tokens <= budget, budget
     with pytest.raises(PackTooBig):
         build(tmp_path, card(outcome="o" * 400), budget_tokens=128)
+
+
+def test_pack_too_big_reports_the_effective_budget_and_tail_reserve(tmp_path):
+    put(tmp_path, "w.py", "w" * 4 * 900)
+    with pytest.raises(PackTooBig) as ei:   # write file over the file budget
+        build(tmp_path, card(write_set=["w.py"]), budget_tokens=1000, max_file_tokens=BIG)
+    e = ei.value
+    assert (e.budget, e.reserve, e.effective) == (1000, 125, 875)
+    assert "budget 875" in str(e) and "limit 1000" in str(e) and "tail reserve 125" in str(e)
+    with pytest.raises(PackTooBig) as hi:   # header alone over the file budget
+        build(tmp_path, card(outcome="o" * 400), budget_tokens=128)
+    assert "budget 112" in str(hi.value) and "tail reserve 16" in str(hi.value)

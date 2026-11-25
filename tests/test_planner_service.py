@@ -348,3 +348,25 @@ def test_admission_and_retry_both_use_the_selected_leg_limit(w, repo):
                                   check_tail="\n".join("E" * 400 for _ in range(60)))
     assert retry.text[:retry.prefix_chars] == first.text
     assert retry.tokens <= LEG_LIMIT
+
+
+def test_retry_packing_carries_the_admission_route_without_a_separate_limit(w, repo):
+    key, key2 = seed(w, [("A", []), ("B", [])])
+    put(w, key, window_class="1m", estimate_tokens=1000,
+        write_set=_big_write_set(repo, LEG_LIMIT - 4000))
+    admitted = gate(w, repo, key, legs=(GROK_LEG,))
+    assert admitted.ready
+    tail = "\n".join("E" * 400 for _ in range(60))
+    via_route = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
+                                      route=admitted.route, check_tail=tail)
+    via_legs = service.pack_for_card(w.store, w.p("router"), key, repo_root=repo,
+                                     legs=(GROK_LEG,), check_tail=tail)
+    for retry in (via_route, via_legs):
+        assert retry.tokens <= LEG_LIMIT
+    assert via_route.text == via_legs.text
+    # an over-limit card is refused on the retry path too, not packed to the window budget
+    put(w, key2, window_class="1m", estimate_tokens=1000,
+        write_set=_big_write_set(repo, LEG_LIMIT - 300))
+    with pytest.raises(service.context_pack.PackTooBig) as ei:
+        service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo, legs=(GROK_LEG,))
+    assert "limit 120000" in str(ei.value)
