@@ -309,8 +309,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 except (OSError, subprocess.CalledProcessError):
                     ok, reason, infra = False, 'probe infra: git', True
                 else:
-                    ok = changed and 'ok.txt' in files
-                    reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                    # The commit alone is not a pass: the writer process must
+                    # also have completed with exit code zero.
+                    status, code = getattr(job, 'status', None), getattr(job, 'exit_code', None)
+                    ok = changed and 'ok.txt' in files and status == 'completed' and not code
+                    reason = ('' if ok else f'exit {code}' if code else
+                              'no commit' if not (changed and 'ok.txt' in files) else str(status or 'failed'))
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())

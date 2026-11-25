@@ -8,6 +8,7 @@ probe writes through the store the planner reads, and error-shaped/anchored
 stderr quota detection.
 """
 import asyncio
+import os
 import sqlite3
 import subprocess
 import sys
@@ -144,9 +145,10 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
     monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
 
     async def factory(*args, **kwargs):
-        code = ("from pathlib import Path; import subprocess; Path('ok.txt').write_text('ok'); "
+        code = ("from pathlib import Path; import json, subprocess; Path('ok.txt').write_text('ok'); "
                 "subprocess.run(['git', 'add', 'ok.txt'], check=True); "
-                "subprocess.run(['git', 'commit', '-m', 'probe'], check=True)")
+                "subprocess.run(['git', 'commit', '-m', 'probe'], check=True); "
+                "print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'ok'}}))")
         return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
 
     runner = SpawnerRunner(process_factory=factory)
@@ -666,3 +668,86 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
     assert roles[writer.id] is None
     assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
     assert store.leg_status(leg_probe.key(writer))['state'] != 'down'
+
+
+COMMIT_OK = ("from pathlib import Path; import subprocess, sys; Path('ok.txt').write_text('ok'); "
+             "subprocess.run(['git', 'add', 'ok.txt'], check=True); "
+             "subprocess.run(['git', 'commit', '-m', 'probe'], check=True); ")
+LIMIT_REPLY = ("ERROR: You've hit your usage limit. Upgrade to Pro or try again at "
+               "Dec 30th, 2099 8:24 PM.")
+
+
+def _events(store, source=None):
+    sql = 'SELECT status, source FROM leg_events' + (' WHERE source=?' if source else '')
+    return sqlite3.connect(str(store.path)).execute(sql, (source,) if source else ()).fetchall()
+
+
+def _booked_store(tmp_path, leg):
+    """A store holding one provider limit booking for the leg (the original booking)."""
+    from plangraph.spawner.exit_outcome import quota_models
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    for model in quota_models(leg_state.leg_key(leg), leg.harness):
+        store.record_harness_limit(model, LIMIT_REPLY, 'spawner:harness', harness=leg.harness)
+    assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
+    return store
+
+
+def _committing_runner(status, exit_code, stderr=''):
+    """A runner whose job commits ok.txt into the probe repo, then ends as given."""
+    async def spawn(**kwargs):
+        subprocess.run([sys.executable, '-c', COMMIT_OK], cwd=kwargs['cwd'], check=True,
+                       env={**os.environ, **{k: v for k, v in kwargs['extra_env'].items() if v is not None}})
+        return SimpleNamespace(job_id='probe', status=status, exit_code=exit_code, stdout='', stderr=stderr,
+                               events=[], command=['fake'])
+
+    async def cancel(job_id):
+        pass
+    return SimpleNamespace(spawn=spawn, cancel=cancel, jobs={})
+
+
+def test_failed_writer_probe_preserves_quota_booking(tmp_path, monkeypatch):
+    """A commit from a nonzero exit is no pass: the booking stays and a 503 row is written."""
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.runner import SpawnerRunner
+
+    leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy', roles=('implement',), id='probe-leg')
+    store = _booked_store(tmp_path, leg)
+    before = len(_events(store))
+
+    async def factory(*args, **kwargs):
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', COMMIT_OK + 'sys.exit(3)', **kwargs)
+
+    result = asyncio.run(leg_probe.probe(SpawnerRunner(process_factory=factory), leg, timeout_s=20, store=store))
+    assert result['ok'] is False and result['infra'] is False, result
+    assert result['reason'].startswith('exit '), result
+    assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
+    assert _events(store, 'provider-probe') == []
+    assert [row for row in _events(store)[before:]] == [(503, 'liveness-probe')]
+
+
+def test_zero_exit_refused_writer_probe_is_no_pass(tmp_path, monkeypatch):
+    """A job the runner marked failed with exit code 0 must not pass on its commit."""
+    from plangraph.spawner import leg_probe
+
+    leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy', roles=('implement',), id='probe-leg')
+    store = _booked_store(tmp_path, leg)
+    result = asyncio.run(leg_probe.probe(_committing_runner('failed', 0), leg, timeout_s=20, store=store))
+    assert result['ok'] is False and result['infra'] is False and result['reason'].startswith('failed'), result
+    assert store.leg_status(leg_state.leg_key(leg))['state'] == 'limited'
+    assert _events(store, 'provider-probe') == []
+
+
+def test_committed_codex_probe_books_usage_limit(tmp_path, monkeypatch):
+    """A failed Codex writer that already committed still books the account-wide limit."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.exit_outcome import quota_models
+
+    leg = next(l for l in DEFAULT_LEGS if l.harness == 'codex' and 'implement' in l.roles)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *a, **kw: 'fake')
+    result = asyncio.run(leg_probe.probe(_committing_runner('failed', 1, LIMIT_REPLY), leg, timeout_s=20, store=store))
+    assert result['ok'] is False and result['reason'] == 'limited', result
+    for model in quota_models(leg_state.leg_key(leg), leg.harness):
+        assert store.leg_status(model, harness='codex')['state'] == 'limited', model
+    assert _events(store, 'provider-probe') == []
