@@ -339,3 +339,85 @@ fn a_merge_commit_and_a_stripped_message_keep_the_class_search_check() {
     let output = git(root, &["commit", "--allow-empty", "-m", &message]);
     assert!(!output.status.success(), "{output:?}");
 }
+
+fn commit_with_editor(root: &Path, args: &[&str], editor: &str) -> Output {
+    pg_worker_core::git_test_support::command(root)
+        .arg("commit")
+        .args(args)
+        .env("GIT_EDITOR", editor)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()
+        .unwrap()
+}
+
+fn saved_body(root: &Path) -> String {
+    String::from_utf8(git(root, &["log", "-1", "--format=%B"]).stdout).unwrap()
+}
+
+#[test]
+fn the_check_follows_what_git_keeps_of_an_editor_message() {
+    let dir = repo();
+    let root = dir.path();
+    // Trailing spaces typed in the editor are stripped by Git: the line is valid.
+    let editor = "sh -c 'printf \"x\\n\\nClass-Search: fixture -> 1 hit, 1 changed   \\n\\nWriter: codex\\n\" > \"$1\"' --";
+    let output = commit_with_editor(root, &["--allow-empty", "--edit", "-m", "m"], editor);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        saved_body(root).contains("Class-Search: fixture -> 1 hit, 1 changed\n"),
+        "{}",
+        saved_body(root)
+    );
+    // A line typed below the scissors line Git generated is discarded by Git: not checked.
+    std::fs::write(root.join("staged.txt"), "x").unwrap();
+    assert!(git(root, &["add", "staged.txt"]).status.success());
+    let editor = format!("sh -c 'printf \"{BAD}\\n\" >> \"$1\"' --");
+    let output = commit_with_editor(
+        root,
+        &["--edit", "--verbose", "-m", "tail\n\nWriter: codex"],
+        &editor,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !saved_body(root).contains("Class-Search"),
+        "{}",
+        saved_body(root)
+    );
+    // The same text above the tail is kept by Git and refused.
+    std::fs::write(root.join("staged.txt"), "y").unwrap();
+    assert!(git(root, &["add", "staged.txt"]).status.success());
+    let editor = format!("sh -c 'printf \"x\\n\\n{BAD}\\n\\nWriter: codex\\n\" > \"$1\"' --");
+    let output = commit_with_editor(root, &["--edit", "-m", "m"], &editor);
+    assert!(!output.status.success(), "{output:?}");
+}
+
+#[test]
+fn a_copied_scissors_pair_in_a_message_without_an_editor_is_kept_and_checked() {
+    let dir = repo();
+    let root = dir.path();
+    let message = format!(
+        "x\n\n# ------------------------ >8 ------------------------\n# Do not modify or remove the line above.\n{BAD}\n\nWriter: codex"
+    );
+    let output = git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "--cleanup=verbatim",
+            "-m",
+            &message,
+        ],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    // Verbatim cleanup keeps trailing whitespace, which the range check refuses.
+    assert!(git(root, &["config", "commit.cleanup", "verbatim"])
+        .status
+        .success());
+    let message = "x\n\nClass-Search: fixture -> 1 hit, 1 changed  \n\nWriter: codex";
+    let output = git(root, &["commit", "--allow-empty", "-m", message]);
+    assert!(!output.status.success(), "{output:?}");
+}

@@ -50,18 +50,53 @@ fn config_value(key: &str) -> Result<Option<String>, Box<dyn std::error::Error>>
     }
 }
 
-/// Refusals for every Class-Search line of the message file. The whole file is read, before any
-/// cleanup: Git keeps the text below a scissors-looking line for most commits, and a retained line
-/// is what the range check reads. A diff tail Git generates holds no line that starts this way.
-fn class_search_violations(raw: &[u8]) -> Vec<String> {
+const SCISSORS: &[u8] = b" ------------------------ >8 ------------------------";
+
+/// Where Git discards the tail of an editor message: the scissors line Git generated, which it
+/// always follows with its own hint line. A hand-copied pair in a `-m` message is not such a tail,
+/// so the caller passes the tail only for an editor commit.
+fn generated_scissors_offset(raw: &[u8]) -> Option<usize> {
+    let hint = b" Do not modify or remove the line above.";
+    let mut lines = raw
+        .split_inclusive(|b| *b == b'\n')
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some((start, line.strip_suffix(b"\n").unwrap_or(line)))
+        });
+    let mut previous = lines.next()?;
+    for current in lines {
+        if let Some(prefix) = previous.1.strip_suffix(SCISSORS).filter(|p| !p.is_empty()) {
+            if current.1.strip_prefix(prefix) == Some(hint) {
+                return Some(previous.0);
+            }
+        }
+        previous = current;
+    }
+    None
+}
+
+/// Refusals for the Class-Search lines Git keeps. The file is read before cleanup; the tail Git
+/// generates for an editor message is skipped, and trailing whitespace is ignored because every
+/// cleanup mode but `verbatim` strips it (`verbatim` is read from commit.cleanup only).
+fn class_search_violations(raw: &[u8], editor: bool, verbatim: bool) -> Vec<String> {
+    let end = if editor {
+        generated_scissors_offset(raw)
+    } else {
+        None
+    };
     let mut violations = Vec::new();
-    for (index, line) in raw.split(|b| *b == b'\n').enumerate() {
+    for (index, line) in raw[..end.unwrap_or(raw.len())]
+        .split(|b| *b == b'\n')
+        .enumerate()
+    {
         let line = String::from_utf8_lossy(line.strip_suffix(b"\r").unwrap_or(line));
-        if line.starts_with("Class-Search:") && pg_policy::parse(&line).is_none() {
+        let line = if verbatim { &*line } else { line.trim_end() };
+        if line.starts_with("Class-Search:") && pg_policy::parse(line).is_none() {
             violations.push(format!(
                 "line {}: malformed Class-Search: {}",
                 index + 1,
-                pg_policy::refusal(&line)
+                pg_policy::refusal(line)
             ));
         }
     }
@@ -85,7 +120,10 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         .args(["rev-parse", "--verify", "-q", "MERGE_HEAD"])
         .output()?;
     let raw = std::fs::read(message)?;
-    let class_search = class_search_violations(&raw);
+    // Git sets GIT_EDITOR=: when no editor is used (-m/-F/--no-edit).
+    let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
+    let verbatim = config_value("commit.cleanup")?.as_deref() == Some("verbatim");
+    let class_search = class_search_violations(&raw, editor, verbatim);
     if merge.status.success() {
         // A merge needs no attribution, but its Class-Search lines reach the same range check.
         for violation in &class_search {
@@ -111,9 +149,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     };
     // Git removes editor comments after this hook runs. Validate that same
     // message, honoring core.commentChar, without rewriting the user's file.
-    // Git sets GIT_EDITOR=: when no editor is used (-m/-F/--no-edit).
-    // Its default cleanup then preserves comments, unlike editor commits.
-    let editor = std::env::var_os("GIT_EDITOR").as_deref() != Some(std::ffi::OsStr::new(":"));
+    // Without an editor the default cleanup preserves comments, unlike editor commits.
     let strip_comments = match config_value("commit.cleanup")?.as_deref() {
         Some("strip" | "scissors") => true,
         Some("whitespace" | "verbatim") => false,
@@ -121,7 +157,6 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     };
     // Git chooses the prefix for commentString/auto. The scissors suffix is
     // fixed; do not second-guess its choice by reading only commentChar.
-    let scissors = b" ------------------------ >8 ------------------------";
     let marker = raw
         .split_inclusive(|b| *b == b'\n')
         .scan(0, |offset, line| {
@@ -129,13 +164,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             *offset += line.len();
             Some((start, line))
         })
-        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(scissors))
+        .find(|(_, line)| line.strip_suffix(b"\n").unwrap_or(line).ends_with(SCISSORS))
         .filter(|_| strip_comments);
     let cut = marker.map_or(raw.len(), |(offset, _)| offset);
     let mut command = Command::new("git");
     let marker_prefix = marker.map(|(_, line)| {
         let line = line.strip_suffix(b"\n").unwrap_or(line);
-        &line[..line.len() - scissors.len()]
+        &line[..line.len() - SCISSORS.len()]
     });
     let configured = config_value("core.commentString")?.or(config_value("core.commentChar")?);
     // With auto and no verbose diff, Git's generated comment block includes
