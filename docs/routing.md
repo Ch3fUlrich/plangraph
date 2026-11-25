@@ -281,6 +281,15 @@ The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_ri
 The Rust route reports legs with more than three missing verdicts in their last
 ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
+## Rule 3.3 path classes in `route_card`
+
+`routing_support/risk.py::RULE_33_CLASSES` places keeper service/API code, gate files, the
+gateway, deploy config, installers and privileged lanes at least high, whatever the size of the
+card. `route_card` takes the higher of that assessed band and the card's `risk` (omitted: normal),
+so such a card gets two review seats (`risky`) and no low-risk-only leg. `plan_phase` resolves
+directory and glob write scopes against the repository (`readiness.scope_files`) so a scope like
+`src/plangraph/keeper` or `tools/*.py` is assessed by the files it holds.
+
 ## Utility eligibility and score rules (ROUTE-RANK-RULES)
 
 - Card needs: `card.needs` (`tools`, `shell`, `long_context`, `vision`) and `card.tool_mode` (the weakest tool mode accepted) filter every candidate leg, fallback legs included; the skip reason is `needs_<need>`.
