@@ -34,6 +34,8 @@ fn local_base_fixture(dir: &Path) -> Host {
             "repo",
         ],
     );
+    // The fixture's file content is compared byte for byte: no host setting may change line endings.
+    git_in(&repo, &["config", "core.autocrlf", "false"]);
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
     git_in(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     git_in(&repo, &["checkout", "-q", "-b", "lane/local"]);
@@ -53,6 +55,7 @@ fn local_base_fixture(dir: &Path) -> Host {
         state: dir.to_path_buf(),
         brief: "brief".into(),
         push_ref: Some("refs/heads/phase/local-result".into()),
+        fast_checks_stand_in: super::review_tests::stand_in_argv(),
         reviews_started: 0,
         review_override: None,
         review_cli: vec!["false".into()],
@@ -271,3 +274,6 @@ for launch in (False, True):
 
 #[path = "native_writer_moving_main_tests.rs"]
 mod moving_main;
+
+#[path = "native_writer_rebase_tests.rs"]
+mod rebase;

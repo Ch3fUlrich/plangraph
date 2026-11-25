@@ -74,6 +74,9 @@ fn run() -> i32 {
     if let Some(code) = plangraph_cli::watchers::cli(&args) {
         return code;
     }
+    if let Some(code) = plangraph_cli::wait::cli(&args) {
+        return code;
+    }
     if let Some(code) = plangraph_cli::wait_pid::cli(&args) {
         return code;
     }

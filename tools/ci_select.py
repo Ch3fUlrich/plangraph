@@ -33,10 +33,21 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "rust/",
 )
 
-# The standalone Temporal worker job also runs the probe admission guard tests.
+# The standalone Temporal worker job also runs the probe admission guard tests and builds
+# pg-worker-core; the secret deny-list policy JSON is registered here so it selects that job.
 RUST_WORKER_INPUTS: tuple[str, ...] = (
+    "src/plangraph/config/secret_paths.json",
     "tools/probe_admission_policy_guard.py",
     "rust/test_support/python.rs",
+)
+
+# The unit types the deploy_manifest test covers (UNIT_EXTENSIONS in
+# rust/plangraph-cli/src/deploy_manifest/scan.rs; tests/test_ci_select_rust_inputs.py compares the lists), each
+# also as its `.in` template. Registered here, not left to the unknown-path fallback: a unit file named
+# like documentation (deploy/systemd/CHANGELOG.service) is documentation-class and would skip Rust CI.
+DEPLOY_UNIT_SUFFIXES: tuple[str, ...] = (
+    ".service", ".timer", ".socket", ".path", ".target", ".mount",
+    ".automount", ".swap", ".slice", ".scope", ".device",
 )
 
 # D-5294: Rust tests also compile/read repository inputs outside rust/.
@@ -50,6 +61,8 @@ RUST_INPUTS: tuple[str, ...] = (
     ".claude/settings.json",  # pg-hook runs the SendMessage hook commands it registers.
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
+    "deploy/manifest.toml",  # the plangraph-cli deploy_manifest tests read it.
+    *(f"deploy/*{suffix}{tail}" for suffix in DEPLOY_UNIT_SUFFIXES for tail in ("", ".in")),  # fnmatch: * crosses directories.
     "deploy/systemd/disk-hygiene.env.example",
     "deploy/systemd/keeper-backup.env.example",
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
@@ -138,6 +151,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/config/role_headers.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
+    "tests/fixtures/operator_turns/**",  # rust/plangraph-cli/tests/operator_turns.rs reads the fixtures.
     "tests/fixtures/redact_parity.json",
     # rust/pg-spawnd/src/round_replan_ports_tests.rs asserts the golden slice definitions.
     "tests/fixtures/replan_slice_definition.json",

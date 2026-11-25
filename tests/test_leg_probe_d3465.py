@@ -102,6 +102,7 @@ WRITER = (
     "Path(sys.argv[1]).write_text(json.dumps(dict(top=top,\n"
     "    head=subprocess.check_output(['git', '-C', top, 'rev-parse', 'HEAD']).decode().strip(),\n"
     "    subject=subprocess.check_output(['git', '-C', top, 'log', '-1', '--format=%s']).decode().strip())))\n"
+    "print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': 'ok'}}))\n"
 )
 
 

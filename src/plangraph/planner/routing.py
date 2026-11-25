@@ -116,20 +116,29 @@ def task_class(card, *, measurement=None) -> str:
     return f"{size}_{kind}"
 
 
+def _risk_band(card, measured, omitted: str | None = None) -> str:
+    """The higher of the assessed band and the card's declared one (``omitted`` when absent).
+
+    ``scope_files`` are the tracked files a directory or glob write scope resolves to; they
+    count for the assessment but not for the size bucket.
+    """
+    bands = tuple(effort_profiles()["risk_floors"])
+    assessed = evaluate_risk(paths=[*measured.files, *card.get("scope_files", ())],
+                             bucket=measured.bucket, has_tests=measured.has_tests,
+                             fanout=measured.fanout, is_docs_only=measured.is_docs_only,
+                             is_pure_doc=card.get("is_pure_doc", False),
+                             risk_tags=card.get("risk_tags", ()))
+    declared = card.get("risk", omitted or assessed.risk)
+    if declared not in bands:
+        raise ValueError("invalid effort risk band")
+    return max(assessed.risk, declared, key=bands.index)
+
+
 def rule_level(card) -> dict:
     """Compute the routing profile from card facts without changing routing order."""
     measured = _effort_measure(card)
     table = effort_profiles()
-    bands = tuple(table["risk_floors"])
-    assessed = evaluate_risk(paths=measured.files, bucket=measured.bucket,
-                             has_tests=measured.has_tests, fanout=measured.fanout,
-                             is_docs_only=measured.is_docs_only,
-                             is_pure_doc=card.get("is_pure_doc", False),
-                             risk_tags=card.get("risk_tags", ()))
-    declared = card.get("risk", assessed.risk)
-    if declared not in bands:
-        raise ValueError("invalid effort risk band")
-    risk = max(assessed.risk, declared, key=bands.index)
+    risk = _risk_band(card, measured)
     level, reason = int(measured.bucket[1]), "size_bucket"
     if risk == "critical":
         level, reason = 4, "critical_risk"
@@ -192,8 +201,8 @@ def _is_low_risk(risk: str, tags: Sequence[str] | None) -> bool:
     return risk == "low" and not tags
 
 
-def _review(tags: Sequence[str]) -> tuple[str, int]:
-    return ("risky", 2) if tags else ("standard", 1)
+def _review(tags: Sequence[str], risk: str = "normal") -> tuple[str, int]:
+    return ("risky", 2) if tags or risk in ("high", "critical") else ("standard", 1)
 
 
 def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: int = 1,
@@ -216,10 +225,12 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         legs = research_route_pool(legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
-    low_risk = _is_low_risk(card.get("risk", "normal"), tags)
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
+    # An omitted risk stays normal: only a declared low card may reach a low-risk-only leg.
+    risk = _risk_band(card, _effort_measure(card), "normal")
+    low_risk = _is_low_risk(risk, tags)
     check_card_needs(card)
     per_leg = effective_role in LEG_ROLES and not overflow
     largest = WINDOW_CLASSES[-1]
@@ -300,7 +311,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     else:
         eligible.sort(key=lambda t: (research and t[2].claude_family, t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
-    level, seats = _review(tags)
+    level, seats = _review(tags, risk)
     return Route(window_class=window_class, harness=plan[0].harness, legs=plan,
                  attempt_budget=ATTEMPT_BUDGET, promotions=PROMOTIONS,
                  review_level=level, review_seats=seats, cross_family=True,

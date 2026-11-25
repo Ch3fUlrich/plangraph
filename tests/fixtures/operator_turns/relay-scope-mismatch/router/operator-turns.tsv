@@ -1,0 +1,3 @@
+v	turn_sha256	utc_timestamp	kind	relay_of	session_uuid	transcript_line	decision	lifts	withdrawn_by
+1	a7529611e6c74d1d4e1356b338de9c50ca6708c68daac64715c584bc3b08c384	2026-01-05T10:00:00.000Z	human	-	00000000-0000-4000-8000-000000000001	12	D-101	[{"item":"demo:A","gate":"operator"}]	-
+1	0523017060d5ca57c158bcefa357197b257499c7234756cfde382939c12028f7	2026-01-05T10:05:00.000Z	relay	a7529611e6c74d1d4e1356b338de9c50ca6708c68daac64715c584bc3b08c384@2026-01-05T10:00:00.000Z@D-101	00000000-0000-4000-8000-000000000002	40	D-102	[{"item":"demo:A","gate":"operator"},{"item":"demo:C","gate":"operator"}]	-

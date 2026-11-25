@@ -10,6 +10,9 @@ mod dry_run;
 #[path = "fleet_launch/interrupted.rs"]
 mod interrupted;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/parent.rs"]
+mod parent;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/peers.rs"]
 mod peers;
 #[cfg(target_os = "linux")]
@@ -52,6 +55,10 @@ fn main() {
     let rust = Launcher::Rust(None);
     check(&rust);
     records::check_lifecycle(&rust);
+    parent::parent_session_is_recorded(&rust);
+    println!("fleet-launch fixture parent_session_is_recorded passed");
+    parent::invalid_parent_is_not_recorded(&rust);
+    println!("fleet-launch fixture invalid_parent_is_not_recorded passed");
     interrupted::check(&rust);
     interrupted::check_counter(&rust, false);
     interrupted::check_counter(&rust, true);
@@ -86,6 +93,8 @@ fn check(launcher: &sandbox::Launcher) {
     remote::check(launcher);
     if matches!(launcher, sandbox::Launcher::Rust(_)) {
         restart::check(launcher);
+        refusals::check_cargo_target(launcher);
+        refusals::check_cargo_target_reaches_the_child(launcher);
         records::check_router_prompt(launcher);
         records::check_batch_prompt(launcher);
     }

@@ -4,7 +4,13 @@
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
-Lane and train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
+A push to refs/heads/lane/* runs the public scrub, the commit
+gate (with its open-PR query) and the stamp gate only (seconds, no worktree, no test): a lane head needs a green
+`plangraph fast-checks` receipt of exactly that head in the same push (no bypass), as a per-lane
+receipt ref (refs/notes/plangraph-fast-checks-<lane>, the designated ref of that lane head) that is one
+parentless commit holding nothing but well-formed receipts, validated and scrubbed like any pushed content.
+A receipt ref without its lane head, or another lane's receipt ref, is refused.
+Train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
 cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
 train: its first-parent chain must carry the merges listed in the manifest in order, with
 attributed resolution or drop commits allowed between merges. PLANGRAPH_TRAIN_MANIFEST
@@ -168,6 +174,56 @@ TRAIN_REF_PREFIX = "refs/heads/land/train-"
 
 def is_train_ref(remote_ref):
     return remote_ref.startswith(TRAIN_REF_PREFIX) and len(remote_ref) > len(TRAIN_REF_PREFIX)
+
+
+LANE_REF_PREFIX = "refs/heads/lane/"
+RECEIPT_REF_PREFIX = "refs/notes/plangraph-fast-checks"
+
+
+def is_receipt_ref(remote_ref):
+    """A published receipt ref: `refs/notes/plangraph-fast-checks-<lane>` (one parentless commit per head)."""
+    return remote_ref.startswith(RECEIPT_REF_PREFIX + "-") and len(remote_ref) > len(RECEIPT_REF_PREFIX) + 1
+
+
+def plangraph_fast_checks(*args):
+    """Run `plangraph fast-checks ...`; (ok, message). The one reader of receipts is the Rust one."""
+    try:
+        result = subprocess.run(["plangraph", "fast-checks", *args], capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        return False, "plangraph binary not found on PATH (required for the receipt gate)"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"receipt gate failed ({type(exc).__name__})"
+    return result.returncode == 0, (result.stderr or result.stdout).strip()
+
+
+def receipt_ref_gate(commit, remote_ref):
+    """A receipt ref may carry only well-formed receipts (each file named by its head)."""
+    ok, message = plangraph_fast_checks("--check-notes", commit)
+    if not ok:
+        print(f"pre-push: {remote_ref} is not a receipt ref ({message}): push refused", file=sys.stderr)
+    return 0 if ok else 1
+
+
+def is_lane_ref(remote_ref):
+    """A writer's lane branch: only scrub, commit gate and stamp run for it."""
+    return remote_ref.startswith(LANE_REF_PREFIX) and len(remote_ref) > len(LANE_REF_PREFIX)
+
+
+def stamp_gate(head, lane_ref, receipts):
+    """A lane head is pushed with the green receipt of exactly that head in its designated receipt
+    ref, in the same push: a local stamp, or a receipt that belongs to another lane, publishes nothing."""
+    ok, designated = plangraph_fast_checks("--receipt-ref", lane_ref)
+    commit = receipts.get(designated.strip()) if ok else None
+    reason = designated if not ok else ""
+    if commit:
+        ok, reason = plangraph_fast_checks("--stamp-green", head, "--notes-commit", commit)
+        if ok:
+            return 0
+    detail = f" ({reason})" if reason else ""
+    print(f"pre-push: no green fast-checks receipt of {head[:12]} in {designated.strip() or 'its receipt ref'} "
+          f"in this push{detail}: run `plangraph fast-checks --owned-worktree` on this head and push the head "
+          "with its receipt exactly as the brief's PUSH line prints it (atomic): push refused", file=sys.stderr)
+    return 1
 
 
 def lane_or_train_ref(remote_ref):
@@ -478,7 +534,8 @@ def push_main():
         if is_zero(local_sha):
             print(f"pre-push: refused delete of {remote_ref}", file=sys.stderr)
             return 1
-        if is_zero(remote_sha):
+        if is_zero(remote_sha) or is_receipt_ref(remote_ref):
+            # A receipt ref has one writer per lane and is replaced, not merged.
             continue
         if git("cat-file", "-e", remote_sha).returncode != 0:
             print(f"pre-push: remote object unavailable for {remote_ref}: push refused",
@@ -508,7 +565,26 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
+    receipts = {rec[2]: rec[1] for rec in refs if is_receipt_ref(rec[2])}
+    # A receipt ref is not a branch (no commit trailers or file sizes): its commit is validated first
+    # (one parentless commit of well-formed receipts) and scrubbed below, before any lane head is judged
+    # by it. A receipt travels only as the designated ref of a lane head in the same push.
+    for _, local_sha, remote_ref, _ in refs:
+        if is_receipt_ref(remote_ref) and receipt_ref_gate(local_sha, remote_ref):
+            return 1
+    designated = set()
+    for _, _, remote_ref, _ in refs:
+        if is_lane_ref(remote_ref):
+            ok, name = plangraph_fast_checks("--receipt-ref", remote_ref)
+            designated.add(name.strip() if ok else "")
+    for remote_ref in receipts:
+        if remote_ref not in designated:
+            print(f"pre-push: {remote_ref} is not the receipt ref of a lane head in this push: push refused",
+                  file=sys.stderr)
+            return 1
     for _, local_sha, remote_ref, remote_sha in refs:
+        if is_receipt_ref(remote_ref):
+            continue
         train = is_train_ref(remote_ref)
         if train:
             problem = train_gate(local_sha, os.environ.get("PLANGRAPH_TRAIN_MANIFEST"))
@@ -520,6 +596,8 @@ def push_main():
         # check the existing PR plan and distinguish its parts from foreign PRs.
         open_prs = not train or not is_zero(remote_sha)
         if commit_gate(local_sha, remote_ref, remote_sha, open_prs=open_prs) or file_size_gate(local_sha):
+            return 1
+        if is_lane_ref(remote_ref) and stamp_gate(local_sha, remote_ref, receipts):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
@@ -556,18 +634,21 @@ def push_main():
         return 1
     find_shapes = sc._shape_finder()
     hits = []
+    # A receipt ref has no tools/ tree: its blobs are scrubbed with the rules of the branch pushed with it.
+    branch_commits = [rec[1] for rec in refs if not is_receipt_ref(rec[2])]
     for rec in refs:
-        _, local_sha, _, remote_sha = rec
+        _, local_sha, scrub_ref, remote_sha = rec
+        rules_commit = branch_commits[0] if is_receipt_ref(scrub_ref) and branch_commits else local_sha
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 rules_files = []
                 for name in BASE_RULES:
                     rel = "tools/split/" + name
-                    entry = git("ls-tree", local_sha, "--", rel)
+                    entry = git("ls-tree", rules_commit, "--", rel)
                     if entry.returncode:
                         raise ValueError("unavailable rules tree")
                     if entry.stdout:
-                        blob = git("show", f"{local_sha}:{rel}")
+                        blob = git("show", f"{rules_commit}:{rel}")
                         if blob.returncode:
                             raise ValueError("unavailable rules blob")
                         path = Path(tmp) / name
@@ -596,6 +677,10 @@ def push_main():
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
     # Prune deleted heads too: stale tracking refs cannot vouch for parts.
+    # Lane refs stop here: scrub and commit gate passed; their tests run on the train.
+    refs = [rec for rec in refs if not is_lane_ref(rec[2]) and not is_receipt_ref(rec[2])]
+    if not refs:
+        return 0
     fetched = refresh_origin()
     for _, local_sha, remote_ref, remote_sha in refs:
         if skip_tests and remote_ref.startswith("refs/heads/land/"):

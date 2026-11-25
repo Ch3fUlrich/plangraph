@@ -95,6 +95,7 @@ fn mode_is_not_a_fixture_write(path: &str, line: &str) -> bool {
         "worker-core/src/fleet_foundation_tick_state_tests.rs" => {
             line.contains(r#"set_permissions(".","#)
         }
+        "worker-core/src/idle_targets_tests.rs" => line.contains("set_permissions(&hidden,"),
         "worker-core/src/reap_journal.rs" => {
             line.contains(".permissions(fs::Permissions::from_mode(")
         }

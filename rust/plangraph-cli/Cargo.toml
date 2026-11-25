@@ -3,6 +3,9 @@ name = "plangraph-cli"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.plangraph]
+host-binaries = ["plangraph"]
+
 [dependencies]
 pg-worker-core = { path = "../worker-core" }
 serde = { version = "1", features = ["derive"] }

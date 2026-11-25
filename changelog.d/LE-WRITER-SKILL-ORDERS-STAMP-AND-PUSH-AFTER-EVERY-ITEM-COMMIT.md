@@ -1,0 +1,1 @@
+The batch-writer skill orders one `plangraph fast-checks --owned-worktree` stamp and one push per round, on the final head of the round, and forbids a stamp or push after a single item commit; a skill test refuses the per-item wording.

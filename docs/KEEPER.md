@@ -149,7 +149,7 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 | `delegate(p, key, worker_principal)` | claimant (l1) | sets `delegate` (the worker principal; it must have role `worker`) |
 | `heartbeat(p, key, epoch)` | claimant or delegate | extends lease; stale epoch → `epoch_stale` |
 | `release(p, key, epoch)` | claimant, router | `claimed`→`open` |
-| `add_evidence(p, key, epoch, kind, ref)` | claimant or delegate, state `claimed` | runs the verifier for `kind`; stores `verified` + detail; unverified evidence is stored but does not count |
+| `add_evidence(p, key, epoch, kind, ref)` | claimant or delegate, state `claimed` (`deploy`: or merged `open`) | runs the verifier for `kind`; stores `verified` + detail; unverified evidence is stored but does not count. Kind `deploy` is also taken on an `open` item whose Plan-Item commit is on the default branch, from an l1/worker scoped to the project (the claim there is refused as stale); the `evidence_added` event carries `merged_open` |
 | `incident(p, key, text, evidence=None)` | router or L1 in its project | `pg incident KEY --text TEXT [--evidence URL]` appends an attributed, timestamped report to a live item. Read the log in show, snapshot or the item card. PostgreSQL migration 22 and the SQLite v23 upgrade add the event index. |
 | `submit(p, key, epoch)` | claimant or delegate | `claimed`→`in_review` iff every kind in `evidence_kinds` has verified evidence; lease frozen (cleared) |
 | `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict` and re-verifies ALL evidence; on a `standard` item this one cross-family verdict → `done` (event `review_passed`, locks), on a `high` item a second distinct reviewer (two distinct resolved families unless waived) is required; not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
@@ -520,6 +520,10 @@ lock as it always did.
 never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field; `description` is its own column, cap 2000) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
 characters of `credential|password|passwd|pwd|login`; there are no exemptions, so rephrase paths and URLs near credential words.
 `pg render` masks any match that is already stored as `[redacted]` and prints `render: masked N credential-shaped string(s)` on stderr.
+
+## Effective priority (PRIORITY-INHERIT-EFFECTIVE)
+
+`views.effective_priorities` gives each non-terminal item `max(own, effective of every non-terminal dependent)`, with the dependent that supplies it as `priority_via`; a dependency cycle is reported and its back edge ignored. `ready` sorts by it, `ready` rows and the snapshot carry `effective_priority` and `priority_via` (raised items only in the snapshot), and the feeder and the web page only read them. The stored priority is never written; aging and `priority` use the own value. `reap` records `priority_inherit_raised` and `priority_inherit_longest_chain` once a day.
 
 ## Signed snapshot (M2B-SIGNED-SNAPSHOT, D-789)
 
