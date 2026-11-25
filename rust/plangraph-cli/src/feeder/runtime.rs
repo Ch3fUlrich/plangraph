@@ -14,6 +14,8 @@ struct Options {
     facts: PathBuf,
     rules: PathBuf,
     repo: PathBuf,
+    /// Where `--live-facts` reads the kernel counters; tests point it at a fixture.
+    proc: PathBuf,
 }
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
@@ -23,6 +25,7 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
         facts: home.join(".config/plangraph/feeder-facts.json"),
         rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
+        proc: "/proc".into(),
     };
     let mut once = false;
     let mut explicit_facts = false;
@@ -63,43 +66,75 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
     let running = sources::runs(env, &o.repo, &ready, state, o.dry)?;
-    let eligible = pick(&ready, &running, &policy).is_some();
+    decide(
+        home,
+        env,
+        o,
+        state,
+        policy,
+        local.as_deref(),
+        &ready,
+        &running,
+    )
+}
+
+/// The capacity line of a live decision: why this host admits or refuses. `load1` is null and
+/// `load_paced` false when the host reports no load; `writer_limit` is null for a host the
+/// policy does not list.
+fn capacity_line(
+    facts: &HostFacts,
+    free_ram_bytes: u64,
+    policy: &Policy,
+    cpu: capacity::Cpu,
+    budget: &capacity::Budget,
+) -> Value {
+    json!({
+        "host":facts.host, "cpus":cpu.cpus, "load1":cpu.load1, "running_writers":facts.running_writers,
+        "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+        "ram_per_writer_bytes":policy.ram_per_run_bytes,
+        "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
+        "load_paced":budget.load_paced, "writer_limit":budget.limit,
+        "free_disk_bytes":facts.free_disk_bytes,
+        "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
+    })
+}
+
+/// Everything after the keeper and run reads. `--live-facts` derives the writer limit from the
+/// RAM budget of a live sample; `--facts` keeps the limit the policy lists. Both refuse a host
+/// the policy does not list by name, in `admit`.
+#[allow(clippy::too_many_arguments)]
+fn decide(
+    home: &Path,
+    env: &Env,
+    o: &Options,
+    state: &Path,
+    mut policy: Policy,
+    local: Option<&str>,
+    ready: &Value,
+    running: &[Run],
+) -> Result<Value, String> {
+    let eligible = pick(ready, running, &policy).is_some();
     if !o.live && !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
     }
-    let host = env
-        .get("PLANGRAPH_HOST_NAME")
-        .map(String::as_str)
-        .or(local.as_deref());
-    let (sample, load) = if o.live {
+    let host = env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local);
+    let (sample, cpu) = if o.live {
         let host = host
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, cpus, load) = capacity::sample(host, disk_root, env)?;
-        (sample, Some((cpus, load)))
+        let (sample, cpu) = capacity::sample(host, disk_root, env, &o.proc)?;
+        (sample, Some(cpu))
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let mut facts = sources::facts(
-        env,
-        &o.repo,
-        sample,
-        &running,
-        home,
-        &policy,
-        local.as_deref(),
-    )?;
-    let measurement = if let Some((cpus, load)) = load {
+    let mut facts = sources::facts(env, &o.repo, sample, running, home, &policy, local)?;
+    let measurement = if let Some(cpu) = cpu {
         let free_ram_bytes = facts.free_ram_bytes;
-        capacity::apply(&mut facts, &mut policy, cpus, load)?;
-        Some(json!({
-            "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
-            "free_ram_bytes":free_ram_bytes, "free_disk_bytes":facts.free_disk_bytes,
-            "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
-        }))
+        let budget = capacity::apply(&mut facts, &mut policy, cpu)?;
+        Some(capacity_line(&facts, free_ram_bytes, &policy, cpu, &budget))
     } else {
         None
     };
@@ -109,8 +144,8 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let rules = fs::read_to_string(&o.rules).map_err(|_| "house rules unreadable")?;
     let reviews = home.join(".local/share/plangraph/handoffs/plan-order/reviews");
     let mut row = tick(
-        &ready,
-        &running,
+        ready,
+        running,
         &facts,
         &policy,
         &rules,
@@ -208,26 +243,247 @@ pub fn run(home: &Path, env: &Env, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn live_capacity_budget_changes_with_load_and_reserves_memory_floor() {
-        let mut facts: HostFacts = serde_json::from_value(json!({
-            "host":"worker", "free_ram_bytes":7000000000u64,
+    fn live_facts(host: &str, running: usize, free_ram: u64) -> HostFacts {
+        serde_json::from_value(json!({
+            "host":host, "free_ram_bytes":free_ram,
             "free_disk_bytes":20000000000u64, "quota_remaining_percent":80,
-            "observed_at":1000, "now":1000, "running_writers":5
+            "observed_at":1000, "now":1000, "running_writers":running
         }))
-        .unwrap();
+        .unwrap()
+    }
+    fn cpu(cpus: usize, load1: Option<f64>, psi: bool) -> capacity::Cpu {
+        capacity::Cpu { cpus, load1, psi }
+    }
+    #[test]
+    fn live_slots_follow_free_ram_above_the_floor_not_load() {
         let mut policy = Policy::default();
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 0.5).unwrap();
-        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        // 7 GB free - 3 GB floor = 4 GB = one 4 GB writer on top of the 5 running.
+        let mut facts = live_facts("dell", 5, 7_000_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(12, Some(0.5), false)).unwrap();
+        assert_eq!((b.slots_by_ram, b.limit, b.load_paced), (1, Some(6), false));
         assert_eq!(facts.free_ram_bytes, 4_000_000_000);
-        facts.running_writers = 6;
         assert_eq!(admit(&facts, &policy), Admission::Admit);
-        facts.free_ram_bytes = 7_000_000_000;
-        super::super::capacity::apply(&mut facts, &mut policy, 12, 11.5).unwrap();
+        facts.running_writers = 6;
         assert_eq!(
             admit(&facts, &policy),
             Admission::Refuse("max_writers".into())
         );
+        // Load 11.5 on 12 cpus changes nothing: only RAM sets the slots.
+        let mut facts = live_facts("dell", 5, 7_000_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(12, Some(11.5), false)).unwrap();
+        assert_eq!(b.limit, Some(6));
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+    }
+    #[test]
+    fn without_a_psi_file_load_falls_back_to_one_new_writer_per_tick_and_says_so() {
+        // The workstation of 2026-11-24: 32 cpus, load1 ~100, 86 GB free, no writer.
+        let mut policy = Policy::default();
+        policy.max_writers.insert("workstation".into(), 8);
+        let mut facts = live_facts("workstation", 0, 86_000_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(32, Some(100.0), false)).unwrap();
+        assert_eq!(b.slots_by_ram, 20);
+        assert_eq!(
+            (b.new_writers_allowed, b.load_paced, b.limit),
+            (1, true, Some(1))
+        );
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        facts.running_writers = 1;
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("max_writers".into())
+        );
+        // With a PSI file the same load does not pace.
+        let mut facts = live_facts("workstation", 0, 86_000_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(32, Some(100.0), true)).unwrap();
+        assert_eq!((b.new_writers_allowed, b.load_paced), (20, false));
+    }
+    #[test]
+    fn a_host_the_policy_does_not_list_refuses_by_name_even_with_free_ram() {
+        let mut policy = Policy::default();
+        let mut facts = live_facts("mystery", 0, 86_000_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(32, Some(1.0), false)).unwrap();
+        assert_eq!(
+            (b.slots_by_ram, b.new_writers_allowed, b.limit),
+            (20, 0, None)
+        );
+        assert!(!policy.max_writers.contains_key("mystery"));
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("unknown_host:mystery".into())
+        );
+    }
+    #[test]
+    fn no_free_ram_above_the_floor_gives_no_slot_whatever_the_load() {
+        let mut policy = Policy::default();
+        let mut facts = live_facts("dell", 0, 3_500_000_000);
+        let b = capacity::apply(&mut facts, &mut policy, cpu(32, Some(0.0), false)).unwrap();
+        assert_eq!((b.slots_by_ram, b.limit), (0, Some(0)));
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("max_writers".into())
+        );
+    }
+
+    /// A live decision on a fixture host: 16 000 000 kB available (3 slots above the 3 GB floor
+    /// at 4 GB each), one eligible item, no quota snapshot (the last gate, `provider_quota`).
+    struct Live {
+        dir: tempfile::TempDir,
+        env: Env,
+        options: Options,
+        ready: Value,
+    }
+    impl Live {
+        fn new(host: &str, policy: &str) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let at = |name: &str| dir.path().join(name);
+            fs::create_dir_all(at("proc")).unwrap();
+            fs::write(
+                at("proc/meminfo"),
+                "MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n",
+            )
+            .unwrap();
+            fs::write(at("policy.toml"), format!("disk_floor_bytes = 1\n{policy}")).unwrap();
+            fs::write(at("rules.md"), "rules").unwrap();
+            // An empty PATH keeps the quota adapter from running python: no quota snapshot.
+            let empty_path = at("empty-path");
+            fs::create_dir_all(&empty_path).unwrap();
+            let env = Env::from([
+                ("PLANGRAPH_HOST_NAME".into(), host.into()),
+                ("PATH".into(), empty_path.to_string_lossy().into()),
+            ]);
+            let options = Options {
+                dry: true,
+                live: true,
+                policy: at("policy.toml"),
+                facts: at("facts.json"),
+                rules: at("rules.md"),
+                repo: dir.path().to_path_buf(),
+                proc: at("proc"),
+            };
+            let ready = json!({"items":[{"key":"plangraph:X","title":"x","priority":5,
+                "created_at":"2026-01-01T00:00:00Z","state":"open","files":[]}]});
+            Self {
+                dir,
+                env,
+                options,
+                ready,
+            }
+        }
+        fn proc(&self, name: &str) -> PathBuf {
+            self.dir.path().join("proc").join(name)
+        }
+        fn decide(&self) -> Value {
+            let policy: Policy =
+                toml::from_str(&fs::read_to_string(&self.options.policy).unwrap()).unwrap();
+            decide(
+                self.dir.path(),
+                &self.env,
+                &self.options,
+                &self.dir.path().join("state"),
+                policy,
+                None,
+                &self.ready,
+                &[],
+            )
+            .unwrap()
+        }
+    }
+    const SATURATED: &str = "1000000.0 1000000.0 1000000.0 1/2 3\n";
+
+    #[test]
+    fn live_decision_reports_ram_budget_and_psi_pacing() {
+        use std::os::unix::fs::PermissionsExt;
+        let live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        fs::write(live.proc("loadavg"), SATURATED).unwrap();
+        // (pressure file state, expected pacing): only a missing file paces by load.
+        for (state, paced) in [
+            ("missing", true),
+            ("valid", false),
+            ("malformed", false),
+            ("unreadable", false),
+        ] {
+            let dir = live.proc("pressure");
+            let file = dir.join("cpu");
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+            let _ = fs::remove_dir_all(&dir);
+            match state {
+                "missing" => {}
+                _ => {
+                    fs::create_dir_all(&dir).unwrap();
+                    let text = if state == "malformed" {
+                        "garbage"
+                    } else {
+                        "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+                    };
+                    fs::write(&file, text).unwrap();
+                    if state == "unreadable" {
+                        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+                    }
+                }
+            }
+            let row = live.decide();
+            let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o755));
+            let c = &row["capacity"];
+            assert_eq!(c["load_paced"], paced, "{state}");
+            assert_eq!(c["slots_by_ram"], 3, "{state}");
+            assert_eq!(
+                c["new_writers_allowed"],
+                if paced { 1 } else { 3 },
+                "{state}"
+            );
+            assert_eq!(c["writer_limit"], if paced { 1 } else { 3 }, "{state}");
+            assert_eq!(c["free_ram_bytes"], 16_384_000_000u64, "{state}");
+            assert_eq!(c["ram_floor_bytes"], 3_000_000_000u64);
+            assert_eq!(c["ram_per_writer_bytes"], 4_000_000_000u64);
+            assert_eq!(c["load1"], 1_000_000.0);
+            // Past max_writers and ram: the first gate that still refuses is the quota.
+            assert_eq!(row["reason"], "provider_quota", "{state}");
+        }
+    }
+    #[test]
+    fn live_decision_uses_ram_when_load_is_unavailable() {
+        // The configured cap of 0 would refuse the launch; the live RAM budget admits it.
+        let live = Live::new("dell", "[max_writers]\ndell = 0\n");
+        for loadavg in [None, Some("garbage")] {
+            if let Some(text) = loadavg {
+                fs::write(live.proc("loadavg"), text).unwrap();
+            }
+            let row = live.decide();
+            let c = &row["capacity"];
+            assert_eq!(c["load1"], Value::Null);
+            assert_eq!(c["load_paced"], false);
+            assert_eq!(
+                (&c["slots_by_ram"], &c["writer_limit"]),
+                (&json!(3), &json!(3))
+            );
+            assert_eq!(row["reason"], "provider_quota");
+        }
+    }
+    #[test]
+    fn live_decision_refuses_an_unlisted_host_by_name_with_its_ram_slots() {
+        let live = Live::new("mystery", "[max_writers]\ndell = 5\n");
+        fs::write(live.proc("loadavg"), "0.1 0.1 0.1 1/2 3\n").unwrap();
+        let row = live.decide();
+        let c = &row["capacity"];
+        assert_eq!(row["reason"], "unknown_host:mystery");
+        assert_eq!(c["slots_by_ram"], 3);
+        assert_eq!(c["new_writers_allowed"], 0);
+        assert_eq!(c["writer_limit"], Value::Null);
+    }
+    #[test]
+    fn facts_file_keeps_the_configured_cap_and_refuses_an_unlisted_host_by_name() {
+        let mut live = Live::new("mystery", "[max_writers]\ndell = 5\n");
+        live.options.live = false;
+        fs::write(
+            &live.options.facts,
+            json!({"host":"mystery","free_ram_bytes":86_000_000_000u64,
+                "free_disk_bytes":20_000_000_000u64,"observed_at":chrono::Utc::now().timestamp()})
+            .to_string(),
+        )
+        .unwrap();
+        let row = live.decide();
+        assert_eq!(row["reason"], "unknown_host:mystery");
+        assert!(row.get("capacity").is_none());
     }
     #[test]
     fn routine_admission_refusals_are_healthy_unit_exits() {

@@ -1,13 +1,34 @@
-use super::{Env, HostFacts, Policy};
+use super::{writer_limit, Env, HostFacts, Policy};
 use pg_worker_core::{disk_runtime, host_probe};
 use std::path::Path;
+
+/// What a live sample says about CPU, beside the host facts: the effective cpu count, the
+/// one-minute load when the host reports one, and whether the kernel keeps a CPU pressure
+/// (PSI) file, which then owns CPU saturation instead of load1.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Cpu {
+    pub cpus: usize,
+    pub load1: Option<f64>,
+    pub psi: bool,
+}
+
+/// Only a missing `pressure/cpu` means "no PSI": a present file that is malformed or cannot
+/// be read still belongs to a PSI kernel, so load must not pace in its place.
+fn has_psi(proc_root: &Path) -> bool {
+    !matches!(
+        std::fs::File::open(proc_root.join("pressure/cpu")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
 
 pub(super) fn sample(
     host: &str,
     disk_root: &Path,
     env: &Env,
-) -> Result<(HostFacts, usize, f64), String> {
-    let metrics = host_probe::probe(host).map_err(|e| format!("capacity probe: {e}"))?;
+    proc_root: &Path,
+) -> Result<(HostFacts, Cpu), String> {
+    let metrics = host_probe::probe_load_optional(host, proc_root)
+        .map_err(|e| format!("capacity probe: {e}"))?;
     let disk = |path: &Path| {
         disk_runtime::disk_usage(path).map_err(|e| format!("capacity disk probe: {e}"))
     };
@@ -29,27 +50,65 @@ pub(super) fn sample(
         kill_switch: false,
         now: 0,
     };
-    Ok((
-        facts,
-        metrics.cpus,
-        metrics.load1.ok_or("capacity load unavailable")?,
-    ))
+    let cpu = Cpu {
+        cpus: metrics.cpus,
+        load1: metrics.load1,
+        psi: has_psi(proc_root),
+    };
+    Ok((facts, cpu))
 }
 
+/// The writer budget of one live sample: the slots free RAM allows, the pacing that load adds,
+/// and the numbers behind both, so the decision line shows why a host admits or refuses.
+/// `limit` is `None` for a host the policy does not list: it has RAM slots but no writers.
+#[derive(Debug, PartialEq)]
+pub(super) struct Budget {
+    pub slots_by_ram: usize,
+    pub new_writers_allowed: usize,
+    pub load_paced: bool,
+    pub limit: Option<usize>,
+}
+
+/// Hosts admit by free RAM (D-5122): new writer slots = (free RAM - floor) / RAM per writer.
+/// Load never refuses; a host without a PSI file whose load1 is at or above its cpu count
+/// only starts one new writer per tick, so builds already running get room first.
+/// The limit of a listed host is written into `policy`; an unlisted host gets none.
 pub(super) fn apply(
     facts: &mut HostFacts,
     policy: &mut Policy,
-    cpus: usize,
-    load: f64,
-) -> Result<(), String> {
-    if facts.host.is_empty() || cpus == 0 || !load.is_finite() || load < 0.0 {
+    cpu: Cpu,
+) -> Result<Budget, String> {
+    if facts.host.is_empty()
+        || cpu.cpus == 0
+        || cpu
+            .load1
+            .is_some_and(|load| !load.is_finite() || load < 0.0)
+    {
         return Err("invalid live host capacity".into());
     }
-    let free_cores = (cpus as f64 - load).max(0.0).floor() as usize;
-    policy.max_writers.insert(
-        facts.host.clone(),
-        facts.running_writers.saturating_add(free_cores),
-    );
     facts.free_ram_bytes = facts.free_ram_bytes.saturating_sub(policy.ram_floor_bytes);
-    Ok(())
+    let slots_by_ram = usize::try_from(
+        facts
+            .free_ram_bytes
+            .checked_div(policy.ram_per_run_bytes)
+            .unwrap_or(0),
+    )
+    .unwrap_or(usize::MAX);
+    let load_paced = !cpu.psi && cpu.load1.is_some_and(|load| load >= cpu.cpus as f64);
+    let listed = writer_limit(&facts.host, policy).is_some();
+    let new_writers_allowed = match (listed, load_paced) {
+        (false, _) => 0,
+        (true, true) => slots_by_ram.min(1),
+        (true, false) => slots_by_ram,
+    };
+    let limit = listed.then(|| facts.running_writers.saturating_add(new_writers_allowed));
+    if let Some(limit) = limit {
+        policy.max_writers.insert(facts.host.clone(), limit);
+    }
+    Ok(Budget {
+        slots_by_ram,
+        new_writers_allowed,
+        load_paced,
+        limit,
+    })
 }
