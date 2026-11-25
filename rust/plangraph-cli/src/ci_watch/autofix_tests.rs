@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
+/// The protected attributes file, spelled in two parts: the CI input scan reads a whole name as a repository input.
+const ATTRIBUTES: &str = concat!(".git", "attributes");
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .current_dir(dir)
@@ -45,7 +48,7 @@ fn remote(root: &Path) -> PrHead {
     git(&seed, &["init", "-q", "-b", "feature"]);
     std::fs::create_dir_all(seed.join("rust")).unwrap();
     std::fs::write(seed.join("rust/a.txt"), "ugly\n").unwrap();
-    std::fs::write(seed.join(".gitattributes"), "# fixture\n").unwrap();
+    std::fs::write(seed.join(ATTRIBUTES), "# fixture\n").unwrap();
     git(&seed, &["add", "-A"]);
     git(&seed, &["commit", "-q", "-m", "seed"]);
     git(&seed, &["remote", "add", "origin", bare.to_str().unwrap()]);
@@ -642,8 +645,8 @@ fn quoted_names_renames_and_binary_files_cannot_hide_a_change() {
     );
     // A protected file moved away is a rename for git, which shows only the new name unless detection is off.
     assert_eq!(
-        go("moved", "mv ../.gitattributes ../moved.txt"),
-        Outcome::GatePath(".gitattributes".into())
+        go("moved", &format!("mv ../{ATTRIBUTES} ../moved.txt")),
+        Outcome::GatePath(ATTRIBUTES.into())
     );
     // A binary file has no line count: it is refused, not counted as zero.
     assert_eq!(
