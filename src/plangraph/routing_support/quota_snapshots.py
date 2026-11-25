@@ -100,13 +100,28 @@ def _plain(value):
     return value
 
 
+_TIME_COLUMNS = ('next_reset_at', 'created_at')
+
+
+def _decimal(value):
+    """A numeric time as its shortest decimal text: a JSON number is rounded by readers that
+    parse it as a float, the text keeps the digits the store holds."""
+    if isinstance(value, float):
+        return repr(value)
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else value
+
+
 def _history(db):
     """Every stored row for the pool readout, which tolerates a malformed row: undecodable text
     is replaced and an unsupported cell becomes None, so independent healthy rows stay readable."""
     db.text_factory = lambda raw: raw.decode('utf-8', 'replace')
     cursor = db.execute('SELECT ' + _SNAPSHOT_COLUMNS + ' FROM quota_snapshots ORDER BY id')
     columns = [column[0] for column in cursor.description]
-    return [dict(zip(columns, map(_plain, row))) for row in cursor]
+    rows = [dict(zip(columns, map(_plain, row))) for row in cursor]
+    for row in rows:
+        for column in _TIME_COLUMNS:
+            row[column] = _decimal(row[column])
+    return rows
 
 
 def fetch_snapshot_rows(env=None, *, fetch=None, latest='id'):
