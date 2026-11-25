@@ -97,13 +97,16 @@ impl<R: CommandRunner> Keeper for KeeperCli<R> {
         if refused.is_empty() {
             return Ok(held);
         }
-        // The refusal is the settled answer for this key: the next attempt asks anew.
-        let _ = std::fs::remove_file(&self.key_file);
         // Give back what this attempt got, at the epochs it got, and say what could not be.
         let failures: Vec<String> = held
             .iter()
             .filter_map(|(key, epoch)| self.release(key, *epoch).err())
             .collect();
+        // The key is dropped only once the cleanup is confirmed: a kill before that retries
+        // with the same key, the keeper replays the mixed answer, and the cleanup runs again.
+        if failures.is_empty() {
+            let _ = std::fs::remove_file(&self.key_file);
+        }
         let mut error = format!("claim-batch refused {}", refused.join("; "));
         if !failures.is_empty() {
             error.push_str(&format!("; release failed: {}", failures.join("; ")));
@@ -121,6 +124,14 @@ pub struct GhCi<R: CommandRunner> {
 }
 
 impl<R: CommandRunner> CiRuns for GhCi<R> {
+    fn draft_lane_part(&mut self, pr: u64) -> Result<bool, String> {
+        let pull = self.pull(pr)?;
+        let draft = pull["draft"]
+            .as_bool()
+            .ok_or("gh api pull: no draft flag")?;
+        let branch = text(&pull["head"], "ref", "gh api pull")?;
+        Ok(draft && branch.starts_with("lane/"))
+    }
     fn runs(&mut self, head: &str, pr: u64) -> Result<Vec<CiRun>, String> {
         let endpoint = format!(
             "repos/{}/actions/runs?head_sha={head}&per_page=100",
@@ -141,6 +152,7 @@ impl<R: CommandRunner> CiRuns for GhCi<R> {
             .filter(of_pr)
             .map(|run| {
                 Ok(CiRun {
+                    event: text(run, "event", "gh api runs")?.to_owned(),
                     name: text(run, "name", "gh api runs")?.to_owned(),
                     id: run["id"].as_u64().ok_or("gh api runs: run without id")?,
                     attempt: run["run_attempt"]
@@ -153,6 +165,14 @@ impl<R: CommandRunner> CiRuns for GhCi<R> {
                 })
             })
             .collect()
+    }
+}
+
+impl<R: CommandRunner> GhCi<R> {
+    fn pull(&mut self, pr: u64) -> Result<Value, String> {
+        let endpoint = format!("repos/{}/pulls/{pr}", self.repo);
+        let argv = ["gh", "api", &endpoint].map(str::to_owned).to_vec();
+        json(&self.runner.run(&self.dir, &argv)?, "gh api pull")
     }
 }
 

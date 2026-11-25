@@ -112,10 +112,15 @@ impl<D: Driver> AgentSteps<D> {
         self.driver.save(&record)
     }
 
-    /// The review the push may consume: a recorded row accepted exactly `head` in a kept run.
+    /// The review the push may consume: a recorded row that accepted exactly `head`, backed by
+    /// a kept review run that says ACCEPT for the same head. The kept run is the receipt; a row
+    /// that disagrees with it (a hand-edited or stale steps file) authorizes nothing.
     pub(crate) fn verify_review(&self, head: &str, review: &str) -> Result<(), String> {
         let recorded = self.committed_reviews().into_iter().any(|(verdict, run)| {
-            matches!(verdict, Verdict::Accept) && run["run_id"] == review && run["head"] == head
+            matches!(verdict, Verdict::Accept)
+                && run["run_id"] == review
+                && run["head"] == head
+                && run["verdict"] == "ACCEPT"
         });
         if recorded {
             return Ok(());

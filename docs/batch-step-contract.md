@@ -79,8 +79,17 @@ Resuming is bound to the batch: the saved rows must carry this call's items, bas
 the worktree of this native run, or the call is refused before a step runs. `push` verifies
 the stamp and a recorded, accepting review of the exact head (the review reference of a row is
 not trusted by itself). The claim keeps its keeper idempotency key beside the steps file
-(`<steps>.claim-key`), so a process killed after the keeper granted the claim retries with the
+(`<steps file name>.claim-key`, a name that is never the steps file itself), so a process killed after the keeper granted the claim retries with the
 same key and is answered from the keeper's receipt; a refused claim settles and drops the key.
 `ci_class` judges the latest run of each workflow; for a draft `lane/*` part (the default
 publish path) the part policy of `.github/workflows/tests.yml` applies: its jobs are skipped by
 design, a skipped required workflow is its passing evidence and a failure is still red.
+
+The immutable inputs (native run, repo, batch key, items, base, brief, worktree) are saved in
+`<steps file name>.inputs` before the first step and compared on every start, so even a
+claim-only prefix cannot resume against another run, base or brief. A claim refused in part
+keeps its key until every granted epoch is given back, so a kill during that cleanup retries
+into the same keeper receipt. `ci_class` keeps the latest run per workflow and event (a failed
+run of another event is not hidden by a newer pass of one), and asks the pull request itself
+whether it is a draft `lane/*` part before it accepts a skipped `pull_request` run as
+evidence. `push` takes the verdict from the kept review run, not from the row alone.

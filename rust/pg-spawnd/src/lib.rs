@@ -13,6 +13,8 @@ pub mod step_runner_shell;
 #[cfg(test)]
 mod step_runner_tests;
 pub mod step_services;
+#[cfg(test)]
+mod step_services_classify_tests;
 pub mod step_services_cli;
 #[cfg(test)]
 mod step_services_cli_tests;
