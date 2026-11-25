@@ -175,8 +175,12 @@ def _process_diagnostics(seat_dir, text, evidence, cwd=None):
         prompt = ""
     if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(evidence.get("prompt_sha256") or "").lower():
         prompt = ""
-    found = classifier.classify_findings(
-        text, prompt=prompt, changed_paths=classifier.diff_paths(prompt, cwd) if prompt else None)
+    # The serving attempt's own diff binding (digest recomputed in its checkout) fixes the scope;
+    # seats without one fall back to the diff the verified prompt carries.
+    scope = classifier.bound_diff_paths(evidence.get("review_binding"), cwd)
+    if scope is None and prompt:
+        scope = classifier.diff_paths(prompt, cwd)
+    found = classifier.classify_findings(text, prompt=prompt, changed_paths=scope)
     return {"lines": list(found.process), "blocking": found.blocking,
             "prompt_sha256": evidence.get("prompt_sha256")}
 
