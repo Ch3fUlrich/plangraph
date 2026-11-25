@@ -84,7 +84,7 @@ pub struct AskInput {
 fn sha40(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
-fn decision_id(value: &str) -> bool {
+pub(crate) fn decision_id(value: &str) -> bool {
     value
         .strip_prefix("D-")
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))

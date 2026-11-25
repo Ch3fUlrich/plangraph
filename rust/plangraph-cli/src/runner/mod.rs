@@ -1,7 +1,7 @@
 //! `plangraph runner plan|install|check` (Linux CI host side).
 mod check;
 mod config;
-mod download;
+pub(crate) mod download;
 mod observe;
 mod plan;
 mod steps;
