@@ -149,6 +149,49 @@ fn switch_off(
     }
 }
 
+/// The identity of a plan: a digest of its targets and their items. A state belongs to the plan that first
+/// used it, so a checkpoint of another plan never decides what this plan switches off or skips.
+pub fn plan_id(targets: &[RunTarget]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut lines: Vec<String> = targets
+        .iter()
+        .map(|t| {
+            let items: Vec<&str> = t.items.iter().map(String::as_str).collect();
+            format!("{} {}", name(t), items.join(","))
+        })
+        .collect();
+    lines.sort();
+    format!("{:x}", Sha256::digest(lines.join("\n")))
+}
+
+/// Cleanup after a failure once the host may have changed: switches off the timers held for their service
+/// and `own` when it triggers itself (a timer, socket, path), and saves any disable that failed.
+fn abort(
+    installer: &dyn Installer,
+    state: &mut PostState,
+    report: &mut PostReport,
+    held: &BTreeMap<String, (RunTarget, RunRead)>,
+    own: Option<&RunTarget>,
+    checkpoint: &mut dyn FnMut(&PostState) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut off: Vec<(String, String)> = held
+        .values()
+        .map(|(h, _)| (h.host.clone(), h.family.clone()))
+        .collect();
+    if let Some(t) =
+        own.filter(|t| !t.family.ends_with(".service") && !t.family.starts_with("bin:"))
+    {
+        off.push((t.host.clone(), t.family.clone()));
+    }
+    for (host, unit) in off {
+        switch_off(installer, state, report, &host, &unit);
+    }
+    if !state.cleanup.is_empty() {
+        checkpoint(state)?;
+    }
+    Ok(())
+}
+
 /// Installs `targets` (timers first). A timer whose service the train also ships is held: its rows and its
 /// checkpoint wait until that service has passed, so a failed service leaves no timer evidence behind.
 /// `checkpoint` is called after every state change so the caller can save it.
@@ -161,10 +204,22 @@ pub fn apply(
     checkpoint: &mut dyn FnMut(&PostState) -> Result<(), String>,
 ) -> Result<PostReport, String> {
     let mut report = PostReport::default();
+    // The state belongs to one plan: a checkpoint of another plan (or of an unknown one) decides nothing.
+    let pid = plan_id(targets);
+    if state.plan.is_empty() {
+        if !state.done.is_empty() || !state.cleanup.is_empty() || state.failed.is_some() {
+            return Err("the state names no plan; fix or clear it".into());
+        }
+        state.plan = pid;
+    } else if state.plan != pid {
+        return Err(format!(
+            "the state belongs to plan {}, this plan is {pid}; clear it for a new plan",
+            state.plan
+        ));
+    }
     // A unit an earlier attempt could not switch off is retried before anything else, and the step goes on
-    // only when it is off.
-    // Every pending entry must be a unit of the current plan before any disable command is issued: a stale or
-    // foreign checkpoint never switches off an unrelated unit.
+    // only when it is off. Every pending (host, unit) pair must be a target of the current plan before any
+    // disable command is issued.
     let planned: BTreeSet<(&str, &str)> = targets
         .iter()
         .map(|t| (t.host.as_str(), t.family.as_str()))
@@ -214,7 +269,10 @@ pub fn apply(
                    checkpoint: &mut dyn FnMut(&PostState) -> Result<(), String>|
      -> Result<(), String> {
         if let Some((timer, run)) = held.remove(service) {
-            write_rows(rows, &timer, &run, &None)?;
+            if let Err(e) = write_rows(rows, &timer, &run, &None) {
+                held.insert(service.to_owned(), (timer, run));
+                return Err(e);
+            }
             if timer.items.is_empty() {
                 report.notes.push(format!(
                     "{} has no item key: no deploy row written",
@@ -231,7 +289,10 @@ pub fn apply(
         let id = name(t);
         if state.done.contains(&id) {
             report.skipped_done.push(id.clone());
-            release(&mut held, &id, rows, state, &mut report, checkpoint)?;
+            if let Err(e) = release(&mut held, &id, rows, state, &mut report, checkpoint) {
+                abort(installer, state, &mut report, &held, None, checkpoint)?;
+                return Err(e);
+            }
             continue;
         }
         // `changed`: the target's install was started, so it may have changed the host.
@@ -270,7 +331,10 @@ pub fn apply(
                 held.insert(service, (t.clone(), run));
             }
             Ok((run, paired)) => {
-                write_rows(rows, t, &run, &paired)?;
+                if let Err(e) = write_rows(rows, t, &run, &paired) {
+                    abort(installer, state, &mut report, &held, Some(t), checkpoint)?;
+                    return Err(e);
+                }
                 if t.items.is_empty() {
                     report
                         .notes
@@ -279,26 +343,25 @@ pub fn apply(
                 state.done.insert(id.clone());
                 checkpoint(state)?;
                 report.deployed.push(id.clone());
-                release(&mut held, &id, rows, state, &mut report, checkpoint)?;
+                if let Err(e) = release(&mut held, &id, rows, state, &mut report, checkpoint) {
+                    abort(installer, state, &mut report, &held, None, checkpoint)?;
+                    return Err(e);
+                }
             }
             Err(why) => {
                 // Only what the GO names and this attempt installed is switched off: the timers held for
                 // their service, and the failed unit itself when it triggers itself (a timer, socket, path).
                 // A failure before the install changed nothing, so it leaves the rerun open.
-                let mut off: Vec<(String, String)> = held
-                    .values()
-                    .map(|(h, _)| (h.host.clone(), h.family.clone()))
-                    .collect();
-                if changed && !t.family.ends_with(".service") && !t.family.starts_with("bin:") {
-                    off.push((t.host.clone(), t.family.clone()));
-                }
-                for (host, unit) in off {
-                    switch_off(installer, state, &mut report, &host, &unit);
-                }
-                if changed || !state.cleanup.is_empty() {
-                    if changed {
-                        state.failed = Some(id.clone());
-                    }
+                abort(
+                    installer,
+                    state,
+                    &mut report,
+                    &held,
+                    changed.then_some(t),
+                    checkpoint,
+                )?;
+                if changed {
+                    state.failed = Some(id.clone());
                     checkpoint(state)?;
                 }
                 report.not_attempted = ordered[i + 1..]

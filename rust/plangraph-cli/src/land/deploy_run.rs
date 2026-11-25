@@ -164,6 +164,9 @@ pub struct PostState {
     /// to go on until they are off.
     #[serde(default)]
     pub cleanup: BTreeSet<(String, String)>,
+    /// The plan this state belongs to (`plan_id`): another plan's state is refused.
+    #[serde(default)]
+    pub plan: String,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

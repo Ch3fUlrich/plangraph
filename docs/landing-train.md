@@ -77,9 +77,11 @@ invocation the install started, which differs from the one shown before; a blank
 already-running unit whose id could not be read before the install proves no restart. A failed first run writes
 no row, switches off what this attempt installed and the plan names (the timers held for their service, a failed
 timer, socket or path itself, never a unit the plan lacks), saves the failure in the state and stops the step. A
-unit that could not be switched off is saved in the state; the next run first checks every saved entry against
-the current plan's hosts and units (an entry it does not name stops the run with no command issued), retries
-them, and goes on only when they are off. Settlement wiring, GO binding and landed-path derivation are other
+unit that could not be switched off is saved in the state, and so is the failed disable of a row-write error (the
+timers held for their service are switched off then too). The state belongs to one plan (a digest of its targets
+and items): another plan's state, or one with entries and no plan, is refused before any command. The next run
+checks every saved (host, unit) pair against a target of the current plan, retries them, and goes on only when
+they are off. Settlement wiring, GO binding and landed-path derivation are other
 keeper items (`plangraph:TRAIN-SETTLE-RUNS-DEPLOY-APPLY`, `plangraph:TRAIN-DEPLOY-DERIVE-LANDED-PATH-ATTRIBUTION`).
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources

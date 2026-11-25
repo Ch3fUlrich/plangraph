@@ -133,35 +133,81 @@ fn a_blank_baseline_invocation_id_of_an_already_active_service_is_never_a_restar
     assert!(r.failed.is_some() && rows.0.borrow().is_empty());
 }
 
-#[test]
-fn a_pending_cleanup_the_current_plan_does_not_name_disables_nothing() {
+/// A state bound to `plan` (the current plan's when `None`, none when `Some("")`) with these pending
+/// cleanups, run against `targets`: the error, the host calls and whether the state was left untouched.
+fn stale_cleanup(
+    plan: Option<&str>,
+    pending: &[(&str, &str)],
+    targets: &[RunTarget],
+) -> (String, usize, bool) {
     let mut host = Host::default();
     host.runs.insert("a.service".into(), plain("inv-1"));
-    let (rows, mut state) = (Rows::default(), PostState::default());
-    // A stale checkpoint: another host, another unit, and one that is only named on another host.
-    state.cleanup.insert(("alpha".into(), "a.service".into()));
-    state
-        .cleanup
-        .insert(("alpha".into(), "unrelated.timer".into()));
-    state.cleanup.insert(("beta".into(), "a.service".into()));
+    host.runs.insert("a.timer".into(), active());
+    host.runs.insert("b.timer".into(), active());
+    let rows = Rows::default();
+    let mut state = PostState {
+        plan: plan.map_or_else(|| plan_id(targets), str::to_owned),
+        cleanup: pending
+            .iter()
+            .map(|(h, u)| (h.to_string(), u.to_string()))
+            .collect(),
+        ..PostState::default()
+    };
     let before = state.clone();
-    let err = run(
-        &[target("a.service", "alpha", &["demo:A"])],
-        &host,
-        &rows,
-        &mut state,
-    )
-    .unwrap_err();
+    let err = run(targets, &host, &rows, &mut state).unwrap_err();
+    let (calls, same) = (host.calls.borrow().len(), state == before);
+    (err, calls, same)
+}
+
+#[test]
+fn a_pending_cleanup_the_current_plan_does_not_name_disables_nothing() {
+    let targets = [target("a.service", "alpha", &["demo:A"])];
+    // Another unit, another host, and a unit the plan does not name at all: no command.
+    for entry in [
+        ("alpha", "unrelated.timer"),
+        ("beta", "a.service"),
+        ("alpha", "a.timer"),
+    ] {
+        let (err, calls, same) = stale_cleanup(None, &[entry], &targets);
+        assert!(
+            err.contains("is not a target of this plan"),
+            "{entry:?}: {err}"
+        );
+        assert_eq!(calls, 0, "{entry:?}");
+        assert!(same, "the stale checkpoint is left for the operator");
+    }
+}
+
+#[test]
+fn a_pending_cleanup_needs_the_exact_host_and_unit_pair_of_one_target() {
+    // alpha appears in the plan (a.service) and b.timer appears in the plan (on beta), never together.
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("b.timer", "beta", &["demo:A"]),
+    ];
+    let (err, calls, same) = stale_cleanup(None, &[("alpha", "b.timer")], &targets);
     assert!(err.contains("is not a target of this plan"), "{err}");
-    assert!(
-        host.calls.borrow().is_empty(),
-        "no command before every entry is validated: {:?}",
-        host.calls.borrow()
-    );
-    assert_eq!(
-        state, before,
-        "the stale checkpoint is left for the operator"
-    );
+    assert_eq!((calls, same), (0, true));
+}
+
+#[test]
+fn a_checkpoint_of_another_plan_sharing_a_host_and_timer_issues_no_command() {
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("a.timer", "alpha", &["demo:A"]),
+    ];
+    let (err, calls, same) = stale_cleanup(Some("another-plan"), &[("alpha", "a.timer")], &targets);
+    assert!(err.contains("belongs to plan another-plan"), "{err}");
+    assert_eq!((calls, same), (0, true));
+    // A checkpoint with cleanup but no recorded plan has an unknown origin.
+    let mut host = Host::default();
+    host.runs.insert("a.timer".into(), active());
+    let rows = Rows::default();
+    let mut state = PostState::default();
+    state.cleanup.insert(("alpha".into(), "a.timer".into()));
+    let err = run(&targets, &host, &rows, &mut state).unwrap_err();
+    assert!(err.contains("names no plan"), "{err}");
+    assert!(host.calls.borrow().is_empty());
 }
 
 #[test]
@@ -170,12 +216,69 @@ fn a_pending_cleanup_of_the_plans_own_units_is_retried_and_cleared() {
     host.runs.insert("a.service".into(), plain("inv-1"));
     host.runs.insert("a.timer".into(), active());
     let (rows, mut state) = (Rows::default(), PostState::default());
-    state.cleanup.insert(("alpha".into(), "a.timer".into()));
     let targets = [
         target("a.service", "alpha", &["demo:A"]),
         target("a.timer", "alpha", &["demo:A"]),
     ];
+    state.plan = plan_id(&targets);
+    state.cleanup.insert(("alpha".into(), "a.timer".into()));
     run(&targets, &host, &rows, &mut state).unwrap();
     assert!(state.cleanup.is_empty());
     assert_eq!(host.calls.borrow()[0], "disable a.timer@alpha");
+}
+
+/// Keeper rows that fail for one unit.
+struct FailingRows(&'static str);
+
+impl RowSink for FailingRows {
+    fn write(&self, row: &DeployRow) -> Result<(), String> {
+        if row.unit == self.0 {
+            return Err("keeper unreachable".into());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_row_write_failure_switches_off_the_held_timers_and_saves_a_failed_disable() {
+    let mut host = Host::default();
+    for unit in ["a.service", "b.service"] {
+        host.runs.insert(unit.into(), plain("inv-1"));
+    }
+    host.runs.insert("a.timer".into(), active());
+    host.runs.insert("b.timer".into(), active());
+    host.disable_fails.borrow_mut().insert("b.timer".into());
+    let mut state = PostState::default();
+    let targets = [
+        target("a.service", "alpha", &["demo:A"]),
+        target("a.timer", "alpha", &["demo:A"]),
+        target("b.service", "alpha", &["demo:B"]),
+        target("b.timer", "alpha", &["demo:B"]),
+    ];
+    let mut saved: Vec<PostState> = vec![];
+    let err = apply(
+        &targets,
+        &gate(),
+        &host,
+        &FailingRows("b.service"),
+        &mut state,
+        &mut |s| {
+            saved.push(s.clone());
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("keeper unreachable"), "{err}");
+    // b.timer was installed for its service, whose rows could not be written: it is switched off, and the
+    // failed disable is saved so the next run retries it.
+    let calls = host.calls.borrow();
+    assert!(calls.contains(&"disable b.timer@alpha".to_string()));
+    assert!(
+        !calls.contains(&"disable a.timer@alpha".to_string()),
+        "a.timer was released"
+    );
+    assert!(state
+        .cleanup
+        .contains(&("alpha".to_string(), "b.timer".to_string())));
+    assert_eq!(saved.last().unwrap().cleanup, state.cleanup);
 }

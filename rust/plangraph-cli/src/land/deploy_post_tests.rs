@@ -266,6 +266,7 @@ fn a_rerun_skips_finished_targets_and_a_recorded_failure_blocks_it() {
         target("a.service", "alpha", &["demo:A"]),
         target("b.service", "alpha", &["demo:B"]),
     ];
+    state.plan = plan_id(&targets);
     let mut saved = vec![];
     let r = apply(&targets, &gate(), &host, &rows, &mut state, &mut |s| {
         saved.push(s.clone());
