@@ -121,10 +121,10 @@ fn terminal(item: &Value) -> Result<bool> {
     }
 }
 /// Writes `task` over its row on disk, so the key of an item about to be created is never only in memory.
-fn persist_row(path: &std::path::Path, task: &Task) -> Result<()> {
-    let mut rows = super::load_tasks(path)?;
-    rows.insert(task.key.clone(), task.clone());
-    super::save_tasks(path, &rows)
+pub(super) fn persist_row(path: &std::path::Path, task: &Task) -> Result<()> {
+    super::update_tasks(path, |rows| {
+        rows.insert(task.key.clone(), task.clone());
+    })
 }
 #[cfg(test)]
 fn deliver(keeper: &mut impl Keeper, task: &mut Task) -> Result<bool> {

@@ -6,6 +6,8 @@ pub mod batch_failure;
 mod batch_failure_tests;
 pub(crate) mod github;
 mod keeper;
+#[cfg(test)]
+mod ledger_tests;
 pub(crate) mod logs;
 pub mod main_freeze;
 pub mod main_freeze_gh;
@@ -94,6 +96,19 @@ fn load_tasks(path: &Path) -> Result<BTreeMap<String, Task>> {
         Err(_) => return Err("cannot read tasks".into()),
     }
     Ok(tasks)
+}
+/// Read-modify-write of the task ledger under its own lock. The scan, the sweep, the main-freeze handler
+/// and the keeper checkpoint each hold a different pass lock, so every change to `tasks.jsonl` goes through
+/// here and none writes back a copy it read before another changed the file.
+fn update_tasks<T>(
+    path: &Path,
+    change: impl FnOnce(&mut BTreeMap<String, Task>) -> T,
+) -> Result<T> {
+    let _lock = atomic::lock(path).map_err(|e| e.to_string())?;
+    let mut tasks = load_tasks(path)?;
+    let out = change(&mut tasks);
+    save_tasks(path, &tasks)?;
+    Ok(out)
 }
 fn number(value: &Value, field: &str) -> Result<u64> {
     value[field]
@@ -212,11 +227,14 @@ struct Head {
     pr: u64,
     owner_only: bool,
     branch: String,
+    /// The repository the head branch lives in (differs from the base for a fork).
+    source: Option<String>,
 }
 
 /// The pull requests (or main) a run belongs to. A push to main is main's alone, whatever pull requests
-/// share its commit. Any other run belongs to the pull requests it names (`pull_requests`), else to the
-/// only pull request on its commit, else to those whose branch it ran on.
+/// share its commit. Any other run belongs to the pull requests it names (`pull_requests`); a run that
+/// names none belongs to the one pull request on its commit whose head branch and head repository it ran
+/// on, and to none when that is not exactly one (two forks can share a branch name and a commit).
 fn targets_of(
     run: &Value,
     sha: &str,
@@ -231,18 +249,31 @@ fn targets_of(
         .as_array()
         .map(|prs| prs.iter().filter_map(|pr| pr["number"].as_u64()).collect())
         .unwrap_or_default();
-    let matched = |head: &&Head| {
-        if !named.is_empty() {
-            named.contains(&head.pr)
-        } else if on_commit.len() == 1 {
-            true
+    let chosen: Vec<&Head> = if !named.is_empty() {
+        on_commit
+            .iter()
+            .filter(|head| named.contains(&head.pr))
+            .collect()
+    } else {
+        let ran_in = run["head_repository"]["full_name"].as_str();
+        let same: Vec<&Head> = on_commit
+            .iter()
+            .filter(|head| {
+                run["head_branch"].as_str() == Some(head.branch.as_str())
+                    && match (ran_in, head.source.as_deref()) {
+                        (Some(ran), Some(source)) => ran == source,
+                        _ => true,
+                    }
+            })
+            .collect();
+        if same.len() == 1 {
+            same
         } else {
-            run["head_branch"].as_str() == Some(head.branch.as_str())
+            Vec::new()
         }
     };
-    on_commit
-        .iter()
-        .filter(matched)
+    chosen
+        .into_iter()
         .map(|head| (Some(head.pr), head.owner_only))
         .collect()
 }
@@ -311,10 +342,12 @@ fn scan_with_owner(
         let sha = text(&pr["head"], "sha")?.to_owned();
         // One commit can head several pull requests (a train and an ordinary one): each keeps its entry.
         let branch = pr["head"]["ref"].as_str().unwrap_or_default().to_owned();
+        let source = pr["head"]["repo"]["full_name"].as_str().map(str::to_owned);
         heads.entry(sha).or_insert_with(Vec::new).push(Head {
             pr: number(&pr, "number")?,
             owner_only: lane == sweep::Lane::Owner,
             branch,
+            source,
         });
     }
     let workflow = "actions/workflows/tests.yml/runs?status=completed&per_page=100";
@@ -523,7 +556,7 @@ fn store_task(
 ) -> Result<bool> {
     let key = task.key.clone();
     tasks.insert(key.clone(), task.clone());
-    save_tasks(path, tasks)?;
+    update_tasks(path, |rows| rows.insert(key.clone(), task.clone()))?;
     let mut pending = false;
     if !task.keeper_defined {
         match define(&mut task) {
@@ -538,8 +571,8 @@ fn store_task(
             }
         }
     }
-    tasks.insert(key, task);
-    save_tasks(path, tasks)?;
+    tasks.insert(key.clone(), task.clone());
+    update_tasks(path, |rows| rows.insert(key, task))?;
     Ok(pending)
 }
 

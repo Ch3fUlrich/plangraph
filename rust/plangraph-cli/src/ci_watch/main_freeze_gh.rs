@@ -134,10 +134,9 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
             .and_then(|t| t.keeper_key.clone())
             .unwrap_or_else(|| key.to_owned());
         (self.close)(&keeper_key)?;
-        let path = self.dir.join("tasks.jsonl");
-        let mut tasks = super::load_tasks(&path)?;
-        tasks.remove(key);
-        super::save_tasks(&path, &tasks)
+        super::update_tasks(&self.dir.join("tasks.jsonl"), |tasks| {
+            tasks.remove(key);
+        })
     }
 }
 

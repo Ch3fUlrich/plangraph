@@ -1,6 +1,6 @@
 //! Cancels the CI-FIX items of pull requests that closed, turned into a probe, or moved to a new head.
 use super::github::Github;
-use super::{load_tasks, save_tasks, Result, Task};
+use super::{load_tasks, update_tasks, Result, Task};
 use crate::atomic;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -97,7 +97,8 @@ pub(super) fn sweep(
         }
     }
     let mut output = Vec::new();
-    let mut changed = false;
+    let mut removed: Vec<String> = Vec::new();
+    let mut heads: Vec<(String, String)> = Vec::new();
     for task in tasks.clone().into_values() {
         let Some(pr) = task.pr else { continue };
         let reason = match live.get(&pr) {
@@ -111,7 +112,7 @@ pub(super) fn sweep(
                 if task.sha.is_none() && then.is_some() && !dry {
                     if let Some(row) = tasks.get_mut(&task.key) {
                         row.sha = then.clone();
-                        changed = true;
+                        heads.extend(then.clone().map(|sha| (task.key.clone(), sha)));
                     }
                 }
                 match then {
@@ -139,13 +140,24 @@ pub(super) fn sweep(
         let done = closed.iter().all(|closed| *closed);
         if done {
             tasks.remove(&task.key);
-            changed = true;
+            removed.push(task.key.clone());
         } else {
             output.push(format!("cancel pending: {}", task.key));
         }
     }
-    if changed {
-        save_tasks(&path, &tasks)?;
+    if !removed.is_empty() || !heads.is_empty() {
+        // Only this pass's changes are applied, to the ledger as it is now (another pass may have
+        // changed other rows while the keeper calls ran).
+        update_tasks(&path, |rows| {
+            for (key, sha) in heads {
+                if let Some(row) = rows.get_mut(&key).filter(|row| row.sha.is_none()) {
+                    row.sha = Some(sha);
+                }
+            }
+            for key in removed {
+                rows.remove(&key);
+            }
+        })?;
     }
     Ok(output)
 }

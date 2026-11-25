@@ -156,3 +156,56 @@ fn a_run_without_a_pull_request_list_is_matched_by_its_branch() {
     assert_eq!(defined, [Some(6)]);
     assert!(load_failures(temp.path()).unwrap().is_empty());
 }
+
+fn fork_pr(number: u64, sha: &str, branch: &str, repo: &str) -> Value {
+    json!({"number": number, "title": "Fix", "draft": false,
+        "head": {"sha": sha, "ref": branch, "repo": {"full_name": repo}}})
+}
+
+/// Two forks can share a branch name and a commit: a run that names no pull request belongs to the one
+/// whose head repository it ran in, and to none when that cannot be told.
+#[test]
+fn a_run_without_pull_request_metadata_needs_the_branch_and_the_head_repository() {
+    let both = vec![
+        fork_pr(5, "same", "fix", "alice/r"),
+        fork_pr(6, "same", "fix", "bob/r"),
+    ];
+    let mut run = run(10, "same", "fix", "pull_request", None, "failure");
+    // Ran in bob's fork: only #6.
+    run["head_repository"] = json!({"full_name": "bob/r"});
+    let temp = tempfile::tempdir().unwrap();
+    let mut world = Listed {
+        prs: both.clone(),
+        runs: vec![run.clone()],
+    };
+    let (defined, _) = watch(&mut world, temp.path());
+    assert_eq!(defined, [Some(6)]);
+    // No head repository on the run and two pull requests share branch and commit: unassigned.
+    run.as_object_mut().unwrap().remove("head_repository");
+    let temp = tempfile::tempdir().unwrap();
+    let mut world = Listed {
+        prs: both,
+        runs: vec![run],
+    };
+    let (defined, rows) = watch(&mut world, temp.path());
+    assert!(defined.is_empty(), "{rows:?}");
+    assert!(tasks(temp.path()).is_empty());
+}
+
+#[test]
+fn the_only_pull_request_on_a_commit_does_not_take_a_run_of_another_branch() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut world = Listed {
+        prs: vec![live(6, "shared")],
+        runs: vec![run(
+            10,
+            "shared",
+            "other-branch",
+            "pull_request",
+            None,
+            "failure",
+        )],
+    };
+    let (defined, rows) = watch(&mut world, temp.path());
+    assert!(defined.is_empty(), "{rows:?}");
+}
