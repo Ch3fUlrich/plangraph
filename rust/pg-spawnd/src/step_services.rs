@@ -22,6 +22,9 @@ pub trait Keeper {
 pub struct CiRun {
     /// The workflow's name.
     pub name: String,
+    /// The event that started the run (`pull_request`, `workflow_dispatch`, `push`...): runs of
+    /// different events are independent evidence for one head.
+    pub event: String,
     pub id: u64,
     pub attempt: u32,
     /// `queued`, `in_progress` or `completed`.
@@ -34,6 +37,9 @@ pub trait CiRuns {
     /// Every workflow run of exactly `head` that belongs to pull request `pr`, latest attempt
     /// of each.
     fn runs(&mut self, head: &str, pr: u64) -> Result<Vec<CiRun>, String>;
+    /// Whether `pr` is, right now, a draft pull request from a `lane/*` branch: the part whose
+    /// workflow jobs are skipped by design.
+    fn draft_lane_part(&mut self, pr: u64) -> Result<bool, String>;
 }
 
 /// The landing train desk: registers the green part and returns the train it joined.
@@ -71,12 +77,14 @@ pub enum Reading {
 /// Conclusions that do not make a head red: the run did what it was asked to.
 const PASSING: [&str; 3] = ["success", "skipped", "neutral"];
 
-/// The runs that count: the latest run of each workflow. An older run of the same workflow
-/// (an earlier push, a superseded dispatch) is history, not the state of the head.
+/// The runs that count: the latest run of each workflow and event. An older run of the same
+/// workflow and event (an earlier push) is history, but a run of another event is independent
+/// evidence for the head and never hides it (the CI watcher selects per head and event too).
 fn current(runs: &[CiRun]) -> Vec<&CiRun> {
     let mut latest: Vec<&CiRun> = Vec::new();
     for run in runs {
-        match latest.iter_mut().find(|seen| seen.name == run.name) {
+        let same = |seen: &&mut &CiRun| seen.name == run.name && seen.event == run.event;
+        match latest.iter_mut().find(same) {
             Some(seen) if seen.id < run.id => *seen = run,
             Some(_) => {}
             None => latest.push(run),
@@ -117,17 +125,19 @@ pub fn classify(runs: &[CiRun], required: &[String], draft_part: bool) -> Readin
     if runs.iter().any(|run| conclusion(run).is_none()) {
         return Reading::Pending("a CI run has not completed");
     }
-    // Green speaks for the required workflows: each has a current run that passed.
+    // Green speaks for the required workflows: each has current runs and every one passed. The
+    // skipped run of a draft lane part counts only for its own `pull_request` event.
     for name in required {
-        let Some(run) = runs.iter().find(|run| &run.name == name) else {
+        let of_name: Vec<&&CiRun> = runs.iter().filter(|run| &run.name == name).collect();
+        if of_name.is_empty() {
             return Reading::Pending("a required workflow has no run for the head yet");
-        };
-        let passed = match run.conclusion.as_deref() {
+        }
+        let passed = |run: &CiRun| match run.conclusion.as_deref() {
             Some("success") => true,
-            Some("skipped" | "neutral") => draft_part,
+            Some("skipped" | "neutral") => draft_part && run.event == "pull_request",
             _ => false,
         };
-        if !passed {
+        if !of_name.iter().all(|run| passed(run)) {
             return Reading::Unproven(format!("required workflow {name} has no passing run"));
         }
     }
@@ -150,8 +160,6 @@ pub struct ServiceSteps<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> {
     pub wait: CiWait,
     /// Workflow names that must have passed for the head to be green.
     pub required: Vec<String>,
-    /// The pull request is a draft `lane/*` part: see `classify`.
-    pub draft_part: bool,
     /// Called between two looks at the CI; a test passes a no-op.
     pub sleep: Box<dyn FnMut(Duration)>,
     pub rest: A,
@@ -178,7 +186,11 @@ impl<K: Keeper, C: CiRuns, T: TrainDesk, A: StepActions> StepActions for Service
             if look > 0 {
                 (self.sleep)(self.wait.interval);
             }
-            match classify(&self.ci.runs(head, pr)?, &self.required, self.draft_part) {
+            let runs = self.ci.runs(head, pr)?;
+            // Asked of the pull request itself each look: a reused or re-marked PR may not be
+            // the draft part the branch name suggests.
+            let draft_part = self.ci.draft_lane_part(pr)?;
+            match classify(&runs, &self.required, draft_part) {
                 Reading::Done(class) => return Ok(class),
                 Reading::Unproven(why) => return Err(format!("CI of {head}: {why}")),
                 Reading::Pending(why) => last = why,

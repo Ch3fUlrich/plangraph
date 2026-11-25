@@ -185,3 +185,21 @@ fn a_request_for_changes_is_no_receipt_for_a_push() {
     let error = steps.verify_review(&head, &changes.review).unwrap_err();
     assert!(error.contains("no recorded accepting review"), "{error}");
 }
+
+#[test]
+fn a_row_that_says_accept_over_a_kept_request_for_changes_authorizes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut steps = agents(Fake::default(), dir.path());
+    let head = sha('1');
+    let rejected = changes(&mut steps, &head, 1);
+    // The steps file is rewritten so the row reads ACCEPT; the kept review run still says
+    // REQUEST_CHANGES, and the kept run is the receipt.
+    let forged = pg_worker_core::batch_steps::Review {
+        verdict: pg_worker_core::batch_steps::Verdict::Accept,
+        review: rejected.review.clone(),
+    };
+    std::fs::remove_file(&steps.steps).unwrap();
+    commit(&steps.steps, &head, &forged);
+    let error = steps.verify_review(&head, &rejected.review).unwrap_err();
+    assert!(error.contains("no recorded accepting review"), "{error}");
+}

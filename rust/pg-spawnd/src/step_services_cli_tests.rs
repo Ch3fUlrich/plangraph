@@ -8,6 +8,7 @@ const HEAD: &str = "1111111111111111111111111111111111111111";
 fn run(id: u64, status: &str, conclusion: Option<&str>) -> CiRun {
     CiRun {
         name: "CI".into(),
+        event: "pull_request".into(),
         id,
         attempt: 1,
         status: status.into(),
@@ -192,10 +193,10 @@ fn keeper_cli_refuses_a_row_without_an_epoch() {
 #[test]
 fn gh_ci_reads_only_the_runs_of_this_pull_request() {
     let mut script = Script::new(vec![Ok(r#"{"workflow_runs":[
-            {"id":5,"name":"CI","run_attempt":2,"status":"completed","conclusion":"success","pull_requests":[{"number":12}]},
-            {"id":6,"name":"CI","run_attempt":1,"status":"queued","conclusion":null,"pull_requests":[{"number":12}]},
-            {"id":7,"name":"CI","run_attempt":1,"status":"completed","conclusion":"failure","pull_requests":[{"number":99}]},
-            {"id":8,"name":"CI","run_attempt":1,"status":"completed","conclusion":"success","pull_requests":[]}]}"#)]);
+            {"id":5,"name":"CI","event":"pull_request","run_attempt":2,"status":"completed","conclusion":"success","pull_requests":[{"number":12}]},
+            {"id":6,"name":"CI","event":"pull_request","run_attempt":1,"status":"queued","conclusion":null,"pull_requests":[{"number":12}]},
+            {"id":7,"name":"CI","event":"pull_request","run_attempt":1,"status":"completed","conclusion":"failure","pull_requests":[{"number":99}]},
+            {"id":8,"name":"CI","event":"pull_request","run_attempt":1,"status":"completed","conclusion":"success","pull_requests":[]}]}"#)]);
     let mut ci = GhCi {
         runner: &mut script,
         dir: ".".into(),
@@ -272,4 +273,53 @@ fn train_command_without_a_command_fails_with_a_reason() {
         .join(HEAD, 1, 1, 1)
         .unwrap_err()
         .contains("no train join command"));
+}
+
+#[test]
+fn gh_ci_reads_whether_the_pull_request_is_a_draft_lane_part() {
+    let cases = [
+        (r#"{"draft":true,"head":{"ref":"lane/batch-1"}}"#, true),
+        (r#"{"draft":false,"head":{"ref":"lane/batch-1"}}"#, false),
+        (r#"{"draft":true,"head":{"ref":"batch/x"}}"#, false),
+    ];
+    for (pull, expected) in cases {
+        let mut script = Script::new(vec![Ok(pull)]);
+        let mut ci = GhCi {
+            runner: &mut script,
+            dir: ".".into(),
+            repo: "demo/repo".into(),
+        };
+        assert_eq!(ci.draft_lane_part(12).unwrap(), expected, "{pull}");
+        assert_eq!(script.seen[0], ["gh", "api", "repos/demo/repo/pulls/12"]);
+    }
+}
+
+#[test]
+fn a_kill_during_the_cleanup_of_a_partial_grant_keeps_the_key() {
+    let key_file = key_file();
+    let mixed = r#"{"results":[{"key":"demo:A","epoch":3},{"key":"demo:B","error":"claimed"}]}"#;
+    // The release of demo:A does not finish (the process is killed, or the release fails).
+    let mut first = Script::new(vec![Ok(mixed), Err("killed")]);
+    let mut keeper = KeeperCli {
+        runner: &mut first,
+        dir: ".".into(),
+        prefix: vec!["pg".into()],
+        key_file: key_file.clone(),
+    };
+    assert!(keeper.claim_batch(&keys()).is_err());
+    assert!(
+        key_file.exists(),
+        "the grant of demo:A is not yet given back"
+    );
+    // The next process asks with the same key, so the keeper replays the grant it holds.
+    let mut second = Script::new(vec![Ok(mixed), Ok("{}")]);
+    let mut again = KeeperCli {
+        runner: &mut second,
+        dir: ".".into(),
+        prefix: vec!["pg".into()],
+        key_file: key_file.clone(),
+    };
+    assert!(again.claim_batch(&keys()).is_err());
+    assert_eq!(first.seen[0][1], second.seen[0][1]);
+    assert!(!key_file.exists(), "dropped once the cleanup is confirmed");
 }

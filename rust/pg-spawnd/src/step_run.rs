@@ -128,6 +128,58 @@ pub(crate) fn limits() -> Limits {
     }
 }
 
+/// A file beside the steps file: the steps file's whole name plus `suffix`, so the sidecar is
+/// never the steps file itself (`with_extension` would make `a.claim-key` its own sidecar).
+pub(crate) fn sidecar(steps: &Path, suffix: &str) -> PathBuf {
+    let mut name = steps.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    steps.with_file_name(name)
+}
+
+/// The immutable inputs of the batch, saved before the first step and compared on every
+/// start. The rows alone cannot bind a claim-only prefix, which holds no base or brief.
+fn bind_inputs(args: &Args, worktree: Option<&Path>) -> Result<(), String> {
+    let inputs = &args.inputs;
+    let now = json!({
+        "run_id": args.run_id, "repo": inputs.repo, "batch_key": inputs.batch_key,
+        "items": inputs.items, "base": inputs.base, "brief": inputs.brief,
+        "worktree": worktree.map(|path| path.display().to_string()),
+    });
+    let path = sidecar(&args.steps, ".inputs");
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let saved: Value = serde_json::from_slice(&bytes)
+                .map_err(|err| format!("saved inputs {}: {err}", path.display()))?;
+            for field in [
+                "run_id",
+                "repo",
+                "batch_key",
+                "items",
+                "base",
+                "brief",
+                "worktree",
+            ] {
+                if saved[field] != now[field] {
+                    return Err(format!(
+                        "the saved steps were made for other {field} ({}): {} is not {}",
+                        path.display(),
+                        saved[field],
+                        now[field]
+                    ));
+                }
+            }
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let tmp = sidecar(&args.steps, ".inputs.tmp");
+            std::fs::write(&tmp, now.to_string())
+                .and_then(|()| std::fs::rename(&tmp, &path))
+                .map_err(|err| format!("inputs not saved at {}: {err}", path.display()))
+        }
+        Err(err) => Err(format!("saved inputs {}: {err}", path.display())),
+    }
+}
+
 /// Refuse a saved list that was made for other inputs. The repo and batch key are checked by
 /// the runner; the items (journal rows and claims are keyed by them), the base, the brief and,
 /// when known, the worktree of this native run are immutable inputs of the batch, so a
@@ -238,6 +290,7 @@ pub(crate) fn drive(
     actions: &mut dyn StepActions,
     out: &mut dyn std::io::Write,
 ) -> Result<i32, String> {
+    bind_inputs(args, worktree)?;
     let mut runner = load(&args.steps, args.inputs.clone(), worktree)?;
     let mut sink = log_for(args);
     let outcome = runner.run(actions, &mut sink, &mut clock);
@@ -250,7 +303,7 @@ pub(crate) fn drive(
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn std::io::Write) -> Result<(), String> {
     let args = parse(&args)?;
     let state = crate::state::resolve_state(args.state.as_deref(), |key| std::env::var_os(key))?;
-    let findings = args.steps.with_extension("findings");
+    let findings = sidecar(&args.steps, ".findings");
     let host = crate::native_writer_host::step_host(
         &state,
         &args.run_id,

@@ -1,3 +1,5 @@
 `pg-spawnd step-run RUN_ID --steps FILE --repo OWNER/NAME --batch-key KEY --items A,B --base SHA --brief FILE --train-cmd ARGV --ci-workflow NAME` starts or resumes a batch step list from its saved steps file. The checkout, gates and review state are the native writer host's, so one fast-checks stamp serves checks, review and push, and the review state and the round stop rule survive a restart. It exits 0 when the part joined a train, 3 on red CI and 1 otherwise, and prints one JSON line with the outcome.
 
 A saved steps file is refused unless its items, base, brief and worktree are those of this call and native run. The push verifies a recorded accepting review of the exact head, not only the stamp. The clean-tree check rejects every tracked change and exempts only untracked review artifacts.
+
+The run, repo, batch key, items, base, brief and worktree are saved in a sidecar before the first step and compared on every start; sidecars are the steps file name plus a suffix, never the steps file itself. The push takes the review verdict from the kept review run, so a steps row that disagrees with it authorizes nothing.

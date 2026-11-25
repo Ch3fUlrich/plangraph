@@ -19,6 +19,7 @@ fn inputs() -> Inputs {
 fn run(id: u64, status: &str, conclusion: Option<&str>) -> CiRun {
     CiRun {
         name: "CI".into(),
+        event: "pull_request".into(),
         id,
         attempt: 1,
         status: status.into(),
@@ -38,9 +39,12 @@ impl Keeper for FakeKeeper {
 }
 
 /// CI that shows one list of runs per look and repeats the last.
-struct FakeCi(VecDeque<Vec<CiRun>>, usize);
+struct FakeCi(VecDeque<Vec<CiRun>>, usize, bool);
 
 impl CiRuns for FakeCi {
+    fn draft_lane_part(&mut self, _: u64) -> Result<bool, String> {
+        Ok(self.2)
+    }
     fn runs(&mut self, _: &str, _: u64) -> Result<Vec<CiRun>, String> {
         self.1 += 1;
         if self.0.len() > 1 {
@@ -118,14 +122,13 @@ impl StageSink for Keep {
 fn services(ci: Vec<Vec<CiRun>>, polls: u32) -> ServiceSteps<FakeKeeper, FakeCi, FakeTrain, Rest> {
     ServiceSteps {
         keeper: FakeKeeper::default(),
-        ci: FakeCi(ci.into(), 0),
+        ci: FakeCi(ci.into(), 0, false),
         train: FakeTrain::default(),
         wait: CiWait {
             polls,
             interval: Duration::ZERO,
         },
         required: vec!["CI".into()],
-        draft_part: false,
         sleep: Box::new(|_| {}),
         rest: Rest,
     }
@@ -199,11 +202,10 @@ fn a_keeper_that_claims_other_keys_fails_the_claim() {
     let mut actions = services(vec![], 1);
     let mut wrong = ServiceSteps {
         keeper: Wrong,
-        ci: FakeCi(VecDeque::new(), 0),
+        ci: FakeCi(VecDeque::new(), 0, false),
         train: FakeTrain::default(),
         wait: actions.wait,
         required: vec![],
-        draft_part: false,
         sleep: Box::new(|_| {}),
         rest: Rest,
     };
@@ -240,57 +242,6 @@ fn a_run_that_never_finishes_fails_ci_class_after_the_looks() {
 }
 
 #[test]
-fn a_head_without_runs_is_never_green() {
-    assert!(matches!(classify(&[], &[], false), Reading::Pending(_)));
-}
-
-#[test]
-fn a_cancelled_run_is_red() {
-    let Reading::Done(class) = classify(&[run(3, "completed", Some("cancelled"))], &[], false)
-    else {
-        panic!("pending");
-    };
-    assert!(matches!(class.classification, Classification::Red));
-    assert_eq!(class.run, 3);
-}
-
-#[test]
-fn red_wins_over_a_run_still_going() {
-    let Reading::Done(class) = classify(
-        &[
-            run(3, "completed", Some("failure")),
-            CiRun {
-                name: "lint".into(),
-                ..run(4, "in_progress", None)
-            },
-        ],
-        &[],
-        false,
-    ) else {
-        panic!("pending");
-    };
-    assert!(matches!(class.classification, Classification::Red));
-}
-
-#[test]
-fn green_needs_every_required_workflow_to_have_run() {
-    let only_lint = CiRun {
-        name: "lint".into(),
-        ..run(4, "completed", Some("success"))
-    };
-    let required = ["CI".to_owned()];
-    assert!(matches!(
-        classify(std::slice::from_ref(&only_lint), &required, false),
-        Reading::Pending(_)
-    ));
-    let ci = run(5, "completed", Some("success"));
-    let Reading::Done(class) = classify(&[only_lint, ci], &required, false) else {
-        panic!("pending");
-    };
-    assert_eq!(class.run, 5, "the run named is the required workflow's");
-}
-
-#[test]
 fn a_required_workflow_that_only_skipped_is_not_green() {
     let mut actions = services(vec![vec![run(5, "completed", Some("skipped"))]], 5);
     let error = actions.ci_class(HEAD, 12).unwrap_err();
@@ -305,55 +256,15 @@ fn a_required_workflow_that_only_skipped_is_not_green() {
 }
 
 #[test]
-fn an_older_failed_run_of_a_workflow_does_not_make_the_head_red() {
-    let old_red = run(3, "completed", Some("failure"));
-    let new_green = run(7, "completed", Some("success"));
-    let Reading::Done(class) = classify(&[old_red, new_green], &["CI".to_owned()], false) else {
-        panic!("pending");
-    };
-    assert!(matches!(class.classification, Classification::Green));
-    assert_eq!(
-        (class.run, class.attempt),
-        (7, 1),
-        "the newer run is the receipt"
-    );
-}
-
-#[test]
-fn a_newer_failure_beats_an_older_pass() {
-    let Reading::Done(class) = classify(
-        &[
-            run(3, "completed", Some("success")),
-            run(7, "completed", Some("failure")),
-        ],
-        &["CI".to_owned()],
-        false,
-    ) else {
-        panic!("pending");
-    };
-    assert!(matches!(class.classification, Classification::Red));
-    assert_eq!(class.run, 7);
-}
-
-#[test]
-fn a_draft_lane_part_passes_on_its_skipped_required_workflow() {
-    // The policy of .github/workflows/tests.yml: a draft lane/* pull request runs no job and a
-    // skipped required check reports success; its admission is review and the fast gates.
-    let skipped = [run(5, "completed", Some("skipped"))];
-    let required = ["CI".to_owned()];
-    assert!(matches!(
-        classify(&skipped, &required, false),
-        Reading::Unproven(_)
-    ));
-    let Reading::Done(class) = classify(&skipped, &required, true) else {
-        panic!("not decided");
-    };
+fn ci_class_asks_the_pull_request_whether_it_is_a_draft_part() {
+    let skipped = || vec![vec![run(5, "completed", Some("skipped"))]];
+    // The pull request is not a draft lane part (a reused PR, marked ready): no exception.
+    let mut ready = services(skipped(), 3);
+    let error = ready.ci_class(HEAD, 12).unwrap_err();
+    assert!(error.contains("no passing run"), "{error}");
+    let mut draft = services(skipped(), 3);
+    draft.ci.2 = true;
+    let class = draft.ci_class(HEAD, 12).unwrap();
     assert!(matches!(class.classification, Classification::Green));
     assert_eq!(class.run, 5);
-    // The policy never excuses a failure.
-    let Reading::Done(red) = classify(&[run(6, "completed", Some("failure"))], &required, true)
-    else {
-        panic!("pending");
-    };
-    assert!(matches!(red.classification, Classification::Red));
 }

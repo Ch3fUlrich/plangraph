@@ -35,12 +35,6 @@ pub(crate) fn branch_of(args: &Args) -> String {
         .unwrap_or_else(|| format!("lane/{}", args.inputs.batch_key))
 }
 
-/// `publish` opens a draft pull request, and a draft from a `lane/*` branch is a part: its
-/// workflow jobs are skipped by design (`.github/workflows/tests.yml`; D-6773).
-pub(crate) fn is_draft_part(branch: &str) -> bool {
-    branch.starts_with("lane/")
-}
-
 pub(crate) fn production(args: &Args, host: StepHost) -> Production {
     let inputs = &args.inputs;
     let branch = branch_of(args);
@@ -64,7 +58,7 @@ pub(crate) fn production(args: &Args, host: StepHost) -> Production {
                 .keeper_cmd
                 .clone()
                 .unwrap_or_else(|| vec!["pg".into(), "--json".into()]),
-            key_file: args.steps.with_extension("claim-key"),
+            key_file: crate::step_run::sidecar(&args.steps, ".claim-key"),
         },
         ci: GhCi {
             runner: SystemRunner,
@@ -78,7 +72,6 @@ pub(crate) fn production(args: &Args, host: StepHost) -> Production {
         },
         wait: CiWait::default(),
         required: args.ci_workflows.clone(),
-        draft_part: is_draft_part(&branch),
         sleep: Box::new(std::thread::sleep),
         rest: host.agents,
     };
