@@ -11,6 +11,9 @@ use std::{
 pub(crate) struct Dispatch {
     pub head: String,
     pub binding: Option<Value>,
+    /// The merge-base diff and path subset of a seat that has no full-diff binding (an inline
+    /// seat), recorded at dispatch and re-verified by the classifier at completion.
+    pub scope: Option<Value>,
 }
 
 impl Dispatch {
@@ -35,7 +38,16 @@ impl Dispatch {
                 binding(cwd, &base, &head)
             })
             .transpose()?;
-        Ok(Self { head, binding })
+        let scope = if binding.is_none() {
+            scope(cwd, &head, reference)
+        } else {
+            None
+        };
+        Ok(Self {
+            head,
+            binding,
+            scope,
+        })
     }
 
     pub fn apply(&self, metadata: &mut Value) {
@@ -43,6 +55,9 @@ impl Dispatch {
         if let Some(binding) = &self.binding {
             metadata["review_base"] = binding["base_sha"].clone();
             metadata["review_binding"] = binding.clone();
+        }
+        if let Some(scope) = &self.scope {
+            metadata["review_scope"] = scope.clone();
         }
     }
 
@@ -135,6 +150,61 @@ fn diff_command(cwd: &Path) -> Command {
         command.process_group(0);
     }
     command
+}
+
+/// The files of `base...head` limited to the card's path subset, with the digest of their sorted
+/// names (`plangraph.review.verdict.diff_scope` recomputes it): the diff an inline seat is shown.
+fn scope(cwd: &Path, head: &str, reference: &Value) -> Option<Value> {
+    let is_sha = |value: &str| value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit());
+    let base = reference
+        .get("base_sha")
+        .or_else(|| reference.get("base"))?
+        .as_str()?;
+    let base = git(
+        cwd,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ],
+    )
+    .ok()?;
+    if !is_sha(&base) || !is_sha(head) {
+        return None;
+    }
+    let paths: Option<Vec<String>> = reference["paths"].as_array().map(|paths| {
+        paths
+            .iter()
+            .filter_map(|path| path.as_str().map(str::to_owned))
+            .collect()
+    });
+    let child = diff_command(cwd)
+        .args(["--name-only", "-z", &format!("{base}...{head}"), "--"])
+        .args(
+            paths
+                .iter()
+                .flatten()
+                .map(|path| format!(":(literal){path}")),
+        )
+        .spawn()
+        .ok()?;
+    let names =
+        crate::prompt_git::collect_diff(child, 16 * 1024 * 1024, Duration::from_secs(10)).ok()?;
+    let mut files: Vec<&[u8]> = names
+        .split(|byte| *byte == 0)
+        .filter(|n| !n.is_empty())
+        .collect();
+    files.sort_unstable();
+    let mut digest = Sha256::new();
+    for file in files {
+        digest.update(file);
+        digest.update([0]);
+    }
+    Some(
+        json!({"mode": "merge-base", "base": base, "head": head, "paths": paths,
+                "files_sha256": format!("{:x}", digest.finalize())}),
+    )
 }
 
 fn binding(cwd: &Path, base: &str, head: &str) -> Result<Value, ToolError> {

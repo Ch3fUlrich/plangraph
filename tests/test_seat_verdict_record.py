@@ -389,7 +389,7 @@ BRIEF_MED = "PROCESS src/plangraph/review/review_brief.md:26 field=public_symbol
 EMPTY_BRIEF = "=== ITEM CONTEXT\nItem key: demo:A\nChanged public symbols: unavailable (request before acceptance)\n"
 
 
-def bound_record(tmp_path, name, reply, digest=None, touch_brief=False, bad_binding=False):
+def bound_record(tmp_path, name, reply, digest=None, touch_brief=False, bad_binding=False, inline=False):
     """A record-derived seat run bound to a real two-commit repository diff (src/a.py)."""
     import hashlib
     import subprocess
@@ -415,9 +415,13 @@ def bound_record(tmp_path, name, reply, digest=None, touch_brief=False, bad_bind
     prompt = EMPTY_BRIEF + "diff --git a/src/a.py b/src/a.py\n"  # the prompt text would put src/a.py in scope
     binding = {"base_sha": base, "head_sha": head,
                "diff_sha256": "0" * 64 if bad_binding else diff_binding(base, head, str(repo))[0]}
+    extra = dict(review_binding=binding, completion={"head_sha": head, "review_binding": binding})
+    if inline:  # an inline seat: no full-diff binding, a recorded merge-base scope limited to src/a.py
+        from plangraph.review.verdict import diff_scope
+        extra = {"completion": {"head_sha": head}, "review_scope": {"mode": "merge-base", "base": base, "head": head, "paths": ["src/a.py"],
+                                  "files_sha256": diff_scope(base, head, ["src/a.py"], str(repo))[0]}}
     argv = record_dir(
-        tmp_path, name, live_log=reply, head=head, cwd=str(repo), head_sha=head,
-        review_binding=binding, completion={"head_sha": head, "review_binding": binding},
+        tmp_path, name, live_log=reply, head=head, cwd=str(repo), head_sha=head, **extra,
         prompt_sha256=digest or hashlib.sha256(prompt.encode()).hexdigest(),
         request={"verdict_binding": {"key": "demo:A", "epoch": 1, "round": 1, "head": head, "seat_run": name}})
     seat_dir = Path(argv[argv.index("--seat-dir") + 1])
@@ -453,3 +457,29 @@ def test_failed_diff_binding_leaves_the_scope_unverified_with_no_prompt_fallback
     assert sv.main(argv) == 0  # not a hold: the PROCESS line counts as a finding of the head
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
     assert not (seat_dir / "process.json").exists()
+
+
+def test_a_bound_mixed_reply_persists_the_process_line_and_posts_fix(tmp_path, capsys):
+    reply = f"{BRIEF_MED}\nHIGH src/a.py:3 - real bug\nTEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    argv, seat_dir = bound_record(tmp_path, "mixed", reply)
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False
+    saved = json.loads((seat_dir / "process.json").read_text())
+    assert (saved["lines"], saved["blocking"]) == ([BRIEF_MED], 1)
+
+
+@pytest.mark.parametrize("verdict", ["REQUEST_CHANGES", "ACCEPT"])
+def test_an_inline_seat_with_a_recorded_scope_is_held_and_one_without_is_not(tmp_path, capsys, verdict):
+    reply = f"{BRIEF_MED}\nTESTS: none: x\nTEST_GAMING: no\nVERDICT: {verdict}\n"
+    # the head changes the brief, outside the path subset the inline seat was shown
+    argv, seat_dir = bound_record(tmp_path, "inline", reply, inline=True, touch_brief=True)
+    assert sv.main(argv) == sv.EXIT_PROCESS
+    assert json.loads((seat_dir / "process.json").read_text())["lines"] == [BRIEF_MED]
+    capsys.readouterr()
+    # the same reply without the recorded scope: scope unknown, the line counts as a finding
+    argv, seat_dir = bound_record(tmp_path, "unscoped", reply, inline=True, touch_brief=True)
+    record = json.loads((seat_dir / "record.json").read_text())
+    del record["review_scope"]
+    (seat_dir / "record.json").write_text(json.dumps(record))
+    assert sv.main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["body"]["ok"] is False

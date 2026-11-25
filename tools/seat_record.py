@@ -228,6 +228,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if "item_key" in record:
         evidence["item_key"] = record["item_key"]
     # The serving attempt's prompt digest: seat_verdict trusts prompt.txt only when it matches.
+    if isinstance(record.get("review_scope"), dict):
+        evidence["review_scope"] = record["review_scope"]  # the inline seat's recorded diff scope
     if re.fullmatch(r"[0-9a-f]{64}", str(record.get("prompt_sha256"))):
         evidence["prompt_sha256"] = record["prompt_sha256"]
     # F3: finish_reason is only ever recorded; never hard-coded.  The last

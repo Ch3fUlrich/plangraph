@@ -366,6 +366,7 @@ impl Driver for Host {
             "prompt": fs::read_to_string(run.join("prompt.txt")).unwrap_or_default(),
             "prompt_sha256": record["prompt_sha256"],
             "binding": record["review_binding"],
+            "scope": record["review_scope"],
             "cwd": self.cwd,
         });
         let python = || {

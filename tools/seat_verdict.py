@@ -183,7 +183,8 @@ def _process_diagnostics(seat_dir, text, evidence, cwd=None):
     except (OSError, ValueError):
         prompt = ""
     found = classifier.classify_run(text, prompt=prompt, prompt_sha256=evidence.get("prompt_sha256"),
-                                    binding=evidence.get("review_binding"), cwd=cwd)
+                                    binding=evidence.get("review_binding"), cwd=cwd,
+                                    scope=evidence.get("review_scope"))
     return {"lines": list(found.process), "blocking": found.blocking,
             "prompt_sha256": evidence.get("prompt_sha256")}
 

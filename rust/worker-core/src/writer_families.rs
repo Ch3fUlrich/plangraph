@@ -96,8 +96,8 @@ pub fn classify_review(
     python: &dyn Fn() -> Command,
 ) -> Result<ReviewClass, String> {
     // `attempt` is the serving attempt: its saved final `prompt`, `prompt_sha256`, recorded
-    // `binding` and the checkout `cwd` the binding is re-verified in.
-    const CODE: &str = "import json, sys; from plangraph.review.verdict import classify_run; a = json.load(sys.stdin); f = classify_run(a['text'], prompt=a['prompt'], prompt_sha256=a['prompt_sha256'], binding=a['binding'], cwd=a['cwd']); print(json.dumps({'blocking': f.blocking, 'process': list(f.process)}))";
+    // `binding` or inline `scope` and the checkout `cwd` it is re-verified in.
+    const CODE: &str = "import json, sys; from plangraph.review.verdict import classify_run; a = json.load(sys.stdin); f = classify_run(a['text'], prompt=a['prompt'], prompt_sha256=a['prompt_sha256'], binding=a['binding'], cwd=a['cwd'], scope=a.get('scope')); print(json.dumps({'blocking': f.blocking, 'process': list(f.process)}))";
     let mut payload = attempt.clone();
     payload["text"] = serde_json::json!(text);
     let out = run_python(

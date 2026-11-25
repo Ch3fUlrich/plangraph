@@ -490,11 +490,13 @@ def test_hold_registry_lets_only_a_pass_posted_after_the_hold_approve(tmp_path):
 
 @pytest.mark.parametrize("prose", ["HIGH-level test coverage looks good", "HIGH level coverage is fine",
                                    "MED-sized change", "P1 is the priority of the plan",
-                                   "HIGH 12:30 UTC was the window", "HIGH 12:30 UTC - the window"])
+                                   "HIGH 12:30 UTC was the window", "HIGH 12:30 UTC - the window",
+                                   "HIGH Build completed at 12:30 - all checks passed"])
 def test_prose_opening_with_a_severity_word_is_not_a_finding(prose):
     assert v.classify_findings(prose + "\nVERDICT: ACCEPT\n").blocking == 0
     for documented in ("HIGH src/a.py:3 - wrong", "- **MED** src/a.py:3-9 - wrong", "P2 a.rs:1:7 x",
-                       "HIGH docs/review notes.md:12 - missing test"):
+                       "HIGH docs/review notes.md:12 - missing test",
+                       "HIGH docs/review - notes.md:12 - missing test"):
         assert v.classify_findings(documented + "\n").blocking == 1, documented
 
 
@@ -507,3 +509,41 @@ def test_a_prompt_without_a_verified_binding_never_gives_a_scope(tmp_path):
     for binding in (None, {"base_sha": "0" * 40, "head_sha": "1" * 40, "diff_sha256": "2" * 64}):
         found = v.classify_run(line, prompt=prompt, prompt_sha256=digest, binding=binding, cwd=str(tmp_path))
         assert (found.med, found.process) == (1, ()), binding
+
+
+def test_an_inline_seats_recorded_scope_is_reverified_before_it_is_trusted(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    (tmp_path / "x.txt").write_text("1")
+    git("add", "."); git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/a.py").write_text("a")
+    (tmp_path / "src/plangraph/review").mkdir(parents=True)
+    (tmp_path / "src/plangraph/review/review_brief.md").write_text("brief")
+    git("add", "."); git("commit", "-qm", "head")
+    head = git("rev-parse", "HEAD")
+    digest, files = v.diff_scope(base, head, ["src/a.py"], str(tmp_path))
+    assert files == {"src/a.py"}  # the path subset the inline seat was shown
+    scope = {"mode": "merge-base", "base": base, "head": head, "paths": ["src/a.py"], "files_sha256": digest}
+    assert v.bound_scope_paths(scope, str(tmp_path)) == {"src/a.py"}
+    assert v.bound_scope_paths(dict(scope, files_sha256="0" * 64), str(tmp_path)) is None
+    assert v.bound_scope_paths(dict(scope, mode="two-dot"), str(tmp_path)) is None
+    assert v.bound_scope_paths(scope, None) is None
+    # With the subset kept, a brief the head changes outside it is not in the seat's scope.
+    import hashlib
+    prompt = EMPTY_PROMPT
+    line = "PROCESS review_brief.md field=callers - no callers rendered"
+    found = v.classify_run(line, prompt=prompt, prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                           binding=None, cwd=str(tmp_path), scope=scope)
+    assert found.process == (line,)
+    full = v.diff_scope(base, head, None, str(tmp_path))
+    wide = dict(scope, paths=None, files_sha256=full[0])
+    found = v.classify_run(line, prompt=prompt, prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                           binding=None, cwd=str(tmp_path), scope=wide)
+    assert (found.med, found.process) == (1, ())  # the whole diff changes the brief

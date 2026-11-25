@@ -27,6 +27,8 @@ __all__ = [
     "classify_findings",
     "diff_binding",
     "bound_diff_paths",
+    "diff_scope",
+    "bound_scope_paths",
     "classify_run",
     "record_hold",
     "record_pass",
@@ -367,19 +369,24 @@ def bound_diff_paths(binding: object, cwd: str | None) -> set[str] | None:
     return found[1] if found and found[0] == binding.get("diff_sha256") else None
 
 
-_SEPARATOR = re.compile(r"\s[-\u2013\u2014]\s")
-_LINE_CITE = re.compile(r"[A-Za-z_./][^:]*:\d+(?:[-:]\d+)*$")
+_CITATION = re.compile(r"(?P<path>.+?):(?P<line>\d+)(?:[-:]\d+)*(?=\s|$)")
 
 
 def _documented(rest: str) -> bool:
-    """The text after a severity word is the documented `<path>:<line> - <text>`: the citation
-    is everything before the spaced dash (a path may hold spaces), or the first token when
-    there is no dash. A bare or markup-only citation is a malformed finding and still counts;
-    prose or a timestamp ("12:30 UTC") is not a citation."""
-    text = rest.strip()
-    head = _SEPARATOR.split(text, maxsplit=1)[0] if _SEPARATOR.search(text) else (text.split(None, 1) or [""])[0]
-    citation = head.strip().strip("`*_")
-    return not any(c.isalnum() for c in citation) or bool(_LINE_CITE.search(citation))
+    """The text after a severity word starts with the documented `<path>:<line>` citation. The
+    path is everything before the first `:<digits>` (it may hold spaces or a spaced dash, but
+    then it must look like a path: a `/` or an extension), so prose or a timestamp ("Build
+    completed at 12:30", "12:30 UTC") is not a citation. A bare or markup-only citation is a
+    malformed finding and still counts."""
+    text = rest.strip().lstrip("`*_ ")
+    if not any(c.isalnum() for c in (text.split(None, 1) or [""])[0]):
+        return True
+    found = _CITATION.match(text)
+    if not found:
+        return False
+    path = found.group("path").strip("`*_ ")
+    return bool(re.search(r"[A-Za-z_./]", path)) and (
+        not re.search(r"\s", path) or "/" in path or bool(re.search(r"\.\w+$", path)))
 
 
 def classify_findings(text: str, *, prompt: str = "",
@@ -411,20 +418,54 @@ def classify_findings(text: str, *, prompt: str = "",
     return Findings(counts["high"], counts["med"], counts["low"], tuple(process))
 
 
+def diff_scope(base: str, head: str, paths: list[str] | None, cwd: str) -> tuple[str, set[str]] | None:
+    """(sha256, files) of the merge-base diff `base...head` limited to `paths`, as an inline seat
+    is dispatched it (the recorded `review_scope`; the digest is over the sorted file names)."""
+    import hashlib
+
+    if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (base, head)):
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "--no-replace-objects", "diff", "--no-color",
+             "--no-renames", "--no-relative", "--no-ext-diff", "--no-textconv",
+             "--ignore-submodules=none", "--name-only", "-z", f"{base}...{head}", "--",
+             *(f":(literal){path}" for path in paths or [])],
+            capture_output=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    files = sorted(name for name in out.split(b"\0") if name)
+    digest = hashlib.sha256(b"".join(name + b"\0" for name in files)).hexdigest()
+    return digest, {name.decode("utf-8", "replace") for name in files}
+
+
+def bound_scope_paths(scope: object, cwd: str | None) -> set[str] | None:
+    """Files of an inline seat's dispatched diff when its recorded `review_scope` (mode, base,
+    head, path subset, digest) is re-verified in `cwd`; None (scope unknown) otherwise."""
+    if not isinstance(scope, dict) or scope.get("mode") != "merge-base" or not cwd:
+        return None
+    paths = scope.get("paths")
+    if paths is not None and not (isinstance(paths, list) and all(isinstance(p, str) for p in paths)):
+        return None
+    found = diff_scope(str(scope.get("base")), str(scope.get("head")), paths, cwd)
+    return found[1] if found and found[0] == scope.get("files_sha256") else None
+
+
 def classify_run(text: str, *, prompt: str, prompt_sha256: object, binding: object,
-                 cwd: str | None) -> Findings:
+                 cwd: str | None, scope: object = None) -> Findings:
     """Findings of one seat reply against its serving attempt: the saved final `prompt` counts
     only when its digest is the attempt's `prompt_sha256`, and the scope is the attempt's
     recorded `binding` re-verified in `cwd` (a binding that fails leaves the scope unknown,
-    never the prompt's diff text); an attempt with no binding has an unknown scope."""
+    never the prompt's diff text); an attempt with neither a binding nor a scope has an unknown scope."""
     import hashlib
 
     if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != str(prompt_sha256 or "").lower():
         prompt = ""
-    # No recorded binding, or one that fails verification, leaves the scope unknown: nothing the
-    # prompt says about its own diff (example headers, quoted commands) is trusted for it.
-    scope = bound_diff_paths(binding, cwd)
-    return classify_findings(text, prompt=prompt, changed_paths=scope)
+    # The attempt's recorded binding (full diff) or recorded scope (inline: merge-base diff and
+    # path subset), re-verified in `cwd`; a record that fails verification leaves the scope
+    # unknown, and nothing the prompt says about its own diff is trusted for it.
+    paths = bound_diff_paths(binding, cwd) if binding is not None else bound_scope_paths(scope, cwd)
+    return classify_findings(text, prompt=prompt, changed_paths=paths)
 
 
 def _holds_dir(cwd: str | None):
