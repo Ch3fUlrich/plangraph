@@ -84,6 +84,35 @@ def _go_binding(statement, project):
     return int(named[1]), heads[0].lower()
 
 
+def migration_field(statement):
+    """The version of the one standalone ``MIGRATION <version>`` field after the first ``;`` of a GO statement
+    (``None`` when it has none; fields of another name such as ``MIGRATION-NOTE`` are not it). The one parser for
+    the batch land gate and ``plangraph land-train``: ``ValueError`` on a second field or on a value that is not
+    the plain decimal of a positive number (``+3``, ``03``, two spaces)."""
+    fields = [field.strip() for field in statement.split(";")[1:] if field.strip().startswith("MIGRATION ")]
+    if not fields:
+        return None
+    if len(fields) > 1:
+        raise ValueError("the GO statement has more than one MIGRATION field")
+    if not re.fullmatch(r"MIGRATION [1-9][0-9]*", fields[0]):
+        raise ValueError(f"malformed field {fields[0]!r}")
+    return int(fields[0].split(" ")[1])
+
+
+def migration_for_go(decision, repo, pr, head):
+    """The ``MIGRATION`` version of the GO decision of this exact pull request and head, ``None`` when it has none.
+    ``ValueError`` when the decision holds no GO, names another pull request or head, or has a bad field: a GO
+    row of another head never supplies the migration of this one."""
+    statement = _go_statement(decision)
+    bound = next((found for name in (repo, repo.rsplit("/", 1)[-1])
+                  if (found := _go_binding(statement, name)) != (None, None)), (None, None))
+    if bound[0] is None:
+        raise ValueError("the GO statement names no single pull request and full GO-HEAD")
+    if bound != (pr, head.lower()):
+        raise ValueError(f"the GO statement is for #{bound[0]} at {bound[1]}, not #{pr} at {head}")
+    return migration_field(statement)
+
+
 def _go_leading_head(statement):
     """The 8 to 64 hex digits a GO statement leads with (``GO <head>``), else ``None``."""
     bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", statement)

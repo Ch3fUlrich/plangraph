@@ -420,7 +420,7 @@ def require_migration_go(st, go_row):
     version = keeper_migration(st)
     if version is None:
         return
-    from plangraph.keeper.store_waiver import _go_binding, _go_statement
+    from plangraph.keeper.store_waiver import _go_binding, _go_statement, migration_field
 
     marker = f"MIGRATION {version}"
     refusal = f"GO row for PR #{st['pr']} at {st['head']} must include {marker}"
@@ -438,9 +438,11 @@ def require_migration_go(st, go_row):
         decision = cells[3].strip() if len(cells) > 4 and not cells[0] else line.strip()
         statement = _go_statement(decision)
         if statement and any(_go_binding(statement, name) == expected for name in (repo, project)):
-            markers = [field.strip() for field in statement.split(";")[1:]
-                       if field.strip().startswith("MIGRATION ")]
-            if markers == [marker]:
+            try:
+                found = migration_field(statement)
+            except ValueError:
+                continue
+            if found == version:
                 return
     raise MergeBatchError(refusal)
 

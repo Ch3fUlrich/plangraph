@@ -58,3 +58,45 @@ fn keeper_schema_reads_both_versions_with_the_python_environment_cleared() {
         r#"{"keeper_schema":{"base":2,"head":3},"migration":null}"#
     );
 }
+
+#[test]
+fn keeper_schema_reads_the_go_row_with_the_python_environment_cleared() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q", "-b", "main"]);
+    let (base, head) = (commit(dir.path(), 2), commit(dir.path(), 3));
+    let home = tempfile::tempdir().unwrap();
+    let run = |statement: &str| {
+        Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .args(["land-train", "keeper-schema", "--repo"])
+            .arg(dir.path())
+            .args([
+                "--base",
+                &base,
+                "--head",
+                &head,
+                "--pr",
+                "9",
+                "--slug",
+                "owner/name",
+            ])
+            .args(["--go-statement", statement])
+            .env_remove("PYTHONPATH")
+            .env_remove("PYTHONHOME")
+            .env_remove("VIRTUAL_ENV")
+            .env_remove("PG_SPAWND_PYTHON")
+            .env("HOME", home.path())
+            .current_dir(home.path())
+            .output()
+            .unwrap()
+    };
+    let ok = run(&format!("GO owner/name PR #9 GO-HEAD {head}; MIGRATION 3"));
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(String::from_utf8_lossy(&ok.stdout).contains(r#""migration":3"#));
+    let wrong = run(&format!("GO owner/name PR #9 GO-HEAD {base}; MIGRATION 3"));
+    assert!(!wrong.status.success());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("not #9 at"));
+}

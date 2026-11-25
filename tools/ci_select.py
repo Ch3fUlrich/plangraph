@@ -69,6 +69,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/liveness/router.toml",
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
+    "src/plangraph/keeper/schema_pg.py",  # rust/plangraph-cli embeds the migration registry reader (land::keeper_schema).
+    "src/plangraph/keeper/store_waiver.py",  # and the GO row parser (land::go_statement).
     "src/plangraph/planner/__init__.py",
     "src/plangraph/planner/routing.py",
     "src/plangraph/planner/benchmarks.py",
