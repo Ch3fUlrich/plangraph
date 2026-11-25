@@ -5,50 +5,63 @@ merged but not deployed and gives the router a gate input for GO.
 
 ## Inventory
 
-The keeper's `close_merged_auto` dry run lists `deployment_pending` rows: items whose merged work
-ships a unit or binary (`deploy/systemd/*`, a new `rust/*/src/main.rs` or `bin/*.rs`) with no
-verified `deploy` evidence, or whose `Live:` done criterion has no verified deploy evidence after the
-merge. Each row has `key`, `state`, `missing`, `merged_at` and `age_hours`.
+The keeper's `close_merged_auto` dry run reads the landed changes of every item, whether or not the close
+is allowed (a sensitive card, a missing seat, an open lane, a commit without a PR and a delivery by
+`Merge-Repo:` or `Plan-Item-Part` do not hide a unit). It returns two lists:
+
+- `deployment_pending`: items whose landed work ships a unit or binary (`deploy/systemd/*`, a new
+  `rust/*/src/main.rs` or `bin/*.rs`) with no verified `deploy` evidence, or whose `Live:` criterion has none.
+  A unit or binary deleted by the head is retired and is not a target.
+- `deployment_expected`: items whose targets all have evidence; each row names its `expected` targets.
+
+Rows have `key`, `state`, `missing`, `expected`, `landed` (the landing commits), `merged_at` and `age_hours`.
+The age counts from the first landing that touched the missing unit (the item's first landing for a `Live:`
+clause), not from an older docs merge; one unreadable landing time makes it unknown.
 
 - Open, claimed and in-review items are always covered.
 - Completed (`done`) items are covered by the request field `inventory: true` (a dry run; it closes
   nothing). The keeper setting `deploy_inventory_done` (default `false`) puts them into the merge-index
-  warm-up; with it off an `inventory` request is refused `validation`.
+  warm-up; with it off an `inventory` request is refused `validation`, and the `projects` reply says
+  `inventory_done: false`, so an empty project list is never taken for an empty scan.
+- Only deploy evidence of the item's current epoch recorded after its last landing (tagged, named by
+  `Merge-Repo:`, or a part) clears a unit or a `Live:` clause.
+- A unit that starts after its item closed is recorded with the router verb `add_evidence_router` (kind
+  `deploy`), which also takes a completed item and no other kind of proof: the key lock (SQLite triggers;
+  Postgres migration 28) lets that one evidence row and its `evidence_added` event through on a closed item,
+  never on a cancelled one and never with a missing or null kind.
 
 ## Report
 
-`plangraph deploy-evidence report --probe PROGRAM [--project NAME] [--no-done] [--rows FILE]` prints the
-JSON report `plangraph.deploy-evidence/1`. It runs `PROGRAM HOST TARGET` for every `host:unit` pair and
-reads the first word printed (`active` for a unit, `installed` for a `bin:NAME` target; a oneshot unit
-answers for its timer). Per target:
+`plangraph deploy-evidence report --probe PROGRAM --repo CHECKOUT [--project NAME] [--no-done] [--rows FILE]`
+prints the JSON report `plangraph.deploy-evidence/1`. For every expected `host:unit` target, receipted or not, it
+runs `PROGRAM HOST TARGET`; the first word printed is the state (`active` for a unit, `installed` for a
+`bin:NAME` target; a oneshot unit answers for its timer) and an optional second word the commit the build was
+made from. `--repo` is the checkout whose history decides whether that commit contains every landing
+(`git merge-base --is-ancestor`); without it no revision is believed. Per target:
 
-| status | meaning |
-|---|---|
-| `unit_inactive`, `binary_missing` | the host does not run it |
-| `unrecorded` | the host runs it, but the keeper holds no deploy evidence tied to the landed revision; a running unit does not say which revision it runs, so the row stays pending until the evidence is recorded |
-| `host_unverified` | the probe failed; the host is not assumed deployed |
-| `live_proof_missing` | a `Live:` clause with no deploy proof |
-| `hosts_unnamed` | the item names no `Deploy-Hosts:` |
-| `scan_unverified` | the keeper could not scan the item (`listed` in the inventory pass); it is never silently dropped |
+| status | meaning | blocks |
+|---|---|---|
+| `verified` | the keeper holds evidence, the host runs it and the build contains every landing | no |
+| `revision_unproven` | the keeper holds evidence and the host runs it, but the build is older or unnamed | yes |
+| `unit_inactive`, `binary_missing` | the host does not run it (also after a receipt: the router's word is not enough) | yes |
+| `unrecorded` | the host runs it, but the keeper holds no evidence | yes |
+| `host_unverified` | the probe failed | yes |
+| `live_proof_missing` | a `Live:` clause with no deploy proof | yes |
+| `hosts_unnamed` | the item names no `Deploy-Hosts:` | yes |
+| `scan_unverified` | the keeper could not scan the item (an inventory refusal, or an open-item refusal that names the index, the default ref or `Merge-Repo:`) | yes |
 
-Every target blocks. Only the keeper's verified `deploy` evidence of the item's current epoch, recorded after
-its last merge (the tagged merges and the merge a `Merge-Repo:` line names), clears a row; an older row does not.
-The deployment scan runs before the close checks, so an item the automatic close refuses (a sensitive card, an
-unset review tier) still gets its row. A unit that starts after its item closed is recorded with the router
-verb `add_evidence_router` (kind `deploy`), which also takes a completed item and no other kind of proof:
-the key lock (SQLite triggers; Postgres migration 28) lets that one evidence row and its `evidence_added` event
-through on a closed item, never on a cancelled one. An item delivered only by a `Merge-Repo:` merge, open or
-completed, has a row too, aged from that merge; the row keeps the `Live:` clause and every refusal of the close.
-
-`--rows FILE` reads keeper rows from a file instead of the keeper (fixtures).
+A row is `pending` while any of its targets blocks, else `verified`. `--rows FILE` reads keeper rows from a
+file instead of the keeper (fixtures).
 
 ## Gate
 
 `plangraph deploy-evidence gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]`
 prints a JSON decision and exits 0 (GO), 1 (blocked) or 2 (unreadable or inconsistent input: a wrong schema, no
-`rows` list, a `pending` count that disagrees with the rows, a row without a key, blocking targets, or a `merged_at` that is not text or null). A pending row older than
-24 hours, or of unknown age, blocks; the age is counted from `merged_at` when the gate runs, so a saved report
-ages, and a report generated more than an hour before the gate runs is refused (exit 2). A younger row is listed under `waiting`.
+`rows` list, a `pending` count that disagrees with the pending rows, a row without a key, targets that disagree
+with the row status, a `merged_at` that is not text or null, or a timestamp out of range). A pending row older
+than 24 hours, or of unknown age (a merge time ahead of the clock beyond five minutes included), blocks; the age
+is counted from `merged_at` when the gate runs, so a saved report ages, and a report generated more than an hour
+before the gate runs is refused (exit 2). A younger row is listed under `waiting`.
 
 A routing exception is one entry of the exceptions file:
 `{"key": "proj:KEY", "decision": "D-1234", "granted": "2026-11-24", "expires": "2026-11-30", "reason": "..."}`.

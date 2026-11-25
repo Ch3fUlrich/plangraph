@@ -634,27 +634,26 @@ class WaiverMixin:
         if inventory:
             return self._deploy_inventory_row(item, now)
         # The deployment scan does not depend on whether the close is allowed: every refusal below
-        # carries its row, whatever stage refuses.
-        pinned, proofs, pending, result, token = self._deploy_state(item, now)
+        # carries the item's rows, whatever stage refuses.
+        pinned, pending, result, token = self._deploy_state(item, now)
         try:
             return self._auto_close_checked(principal, item, require_seats, apply, now,
-                                            (pinned, proofs, pending, result, token))
+                                            (pinned, pending, result, token))
         except Refused as exc:
-            exc.deployment = result.get("deployment_pending")
+            exc.deployment = result
             raise
 
     def _auto_close_checked(self, principal, item, require_seats, apply, now, scan):
         key = item["key"]
-        pinned, proofs, pending, result, token = scan
+        pinned, pending, result, token = scan
         tier = item.get("review_tier")
         if tier not in ("standard", "high", "none"):
             raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
         if self._card_requires_non_anthropic_seats(item):
             raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
         self._assert_unlocked(item)
-        if any(proof.get("synthetic") for proof in proofs):
-            raise Refused("evidence_unverified", "merged_on_default_missing")
-        self._merged_auto_proofs(pinned)  # the close, unlike the deployment row, waits for every open lane
+        # The close, unlike the deployment rows, needs a PR for every commit and waits for every open lane.
+        proofs = self._merged_auto_proofs(pinned)
         seated = tier != "none"
         if pending:
             if apply:

@@ -41,6 +41,7 @@ from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 from .evidence_decisions import decision_book, decisions_naming
 from .evidence_pr import landing_record
+from .evidence import deploy_targets
 from .evidence_types import as_epoch, valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
@@ -674,101 +675,69 @@ class ContextMixin:
     include_done_in_scan = False
 
     def _deploy_inventory_row(self, item, now):
-        """``{"deployment_pending": row}`` for merged work without deploy proof, else ``{}``; never closes."""
-        return self._deploy_state(item, now)[3]
+        """``{"deployment_pending": row}`` and/or ``{"deployment_expected": row}`` for merged work; never closes."""
+        return self._deploy_state(item, now)[2]
 
     def _deploy_state(self, item, now):
-        """``(pinned item, merge proofs, pending host:unit pairs, {"deployment_pending": row} or {}, scan token)``.
+        """``(pinned item, pending host:unit pairs, rows of the item, scan token)``.
 
-        An item whose only delivery is a ``Merge-Repo:`` merge has no tagged commit to prove: its proof is
-        one synthetic entry (``synthetic``) standing on that merge's commit time, enough for a deployment
-        row and never for a close.
+        The rows come from the landed changes alone: a direct commit with no PR, an open lane or a
+        ``Merge-Repo:``-only delivery still has a deployment, and only the close needs PR proof.
         """
         token, changes = self._auto_deploy_scan(item)
         pinned = dict(item, _close_head=token[0])
+        landings = self._item_landings(pinned, token)
+        pending, rows = self._deployment_rows(item, now, landings, changes, token)
+        return pinned, pending, rows, token
+
+    def _item_landings(self, item, token):
+        """``[{sha, at, units}]``: every landing of the item with its merge time and the units it touched."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        units = token[4] if len(token) > 4 else {}
+        landings = []
         try:
-            # What has landed is reported whether or not a lane is still open on the item.
-            proofs = self._merged_auto_proofs(pinned, lanes=False)
+            commits = self._merged_work_commits(item, lanes=False)
         except Refused as exc:
             if token[3] is None or exc.msg != "merged_on_default_missing":
                 raise
-            proofs = [{"merged_at": self._landing_iso(token[3]), "synthetic": True}]
-        cutoff = self._proof_cutoff(proofs, token)
-        pending = self._deploy_pending(pinned, changes, token, cutoff)
-        missing = self._deploy_missing(item, pending, cutoff)
-        return pinned, proofs, pending, (
-            {"deployment_pending": self._deployment_row(missing, proofs, token, now)} if missing else {}), token
+            commits = []
+        for commit in commits:
+            try:
+                at = as_epoch(self._merged_commit_proof(git, project, commit)[2])
+            except Refused:
+                at = as_epoch(commit.get("date"))
+            landings.append({"sha": commit["sha"], "at": at, "units": units.get(commit["sha"], frozenset())})
+        if token[3] is not None and token[5] is not None:
+            landings.append({"sha": token[5], "at": token[3], "units": units.get(token[5], frozenset())})
+        return landings
 
-    @staticmethod
-    def _landing_iso(epoch):
-        return None if epoch is None or epoch == float("inf") else datetime.fromtimestamp(
-            epoch, timezone.utc).isoformat()
-
-    @staticmethod
-    def _landing_stamps(proofs, token):
-        """Merge times (epoch seconds, ``None`` when unreadable) of every landing: tagged and named."""
-        stamps = [as_epoch(proof["merged_at"]) for proof in proofs]
-        named = token[3] if len(token) > 3 else None
-        return stamps + ([named] if named is not None else [])
-
-    @classmethod
-    def _proof_cutoff(cls, proofs, token):
-        """Epoch seconds before which deploy proof says nothing of the landed work: the last landing, tagged
-        or named by ``Merge-Repo:``, for units and ``Live:`` clauses alike. An unreadable time leaves nothing proven."""
-        stamps = cls._landing_stamps(proofs, token)
-        return float("inf") if None in stamps or not stamps else max(stamps)
-
-    def _deploy_missing(self, item, pending, cutoff):
-        """The unproven ``host:unit`` pairs, plus ``live_evidence_missing`` for an unproven ``Live:`` clause."""
-        missing = list(pending)
-        if self._live_evidence_missing(item, cutoff):
-            missing.append("live_evidence_missing")
-        return missing
-
-    @classmethod
-    def _deployment_row(cls, missing, proofs, token, now):
-        """How long the work has waited: counted from the earliest landing, the named merge included."""
-        stamps = cls._landing_stamps(proofs, token)
-        # One landing with an unreadable time (``None`` or the scan's ``inf``) makes the age unknown.
-        earliest = None if not stamps or any(s is None or s == float("inf") for s in stamps) else min(stamps)
-        return {"missing": missing, "merged_at": cls._landing_iso(earliest),
-                "age_hours": int(max(0, now - earliest) // 3600) if earliest is not None else None}
-
-    def _auto_merge_candidates(self, project, after, limit, inventory=False):
-        states = ("done",) if inventory else self.AUTO_STATES
-        if limit is None:
-            return [item for item in self._all_items()
-                    if item["state"] in states and item["kind"] not in ("goal", "operator_task")
-                    and (project is None or item["project"] == project)
-                    and (after is None or item["key"] > after)]
-        marks = ",".join("?" for _ in states)
-        sql = (f"SELECT * FROM items WHERE state IN ({marks})"
-               " AND kind NOT IN ('goal','operator_task')")
-        args = list(states)
-        if project is not None:
-            sql += " AND project=?"
-            args.append(project)
-        if after is not None:
-            sql += " AND key>?"
-            args.append(after)
-        sql += " ORDER BY key LIMIT ?"
-        args.append(limit + 1)
-        rows = self.conn.execute(sql, args).fetchall()
-        if not rows:
-            return []
-        keys = [row["key"] for row in rows]
-        predicates = ",".join("?" for _ in keys)
-        deps = {key: [] for key in keys}
-        for edge in self.conn.execute(
-                f"SELECT src,dst FROM edges WHERE src IN ({predicates}) ORDER BY dst", keys):
-            deps[edge["src"]].append(edge["dst"])
-        return [dict(self._hydrate(dict(row)), depends_on=deps[row["key"]]) for row in rows]
-
-    def _names_merge_in(self, key, project):
-        """True when the item's ``Merge-Repo:`` line names a merge in *project*: it is scanned with no tagged commit."""
-        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+    def _parts_deployment(self, item, delivered, indexes, now):
+        """Rows of an item whose only landings are ``Plan-Item-Part`` merges; ``{}`` without any."""
+        if not delivered:
+            return {}
+        git, landings, changes = self._adapter("git"), [], set()
         try:
-            hinted, revision = self._merge_repository(item) if item else (None, None)
-        except Exception:  # noqa: BLE001 - an unreadable hint warms nothing
-            return False
-        return revision is not None and hinted == project
+            for part in delivered:
+                repo = git.repo_path(part["project"])
+                head = indexes[part["project"]].get("target") or git.ref_commit(repo, git.repo_ref(part["project"]))
+                found = self._live_changes(git, repo, head, git.deploy_changes(repo, part["merge_sha"], head, item["key"]))
+                landings.append({"sha": part["merge_sha"], "at": git.commit_time(repo, part["merge_sha"]),
+                                 "units": frozenset(deploy_targets(found))})
+                changes |= set(found)
+        except (OSError, RuntimeError, ValueError):
+            raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+        return self._deployment_rows(item, now, landings, changes, None)[1]
+
+    @staticmethod
+    def _live_changes(git, repo, head, changes):
+        """The changes without the units and binaries that no longer exist at *head* (retired work)."""
+        present = {}
+        kept = []
+        for status, path in changes:
+            if bool(deploy_targets([("A", path)])):
+                if path not in present:
+                    present[path] = git._run(repo, ["cat-file", "-e", f"{head}:{path}"]).returncode == 0
+                if not present[path]:
+                    continue
+            kept.append((status, path))
+        return kept

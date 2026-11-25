@@ -483,13 +483,16 @@ class CloseMixin:
         tagged = frozenset(commit["sha"] for commit in commits)
         named = self._named_merge_proof(item)
         landed = tagged | {named["landed"]} if named else tagged
-        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
+        found = {sha: self._live_changes(git, repo, head, git.deploy_changes(repo, sha, head, item["key"]))
+                 for sha in landed}
+        changes = {change for each in found.values() for change in each}
         per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])
                     if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
                     else {})
         # The named merge's commit time joins the token: proof older than any landing proves nothing.
         named_at = (git.commit_time(repo, named["landed"]) or float("inf")) if named else None
-        return (head, tagged, per_unit, named_at), changes
+        units = {sha: frozenset(deploy_targets(each)) for sha, each in found.items()}
+        return (head, tagged, per_unit, named_at, units, named["landed"] if named else None), changes
 
     @staticmethod
     def _part_deploy_hosts(git, repo, landed, head, key):
@@ -692,7 +695,7 @@ class CloseMixin:
         if after is not None and not isinstance(after, str):
             raise Refused("validation", "after must be an item key")
         indexes, closed, listed, pending, parts = {}, [], [], [], []
-        deployments = []
+        deployments, expected = [], []
         frozen = self.__dict__.get("_frozen_lanes")
         scan_errors = dict(self.__dict__.get("_merge_scan_errors", {})) if frozen else {}
 
@@ -730,10 +733,13 @@ class CloseMixin:
                 found = [p for p in projects if (index := index_of(p)) is not None
                          and (revision or context_sources.indexed_work(index, key)["commits"])]
                 if not found:
-                    if inventory:
-                        continue
                     delivered = [{"key": key, "project": p, "pr": part["pr"], "merge_sha": part["sha"]}
                                  for p in projects for part in context_sources.indexed_parts(indexes[p], key)]
+                    # A unit that landed under Plan-Item-Part is deployable work whatever the item's state.
+                    self._collect_deployments(key, item, self._parts_deployment(item, delivered, indexes, now),
+                                              deployments, expected)
+                    if inventory:
+                        continue
                     if apply and delivered:
                         self._note_merged_parts(principal, item, delivered, indexes, now)
                     parts.extend(delivered)
@@ -745,11 +751,12 @@ class CloseMixin:
                 result = self._auto_close_one(principal, tagged, require_seats, apply, now, inventory)
             except Refused as exc:
                 listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
-                if getattr(exc, "deployment", None):
-                    deployments.append({"key": key, "state": item["state"], **exc.deployment})
+                self._collect_deployments(key, item, getattr(exc, "deployment", None), deployments, expected)
                 continue
-            if deployment := result.pop("deployment_pending", None):
-                deployments.append({"key": key, "state": item["state"], **deployment})
+            deployment = result.get("deployment_pending")
+            self._collect_deployments(key, item, result, deployments, expected)
+            result.pop("deployment_pending", None)
+            result.pop("deployment_expected", None)
             if inventory:
                 continue
             if result:
@@ -759,7 +766,8 @@ class CloseMixin:
                                "reason": "evidence_unverified: deploy_pending: " + ", ".join(deployment["missing"])})
         return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
                 "merged_not_done": len(pending) + len(listed), "require_seats": require_seats,
-                "next_after": next_after, "scan_errors": scan_errors, "parts": parts, "deployment_pending": deployments}
+                "next_after": next_after, "scan_errors": scan_errors, "parts": parts, "deployment_pending": deployments,
+                "deployment_expected": expected}
 
     def _note_merged_parts(self, principal, item, parts, indexes, now):
         key = item["key"]

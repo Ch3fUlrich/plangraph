@@ -197,6 +197,10 @@ fn computed_mode_is_not_a_fixture(path: &str, line: &str) -> bool {
         "pg-spawnd/tests/serve_cli.rs" => {
             line.contains("set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode))")
         }
+        // Python inside a Rust string: it takes a directory away from its owner and gives it back.
+        "pg-spawnd/tests/ci_merge_policy/python_inputs.rs" => {
+            line.contains("os.chmod(base / 'locked',")
+        }
         _ => false,
     }
 }

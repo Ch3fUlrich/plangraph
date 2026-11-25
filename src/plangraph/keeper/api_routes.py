@@ -360,7 +360,8 @@ class MergeRefresh:
             projects = sorted({project for _, project in server.store.merge_candidates()})
             if not projects and self.state == "ready":
                 self.used = True
-            return {"projects": projects}
+            # Whether completed items are scanned: an empty list is only "nothing to do" when they are.
+            return {"projects": projects, "inventory_done": bool(server.store.include_done_in_scan)}
         if action not in ("start", "status"):
             raise Refused("validation", "refresh must be start, status or projects")
         if action == "start" and self.state != "running":

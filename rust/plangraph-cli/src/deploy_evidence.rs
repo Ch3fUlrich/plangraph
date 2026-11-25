@@ -19,36 +19,70 @@ pub const MAX_REPORT_AGE_SECS: i64 = 3600;
 /// How far a timestamp may lie ahead of the gate's clock before it is not believed.
 pub const MAX_CLOCK_SKEW_SECS: i64 = 300;
 
-/// Live state of one deploy target on one host.
-pub trait HostProbe {
+/// What a host says about one deploy target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Probed {
     /// A unit answers `active` (or another systemd state); a `bin:NAME` target answers `installed` or `missing`.
-    fn state(&self, host: &str, target: &str) -> Result<String, String>;
+    pub state: String,
+    /// The commit the installed build was made from, when the host can name it.
+    pub revision: Option<String>,
 }
 
-/// Runs `PROGRAM HOST TARGET` and takes the first word it prints: `systemctl is-active` exits non-zero
-/// for a unit that is not active but still prints its state, so the exit status is not read.
-pub struct CommandProbe(pub String);
+/// Live state of one deploy target on one host.
+pub trait HostProbe {
+    fn state(&self, host: &str, target: &str) -> Result<Probed, String>;
+    /// True when `revision` contains every one of the `landed` commits.
+    fn reached(&self, landed: &[String], revision: &str) -> bool;
+}
+
+/// Runs `PROGRAM HOST TARGET`; its first word is the state and an optional second word the revision.
+/// `systemctl is-active` exits non-zero for a unit that is not active but still prints its state, so
+/// the exit status is not read. `repo` is the checkout whose history decides whether a revision
+/// contains a landing; without it no revision is believed.
+pub struct CommandProbe {
+    pub program: String,
+    pub repo: Option<String>,
+}
 
 impl HostProbe for CommandProbe {
-    fn state(&self, host: &str, target: &str) -> Result<String, String> {
-        let out = Command::new(&self.0)
+    fn state(&self, host: &str, target: &str) -> Result<Probed, String> {
+        let out = Command::new(&self.program)
             .arg(host)
             .arg(target)
             .output()
             .map_err(|e| format!("probe did not start: {e}"))?;
-        String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut words = text.split_whitespace();
+        let state = words
             .next()
-            .map(str::to_string)
-            .ok_or_else(|| format!("probe printed no state (exit {})", out.status))
+            .ok_or_else(|| format!("probe printed no state (exit {})", out.status))?;
+        Ok(Probed {
+            state: state.to_string(),
+            revision: words.next().map(str::to_string),
+        })
+    }
+
+    fn reached(&self, landed: &[String], revision: &str) -> bool {
+        let Some(repo) = &self.repo else { return false };
+        let sha = |text: &str| text.len() >= 7 && text.bytes().all(|b| b.is_ascii_hexdigit());
+        !landed.is_empty()
+            && sha(revision)
+            && landed.iter().all(|commit| {
+                sha(commit)
+                    && Command::new("git")
+                        .args(["-C", repo, "merge-base", "--is-ancestor", commit, revision])
+                        .output()
+                        .is_ok_and(|out| out.status.success())
+            })
     }
 }
 
 /// The prefix of a `missing` entry that stands for an item the keeper could not scan.
 pub const SCAN_UNVERIFIED: &str = "scan_unverified";
 
-/// One entry of a keeper row's `missing` list, split into what the probe needs.
-fn target_row(entry: &str, probe: &dyn HostProbe) -> Value {
+/// One expected `host:unit` target. `receipted` says the keeper holds deploy evidence for it; only a
+/// receipt plus a host that runs a build containing every landing clears it.
+fn target_row(entry: &str, probe: &dyn HostProbe, landed: &[String], receipted: bool) -> Value {
     let reason = |status: &str| json!({"target": entry, "status": status, "blocking": true});
     if entry.starts_with(SCAN_UNVERIFIED) {
         return reason("scan_unverified");
@@ -66,36 +100,63 @@ fn target_row(entry: &str, probe: &dyn HostProbe) -> Value {
     } else {
         ("active", "unit_inactive")
     };
-    let (seen, status) = match probe.state(host, unit) {
-        // A host that runs the unit does not say which revision it runs: only keeper deploy evidence
-        // tied to the landed revision clears a row, so a live unit stays pending until it is recorded.
-        Ok(state) if state == live => (state, "unrecorded"),
-        Ok(state) => (state, dead),
-        Err(why) => (why, "host_unverified"),
+    let (seen, revision, status) = match probe.state(host, unit) {
+        Ok(p) if p.state == live && !receipted => (p.state, p.revision, "unrecorded"),
+        Ok(p) if p.state == live => {
+            let proven = p
+                .revision
+                .as_deref()
+                .is_some_and(|r| probe.reached(landed, r));
+            (
+                p.state,
+                p.revision,
+                if proven {
+                    "verified"
+                } else {
+                    "revision_unproven"
+                },
+            )
+        }
+        Ok(p) => (p.state, p.revision, dead),
+        Err(why) => (why, None, "host_unverified"),
     };
-    json!({"target": entry, "host": host, "unit": unit, "probe": seen,
-           "status": status, "blocking": true})
+    json!({"target": entry, "host": host, "unit": unit, "probe": seen, "revision": revision,
+           "status": status, "blocking": status != "verified"})
 }
 
-/// The report of the keeper's pending rows with the live host state of every target.
+/// The report of the keeper's rows with the live host state of every expected target.
 pub fn build_report(rows: &[Value], probe: &dyn HostProbe, now: i64) -> Value {
+    let texts = |row: &Value, field: &str| -> Vec<String> {
+        row[field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect()
+    };
     let rows: Vec<Value> = rows
         .iter()
         .map(|row| {
-            let targets: Vec<Value> = row["missing"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(|entry| target_row(entry, probe))
+            let (missing, landed) = (texts(row, "missing"), texts(row, "landed"));
+            let mut targets: Vec<Value> = missing
+                .iter()
+                .map(|entry| target_row(entry, probe, &landed, false))
                 .collect();
-            let targets = if targets.is_empty() {
-                vec![target_row(SCAN_UNVERIFIED, probe)]
-            } else {
-                targets
-            };
+            // Receipted targets are probed too: a receipt alone is only the router's word.
+            targets.extend(
+                texts(row, "expected")
+                    .iter()
+                    .filter(|entry| !missing.contains(entry))
+                    .map(|entry| target_row(entry, probe, &landed, true)),
+            );
+            if targets.is_empty() {
+                targets.push(target_row(SCAN_UNVERIFIED, probe, &landed, false));
+            }
+            let pending = targets.iter().any(|t| t["blocking"] == true);
             json!({"key": row["key"], "state": row["state"], "merged_at": row["merged_at"],
-                   "age_hours": row["age_hours"], "targets": targets, "status": "pending"})
+                   "age_hours": row["age_hours"], "landed": landed, "targets": targets,
+                   "status": if pending { "pending" } else { "verified" }})
         })
         .collect();
     let pending = rows.iter().filter(|r| r["status"] == "pending").count();
@@ -214,10 +275,10 @@ pub fn validate_report(report: &Value, now: i64) -> Result<(), String> {
         ));
     }
     let rows = report["rows"].as_array().ok_or("report has no rows list")?;
-    if report["pending"].as_u64() != Some(rows.len() as u64) {
+    let pending = rows.iter().filter(|r| r["status"] == "pending").count();
+    if report["pending"].as_u64() != Some(pending as u64) {
         return Err(format!(
-            "report pending count disagrees with its {} rows",
-            rows.len()
+            "report pending count disagrees with its {pending} pending rows"
         ));
     }
     for (index, row) in rows.iter().enumerate() {
@@ -225,25 +286,28 @@ pub fn validate_report(report: &Value, now: i64) -> Result<(), String> {
         if !row["key"].as_str().is_some_and(|k| !k.is_empty()) {
             return bad("no key");
         }
-        if row["status"] != "pending" {
-            return bad("status is not pending");
+        let blocking = row["status"] == "pending";
+        if !blocking && row["status"] != "verified" {
+            return bad("status is neither pending nor verified");
         }
         if !(row["merged_at"].is_null() || row["merged_at"].is_string()) {
             return bad("merged_at is not text or null");
         }
         let targets = row["targets"].as_array().map_or(&[][..], Vec::as_slice);
+        let any_blocking = targets.iter().any(|t| t["blocking"] == true);
         if targets.is_empty()
             || !targets
                 .iter()
-                .all(|t| t["target"].is_string() && t["blocking"] == true)
+                .all(|t| t["target"].is_string() && t["blocking"].is_boolean())
+            || any_blocking != blocking
         {
-            return bad("targets are missing or not blocking");
+            return bad("targets are missing or disagree with the row status");
         }
     }
     Ok(())
 }
 
-const USAGE: &str = "usage: plangraph deploy-evidence report [--project NAME] [--no-done] [--probe PROGRAM] [--rows FILE] | gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]";
+const USAGE: &str = "usage: plangraph deploy-evidence report [--project NAME] [--no-done] [--probe PROGRAM] [--repo CHECKOUT] [--rows FILE] | gate --report FILE [--exceptions FILE] [--now EPOCH] [--max-age-hours N]";
 
 fn flags(args: &[String], known: &[&str]) -> Result<Vec<(String, Option<String>)>, String> {
     let mut out = vec![];
@@ -280,7 +344,10 @@ fn run_inner(env: &Env, args: &[String]) -> Result<i32, String> {
     let (verb, rest) = args.split_first().ok_or(USAGE)?;
     match verb.as_str() {
         "report" => {
-            let set = flags(rest, &["--project", "--no-done", "--probe", "--rows"])?;
+            let set = flags(
+                rest,
+                &["--project", "--no-done", "--probe", "--repo", "--rows"],
+            )?;
             let rows = match flag(&set, "--rows") {
                 Some(path) => read_json(path)?
                     .as_array()
@@ -292,11 +359,12 @@ fn run_inner(env: &Env, args: &[String]) -> Result<i32, String> {
                     !set.iter().any(|(n, _)| n == "--no-done"),
                 )?,
             };
-            let probe = CommandProbe(
-                flag(&set, "--probe")
+            let probe = CommandProbe {
+                program: flag(&set, "--probe")
                     .ok_or("report needs --probe PROGRAM")?
                     .into(),
-            );
+                repo: flag(&set, "--repo").map(str::to_string),
+            };
             println!("{}", build_report(&rows, &probe, now()));
             Ok(0)
         }

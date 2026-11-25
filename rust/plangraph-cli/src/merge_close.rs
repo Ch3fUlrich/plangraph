@@ -12,6 +12,16 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
+/// Refusals of the open-item pass that mean "the deployment of this item was not scanned": the
+/// repository index, the default ref or the repository a `Merge-Repo:` line names could not be read.
+const SCAN_REFUSALS: [&str; 5] = [
+    "deploy_scan_",
+    "merge_index",
+    "merge_repo_",
+    "merged_default_ref",
+    "evidence_unverified: merged_on_default",
+];
+
 /// Keep a bound on each keeper call, including a page of close results.
 const MAX_TIME_SECS: u32 = 300;
 const REFRESH_TIMEOUT: Duration = Duration::from_secs(95);
@@ -124,6 +134,14 @@ impl ClosePass {
                 .as_array()
                 .is_some_and(|rows| !rows.is_empty());
             self.scan_failures(&result);
+            // Receipted items carry their expected targets so the report can probe them too.
+            for row in result["deployment_expected"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                self.deployments.push(row.clone());
+            }
             if let Some(deployments) = result["deployment_pending"].as_array() {
                 *self.deployment_count.get_or_insert(0) += deployments.len();
                 for row in deployments {
@@ -150,7 +168,7 @@ impl ClosePass {
     fn scan_failures(&mut self, result: &Value) {
         for row in result["listed"].as_array().into_iter().flatten() {
             let reason = row["reason"].as_str().unwrap_or("");
-            if self.inventory || reason.contains("deploy_scan_") || reason.contains("merge_index") {
+            if self.inventory || SCAN_REFUSALS.iter().any(|code| reason.contains(code)) {
                 self.deployments.push(json!({
                     "key": row["key"], "state": row["state"], "merged_at": null, "age_hours": null,
                     "missing": [format!("{SCAN_UNVERIFIED}: {}", reason.replace(['\n', '\t'], " "))]}));
@@ -416,6 +434,10 @@ fn scheduled(
         vec![project]
     } else {
         projects_reply = control.call("close_merged_auto", Some(json!({"refresh": "projects"})))?;
+        // An empty project list is "nothing to scan" only when completed items are scanned at all.
+        if pass.include_done && projects_reply["inventory_done"] != true {
+            return Err("keeper does not scan completed items (set deploy_inventory_done)".into());
+        }
         projects_reply["projects"]
             .as_array()
             .ok_or("keeper reply has no project list")?

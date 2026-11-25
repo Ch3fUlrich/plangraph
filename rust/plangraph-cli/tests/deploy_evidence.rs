@@ -1,22 +1,39 @@
 //! The deployment evidence report and the GO gate input, against fixture rows and a fake host.
 use plangraph_cli::deploy_evidence::{
-    build_report, gate, HostProbe, MAX_AGE_HOURS, SCAN_UNVERIFIED,
+    build_report, gate, HostProbe, Probed, MAX_AGE_HOURS, SCAN_UNVERIFIED,
 };
 use serde_json::{json, Value};
 
 /// 2026-11-24T12:00:00Z
 const NOW: i64 = 1_795_521_600;
 
+/// The commit every landing of the fixtures reached; the fake host's builds are named by it.
+const LANDED: &str = "1111111111111111111111111111111111111111";
+const OLD_BUILD: &str = "2222222222222222222222222222222222222222";
+
 struct Host;
 
 impl HostProbe for Host {
-    fn state(&self, host: &str, target: &str) -> Result<String, String> {
+    fn state(&self, host: &str, target: &str) -> Result<Probed, String> {
+        let probed = |state: &str, revision: Option<&str>| {
+            Ok(Probed {
+                state: state.into(),
+                revision: revision.map(str::to_string),
+            })
+        };
         match (host, target) {
-            ("host-a", "new.service") => Ok("inactive".into()),
-            ("host-a", "bin:tool") => Ok("missing".into()),
-            ("host-a", "running.service") => Ok("active".into()),
+            ("host-a", "new.service") => probed("inactive", None),
+            ("host-a", "bin:tool") => probed("missing", None),
+            ("host-a", "running.service") => probed("active", Some(LANDED)),
+            ("host-a", "current.service") => probed("active", Some(LANDED)),
+            ("host-a", "stale.service") => probed("active", Some(OLD_BUILD)),
+            ("host-a", "nameless.service") => probed("active", None),
             _ => Err("ssh refused".into()),
         }
+    }
+
+    fn reached(&self, landed: &[String], revision: &str) -> bool {
+        revision == LANDED && !landed.is_empty()
     }
 }
 
@@ -260,4 +277,88 @@ fn the_command_refuses_a_report_at_the_edge_of_the_clock_range_with_exit_2() {
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "{name}: {output:?}");
     }
+}
+
+fn receipted(unit: &str) -> Value {
+    json!({"key": "demo:R", "state": "done", "merged_at": "2026-11-22T07:00:00Z", "age_hours": 53,
+           "missing": [], "expected": [format!("host-a:{unit}")], "landed": [LANDED]})
+}
+
+#[test]
+fn a_receipted_target_is_cleared_only_by_a_host_that_runs_a_build_with_the_landing() {
+    let verified = build_report(&[receipted("current.service")], &Host, NOW);
+    assert_eq!(verified["rows"][0]["status"], "verified");
+    assert_eq!(verified["pending"], 0);
+    assert_eq!(
+        gate(&verified, &json!([]), NOW, MAX_AGE_HOURS).unwrap()["go"],
+        true
+    );
+}
+
+#[test]
+fn a_receipted_target_that_vanished_or_runs_another_build_blocks_go() {
+    for (unit, status) in [
+        ("new.service", "unit_inactive"), // the unit stopped after the router recorded it
+        ("stale.service", "revision_unproven"), // active, but a build without the landing
+        ("nameless.service", "revision_unproven"), // active, and it cannot say which build
+        ("gone.service", "host_unverified"),
+    ] {
+        let report = build_report(&[receipted(unit)], &Host, NOW);
+        assert_eq!(report["rows"][0]["targets"][0]["status"], status, "{unit}");
+        let decision = gate(&report, &json!([]), NOW, MAX_AGE_HOURS).unwrap();
+        assert_eq!(decision["go"], false, "{unit}");
+        assert_eq!(keys(&decision["blockers"]), ["demo:R"], "{unit}");
+    }
+}
+
+#[test]
+fn a_report_that_hides_a_blocking_target_in_a_verified_row_is_refused() {
+    let mut report = build_report(&[receipted("current.service")], &Host, NOW);
+    report["rows"][0]["targets"][0]["blocking"] = json!(true);
+    assert!(gate(&report, &json!([]), NOW, MAX_AGE_HOURS).is_err());
+    let mut report = build_report(&[receipted("new.service")], &Host, NOW);
+    report["rows"][0]["status"] = json!("verified");
+    report["pending"] = json!(0);
+    assert!(gate(&report, &json!([]), NOW, MAX_AGE_HOURS).is_err());
+}
+
+#[test]
+fn the_command_probe_asks_git_whether_a_build_contains_every_landing() {
+    use plangraph_cli::deploy_evidence::CommandProbe;
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+    let one = git(&["rev-parse", "HEAD"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "two"]);
+    let two = git(&["rev-parse", "HEAD"]);
+    let probe = CommandProbe {
+        program: "unused".into(),
+        repo: Some(dir.path().to_str().unwrap().into()),
+    };
+    assert!(probe.reached(std::slice::from_ref(&one), &two));
+    assert!(
+        !probe.reached(std::slice::from_ref(&two), &one),
+        "an older build lacks the later landing"
+    );
+    assert!(!probe.reached(&[], &two), "no landing proves nothing");
+    assert!(!probe.reached(&["nonsense".into()], &two));
+    assert!(!probe.reached(std::slice::from_ref(&one), "not-a-commit"));
+    let blind = CommandProbe {
+        program: "unused".into(),
+        repo: None,
+    };
+    assert!(
+        !blind.reached(std::slice::from_ref(&two), &two),
+        "without a checkout no revision is believed"
+    );
 }

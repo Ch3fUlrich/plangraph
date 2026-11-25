@@ -624,3 +624,48 @@ fn an_item_the_inventory_could_not_scan_becomes_a_row_not_silence() {
         .starts_with("scan_unverified: "));
     assert!(rows[0]["age_hours"].is_null());
 }
+
+#[test]
+fn an_empty_project_list_is_not_trusted_while_completed_items_are_not_scanned() {
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"ready"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"refresh":"projects"}),
+            json!({"projects":[],"inventory_done":false}),
+        ),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400));
+    let error = deployment_rows_with(&keeper, &keeper, None, true, timing).unwrap_err();
+    assert!(error.contains("deploy_inventory_done"), "{error}");
+    // Without completed items in the request the same reply is a plain empty scan.
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"ready"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (
+            json!({"refresh":"projects"}),
+            json!({"projects":[],"inventory_done":false}),
+        ),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400));
+    assert!(deployment_rows_with(&keeper, &keeper, None, false, timing)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn an_open_item_whose_repository_is_ambiguous_holds_go() {
+    let open = json!({"closed":[],"merged_not_done":1,
+        "listed":[{"key":"demo:M","state":"open",
+                   "reason":"evidence_unverified: merge_repo_ambiguous: a, b (name one with Merge-Repo:)"},
+                  {"key":"demo:N","state":"open","reason":"forbidden: sensitive card"}]});
+    let keeper = Script::new([
+        (json!({"refresh":"start"}), json!({"scan":"ready"})),
+        (json!({"refresh":"status"}), json!({"scan":"ready"})),
+        (json!({"apply":false,"project":"demo"}), open),
+    ]);
+    let timing = ScheduleTiming::new(Duration::from_secs(95), Duration::from_secs(400));
+    let rows = deployment_rows_with(&keeper, &keeper, Some("demo"), false, timing).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["key"], "demo:M");
+}

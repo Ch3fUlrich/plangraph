@@ -354,11 +354,11 @@ CREATE TRIGGER trg_criteria_amendments_truncate BEFORE TRUNCATE ON criteria_amen
 """
 
 _DEPLOY_PROOF_PG = """
-CREATE FUNCTION pgk_cancelled(k TEXT) RETURNS boolean
+CREATE OR REPLACE FUNCTION pgk_cancelled(k TEXT) RETURNS boolean
 LANGUAGE sql STABLE SET search_path FROM CURRENT AS $$
     SELECT EXISTS (SELECT 1 FROM items i WHERE i.key = k AND i.state = 'cancelled')
 $$;
-CREATE FUNCTION pgk_deploy_proof_event(t TEXT, p TEXT) RETURNS boolean
+CREATE OR REPLACE FUNCTION pgk_deploy_proof_event(t TEXT, p TEXT) RETURNS boolean
 LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN
     RETURN COALESCE(t = 'evidence_added' AND COALESCE(p::jsonb ->> 'kind', '') = 'deploy', false);
