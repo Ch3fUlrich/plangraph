@@ -606,6 +606,26 @@ def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, mon
     keeper.deliver.assert_called_once_with('keeper', event)
 
 
+def test_native_queue_checks_the_lane_before_it_publishes_an_owning_record(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner import host_ready, seat_spawn
+
+    service = overflow.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 100))
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs: (None, None))
+    held = Mock(side_effect=SpawnRefused('lane_collision: demo:HELD is held by live lane run-held (run)'))
+    monkeypatch.setattr(overflow, 'lane_admit', held)
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:HELD')
+    with pytest.raises(SpawnRefused, match='lane_collision: demo:HELD is held by live lane run-held'):
+        service.admit_spawn({'role': 'implement', 'prompt': '### demo:HELD | t\n'}, card=card)
+    held.assert_called_once_with(service, card, '### demo:HELD | t\n')
+    assert service.ps()['runs'] == []
+
+
 def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
     receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
     child = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(receipt) + '\n'))
@@ -626,6 +646,7 @@ def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch)
     monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
     monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
     monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(overflow, 'lane_admit', lambda service, card, prompt: card)  # no pg-spawnd on the runner
     disk = Mock(side_effect=[(None, 'cargo_target_cap: cache full'), (None, None)])
     monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
     options = {'role': 'implement'}

@@ -3,6 +3,8 @@
 #[path = "common/binary.rs"]
 mod binary;
 mod common;
+#[path = "../../test_support/python.rs"]
+mod test_python;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
 use std::{
@@ -199,4 +201,91 @@ fn native_mcp_spawn_reports_a_lane_refusal_of_the_launch_boundary_with_its_reaso
     counting_adapter(&state, "echo 'fixture refused' >&2; exit 2");
     let reply = spawn_key(&mut fixture, "demo:K");
     assert!(reply["error"]["data"].get("reason").is_none(), "{reply}");
+}
+
+/// The adapter the production spawner presents for a native launch refused at its launch
+/// boundary: `overflow.native_spawn` with the real `lane-admit` verb, then the refused record the
+/// supervisor prints (`service.save_refusal`), as a JSON reply with a `run_id` and exit code 2.
+fn python_launch_boundary_adapter(state: &std::path::Path) {
+    fs::write(
+        state.join("adapter.py"),
+        r#"import asyncio, json, os, sys
+from pathlib import Path
+from unittest.mock import patch
+args = sys.argv[1:]
+card = json.loads(args[args.index('--card') + 1])
+prompt = args[args.index('--') + 1]
+from plangraph.spawner import overflow
+from plangraph.spawner.service import SpawnService
+service = SpawnService(state=Path(args[args.index('--state') + 1]))
+try:
+    with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), \
+         patch.object(overflow, 'native_repo', return_value=Path('/')):
+        asyncio.run(overflow.native_spawn(service, card, dict(prompt=prompt)))
+    sys.exit('the launch was admitted')
+except Exception as exc:
+    record = service.save_refusal(exc, 'implement', card=card)
+    print(json.dumps(record))
+    sys.exit(record['exit_code'])
+"#,
+    )
+    .unwrap();
+    let python = test_python::command();
+    let script = format!(
+        "#!/bin/sh\nPYTHONPATH='{}' NATIVE_BINARY='{}' exec '{}' '{}/adapter.py' \"$@\"\n",
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src")
+            .display(),
+        binary::spawnd(),
+        python.get_program().to_string_lossy(),
+        state.display(),
+    );
+    pg_worker_core::executable_test_support::write_private_executable(
+        state.join("adapter"),
+        script,
+    );
+}
+
+#[test]
+fn native_mcp_spawn_through_the_python_launch_boundary_reports_the_lane_reason() {
+    // The production reply of a refused launch is a record with a run_id, not stderr text.
+    let mut fixture = Fixture::new(false, "running");
+    let state = fixture.state.path().to_owned();
+    python_launch_boundary_adapter(&state);
+    // The fixture's own run record has no role: its liveness cannot be decided.
+    let reply = spawn_key(&mut fixture, "demo:HELD");
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("lane_unreadable:"),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["error"]["data"]["reason"], "lane_unreadable",
+        "{reply}"
+    );
+    assert!(
+        reply["error"]["data"]["run_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("run-"),
+        "{reply}"
+    );
+    fs::write(
+        state.join("runs/run-native/record.json"),
+        json!({"run_id":"run-native","status":"running","role":"implement","item_key":"demo:HELD"})
+            .to_string(),
+    )
+    .unwrap();
+    let reply = spawn_key(&mut fixture, "demo:HELD");
+    let message = reply["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("demo:HELD is held by live lane run-native"),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["error"]["data"]["reason"], "lane_collision",
+        "{reply}"
+    );
 }

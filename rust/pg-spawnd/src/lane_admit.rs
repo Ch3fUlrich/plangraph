@@ -54,6 +54,8 @@ pub(crate) fn execute(
     if !args["prompt"].is_string() || !args["card"].is_object() {
         return Err("lane-admit input needs a string prompt and an object card".into());
     }
+    // The options no host state decides are refused before any run record is read.
+    crate::native_writer_host::check_launch_card(&args["card"])?;
     let admitted = admit_lane(&PathBuf::from(state), &args)
         .map_err(|error| error.into_error_data().message.into_owned())?;
     writeln!(out, "{}", admitted["card"]).map_err(|error| error.to_string())

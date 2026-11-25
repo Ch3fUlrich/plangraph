@@ -76,18 +76,18 @@ pub(crate) fn refused_record_error(value: &Value) -> Option<ErrorData> {
         Some("ParameterRefused" | "BenchRequired" | "BenchDataError") => -32602,
         _ => -32000,
     };
-    Some(ErrorData::new(
-        ErrorCode(code),
-        value["error"]
-            .as_str()
-            .unwrap_or("benchmark rows missing")
-            .to_owned(),
-        Some(
-            json!({"type":refusal,"exit_code":value.get("exit_code").unwrap_or(&json!(2)),
-            "legs":value.get("legs").filter(|v| python_truthy(v)).unwrap_or(&json!([])),
-            "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)}),
-        ),
-    ))
+    let message = value["error"]
+        .as_str()
+        .unwrap_or("benchmark rows missing")
+        .to_owned();
+    let mut data = json!({"type":refusal,"exit_code":value.get("exit_code").unwrap_or(&json!(2)),
+        "legs":value.get("legs").filter(|v| python_truthy(v)).unwrap_or(&json!([])),
+        "run_id":value.get("run_id").filter(|v| python_truthy(v)).unwrap_or(&Value::Null)});
+    // A refusal of the lane guard keeps its stable reason, whichever door reported it.
+    if let Some(reason) = crate::lane_admit::refusal_reason(&message) {
+        data["reason"] = json!(reason);
+    }
+    Some(ErrorData::new(ErrorCode(code), message, Some(data)))
 }
 
 fn python_truthy(value: &Value) -> bool {

@@ -206,6 +206,10 @@ fn a_public_card_mark_cannot_hide_the_keys_of_the_launch() {
 /// Drive `overflow.native_spawn`, the launch boundary, against the real binary. It stops right
 /// after the admission: prints the refusal text, or `ADMITTED` and the keys put into the card.
 fn native_spawn(state: &Path, prompt: &str, card: &Value) -> String {
+    native_spawn_with(state, prompt, card, json!({}))
+}
+
+fn native_spawn_with(state: &Path, prompt: &str, card: &Value, options: Value) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = test_python::command()
         .current_dir(&root)
@@ -213,6 +217,7 @@ fn native_spawn(state: &Path, prompt: &str, card: &Value) -> String {
         .env("STATE", state)
         .env("PROMPT", prompt)
         .env("CARD", card.to_string())
+        .env("OPTIONS", options.to_string())
         .args(["-c", r#"
 import asyncio, json, os
 from pathlib import Path
@@ -221,12 +226,12 @@ from plangraph.routing_errors import SpawnRefused
 from plangraph.spawner import overflow
 from plangraph.spawner.service import SpawnService
 service = SpawnService(state=Path(os.environ['STATE']))
-card, options = json.loads(os.environ['CARD']), dict(prompt=os.environ['PROMPT'])
+card, options = json.loads(os.environ['CARD']), dict(json.loads(os.environ['OPTIONS']), prompt=os.environ['PROMPT'])
 real = overflow.lane_admit
 class Admitted(Exception):
     pass
-async def stop_after_admission(*args):
-    raise Admitted(json.dumps(await real(*args)))
+def stop_after_admission(*args):
+    raise Admitted(json.dumps(real(*args)))
 try:
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), \
          patch.object(overflow, 'native_repo', return_value=Path('/')), \
@@ -234,7 +239,7 @@ try:
         asyncio.run(overflow.native_spawn(service, card, options))
 except Admitted as exc:
     print('ADMITTED', exc)
-except SpawnRefused as exc:
+except (SpawnRefused, ValueError) as exc:
     print(exc)
 "#])
         .output()
@@ -287,4 +292,78 @@ fn native_spawn_admits_on_its_own_hosts_state_only() {
     let card: Value = serde_json::from_str(text.strip_prefix("ADMITTED ").expect(&text)).unwrap();
     assert_eq!(card["item_keys"], json!(["demo:HELD"]));
     assert_eq!(card["lane_admitted"], true);
+}
+
+fn tree(state: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut stack = vec![state.to_owned()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            names.push(entry.path().display().to_string());
+            if entry.path().is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+#[test]
+fn unsupported_dry_run_creates_no_claim_and_no_run() {
+    // A keyed dry run over malformed run state stops at the dry-run refusal, before the
+    // admission reads the state, and creates nothing.
+    let state = tempfile::tempdir().unwrap();
+    write_run(state.path(), "run-odd", &json!({"role":"implement"}));
+    let before = tree(state.path());
+    let card = json!({"run_kind":"native-codex","repo":"/r","item_key":"demo:HELD"});
+    let text = native_spawn_with(
+        state.path(),
+        "### demo:HELD | t\n",
+        &card,
+        json!({"dry_run":true}),
+    );
+    assert!(text.contains("dry-run is not supported"), "{text}");
+    assert_eq!(tree(state.path()), before);
+}
+
+#[test]
+fn a_refused_launch_option_never_reaches_admission_on_any_door() {
+    // The state is malformed: an admitted request would be refused as lane_unreadable.
+    let state = tempfile::tempdir().unwrap();
+    write_run(state.path(), "run-odd", &json!({"role":"implement"}));
+    let before = tree(state.path());
+    for (extra, expected) in [
+        (json!({"push_ref":"main"}), "push_ref must name refs/heads/"),
+        (
+            json!({"review_leg":"bad leg!","review_override_reason":"a reason long enough"}),
+            "review_leg_invalid",
+        ),
+        (json!({"effort":"xhigh"}), "effort_needs_decision"),
+    ] {
+        let mut card = json!({"run_kind":"native-codex","repo":"/r","item_key":"demo:K"});
+        card.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let error = lane_admit(state.path(), "### demo:K | t\n", card.clone()).unwrap_err();
+        assert!(
+            error.contains(expected) && !error.contains("lane_"),
+            "{error}"
+        );
+        let text = native_spawn(state.path(), "### demo:K | t\n", &card);
+        assert!(text.contains(expected) && !text.contains("lane_"), "{text}");
+    }
+    assert_eq!(tree(state.path()), before);
+}
+
+#[test]
+fn a_valid_near_limit_card_stays_admissible_after_the_keys_are_attached() {
+    let state = tempfile::tempdir().unwrap();
+    let mut card = json!({"run_kind":"native-codex","repo":"/r","note":""});
+    let base = card.to_string().len();
+    card["note"] = json!("x".repeat(24000 - base - 4));
+    assert!(card.to_string().len() <= 24000);
+    let admitted = lane_admit(state.path(), "### demo:BIG | t\nWhy: x\n", card).unwrap();
+    assert_eq!(admitted["item_keys"], json!(["demo:BIG"]));
+    assert!(admitted.to_string().len() > 24000);
 }

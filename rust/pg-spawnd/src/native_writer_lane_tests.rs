@@ -179,3 +179,40 @@ fn more_keys_than_a_run_record_keeps_refuse_instead_of_being_dropped_by_the_adap
         50
     );
 }
+
+#[test]
+fn unsupported_dry_run_through_the_mcp_door_reads_no_run_state_and_creates_no_file() {
+    let state = tempfile::tempdir().unwrap();
+    write_run(state.path(), "run-odd", &json!({"role":"implement"}));
+    let before = files(state.path());
+    let mut args = lane_args(json!({"item_key":"demo:HELD"}));
+    args.insert("dry_run".into(), json!(true));
+    let error = refusal(crate::placement::native_spawn(state.path(), &args));
+    assert!(
+        error.message.contains("dry_run is not supported"),
+        "{}",
+        error.message
+    );
+    assert!(error.data.unwrap().get("reason").is_none());
+    assert_eq!(files(state.path()), before);
+}
+
+#[test]
+fn a_launch_option_the_supervisor_would_refuse_is_refused_at_the_mcp_door_before_the_adapter() {
+    let state = tempfile::tempdir().unwrap();
+    for (card, expected) in [
+        (json!({"push_ref":"main"}), "push_ref must name refs/heads/"),
+        (
+            json!({"review_leg":"bad leg!","review_override_reason":"a reason long enough"}),
+            "review_leg_invalid",
+        ),
+        (json!({"effort":"xhigh"}), "effort_needs_decision"),
+    ] {
+        let error = refusal(crate::placement::native_spawn(
+            state.path(),
+            &lane_args(card),
+        ));
+        assert!(error.message.contains(expected), "{}", error.message);
+    }
+    assert!(files(state.path()).is_empty());
+}

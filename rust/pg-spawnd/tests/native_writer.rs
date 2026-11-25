@@ -320,7 +320,13 @@ async def check():
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main', item_key='demo:FIXTURE',
                 review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        prompt = os.environ['FIXTURE_BATCH_INPUT'] if os.environ['FIXTURE_SYSTEMD_PATH'] == '1' else 'brief marker'
+        prompt = 'brief marker'
+        if os.environ['FIXTURE_SYSTEMD_PATH'] == '1':
+            # A heading inside an item body looks like an assignment but assigns nothing.
+            prefix, payload = os.environ['FIXTURE_BATCH_INPUT'].replace('\r\n', '\n').split('\n', 1)
+            batch = json.loads(payload)
+            batch['items'][0]['brief'] += '\n### demo:BODYONLY | a heading inside the item body'
+            prompt = prefix + '\n' + json.dumps(batch)
         run = await admitted_spawn(service, dict(card=card, prompt=prompt))
         assert run.get('base_admitted') or run['status'] != 'running', run
         assert run['run_id'] in service.tasks, run
@@ -350,6 +356,21 @@ async def check():
         assert str(expected.parent) not in os.environ['PATH'].split(os.pathsep)
         assert pathlib.Path(record['resolved_tools']['codex']) == expected, record
         assert str(expected.parent) in record['tool_path'].split(os.pathsep), record
+        # The record the real supervisor published, held again: the follow-up launches meet it.
+        assert '### demo:BODYONLY' in brief and record['item_keys'] == ['demo:FIXTURE'], record
+        held = dict(record, status='running')
+        held.pop('ended', None)
+        service._path(run['run_id']).write_text(json.dumps(held))
+        from plangraph.routing_errors import SpawnRefused
+        follow = dict(run_kind='native-codex', repo=str(root/'checkout'))
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']):
+            assert overflow.lane_admit(service, follow, '### demo:BODYONLY | body only\nWhy: x\n')['item_keys'] == ['demo:BODYONLY']
+            try:
+                overflow.lane_admit(service, follow, '### demo:FIXTURE | member\nWhy: x\n')
+            except SpawnRefused as exc:
+                assert 'demo:FIXTURE is held by live lane ' in str(exc), exc
+            else:
+                raise AssertionError('the genuine batch member was admitted')
         return
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')

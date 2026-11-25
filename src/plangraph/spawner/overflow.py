@@ -520,6 +520,8 @@ def remote_spawn(name, host, card, prompt, options):
             reason = receipt.get('reason')
             if card.get('run_kind') == 'native-codex' and isinstance(reason, str) and reason.startswith(SANDBOX_UNAVAILABLE):
                 raise RemoteRefusal(reason)
+            if isinstance(receipt.get('error'), str) and receipt['error'].startswith(LANE_REFUSALS):
+                raise RemoteRefusal(receipt['error'])  # the target's lane reason and holder, kept
             raise RemoteRefusal('target rejected admission')
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):
@@ -545,20 +547,23 @@ def native_repo(card):
     return Path(repo).resolve()
 
 
-async def lane_admit(service, binary, card, prompt):
+LANE_REFUSALS = ('lane_unreadable:', 'lane_collision:', 'lane_too_many_keys:')
+
+
+def lane_admit(service, card, prompt):
     """Admit the launch against this host's run records; return the card to register.
 
     The one door of the lane guard: every native launch that runs here (MCP, CLI, a forwarded
-    target) passes it, and it alone sets the admitted-keys mark that the supervisor publishes."""
-    import asyncio
+    target) and every local queueing passes it, and it alone sets the admitted-keys mark that
+    the supervisor publishes. Launch options that no host state decides are refused first."""
+    from plangraph.fleet_snapshot import _projection_binary
     from plangraph.routing_errors import SpawnRefused
-    child = await asyncio.create_subprocess_exec(
-        binary, 'lane-admit', '--state', str(service.state), stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    out, error = await child.communicate(json.dumps(dict(prompt=prompt, card=card)).encode())
-    if child.returncode:
-        raise SpawnRefused(error.decode(errors='replace').strip() or 'lane admission failed')
-    return json.loads(out)
+    done = subprocess.run([_projection_binary(), 'lane-admit', '--state', str(service.state)],
+                          input=json.dumps(dict(prompt=prompt, card=card)).encode(),
+                          capture_output=True, timeout=60)
+    if done.returncode:
+        raise SpawnRefused(done.stderr.decode(errors='replace').strip() or 'lane admission failed')
+    return json.loads(done.stdout)
 
 
 async def native_spawn(self, card, options):
@@ -579,7 +584,7 @@ async def native_spawn(self, card, options):
     except (TypeError, ValueError) as exc:
         raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
-    card = await lane_admit(self, binary, card, options.get('prompt', ''))
+    card = await asyncio.to_thread(lane_admit, self, card, options.get('prompt', ''))
     from .host_ready import harness_path
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)
