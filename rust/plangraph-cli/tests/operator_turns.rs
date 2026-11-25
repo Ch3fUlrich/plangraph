@@ -654,14 +654,33 @@ fn d_row_citation_names_every_turn_of_a_decision() {
 
 #[test]
 fn relay_of_names_pins_of_one_human_turn() {
-    // D-101 (H1 at 10:00) and D-107 (H3 at 12:00) are two turns: one relay may not join them.
-    let mut mixed = fields(3);
-    mixed[2] = "2026-01-05T12:30:00.000Z".into();
-    mixed[4] = format!("{H1}@2026-01-05T10:00:00.000Z@D-101,{H3}@2026-01-05T12:00:00.000Z@D-107");
-    mixed[7] = "D-130".into();
-    mixed[8] =
-        r#"[{"item":"demo:A","gate":"operator"},{"item":"demo:C","gate":"operator"}]"#.into();
-    let err = parse(&rows_of(&[fields(2), fields(7), mixed])).unwrap_err();
+    let lifts = r#"[{"item":"demo:A","gate":"operator"},{"item":"demo:C","gate":"operator"}]"#;
+    let relay = |sources: String| {
+        let mut f = fields(3);
+        f[2] = "2026-01-05T12:30:00.000Z".into();
+        f[4] = sources;
+        f[7] = "D-130".into();
+        f[8] = lifts.into();
+        f
+    };
+    // Two distinct turns whose references ascend both as text (4cd0... < a752...) and by D-id
+    // (D-107 < D-111): only the one-turn rule can refuse the list.
+    let mut h1_later = fields(2);
+    h1_later[7] = "D-111".into();
+    let ascending =
+        format!("{H3}@2026-01-05T12:00:00.000Z@D-107,{H1}@2026-01-05T10:00:00.000Z@D-111");
+    assert!(ascending.split(',').collect::<Vec<_>>().is_sorted());
+    let err = parse(&rows_of(&[
+        fields(2),
+        fields(7),
+        h1_later.clone(),
+        relay(ascending),
+    ]))
+    .unwrap_err();
+    assert_eq!(codes(&err), [(5, "field:relay_of")]);
+    // The same turn twice in the list is no second pin of it: D-id order is strict.
+    let same = format!("{H1}@2026-01-05T10:00:00.000Z@D-111,{H1}@2026-01-05T10:00:00.000Z@D-111");
+    let err = parse(&rows_of(&[fields(2), h1_later, relay(same)])).unwrap_err();
     assert_eq!(codes(&err), [(4, "field:relay_of")]);
 }
 
