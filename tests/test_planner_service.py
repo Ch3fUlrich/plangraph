@@ -305,3 +305,46 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
                                     legs=DEFAULT_LEGS, role="implement")
     assert [leg.id for leg in worker.legs[:3]] == ["cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high"]
     assert worker.legs[-1].id == "deepseek"
+
+
+#: A declared small request limit on a large window class (the pack budget of the class
+#: alone would be far above it).
+GROK_LEG = Leg(id="grok-120k", tier="free", harness="opencode", model="grok-model",
+               family="grok", windows=("1m",), max_request_tokens=120000,
+               trains_on_data=False)
+LEG_LIMIT = 120000
+
+
+def _big_write_set(repo, tokens):
+    names, left, i = [], tokens, 0
+    while left > 0:
+        n = min(left, 19000)
+        name = f"src/big{i}.py"
+        (repo / name).write_text("x" * (4 * n), encoding="utf-8")
+        names.append(name)
+        left -= n
+        i += 1
+    return names
+
+
+def test_admission_and_retry_both_use_the_selected_leg_limit(w, repo):
+    """A card that fits the leg only without a tail is refused at the gate, and an admitted
+    card's retry with the largest tail stays within the same limit."""
+    key, key2 = seed(w, [("A", []), ("B", [])])
+    put(w, key, window_class="1m", estimate_tokens=1000,
+        write_set=_big_write_set(repo, LEG_LIMIT - 300))
+    refused = gate(w, repo, key, legs=(GROK_LEG,))
+    assert refused.state == "needs_input"
+    assert any(f.message.startswith("pack too big: ") for f in refused.verdict.findings)
+
+    put(w, key2, window_class="1m", estimate_tokens=1000,
+        write_set=_big_write_set(repo, LEG_LIMIT - 4000))
+    admitted = gate(w, repo, key2, legs=(GROK_LEG,))
+    assert admitted.ready and admitted.state == "ready"
+    first = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
+                                  max_request_tokens=LEG_LIMIT)
+    retry = service.pack_for_card(w.store, w.p("router"), key2, repo_root=repo,
+                                  max_request_tokens=LEG_LIMIT,
+                                  check_tail="\n".join("E" * 400 for _ in range(60)))
+    assert retry.text[:retry.prefix_chars] == first.text
+    assert retry.tokens <= LEG_LIMIT

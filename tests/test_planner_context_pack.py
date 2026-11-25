@@ -341,3 +341,20 @@ def test_stored_card_retry_stays_inside_the_leg_budget_at_the_boundary(tmp_path)
     retry = build(tmp_path, c, budget_tokens=budget, check_tail=huge_tail, max_file_tokens=BIG)
     assert retry.text[:retry.prefix_chars] == first.text
     assert retry.tokens <= budget
+
+
+def test_header_only_pack_counts_the_header_against_the_file_budget(tmp_path):
+    """No files: an admitted header plus the largest tail never exceeds the budget."""
+    huge_tail = "E" * 4000
+    for budget in range(16, 400, 7):
+        c = card(outcome="o" * 400)
+        try:
+            first = build(tmp_path, c, budget_tokens=budget)
+        except PackTooBig as exc:
+            assert exc.budget == budget
+            continue
+        retry = build(tmp_path, c, budget_tokens=budget, check_tail=huge_tail)
+        assert retry.text[:retry.prefix_chars] == first.text, budget
+        assert retry.tokens <= budget, budget
+    with pytest.raises(PackTooBig):
+        build(tmp_path, card(outcome="o" * 400), budget_tokens=128)

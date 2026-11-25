@@ -32,7 +32,7 @@ from typing import Any, Mapping
 from plangraph.keeper.schema import RISK_TAGS, WINDOW_CLASSES
 from .readiness import WINDOW_TOKENS
 
-__all__ = ["CHARS_PER_TOKEN", "TAIL_RESERVE_TOKENS", "tail_cap_tokens", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
+__all__ = ["CHARS_PER_TOKEN", "TAIL_RESERVE_TOKENS", "tail_cap_tokens", "leg_budget", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
            "estimate_tokens", "pack_budget", "build_pack"]
 
 CHARS_PER_TOKEN = 4
@@ -107,6 +107,14 @@ def pack_budget(window_class: str, fraction: float = 0.55,
             or reserve_tokens < 0:
         raise ValueError("reserve_tokens must be a non-negative int")
     return max(0, int(WINDOW_TOKENS[window_class] * fraction) - reserve_tokens)
+
+
+def leg_budget(window_class: str, max_request_tokens: int | None = None) -> int:
+    """Pack budget of a window class, capped at the selected leg's request limit."""
+    budget = pack_budget(window_class)
+    if isinstance(max_request_tokens, int) and not isinstance(max_request_tokens, bool):
+        budget = min(budget, max_request_tokens)
+    return budget
 
 
 # --------------------------------------------------------------------------- validation
@@ -292,6 +300,8 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
 
     files: list[PackFile] = []
     cur = _header(card, key)
+    if estimate_tokens(cur) > budget_tokens:  # the header alone must leave room for the tail
+        raise PackTooBig(estimate_tokens(cur), limit)
     over = False
     todo = [(rel, "write") for rel in sorted(set(writes) | new_writes)]
     todo += [(rel, "read") for rel in sorted(reads)]

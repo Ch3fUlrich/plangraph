@@ -101,9 +101,11 @@ Plain text, deterministic: `# CARD <key>` header (outcome, check_cmd, window_cla
 exports, forbid, smoke; never `heldout_check`), then `# FILE <path> (write)` blocks, then
 `(read)` blocks, each in a fenced block, then the optional `# CHECK OUTPUT` tail (last 40-60
 lines) last. Stable material comes first so a retry keeps a byte-identical prefix
-(`Pack.prefix_chars`) for prompt-cache reuse. Budget = 0.55 x window - 8000 tokens, of which up to 2000 (one eighth of a small
+(`Pack.prefix_chars`) for prompt-cache reuse. Budget = 0.55 x window - 8000 tokens, capped at the selected leg's `max_request_tokens`
+(`leg_budget`; `gate_card` and `pack_for_card(max_request_tokens=...)` use the same one), of which up to 2000 (one eighth of a small
 budget) are held back for the tail on every pack, tail or not, so the files chosen never
-depend on the tail and an admitted card plus any tail stays within the budget; tokens = ceil(chars / 4), `Pack.tokens` as before. A write file that does not fit raises
+depend on the tail and an admitted card plus any tail stays within the budget (a header that alone leaves no room
+for the tail raises `PackTooBig`); tokens = ceil(chars / 4), `Pack.tokens` as before. A write file that does not fit raises
 `PackTooBig` (route to a bigger class), as does a write file over the read-size limit;
 read files over budget or size are skipped. Entries beyond the 50-file expansion cap are
 listed in `skipped` as `(path, "entry_cap")`. Binary write files are skipped.
