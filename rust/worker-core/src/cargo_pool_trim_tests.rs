@@ -1,7 +1,9 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use crate::reap_journal::with_inventory;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 const CAP: u64 = 1000;
 
 /// `<root>/cache/cargo-target` and its review pool.
@@ -9,11 +11,26 @@ fn primary(root: &Path) -> PathBuf {
     root.join("cache/cargo-target")
 }
 
+fn set_modified(path: &Path, modified: SystemTime) {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+        };
+
+        // Both the directory and its files contribute to the age of a candidate.
+        options
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    options.open(path).unwrap().set_modified(modified).unwrap();
+}
+
 fn age(path: &Path, seconds: u64) {
-    fs::File::open(path)
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(seconds))
-        .unwrap();
+    set_modified(path, SystemTime::now() - Duration::from_secs(seconds));
 }
 
 /// A build unit of `crate_name` under `<slot>/debug/build`: `bytes` in its marker, `seconds` old.
@@ -27,6 +44,7 @@ fn unit(slot: &Path, name: &str, bytes: usize, seconds: u64) -> PathBuf {
 }
 
 /// A review slot with an evictable old unit and a newer one that stays: 800 bytes.
+#[cfg(unix)]
 fn review_slot(primary: &Path, id: &str) -> (PathBuf, PathBuf) {
     let slot = crate::cargo_pool::pool_root(primary)
         .unwrap()
@@ -36,10 +54,12 @@ fn review_slot(primary: &Path, id: &str) -> (PathBuf, PathBuf) {
     (slot.canonicalize().unwrap(), old)
 }
 
+#[cfg(target_os = "linux")]
 fn mounted(path: &Path) -> Vec<PathBuf> {
     vec![path.canonicalize().unwrap()]
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn aggregate_trim_preserves_nested_mount_in_stale_build_unit() {
     for apply in [true, false] {
@@ -85,6 +105,7 @@ fn aggregate_trim_preserves_nested_mount_in_stale_build_unit() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn trim_preserves_build_unit_beneath_ancestor_bind_mount() {
     for apply in [true, false] {
@@ -112,6 +133,7 @@ fn trim_preserves_build_unit_beneath_ancestor_bind_mount() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn pool_fallback_preserves_mount_root_and_contents() {
     for apply in [true, false] {
@@ -145,6 +167,7 @@ fn pool_fallback_preserves_mount_root_and_contents() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn unreadable_inventory_leaves_the_bytes_and_records_a_skip() {
     for apply in [true, false] {
@@ -182,27 +205,19 @@ fn dry_run_counts_a_subtree_once_across_unit_and_profile_passes() {
         fs::write(primary.join("release/data"), [0u8; 300]).unwrap();
         // The newest by far, in either mode: the profile pass reaches `debug` first.
         for newest in [primary.join("release/data"), primary.join("release")] {
-            fs::File::open(newest)
-                .unwrap()
-                .set_modified(SystemTime::now() + Duration::from_secs(1000))
-                .unwrap();
+            set_modified(&newest, SystemTime::now() + Duration::from_secs(1000));
         }
         let mut report = Report::default();
         // Unit pass removes 400 of 1300; the profile fallback removes the rest of `debug` (600):
         // `release` (300) is what remains, and the loop stops there.
-        enforce_pool_cap(
-            &primary,
-            std::slice::from_ref(&primary),
-            300,
-            apply,
-            &mut report,
-        )
-        .unwrap()
+        // Run the shared trim with an isolated fixture. The pool's lease requires Unix.
+        trim_slot_to(&primary.canonicalize().unwrap(), 300, apply, &mut report).unwrap()
     };
     assert_eq!(expected(true), 300);
     assert_eq!(expected(false), 300);
 }
 
+#[cfg(unix)]
 #[test]
 fn slots_outside_the_trusted_pool_are_not_trimmed() {
     let tmp = tempfile::tempdir().unwrap();
@@ -227,6 +242,7 @@ fn slots_outside_the_trusted_pool_are_not_trimmed() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unmeasurable_slot_is_reported_incomplete() {
     // SAFETY: geteuid has no preconditions.
