@@ -28,8 +28,15 @@ pub(super) fn output(mut cmd: Command) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|_| "adapter returned invalid JSON".into())
 }
 pub(super) fn quota_snapshots(env: &Env, repo: &Path) -> Result<Value, String> {
+    snapshot_rows(env, repo, "id")
+}
+/// The same read-only source keeping the newest observation per key (id breaks a tie).
+pub(super) fn quota_snapshots_by_observation(env: &Env, repo: &Path) -> Result<Value, String> {
+    snapshot_rows(env, repo, "observed")
+}
+fn snapshot_rows(env: &Env, repo: &Path, latest: &str) -> Result<Value, String> {
     let mut cmd = python(env, repo);
-    cmd.args(["-c", "import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
+    cmd.args(["-c", "import json, sys; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows(latest=sys.argv[1])))", latest]);
     output(cmd)
 }
 pub trait Transport {
