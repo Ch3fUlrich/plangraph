@@ -309,6 +309,70 @@ fn records_of_another_host_and_ended_records_with_old_roles_are_not_lanes() {
 }
 
 #[test]
+fn only_an_explicit_true_receipt_marker_discards_a_record() {
+    let state = tempfile::tempdir().unwrap();
+    for (index, marker) in [
+        json!(0),
+        json!(""),
+        json!("yes"),
+        json!([1]),
+        json!(false),
+        json!(null),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut record = json!({"status":"running","role":"implement","item_key":"demo:ALPHA"});
+        record["overflow_remote"] = marker.clone();
+        record["origin_receipt"] = marker;
+        write_run(state.path(), &format!("run-{index}"), &record);
+    }
+    let held: Vec<_> = scan_runs(state.path())
+        .records
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(held.len(), 6, "{held:?}");
+    write_run(
+        state.path(),
+        "run-real",
+        &json!({"status":"running","role":"implement","origin_receipt":true}),
+    );
+    assert_eq!(scan_runs(state.path()).records.len(), 6);
+}
+
+#[test]
+fn the_marker_is_published_only_from_a_true_mark_of_the_private_request() {
+    let mut record = json!({"run_id":"run-x"});
+    for card in [
+        json!({}),
+        json!({"lane_admitted":"yes"}),
+        json!({"lane_admitted":false}),
+    ] {
+        publish_marker(&json!({"card":card}), &mut record);
+        assert!(record.get("lane_admitted").is_none());
+    }
+    publish_marker(&json!({"card":{"lane_admitted":true}}), &mut record);
+    assert_eq!(record["lane_admitted"], true);
+}
+
+#[test]
+fn a_typed_member_the_writer_would_read_as_another_key_refuses_before_run_state_is_read() {
+    let prompt = typed_prompt(&[("demo:HELD ", "Why: x\n")]);
+    let error = launch_keys(&prompt, &[]).unwrap_err();
+    assert!(error.contains("not a valid item key"), "{error}");
+    // Admission reports it as input, before any lane is read.
+    let state = tempfile::tempdir().unwrap();
+    fs::create_dir_all(state.path().join("runs")).unwrap();
+    let error = error_of(admit_launch(&LaunchRequest {
+        prompt: &prompt,
+        extra: &[],
+        state: state.path(),
+    }));
+    assert_eq!(error.code, "batch_input");
+}
+
+#[test]
 fn a_launch_holds_at_most_the_keys_a_run_record_keeps() {
     let extra: Vec<String> = (0..=MAX_KEYS).map(|n| format!("demo:K{n}")).collect();
     let error = error_of(admit("", &extra, &Fixed(vec![])));
@@ -444,7 +508,7 @@ fn admitted_item_keys_are_the_whole_membership_of_a_record_that_says_so() {
         let mut record = json!({"role":"implement","item_keys":["demo:ONE"],
                                 "manifest":{"brief":brief}});
         if marked {
-            record["lane_keys_admitted"] = json!(true);
+            record["lane_admitted"] = json!(true);
         }
         [("run-1".to_owned(), record)]
     };

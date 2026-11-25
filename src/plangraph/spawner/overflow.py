@@ -545,6 +545,22 @@ def native_repo(card):
     return Path(repo).resolve()
 
 
+async def lane_admit(service, binary, card, prompt):
+    """Admit the launch against this host's run records; return the card to register.
+
+    The one door of the lane guard: every native launch that runs here (MCP, CLI, a forwarded
+    target) passes it, and it alone sets the admitted-keys mark that the supervisor publishes."""
+    import asyncio
+    from plangraph.routing_errors import SpawnRefused
+    child = await asyncio.create_subprocess_exec(
+        binary, 'lane-admit', '--state', str(service.state), stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, error = await child.communicate(json.dumps(dict(prompt=prompt, card=card)).encode())
+    if child.returncode:
+        raise SpawnRefused(error.decode(errors='replace').strip() or 'lane admission failed')
+    return json.loads(out)
+
+
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
     import asyncio, time
@@ -563,6 +579,7 @@ async def native_spawn(self, card, options):
     except (TypeError, ValueError) as exc:
         raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
+    card = await lane_admit(self, binary, card, options.get('prompt', ''))
     from .host_ready import harness_path
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)
