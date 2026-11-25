@@ -128,6 +128,14 @@ fn sweep_owned(
         ));
         return Ok(());
     }
+    // The sibling lease a build holds shared is taken before anything below the target is read, and held through the scan and the removal.
+    let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&canonical)? else {
+        report.skipped.push(format!(
+            "{}: main checkout target cache lease held; not touched",
+            target.display()
+        ));
+        return Ok(());
+    };
     // Only an ignored, untracked directory is a build cache: a tracked file or an unignored one
     // beside the cargo marker is source and never goes with a recursive removal.
     let ignored = crate::disk_hygiene::git(
@@ -165,14 +173,6 @@ fn sweep_owned(
         ));
         return Ok(());
     }
-    // The sibling lease a build holds shared is held exclusively through the scan and the removal.
-    let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&canonical)? else {
-        report.skipped.push(format!(
-            "{}: main checkout target cache lease held; not touched",
-            target.display()
-        ));
-        return Ok(());
-    };
     let (bytes, newest) = scan(&target)?;
     let idle = now.duration_since(newest).unwrap_or_default();
     report.actions.push(format!(

@@ -72,6 +72,14 @@ pub fn sweep(
                 ));
                 continue;
             }
+            // The cache lease a build holds shared is taken before anything below the target is read, and held
+            // through the scan and the removal.
+            let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&target)? else {
+                report
+                    .skipped
+                    .push(format!("{}: cache lease held", target.display()));
+                continue;
+            };
             // A git repository below the target is someone's source tree, whatever markers sit beside it.
             if crate::main_target::holds_git_repository(&canonical)? {
                 report.skipped.push(format!(
@@ -80,13 +88,6 @@ pub fn sweep(
                 ));
                 continue;
             }
-            // The cache lease a build holds shared is held exclusively through the scan and the removal.
-            let Some(_lease) = crate::cargo_cache::try_exclusive_lease(&target)? else {
-                report
-                    .skipped
-                    .push(format!("{}: cache lease held", target.display()));
-                continue;
-            };
             let (bytes, newest) = scan(&target)?;
             if now.duration_since(newest).unwrap_or_default() <= IDLE_AFTER {
                 continue;

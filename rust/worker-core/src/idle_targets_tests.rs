@@ -211,3 +211,36 @@ fn a_git_repository_below_a_legacy_target_keeps_it() {
         assert!(!old.exists(), "{shape}");
     }
 }
+
+#[test]
+fn a_leased_target_with_an_unreadable_child_does_not_stop_the_sweep_of_its_sibling() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let container = tmp.path().join("cargo-target");
+    let leased = target(&container, "batch23", Duration::from_secs(3 * 86400));
+    let sibling = target(&container, "batch24", Duration::from_secs(3 * 86400));
+    let hidden = leased.join("hidden");
+    fs::create_dir_all(&hidden).unwrap();
+    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o000)).unwrap();
+    let lease = crate::cargo_cache::try_exclusive_lease(&leased)
+        .unwrap()
+        .unwrap();
+    let report = run(
+        std::slice::from_ref(&container),
+        &Guards::default(),
+        true,
+        false,
+    );
+    drop(lease);
+    fs::set_permissions(&hidden, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        leased.exists() && !sibling.exists(),
+        "{:?} {:?}",
+        report.skipped,
+        report.actions
+    );
+    assert!(report
+        .skipped
+        .iter()
+        .any(|s| s.contains("cache lease held")));
+}

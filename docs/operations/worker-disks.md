@@ -30,7 +30,7 @@ environment `fleet-launch` runs under. The spawner, `plangraph fast-checks`, pre
 `fleet-launch` resolve that one setting; `fleet-launch` hands it to the session as
 `CARGO_TARGET_DIR` unless the caller set one, and no launcher creates
 `~/.cache/plangraph/cargo-target` while it is set. A worktree under `.claude/worktrees` holds no
-`rust/target`. Cargo targets under
+`rust/target`; `pg-disk-hygiene --apply` removes an idle one. Cargo targets under
 `~/.cache/cargo-target` and `~/.cache/pg-target-warm` untouched for 24 hours are removed by
 `pg-disk-hygiene --apply`, and the disk watch alert at 85% used names the three largest
 directories of the host.
