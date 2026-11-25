@@ -214,8 +214,9 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
-    from .route_policy import implement_family_excluded
+    from .route_policy import implement_family_excluded, refuse_card_sandbox
     from .legs import LOW_RISK_ONLY_LEGS
+    refuse_card_sandbox(card)
     check_route_targets(card, legs)
     effective_role = role if role is not None else card.get("role")
     research = effective_role == "research"
@@ -401,6 +402,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ``installed`` (client name -> bool) puts each leg into its own harness before policy, seats and
     ordering run (rule 3.53); None skips host resolution.
     """
+    from .route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # before any harness probe or leg resolution
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
     from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT

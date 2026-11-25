@@ -238,6 +238,8 @@ def _close_queue(service, queued, **fields):
 
 def admit(service, options, *, card=None, preview=False):
     """Enforce disk and RAM admission even without overflow configuration."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # before the dry-run preview, placement or forwarding
     if options.get('dry_run'):
         if not preview and options.get('role') == 'review' and (card or {}).get('review_workspace') is True:
             options['_placement'] = admit(service, dict(options, dry_run=False), card=card, preview=True) or {}
@@ -500,6 +502,8 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            from plangraph.planner.route_policy import refuse_card_sandbox
+            refuse_card_sandbox(card)
             if (card or {}).get('run_kind') == 'native-codex':
                 from .overflow import native_repo
                 native_repo(card)

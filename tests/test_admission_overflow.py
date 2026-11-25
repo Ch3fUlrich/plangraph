@@ -652,3 +652,84 @@ def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monk
     service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
     assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
     probe.assert_any_call(target)
+
+
+WIDE = {'sandbox': 'danger-full-access'}
+
+
+def _no_side_effects(monkeypatch):
+    """Every resource, placement and binary lookup fails the test when reached."""
+    from plangraph import fleet_snapshot
+    def reached(*args, **kwargs):
+        raise AssertionError('side effect before the sandbox refusal')
+    for module, name in ((a, 'resources'), (overflow, 'registry_caps'), (overflow, 'placement_config'),
+                         (overflow, 'placement_policy'), (overflow, 'ready_records'),
+                         (fleet_snapshot, '_projection_binary')):
+        monkeypatch.setattr(module, name, reached)
+
+
+def test_native_danger_full_access_refuses_before_placement_or_probe(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    _no_side_effects(monkeypatch)
+    card = dict(run_kind='native-codex', repo=str(tmp_path), **WIDE)
+    service = SharedService()
+    service.runner, service._save, service.state = SimpleNamespace(default_cwd=str(tmp_path)), Mock(), tmp_path
+    service.save_refusal = Mock()
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: danger-full-access'):
+        asyncio.run(service.spawn(card=card, prompt='task', role='implement'))
+    service.save_refusal.assert_called_once()
+
+
+def test_direct_admission_danger_full_access_precedes_checks(setup, tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    service, _, remote = setup
+    _no_side_effects(monkeypatch)
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: danger-full-access'):
+        service.admit_spawn({}, card=dict(WIDE))
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: danger-full-access'):
+        service.admit_spawn({'dry_run': True}, card=dict(WIDE))
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: danger-full-access'):
+        asyncio.run(overflow.native_spawn(service, dict(run_kind='native-codex', repo=str(tmp_path), **WIDE), {}))
+    remote.assert_not_called()
+    service._save.assert_not_called()
+
+
+def test_remote_spawn_danger_full_access_refuses_before_staging(monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    ssh = Mock(side_effect=AssertionError('ssh reached'))
+    monkeypatch.setattr(overflow.subprocess, 'run', ssh)
+    with pytest.raises(SpawnRefused, match='^sandbox_refused: danger-full-access'):
+        overflow.remote_spawn('ash', {'ssh': 'ash'}, dict(WIDE), 'task', [])
+    ssh.assert_not_called()
+
+
+def test_explicit_leg_danger_full_access_refuses_before_forwarding(setup, monkeypatch, capsys):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.spawner import cli
+    service, _, remote = setup
+    supervisor = Mock()
+    monkeypatch.setattr(cli, '_start_supervisor', supervisor)
+    monkeypatch.setattr(a, 'resources', lambda service: (100, 1000))   # below the floor: forced overflow
+    service.save_refusal = Mock()
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
+    leg = next(leg.id for leg in DEFAULT_LEGS if 'implement' in leg.roles)
+    assert cli.main(['spawn', '--leg', leg, '--card', json.dumps(WIDE),
+                     'Implement the requested change.']) == 2
+    assert capsys.readouterr().err.startswith('sandbox_refused: danger-full-access')
+    remote.assert_not_called()
+    supervisor.assert_not_called()
+    service._save.assert_not_called()
+    service.save_refusal.assert_called_once()
+
+
+def test_standalone_overflow_cli_danger_full_access_refuses_before_resources(tmp_path, monkeypatch, capsys):
+    _no_side_effects(monkeypatch)
+    monkeypatch.setattr(overflow, 'local_resources', lambda *a: (_ for _ in ()).throw(AssertionError('resources read')))
+    card, prompt, state = tmp_path / 'card.json', tmp_path / 'prompt.txt', tmp_path / 'state'
+    card.write_text(json.dumps(WIDE))
+    prompt.write_text('task')
+    assert overflow.main(['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt),
+                          '--state', str(state)]) == 2
+    assert capsys.readouterr().err.startswith('sandbox_refused: danger-full-access')
+    saved = [json.loads(path.read_text()) for path in state.rglob('*.json')]
+    assert [r['status'] for r in saved if r.get('refusal') == 'SpawnRefused'] == ['refused']

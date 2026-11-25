@@ -400,6 +400,8 @@ def stage_review_diff(diff, directory):
 
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # a wider card never leaves this host
     options = list(options)
     if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
         raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
@@ -547,6 +549,8 @@ def native_repo(card):
 
 async def native_spawn(self, card, options):
     """Placement is already admitted; Rust owns the native writer lifecycle."""
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    refuse_card_sandbox(card)   # before the binary lookup and the sandbox probe
     import asyncio, time
     from plangraph.fleet_snapshot import _projection_binary
     from .private_io import atomic_write_private
@@ -668,6 +672,17 @@ def main(argv=None):
         options.extend(['--cwd', args.cwd])
     if args.role != 'implement':
         options.extend(['--role', args.role])
+    from plangraph.planner.route_policy import refuse_card_sandbox
+    from plangraph.routing_errors import SpawnRefused
+    try:
+        refuse_card_sandbox(json.loads(Path(args.card).read_text()))
+    except SpawnRefused as exc:
+        # Before any resource, host or placement read; saved like every other refusal.
+        cli.SpawnService(state=args.state).save_refusal(exc, args.role)
+        print(exc, file=sys.stderr)
+        return 2
+    except (OSError, ValueError):
+        pass  # Local CLI owns malformed input diagnostics.
     try:
         registry = registry_caps()
         config = placement_config(registry, args.role)

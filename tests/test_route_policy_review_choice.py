@@ -1,9 +1,12 @@
+import pytest
+
 from dataclasses import replace
 from pathlib import Path
 
 from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_REQUIRED
 from plangraph.planner.route_policy import load_route_policy
 from plangraph.planner.routing import plan_spawn, route_card
+from plangraph.routing_errors import SpawnRefused
 
 
 REQUIRED_MODELS = {leg.model for leg in DEFAULT_LEGS if leg.id in REVIEW_REQUIRED}
@@ -203,3 +206,41 @@ def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, mon
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"
     assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
+
+
+SANDBOX_SENTINEL = "SENTINEL-sandbox-value-7f3a"
+# The Python and Rust (`card_sandbox::tests::card_sandbox_contract`) cases are the same table.
+SANDBOX_CASES = [
+    ({}, None), ({"sandbox": None}, None), ({"sandbox": "workspace-write"}, None),
+    ({"sandbox": "danger-full-access"}, "danger-full-access"),
+    ({"sandbox": SANDBOX_SENTINEL}, "unsupported"), ({"sandbox": ""}, "unsupported"),
+    ({"sandbox": "read-only"}, "unsupported"), ({"sandbox": 7}, "unsupported"),
+    ({"sandbox": True}, "unsupported"), ({"sandbox": [SANDBOX_SENTINEL]}, "unsupported"),
+    ({"sandbox": {"k": SANDBOX_SENTINEL}}, "unsupported"),
+]
+
+
+@pytest.mark.parametrize("extra,refusal", SANDBOX_CASES)
+def test_plan_spawn_card_sandbox_contract(extra, refusal):
+    card = {"estimate_tokens": 1000, **extra}
+    if refusal is None:
+        plan_spawn(card, role="implement", catalog_rows=())
+        return
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: ") as caught:
+        plan_spawn(card, role="implement", catalog_rows=())
+    text = str(caught.value)
+    assert SANDBOX_SENTINEL not in text
+    assert ("danger-full-access" in text) == (refusal == "danger-full-access")
+
+
+def test_plan_spawn_danger_full_access_precedes_client_probe():
+    def installed(name):
+        raise AssertionError("client probed before the sandbox refusal")
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: danger-full-access"):
+        plan_spawn({"estimate_tokens": 1000, "sandbox": "danger-full-access"}, role="implement",
+                   catalog_rows=(), installed=installed)
+
+
+def test_route_card_danger_full_access_is_refused():
+    with pytest.raises(SpawnRefused, match="^sandbox_refused: danger-full-access"):
+        route_card({"estimate_tokens": 1000, "sandbox": "danger-full-access"}, role="implement")
