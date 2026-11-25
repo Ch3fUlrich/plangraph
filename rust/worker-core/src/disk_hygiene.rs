@@ -125,15 +125,14 @@ impl Guards {
                 path.starts_with(&p) || p.starts_with(path)
             })
     }
-    /// Broad protection for deletion: any pin or run overlapping `path` in either direction.
+    /// Broad protection for deletion: `pin_protects` plus any run overlapping `path` in either
+    /// direction, so classification and deletion share one pin rule.
     pub fn protects(&self, path: &Path) -> bool {
-        if Self::protected_name(path) {
-            return true;
-        }
-        self.pinned.iter().chain(&self.live).any(|p| {
-            let p = p.canonicalize().unwrap_or_else(|_| p.clone());
-            path.starts_with(&p) || p.starts_with(path)
-        })
+        self.pin_protects(path)
+            || self.live.iter().any(|p| {
+                let p = p.canonicalize().unwrap_or_else(|_| p.clone());
+                path.starts_with(&p) || p.starts_with(path)
+            })
     }
 }
 pub fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
