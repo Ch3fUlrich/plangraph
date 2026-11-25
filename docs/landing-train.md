@@ -69,7 +69,7 @@ unit source, the `ExecStart` binary, the `EnvironmentFile` files and keys and th
 when the host has everything, else prints one `MISSING binary|file|env|path NAME` line per absent thing and
 exits 1. The deploy plan prints `deploy: unit@host, ...` for the GO-REQ (only passing targets), then one
 block per family and host that can be quoted as is: `READY unit@host parts #N`, or `NOT READY unit@host parts
-#N blocker KEY` followed by its `MISSING` or `REFUSED` lines. `--blockers-out` writes a `pg define` file with
+#N blocker KEY` followed by its `MISSING` or `REFUSED` lines. `--derive-only 1` prints what each part ships and which items it carries as one JSON line and asks no host (go-req looks up `Deploy-Hosts:` only for the items of parts with a family). `--blockers-out` writes a `pg define` file with
 a blocker item for each refused target. `merge_batch.py go-req` runs it over the batch's parts with the unit sources of the reported head (read from the commit, not the worktree) and the `Deploy-Hosts:` declarations of the items it carries, and puts the
 blocks into the GO-REQ line (`deploy: unchecked` when there is no hosts registry); it files the blocker items
 with `pg define --file` when the keeper is configured.
@@ -80,7 +80,7 @@ re-runs the `admit` proof (artifacts, freeze, replay of the manifest and of the 
 review of the train delta), so the replay and the delta acceptance rest on that proof and not on a file. It
 reads the pull request twice (before and after every other read) and refuses a head that moved between them
 (`moved_head`) or a main tip that differs from the state it judged (`stale_base`). From GitHub it reads the
-pull request ref and merge base, the changed paths (both ends of a rename) and tree of the train head, the
+pull request ref (open, aimed at `main`, on both reads) and merge base, and the tree of the train head. The changed paths come from `git diff` of the base and the train head in `--repo` without rename detection (both ends of a move), not from the compare API, which lists at most 300 files. the
 newest `tests.yml` `pull_request` run of that head with the jobs of its judged attempt, the newest attempt
 number after the jobs were read, and the workflow file at the head (hashed for the pin). A run counts only
 when it belongs to the requested pull request, and the judged attempt needs a successful `ci-full` receipt of
@@ -88,7 +88,7 @@ the CI publisher for the tree of the train. The decisions come from the document
 the keeper configuration, as committed on `origin/main` (fetched, never the local file): a row is a GO by the
 Keeper's grammar (a timestamp prefix, one numbered GO ruling of a `RULINGS` row, backticked numbers and
 heads, `GO #PR` or `GO project PR #PR`, one full `GO-HEAD`), and `GATE-EDIT <prefix> GO-HEAD sha` written by
-the operator is a grant for one head. The manifest identity is the SHA-256 of the manifest file.
+the operator is a grant for one head. A decision number with more than one row, or one a later row retires, authorizes nothing, and the BY cell must hold `operator` as a comma or plus separated token for a grant. The manifest identity is the SHA-256 of the manifest file.
 
 `plangraph land-train go-verify --evidence FILE` checks the evidence of a GO from protected sources
 (repository ref, workflow run jobs, approvals, delta review, replay, main state). It is pinned to this
