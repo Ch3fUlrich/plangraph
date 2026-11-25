@@ -19,6 +19,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from plangraph.keeper.evidence_git import GitAdapter, resolve_commit  # noqa: E402
+from plangraph.keeper.evidence_types import live_evidence_status  # noqa: E402
 from plangraph.keeper.evidence_repo import _TRACK_RE  # noqa: E402
 from plangraph.keeper.store_tiers import seat_clause_needs_high  # noqa: E402
 
@@ -90,3 +91,17 @@ def names_seats(item):
     """The multi-seat clause of the item's done_criteria, else None."""
     done = item.get("done_criteria")
     return seat_clause_needs_high(done if isinstance(done, str) else None)
+
+
+def live_hold(item):
+    """The keeper's close-gate code that would refuse this close, or ``None``.
+
+    The import has no deploy rows to read, so an item without a ``no deploy needed: <reason>`` line (or
+    with a ``Live:`` clause) is held here instead of rolling back the whole batch at the keeper. An
+    open item still moves to review first (that advances its epoch): the next import retries the
+    close, and any deploy probe it needs must be recorded against the new epoch."""
+    return live_evidence_status(item, ())
+
+
+#: The note of an item the import creates: a question or step closed by a decision ships nothing.
+NO_DEPLOY_NOTE = "no deploy needed: a question or step closed by a decision ships no code"

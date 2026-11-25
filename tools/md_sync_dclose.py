@@ -45,7 +45,7 @@ if _SRC not in sys.path:
 
 from plangraph.keeper import credential_guard  # noqa: E402
 from plangraph.keeper.note_fold import NOTE_CAP  # noqa: E402
-from md_sync_gates import GitGates, names_seats, track_of  # noqa: E402,F401
+from md_sync_gates import GitGates, NO_DEPLOY_NOTE, live_hold, names_seats, track_of  # noqa: E402,F401
 
 DECISION_ROW_RE = re.compile(r"^\| D-([0-9]+) \|")
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
@@ -243,7 +243,7 @@ def plan(plan, dinfo, invalid_rows, *, by_key, pending_keys, repos):
                 item = {"key": key, "project": key.split(":", 1)[0],
                         "state": "open", "review_tier": "none",
                         "evidence_kinds": ["decision"], "evidence": [],
-                        "note": None}
+                        "note": NO_DEPLOY_NOTE}
             else:
                 plan.dclose_skipped.append(
                     (key.split(":", 1)[1], f"D-{info['max_dnum']}", key,
@@ -285,6 +285,16 @@ def _plan_key(plan, key, item, info, gates):
         _plan_decision(plan, key, item, info, new_note)
 
 
+def _held(plan, key, item, primary):
+    """Report a close the keeper's live-evidence gate would refuse; the rest of the import goes on."""
+    code = live_hold(item)
+    if code:
+        plan.skipped.append((key.split(":", 1)[1], f"held: {code} for {key} ({primary}); add a "
+                             "'no deploy needed: <reason>' line, or deploy proof of the new epoch"))
+        plan.d_lines.append(f"held {key}: {primary} {code}")
+    return code
+
+
 def _plan_decision(plan, key, item, info, new_note):
     """Close a decision-only item exactly as the answers path does."""
     primary = f"D-{info['max_dnum']}"
@@ -307,6 +317,8 @@ def _plan_decision(plan, key, item, info, new_note):
                   "note": f"router {primary}: Closes {key}"})
     elif not decision_only:
         plan.skipped.append((key.split(":", 1)[1], f"blocked: {key} is {state}"))
+        return
+    if _held(plan, key, item, primary):
         return
     have = _decision_ids(item)
     for d_id in info["d_ids"]:
@@ -345,6 +357,8 @@ def _plan_sha(plan, key, item, info, gates, new_note):
         elif not tier_done:
             plan.add({"op": "edit", "key": key, "fields": {
                 "review_tier": "none", "evidence_kinds": target_kinds}})
+        if _held(plan, key, item, primary):
+            return
         have = _decision_ids(item)
         for d_id in info["d_ids"]:
             if d_id not in have:
