@@ -18,6 +18,8 @@ use std::{io, path::Path};
 pub const WAIT_LIMIT_MS: i64 = 15 * 60_000;
 /// Waits ended in one round before the round is BLOCKED.
 pub const STRIKE_LIMIT: usize = 2;
+/// How long a BLOCKED round waits for its notices to be delivered before it closes anyway.
+pub const NOTICE_GRACE_MS: i64 = 10 * 60_000;
 
 /// The process that runs a background command, found on the executing host.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,6 +109,10 @@ pub enum Action {
     },
     /// The live session of the BLOCKED round was stopped.
     RoundEnded {
+        round_key: String,
+    },
+    /// The notices of a BLOCKED round stayed queued past the grace: the session was ended anyway.
+    NoticesOverdue {
         round_key: String,
     },
 }
@@ -208,6 +214,10 @@ impl Watch<'_> {
             // signal that was really sent. A crash before the signal leaves none, so an
             // owner that then ends by itself is a finished command, not a strike.
             let signalled = self.state["actions"][key]["signalled"] == json!(true);
+            // The intent is written before any signal: a crash after the kill leaves it,
+            // and the harness's report of the signal exit is the receipt that settles it.
+            self.state["actions"][key]["intent"] = json!(true);
+            self.save()?;
             match self.host.stop(&owner, &wait.task, signalled) {
                 Stop::Survivors => {
                     self.state["actions"][key]["signalled"] = json!(true);
@@ -272,6 +282,7 @@ impl Watch<'_> {
                         .collect();
                     self.state["blocked"]["notices"] = json!(notices);
                     self.state["blocked"]["notified"] = json!(true);
+                    self.state["blocked"]["notified_ms"] = json!(self.now_ms);
                 }
                 self.set_phase(key, Phase::Notified, wait);
                 self.save()?;
@@ -303,13 +314,23 @@ impl Watch<'_> {
                     notice["key"].as_str().unwrap_or(""),
                 )
             });
-        if undelivered {
+        let round_key = blocked["round_key"].as_str().unwrap_or("").to_owned();
+        // A delivery outage must not keep the writer running: past the grace the session
+        // is ended anyway, and the notices stay queued for the bridge to retry.
+        let overdue = blocked["notified_ms"]
+            .as_i64()
+            .is_some_and(|at| self.now_ms - at >= NOTICE_GRACE_MS);
+        if undelivered && !overdue {
             return Ok(());
         }
-        let round_key = blocked["round_key"].as_str().unwrap_or("").to_owned();
         if self.host.end_session(self.session) {
             self.state["blocked"]["ended"] = json!(true);
             self.save()?;
+            if undelivered {
+                self.done.push(Action::NoticesOverdue {
+                    round_key: round_key.clone(),
+                });
+            }
             self.done.push(Action::RoundEnded { round_key });
         }
         Ok(())
@@ -361,7 +382,23 @@ pub fn tick(
             o.round_key == wait.round_key && o.task_id == wait.task_id && o.call_id == wait.call_id
         });
         if phase == Phase::Stopping && !same {
-            watch.settle(&key, "released")?;
+            // The wait closed. If the watchdog had decided to signal and the harness
+            // reports the command ended by that signal, the stop did happen: recover it.
+            let intent = watch.state["actions"][&key]["intent"] == json!(true);
+            let by_signal = reader
+                .exit_of(&wait.task_id)
+                .is_some_and(|code| matches!(code, 137 | 143));
+            if intent && by_signal {
+                watch.set_phase(&key, Phase::Stopped, &wait);
+                watch.save()?;
+                watch.done.push(Action::Stopped {
+                    task_id: wait.task_id.clone(),
+                    command: wait.command.clone(),
+                });
+                watch.finish(&key, Phase::Stopped, &wait)?;
+            } else {
+                watch.settle(&key, "released")?;
+            }
             continue;
         }
         watch.finish(&key, phase, &wait)?;

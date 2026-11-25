@@ -93,6 +93,7 @@ impl World {
             &self.home,
             "ws",
             self.origin + at,
+            true,
         )
     }
 
@@ -214,11 +215,14 @@ fn launch(t: &mut Transcript, root: &Path, at: i64, call: &str, task: &str, comm
     ));
 }
 
-fn wait_call(t: &mut Transcript, root: &Path, at: i64, id: &str, task: &str) {
-    let path = root.join("tasks").join(format!("{task}.output"));
-    let call = format!("until grep -q rc= {}; do sleep 15; done", path.display());
+fn wait_call(t: &mut Transcript, at: i64, id: &str, task: &str) {
     t.request(at - 500);
-    t.tool(at, id, "Bash", json!({ "command": call }));
+    t.tool(
+        at,
+        id,
+        "TaskOutput",
+        json!({"task_id": task, "block": true}),
+    );
 }
 
 fn rules(lines: Vec<Value>) -> Vec<String> {
@@ -234,7 +238,10 @@ fn stub_claude(root: &Path) -> std::path::PathBuf {
     let log = root.join("stop.log");
     fs::write(
         &stub,
-        format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        format!(
+            "#!/bin/sh\n[ \"$1\" = stop ] && echo \"$@\" >> {}\nexit 0\n",
+            log.display()
+        ),
     )
     .unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
@@ -249,7 +256,8 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     std::env::set_var("PLANGRAPH_CLAUDE_BIN", stub_claude(&root));
     let stop_log = root.join("stop.log");
 
-    let mut first = command_shell(&root, id, "bgA", "sleep 301");
+    let secret_command = "sleep 301 # DEPLOY_TOKEN=hunter2hunter2hunter2";
+    let mut first = command_shell(&root, id, "bgA", secret_command);
     // A second shell of the same session runs the very same command text for another task.
     let mut twin = command_shell(&root, id, "bgZ", "sleep 301");
     let mut t = Transcript::at(world.origin);
@@ -257,9 +265,9 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     // Both tasks are launched at the start, as their processes are; the writer waits on
     // bgA first and on bgB when bgA is reported ended.
     let mut second = command_shell(&root, id, "bgB", "sleep 302");
-    launch(&mut t, &root, 2_000, "u1", "bgA", "sleep 301");
+    launch(&mut t, &root, 2_000, "u1", "bgA", secret_command);
     launch(&mut t, &root, 3_000, "u2", "bgB", "sleep 302");
-    wait_call(&mut t, &root, 4_000, "w1", "bgA");
+    wait_call(&mut t, 4_000, "w1", "bgA");
     world.session("writer-5", id, "/w/e2e", Some(&t));
 
     let task = |name: &str| {
@@ -297,8 +305,13 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     );
 
     assert!(world.run(MIN).is_empty(), "first pass records the owner");
+    let stopped = world.run(16 * MIN);
+    assert!(
+        !serde_json::to_string(&stopped).unwrap().contains("hunter2"),
+        "nor the watchdog log: {stopped:?}"
+    );
     assert_eq!(
-        rules(world.run(16 * MIN)),
+        rules(stopped),
         ["round-wait-stopped", "round-wait-notified"]
     );
     assert!(first.wait().is_ok(), "the owner of bgA is gone");
@@ -317,6 +330,10 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     let event = read_json(&outbox[0].as_ref().unwrap().path());
     assert_eq!(event["recipient"], "writer-5");
     assert!(event["text"].as_str().unwrap().contains("sleep 301"));
+    assert!(
+        !event["text"].as_str().unwrap().contains("hunter2"),
+        "credentials in the command text never reach the outbox: {event}"
+    );
     // The bridge delivers: the outbox file goes away, the sent marker stays.
     fs::remove_file(outbox[0].as_ref().unwrap().path()).unwrap();
     assert!(world.run(18 * MIN).is_empty());
@@ -331,7 +348,7 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     // The second wait of the round closes it as BLOCKED, with the command line.
     t.notified(19 * MIN, "bgA");
     t.result(19 * MIN, "w1", None);
-    wait_call(&mut t, &root, 19 * MIN + 3_000, "w2", "bgB");
+    wait_call(&mut t, 19 * MIN + 3_000, "w2", "bgB");
     world.session("writer-5", id, "/w/e2e", Some(&t));
     world.run(20 * MIN);
     let fired = rules(world.run(36 * MIN));
@@ -386,7 +403,7 @@ fn a_review_or_planning_session_with_an_open_wait_is_not_measured_or_stopped() {
     let mut t = Transcript::at(world.origin);
     t.prompt(0, "p1");
     launch(&mut t, &root, 2_000, "u1", "bgR", "sleep 303");
-    wait_call(&mut t, &root, 4_000, "w1", "bgR");
+    wait_call(&mut t, 4_000, "w1", "bgR");
     world.session_as("review", "review-3", "sess-rev", "/w/rev", Some(&t));
     assert!(world.run(MIN).is_empty());
     assert!(world.run(60 * MIN).is_empty());
@@ -423,4 +440,124 @@ fn a_native_run_record_books_one_row_from_its_stage_intervals() {
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn claude_stub(root: &Path, name: &str, stop_rc: i32, agents_json: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = root.join(name);
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = stop ]; then exit {stop_rc}; fi\ncat <<'EOF'\n{agents_json}\nEOF\n"
+    );
+    fs::write(&stub, script).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    stub
+}
+
+#[test]
+fn claude_stop_exit_zero_is_not_a_stopped_session_while_agents_still_lists_it_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let sid = "11111111-2222-3333-4444-555555555555";
+    let end = |stub: std::path::PathBuf| {
+        let mut host = LocalHost::new(dir.path().to_path_buf(), sid.into());
+        host.claude_bin = Some(stub);
+        host.end_session("writer-1")
+    };
+    let live = format!(r#"[{{"sessionId":"{sid}","state":"working"}}]"#);
+    let done = format!(r#"[{{"sessionId":"{sid}","state":"done"}}]"#);
+    let other = r#"[{"sessionId":"other","state":"working"}]"#;
+    assert!(
+        !end(claude_stub(dir.path(), "live", 0, &live)),
+        "exit zero, still live"
+    );
+    assert!(end(claude_stub(dir.path(), "done", 0, &done)));
+    assert!(
+        end(claude_stub(dir.path(), "gone", 0, other)),
+        "an unlisted session is gone"
+    );
+    assert!(
+        end(claude_stub(dir.path(), "empty", 0, "")),
+        "an empty listing lists nobody"
+    );
+    assert!(
+        !end(claude_stub(dir.path(), "failed", 1, &done)),
+        "stop itself failed"
+    );
+    assert!(
+        !end(claude_stub(dir.path(), "junk", 0, "not json")),
+        "an unreadable poll is unconfirmed"
+    );
+}
+
+static RACING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The member exits just before the signal arrives: the kernel refuses the signal.
+fn racing_signal(pid: u32, _signal: i32) -> bool {
+    RACING.store(pid, std::sync::atomic::Ordering::SeqCst);
+    // SAFETY: kill takes numeric identifiers and dereferences nothing.
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    false
+}
+
+#[test]
+fn a_member_that_exits_before_the_signal_is_no_stop_of_ours() {
+    let world = World::live();
+    let id = "sess-race-0001";
+    let root = world.state.parent().unwrap().to_path_buf();
+    let mut shell = command_shell(&root, id, "bgR", "sleep 308");
+    let path = root.join("tasks/bgR.output");
+    let task = super::round_wait::TaskRef {
+        id: "bgR".into(),
+        output_path: Some(path.display().to_string()),
+        launched_from_ms: world.origin,
+        launched_to_ms: world.origin + 5_000,
+    };
+    let mut host = LocalHost::new(world.state.clone(), id.into());
+    host.send_signal = racing_signal;
+    let owner = host.resolve_owner("writer-9", &task).expect("owner");
+    assert_eq!(
+        host.stop(&owner, &task, false),
+        super::round_watch::Stop::Gone
+    );
+    assert!(shell.wait().is_ok());
+    assert_ne!(
+        RACING.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a signal was attempted"
+    );
+}
+
+#[test]
+fn a_telemetry_only_pass_books_rows_and_touches_nothing_else() {
+    let world = World::new();
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    t.request(1_000);
+    t.tool(
+        2_000,
+        "u1",
+        "Bash",
+        json!({"command":"cargo test","run_in_background":true}),
+    );
+    t.result(2_500, "u1", Some("bg1"));
+    t.request(3_000);
+    t.tool(
+        4_000,
+        "w1",
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
+    );
+    world.session("writer-1", "abc", "/w/telemetry", Some(&t));
+    let log = run(
+        &world.state,
+        &world.routing,
+        &world.home,
+        "ws",
+        T0 + 60 * MIN,
+        false,
+    );
+    assert!(log.is_empty(), "no stop, no notice: {log:?}");
+    assert_eq!(world.rows().len(), 1);
+    assert!(!world.state.join("round-watch").exists());
+    assert!(!world.state.join("watchdog").exists());
 }

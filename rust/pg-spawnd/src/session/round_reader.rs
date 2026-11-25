@@ -7,32 +7,34 @@
 //! explain is booked as `unknown`.
 
 use super::{
-    round_time::{classify_command, Cause, Class, OpenWait, RoundRow},
-    round_wait::{command_reads, output_path_of, TaskRef},
+    round_time::{classify_command, Cause, Class, RoundRow},
+    round_wait::{exit_code_of, output_path_of, TaskRef},
 };
 use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Debug)]
-struct Background {
-    task: TaskRef,
-    command: String,
-    class: Class,
+pub(super) struct Background {
+    pub(super) task: TaskRef,
+    pub(super) command: String,
+    pub(super) class: Class,
 }
 
 #[derive(Debug)]
-struct OpenTool {
-    class: Class,
-    command: String,
+pub(super) struct OpenTool {
+    pub(super) class: Class,
+    pub(super) command: String,
     /// `task_id` of a task-output call: a structured binding to one task.
-    task_ref: Option<String>,
-    background: bool,
+    pub(super) task_ref: Option<String>,
+    pub(super) background: bool,
+    /// A blocking task-output call naming one task: the only wait that authorises a stop.
+    pub(super) structured: bool,
     /// When the call was issued: a wait is as old as its own call.
-    started_ms: i64,
+    pub(super) started_ms: i64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum Prev {
+pub(super) enum Prev {
     None,
     Request,
     Assistant { end_turn: bool },
@@ -50,14 +52,16 @@ pub struct Running {
 #[derive(Default)]
 pub struct Reader {
     pub rows: Vec<RoundRow>,
-    session: String,
-    prev_ts: Option<i64>,
-    prev: Option<Prev>,
-    prev_request: Option<String>,
+    pub(super) session: String,
+    pub(super) prev_ts: Option<i64>,
+    pub(super) prev: Option<Prev>,
+    pub(super) prev_request: Option<String>,
     /// Rounds the watchdog closed (round key to closing time): later lines are not booked.
-    closed: HashMap<String, i64>,
-    open: HashMap<String, OpenTool>,
-    background: Vec<Background>,
+    pub(super) closed: HashMap<String, i64>,
+    pub(super) open: HashMap<String, OpenTool>,
+    pub(super) background: Vec<Background>,
+    /// Exit codes the harness reported for finished tasks.
+    pub(super) exits: HashMap<String, i64>,
 }
 
 fn parse_ts(value: &Value) -> Option<i64> {
@@ -98,7 +102,7 @@ impl Reader {
         Self::read_closed(session, text, HashMap::new())
     }
 
-    fn book(&mut self, cause: Cause, ms: i64) {
+    pub(super) fn book(&mut self, cause: Cause, ms: i64) {
         if let Some(row) = self.rows.last_mut() {
             *row.causes.entry(cause).or_insert(0) += ms;
             if cause != Cause::BetweenRounds {
@@ -107,21 +111,13 @@ impl Reader {
         }
     }
 
-    /// The running task a wait call is bound to: by the structured task id of a
-    /// task-output call, or by the task's full output path as a word of the command.
-    fn named_task(&self, tool: &OpenTool) -> Option<usize> {
-        if let Some(id) = &tool.task_ref {
-            return self.background.iter().position(|bg| &bg.task.id == id);
-        }
-        self.background.iter().position(|bg| {
-            bg.task
-                .output_path
-                .as_deref()
-                .is_some_and(|path| command_reads(&tool.command, path))
-        })
-    }
-
-    fn cause_of_gap(&mut self, next: Prev, request: Option<&str>, human: bool, gap: i64) -> Cause {
+    pub(super) fn cause_of_gap(
+        &mut self,
+        next: Prev,
+        request: Option<&str>,
+        human: bool,
+        gap: i64,
+    ) -> Cause {
         if human {
             return Cause::BetweenRounds;
         }
@@ -133,6 +129,11 @@ impl Reader {
                 // The writer ended its turn with a command running: the time is booked
                 // to the oldest one, but no call names it, so it never counts toward a stop.
                 Cause::wait_for_class(self.background[0].class)
+            }
+            // The writer ended its turn with nothing running: the time until it is driven
+            // again (a notification, a steer, the next prompt) is time between rounds.
+            (Prev::Assistant { end_turn: true }, Prev::Request | Prev::Other) => {
+                Cause::BetweenRounds
             }
             // The request line and the first output are one request: their ids agree.
             (Prev::Request, Prev::Assistant { .. })
@@ -152,7 +153,7 @@ impl Reader {
     }
 
     /// Overlapping tool calls: a wait outranks a gate, a test, a build, any other tool.
-    fn tool_cause(&mut self, _gap: i64) -> Cause {
+    pub(super) fn tool_cause(&mut self, _gap: i64) -> Cause {
         let waiting = self.open.values().find(|tool| tool.class == Class::Wait);
         if let Some(tool) = waiting {
             return match self.named_task(tool) {
@@ -267,8 +268,16 @@ impl Reader {
             let name = block["name"].as_str().unwrap_or("");
             let input = &block["input"];
             let command = input["command"].as_str().unwrap_or("").to_owned();
-            let waits = matches!(name, "TaskOutput" | "BashOutput" | "Monitor");
-            let class = if waits {
+            let task_output = matches!(name, "TaskOutput" | "BashOutput");
+            // A task-output call blocks unless it says `block: false`.
+            let blocking = input["block"] != false;
+            let class = if task_output {
+                if blocking {
+                    Class::Wait
+                } else {
+                    Class::Other
+                }
+            } else if name == "Monitor" {
                 Class::Wait
             } else if name == "Bash" {
                 classify_command(&command)
@@ -280,11 +289,13 @@ impl Reader {
                 .iter()
                 .find_map(|key| input[*key].as_str())
                 .map(str::to_owned);
+            let structured = task_output && blocking && task_ref.is_some();
             self.open.insert(
                 id,
                 OpenTool {
                     class,
                     command,
+                    structured,
                     task_ref,
                     background: input["run_in_background"] == true,
                     started_ms: ts,
@@ -318,73 +329,15 @@ impl Reader {
         }
         if value["origin"]["kind"] == "task-notification" {
             let text = value["message"]["content"].as_str().unwrap_or("");
+            for bg in &self.background {
+                if text.contains(&format!("<task-id>{}</task-id>", bg.task.id)) {
+                    if let Some(code) = exit_code_of(text) {
+                        self.exits.insert(bg.task.id.clone(), code);
+                    }
+                }
+            }
             self.background
                 .retain(|bg| !text.contains(&format!("<task-id>{}</task-id>", bg.task.id)));
         }
-    }
-
-    /// Background tasks that have started and not yet been reported finished.
-    pub fn running(&self) -> Vec<Running> {
-        let Some(row) = self.rows.last() else {
-            return Vec::new();
-        };
-        self.background
-            .iter()
-            .map(|bg| Running {
-                round_key: row.round_key.clone(),
-                task: bg.task.clone(),
-                command: bg.command.clone(),
-            })
-            .collect()
-    }
-
-    /// The wait the writer is in at `now_ms`: the oldest open wait call bound to one
-    /// running task. Its age is the age of that call alone; idle time, an earlier call
-    /// or a sleep that names no task does not count.
-    pub fn open_wait(&self, now_ms: i64) -> Option<OpenWait> {
-        let row = self.rows.last()?;
-        let mut calls: Vec<(&String, &OpenTool)> = self
-            .open
-            .iter()
-            .filter(|(_, tool)| tool.class == Class::Wait)
-            .collect();
-        calls.sort_by_key(|(id, _)| id.as_str());
-        let (call_id, tool, index) = calls
-            .into_iter()
-            .find_map(|(id, tool)| Some((id.clone(), tool, self.named_task(tool)?)))?;
-        let bg = &self.background[index];
-        Some(OpenWait {
-            round_key: row.round_key.clone(),
-            task_id: bg.task.id.clone(),
-            task: bg.task.clone(),
-            call_id,
-            command: bg.command.clone(),
-            class: bg.class,
-            waited_ms: (now_ms - tool.started_ms).max(0),
-        })
-    }
-
-    /// A round the watchdog closed ends at its terminal time: the open wait that earned
-    /// the close is booked up to it, so the row holds the minutes that triggered it.
-    fn book_closed_tail(&mut self) {
-        let Some(at) = self
-            .rows
-            .last()
-            .and_then(|row| self.closed.get(&row.round_key))
-            .copied()
-        else {
-            return;
-        };
-        let Some(previous) = self.prev_ts.filter(|p| *p < at) else {
-            return;
-        };
-        let gap = at - previous;
-        let cause = if !self.open.is_empty() {
-            self.tool_cause(gap)
-        } else {
-            self.cause_of_gap(Prev::Other, None, false, gap)
-        };
-        self.book(cause, gap);
-        self.prev_ts = Some(at);
     }
 }

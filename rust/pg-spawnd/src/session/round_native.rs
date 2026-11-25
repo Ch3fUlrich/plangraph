@@ -52,24 +52,36 @@ pub fn rows(record: &Value) -> Vec<RoundRow> {
     let Some(run) = record["run_id"].as_str() else {
         return Vec::new();
     };
-    let Some(stage_rows) = record["stage_timings"].as_array() else {
-        return Vec::new();
-    };
-    let mut stages: Vec<(i64, i64, Cause)> = stage_rows
-        .iter()
+    let mut stages: Vec<(i64, i64, Cause)> = record["stage_timings"]
+        .as_array()
+        .into_iter()
+        .flatten()
         .filter_map(|s| {
             let (from, to) = (s["started_at_ms"].as_i64()?, s["ended_at_ms"].as_i64()?);
             Some((from, to.max(from), stage_cause(s["stage"].as_str()?)))
         })
         .collect();
-    if stages.is_empty() {
+    let turns: Vec<(i64, i64)> = record["writer_turns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| Some((parse_ts(&t["started"])?, parse_ts(&t["ended"])?)))
+        .collect();
+    // Boundaries are the persisted writer turns; a record that kept no turn falls back to
+    // its `writing` stages. Stage intervals decide the attribution inside a round.
+    let mut starts: Vec<i64> = turns.iter().map(|t| t.0).collect();
+    if starts.is_empty() {
+        starts = record["stage_timings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|s| s["stage"] == "writing")
+            .filter_map(|s| s["started_at_ms"].as_i64())
+            .collect();
+    }
+    if starts.is_empty() && stages.is_empty() {
         return Vec::new();
     }
-    let mut starts: Vec<i64> = stage_rows
-        .iter()
-        .filter(|s| s["stage"] == "writing")
-        .filter_map(|s| s["started_at_ms"].as_i64())
-        .collect();
     stages.sort_by_key(|s| (s.0, s.1));
     // A later stage never re-books time an earlier one owns.
     let mut owned: Vec<(i64, i64)> = Vec::new();
@@ -81,15 +93,6 @@ pub fn rows(record: &Value) -> Vec<RoundRow> {
             owned.sort_unstable();
         }
     }
-    let turns: Vec<(i64, i64)> = record["writer_turns"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| Some((parse_ts(&t["started"])?, parse_ts(&t["ended"])?)))
-        .collect();
-    if starts.is_empty() {
-        starts = turns.iter().map(|t| t.0).collect();
-    }
     for (from, to) in turns {
         for (a, b) in free_parts(from, to.max(from), &owned.clone()) {
             booked.push((a, b, Cause::NativeTurn));
@@ -97,7 +100,9 @@ pub fn rows(record: &Value) -> Vec<RoundRow> {
             owned.sort_unstable();
         }
     }
-    let first = booked.iter().map(|b| b.0).min().unwrap_or(0);
+    let Some(first) = booked.iter().map(|b| b.0).min() else {
+        return Vec::new();
+    };
     starts.sort_unstable();
     starts.dedup();
     if starts.is_empty() {
@@ -106,6 +111,7 @@ pub fn rows(record: &Value) -> Vec<RoundRow> {
     let last_round = starts.len() - 1;
     (0..starts.len())
         .filter_map(|i| {
+            // Time before the first boundary belongs to the first round.
             let from = if i == 0 {
                 first.min(starts[0])
             } else {

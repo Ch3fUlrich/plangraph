@@ -56,7 +56,14 @@ fn sessions(routing: &Path) -> Vec<Value> {
 /// A launch record that another host mirrored has no transcript and no process here:
 /// it books nothing and stops nothing. Only a command whose owner was recorded on this
 /// host is ever signalled.
-pub fn run(state: &Path, routing: &Path, home: &Path, host: &str, now_ms: i64) -> Vec<Value> {
+pub fn run(
+    state: &Path,
+    routing: &Path,
+    home: &Path,
+    host: &str,
+    now_ms: i64,
+    act: bool,
+) -> Vec<Value> {
     let mut log = Vec::new();
     for spec in sessions(routing) {
         let (Some(id), Some(cwd)) = (spec["session_id"].as_str(), spec["cwd"].as_str()) else {
@@ -66,13 +73,15 @@ pub fn run(state: &Path, routing: &Path, home: &Path, host: &str, now_ms: i64) -
         let Ok(text) = fs::read_to_string(transcript_path(home, cwd, id)) else {
             continue;
         };
-        let local = LocalHost::new(state.to_path_buf(), id.to_owned());
         let path = round_watch::state_file(state, name);
-        match tick(name, &text, now_ms, &path, &local) {
-            Ok(actions) => log.extend(actions.iter().map(|a| event(name, a))),
-            Err(error) => log.push(
-                json!({"rule": "round-watch-error", "session": name, "error": error.to_string()}),
-            ),
+        if act {
+            let local = LocalHost::new(state.to_path_buf(), id.to_owned());
+            match tick(name, &text, now_ms, &path, &local) {
+                Ok(actions) => log.extend(actions.iter().map(|a| event(name, a))),
+                Err(error) => log.push(
+                    json!({"rule": "round-watch-error", "session": name, "error": error.to_string()}),
+                ),
+            }
         }
         let blocked = round_watch::blocked_outcome(&path);
         let rows: Vec<Value> = Reader::read_closed(name, &text, round_watch::closed_rounds(&path))
@@ -134,13 +143,16 @@ fn ingest_native_runs(state: &Path, host: &str, log: &mut Vec<Value>) {
 fn event(session: &str, action: &Action) -> Value {
     match action {
         Action::Stopped { task_id, command } => {
-            json!({"rule": "round-wait-stopped", "session": session, "task": task_id, "command": command})
+            json!({"rule": "round-wait-stopped", "session": session, "task": task_id, "command": super::round_state::redacted(command)})
         }
         Action::Finished { task_id } => {
             json!({"rule": "round-wait-finished", "session": session, "task": task_id})
         }
         Action::OwnerUnknown { task_id } => {
             json!({"rule": "round-wait-owner-unknown", "session": session, "task": task_id})
+        }
+        Action::NoticesOverdue { round_key } => {
+            json!({"rule": "round-notices-overdue", "session": session, "round": round_key})
         }
         Action::RoundEnded { round_key } => {
             json!({"rule": "round-session-ended", "session": session, "round": round_key})
@@ -152,16 +164,17 @@ fn event(session: &str, action: &Action) -> Value {
             json!({"rule": "round-wait-notified", "session": session, "task": task_id})
         }
         Action::Blocked { round_key, command } => {
-            json!({"rule": "round-blocked", "session": session, "round": round_key, "command": command})
+            json!({"rule": "round-blocked", "session": session, "round": round_key, "command": super::round_state::redacted(command)})
         }
     }
 }
 
-/// Entry for `pg-spawnd round-watch --state DIR [--routing-state DIR] [--now-ms N] [--digest]`.
+/// Entry for `pg-spawnd round-watch --state DIR [--routing-state DIR] [--now-ms N] [--digest] [--telemetry-only]`.
 pub fn main(args: &[String]) -> i32 {
     let mut state = None;
     let mut now = None;
     let mut digest = false;
+    let mut act = true;
     let mut routing = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -170,8 +183,9 @@ pub fn main(args: &[String]) -> i32 {
             "--now-ms" => now = it.next().and_then(|n| n.parse::<i64>().ok()),
             "--routing-state" => routing = it.next().map(std::path::PathBuf::from),
             "--digest" => digest = true,
+            "--telemetry-only" => act = false,
             _ => {
-                eprintln!("usage: pg-spawnd round-watch --state DIR [--routing-state DIR] [--now-ms N] [--digest]");
+                eprintln!("usage: pg-spawnd round-watch --state DIR [--routing-state DIR] [--now-ms N] [--digest] [--telemetry-only]");
                 return 2;
             }
         }
@@ -194,7 +208,7 @@ pub fn main(args: &[String]) -> i32 {
         .unwrap_or_default();
     let host = super::local_hostname();
     let now = now.unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-    for line in run(&state, &routing, &home, &host, now) {
+    for line in run(&state, &routing, &home, &host, now, act) {
         println!("{line}");
     }
     0

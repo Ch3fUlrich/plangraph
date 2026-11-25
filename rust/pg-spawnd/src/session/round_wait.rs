@@ -77,3 +77,15 @@ impl TaskRef {
         })
     }
 }
+
+/// The exit code a task notification reports: "... exit code 143".
+pub fn exit_code_of(notification: &str) -> Option<i64> {
+    let rest = &notification[notification.find("exit code ")? + "exit code ".len()..];
+    let digits: String = rest
+        .chars()
+        .enumerate()
+        .take_while(|(i, c)| c.is_ascii_digit() || (*i == 0 && *c == '-'))
+        .map(|(_, c)| c)
+        .collect();
+    digits.parse().ok()
+}

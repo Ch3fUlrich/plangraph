@@ -81,8 +81,8 @@ fn waiting(task: &str, start: i64, t: &mut Transcript) {
     t.tool(
         start + 6_000,
         &format!("w-{task}"),
-        "Bash",
-        json!({"command":format!("until grep -q rc= /t/tasks/{task}.output; do sleep 15; done")}),
+        "TaskOutput",
+        json!({"task_id": task, "block": true}),
     );
 }
 
@@ -374,8 +374,8 @@ fn a_stop_needs_the_very_wait_call_that_earned_it() {
     t.tool(
         16 * MIN + 12_000,
         "w2-a",
-        "Bash",
-        json!({"command":"until grep -q rc= /t/tasks/a.output; do sleep 15; done"}),
+        "TaskOutput",
+        json!({"task_id": "a", "block": true}),
     );
     let retry = Fake::new(true, Stop::Ended);
     assert!(run(&t, 17, dir.path(), &retry).is_empty());
@@ -397,8 +397,8 @@ fn a_wait_on_a_prefix_task_id_stops_nothing() {
     t.tool(
         6_000,
         "w-x",
-        "Bash",
-        json!({"command":"until grep -q rc= /t/tasks/bg10.output; do sleep 15; done"}),
+        "TaskOutput",
+        json!({"task_id": "bg10", "block": true}),
     );
     run(&t, 1, dir.path(), &host);
     assert!(run(&t, 40, dir.path(), &host).is_empty());
@@ -418,8 +418,8 @@ fn a_replacement_wait_call_qualifies_on_its_own_after_a_release() {
     t.tool(
         16 * MIN + 12_000,
         "w2-a",
-        "Bash",
-        json!({"command":"until grep -q rc= /t/tasks/a.output; do sleep 15; done"}),
+        "TaskOutput",
+        json!({"task_id": "a", "block": true}),
     );
     let after = Fake::new(true, Stop::Ended);
     assert!(
@@ -436,5 +436,155 @@ fn a_replacement_wait_call_qualifies_on_its_own_after_a_release() {
             command: "cargo test -p a".into()
         }),
         "{done:?}"
+    );
+}
+
+#[test]
+fn a_shell_wait_that_names_the_output_file_is_never_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    waiting("a", 0, &mut t);
+    t.0.pop();
+    t.tool(
+        6_000,
+        "w-sh",
+        "Bash",
+        json!({"command":"until grep -q rc= /t/tasks/a.output; do sleep 15; done"}),
+    );
+    run(&t, 1, dir.path(), &host);
+    assert!(run(&t, 60, dir.path(), &host).is_empty());
+    assert!(
+        host.stopped.borrow().is_empty(),
+        "nothing proves the loop waits on it"
+    );
+}
+
+#[test]
+fn a_non_blocking_task_output_call_is_never_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    waiting("a", 0, &mut t);
+    t.0.pop();
+    t.tool(
+        6_000,
+        "w-poll",
+        "TaskOutput",
+        json!({"task_id": "a", "block": false}),
+    );
+    run(&t, 1, dir.path(), &host);
+    assert!(run(&t, 60, dir.path(), &host).is_empty());
+    assert!(host.stopped.borrow().is_empty());
+}
+
+/// The watchdog wrote its intent, killed the command and died before it saved `Stopped`.
+fn crashed_after_the_kill(dir: &std::path::Path, t: &Transcript) {
+    let path = dir.join("w.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    state["actions"]["writer-1:p1|a|w-a"] = json!({"phase": "stopping", "intent": true,
+        "round_key": "writer-1:p1", "task_id": "a", "call_id": "w-a",
+        "command": "cargo test -p a", "waited_ms": 1,
+        "task": {"id": "a", "output_path": "/t/tasks/a.output",
+                 "launched_from_ms": 0, "launched_to_ms": 1}});
+    std::fs::write(&path, state.to_string()).unwrap();
+    let _ = t;
+}
+
+fn ended_by(t: &mut Transcript, code: i64) {
+    t.result(16 * MIN, "w-a", None);
+    t.0.push(json!({"type":"user","timestamp": super::round_time_tests::stamp_from(T0, 16 * MIN),
+        "origin":{"kind":"task-notification"},
+        "message":{"role":"user","content": format!(
+            "<task-notification><task-id>a</task-id><status>failed</status><summary>Background command \"cargo test -p a\" failed with exit code {code}</summary></task-notification>")}}));
+}
+
+#[test]
+fn a_crash_after_the_kill_is_recovered_from_the_harness_report_of_the_signal_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = first_wait("a");
+    run(&t, 1, dir.path(), &host);
+    crashed_after_the_kill(dir.path(), &t);
+    ended_by(&mut t, 143);
+    let restarted = Fake::live();
+    let done = run(&t, 17, dir.path(), &restarted);
+    assert!(
+        done.contains(&Action::Stopped {
+            task_id: "a".into(),
+            command: "cargo test -p a".into()
+        }),
+        "{done:?}"
+    );
+    assert!(
+        done.contains(&Action::Notified {
+            task_id: "a".into()
+        }),
+        "{done:?}"
+    );
+    assert!(
+        restarted.stopped.borrow().is_empty(),
+        "no new signal without an open wait"
+    );
+    assert_eq!(restarted.sent.borrow().len(), 1, "the nudge is not lost");
+}
+
+#[test]
+fn a_crash_before_the_kill_and_a_normal_exit_is_released_without_a_strike() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = first_wait("a");
+    run(&t, 1, dir.path(), &host);
+    crashed_after_the_kill(dir.path(), &t);
+    ended_by(&mut t, 0);
+    let restarted = Fake::live();
+    assert!(run(&t, 17, dir.path(), &restarted).is_empty());
+    assert!(restarted.sent.borrow().is_empty());
+    assert!(std::fs::read_to_string(dir.path().join("w.json"))
+        .unwrap()
+        .contains("released"));
+}
+
+#[test]
+fn a_delivery_outage_does_not_keep_a_blocked_writer_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Fake::live();
+    let mut t = first_wait("a");
+    run(&t, 1, dir.path(), &host);
+    run(&t, 16, dir.path(), &host);
+    t.notified(17 * MIN, "a");
+    t.result(17 * MIN, "w-a", None);
+    waiting("b", 17 * MIN, &mut t);
+    run(&t, 20, dir.path(), &host);
+    *host.undelivered.borrow_mut() = true; // the bridge is down and never flushes
+    assert!(run(&t, 34, dir.path(), &host)
+        .iter()
+        .any(|a| matches!(a, Action::Blocked { .. })));
+    assert!(
+        run(&t, 40, dir.path(), &host).is_empty(),
+        "inside the grace the writer may still read why"
+    );
+    assert_eq!(*host.ended.borrow(), 0);
+    let late = run(&t, 45, dir.path(), &host);
+    assert!(
+        late.contains(&Action::NoticesOverdue {
+            round_key: "writer-1:p1".into()
+        }),
+        "{late:?}"
+    );
+    assert!(
+        late.contains(&Action::RoundEnded {
+            round_key: "writer-1:p1".into()
+        }),
+        "{late:?}"
+    );
+    assert_eq!(*host.ended.borrow(), 1);
+    assert_eq!(
+        host.sent.borrow().len(),
+        3,
+        "the notices stay queued for the bridge"
     );
 }

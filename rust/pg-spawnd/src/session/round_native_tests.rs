@@ -78,3 +78,46 @@ fn a_record_without_stage_intervals_has_no_row() {
     assert!(rows(&json!({"run_id": "run-2", "stage_timings": []})).is_empty());
     assert!(rows(&json!({"run_id": "run-2"})).is_empty());
 }
+
+#[test]
+fn a_turn_without_a_writing_stage_is_its_own_round() {
+    let base = 1_700_000_000_000;
+    // Turn one has its stage; turn two (a resume) booked none; turn three has a stage again.
+    let record = json!({"run_id": "run-4",
+    "stage_timings": [
+        stage("writing", base + 10, base + 50_000),
+        stage("fast_checks", base + 50_000, base + 60_000),
+        stage("writing", base + 200_010, base + 230_000),
+    ],
+    "writer_turns": [
+        turn(base, base + 50_000),
+        turn(base + 100_000, base + 160_000),
+        turn(base + 200_000, base + 230_000),
+    ]});
+    let rows = rows(&record);
+    assert_eq!(rows.len(), 3, "one round per persisted turn");
+    let ms =
+        |row: &super::round_time::RoundRow, cause| row.causes.get(&cause).copied().unwrap_or(0);
+    assert_eq!(ms(&rows[0], Cause::Gate), 10_000);
+    assert_eq!(
+        ms(&rows[1], Cause::NativeTurn),
+        60_000,
+        "the unstaged turn is not folded away"
+    );
+    assert_eq!(ms(&rows[2], Cause::NativeTurn), 30_000 - 10 + 10);
+    assert_eq!(
+        rows[1].round_key,
+        format!("run-4:native:{}", base + 100_000)
+    );
+}
+
+#[test]
+fn a_record_with_turns_and_no_stage_rows_still_books_its_turns() {
+    let base = 1_700_000_000_000;
+    let record = json!({"run_id": "run-5",
+        "writer_turns": [turn(base, base + 40_000), turn(base + 90_000, base + 120_000)]});
+    let rows = rows(&record);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].causes[&Cause::NativeTurn], 40_000);
+    assert_eq!(rows[1].causes[&Cause::NativeTurn], 30_000);
+}
