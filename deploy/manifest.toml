@@ -40,7 +40,7 @@ name = "flow-watchdog"
 dir = "watchdog"
 files = ["flow-watchdog.service", "flow-watchdog.timer"]
 env_files = ["flow-watchdog.env"]
-not_deployed = "needs a host collector that refreshes ~/.local/state/plangraph/flow-snapshot.json (docs/flow-watchdog.md); none is deployed yet, the binary is installed on every host"
+not_deployed = "service and timer await a host collector that refreshes ~/.local/state/plangraph/flow-snapshot.json (docs/flow-watchdog.md)"
 
 [[unit]]
 name = "stall-watchdog"
