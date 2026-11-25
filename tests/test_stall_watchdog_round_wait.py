@@ -71,9 +71,12 @@ def launch(root, task, command, at):
                  message=dict(role='user', content=[dict(type='tool_result', tool_use_id='u-' + task, content=text)]))]
 
 
-def wait_call(root, task, at):
-    call = f'until grep -q rc= {output_path(root, task)}; do sleep 15; done'
-    return [request(at - 0.5), tool(at, 'w-' + task, call)]
+def wait_call(task, at):
+    """A blocking task-output call: the only wait the watchdog may end a command for."""
+    return [request(at - 0.5), line(at, 'assistant', requestRef='r%d' % int(at - 1),
+                                    message=dict(id='m%d' % at, stop_reason='tool_use', content=[
+                                        dict(type='tool_use', id='w-' + task, name='TaskOutput',
+                                             input=dict(task_id=task, block=True))]))]
 
 
 def command_shell(root, session_id, task, command):
@@ -93,7 +96,7 @@ def world(tmp_path, monkeypatch):
     globals()['T0'] = time.time()  # after the build: the shells start within seconds of it
     stop_log = tmp_path / 'claude-stop.log'
     stub = tmp_path / 'claude-stub'
-    stub.write_text(f'#!/bin/sh\necho "$@" >> {stop_log}\n')
+    stub.write_text(f'#!/bin/sh\n[ "$1" = stop ] && echo "$@" >> {stop_log}\nexit 0\n')
     stub.chmod(0o755)
     delivered = tmp_path / 'delivered.log'
     monkeypatch.setenv('PATH', f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
@@ -142,7 +145,7 @@ def test_the_scheduled_tick_ends_the_task_once_blocks_the_second_wait_and_closes
     second = command_shell(root, 'sid-5xxxx', 'bgB', 'sleep 402')
     twin = command_shell(root, 'sid-5xxxx', 'bgZ', 'sleep 401')  # same command text as bgA, another task
     head = [line(0, 'user', promptId='p1', origin=dict(kind='human'), message=dict(role='user', content='go'))]
-    one = head + launch(root, 'bgA', 'sleep 401', 2) + launch(root, 'bgB', 'sleep 402', 3) + wait_call(root, 'bgA', 4)
+    one = head + launch(root, 'bgA', 'sleep 401', 2) + launch(root, 'bgB', 'sleep 402', 3) + wait_call('bgA', 4)
     world.tick(1, one)
     assert 'round-wait' not in world.tick(14, one)
     assert first.poll() is None, 'under the cap nothing is stopped'
@@ -159,7 +162,7 @@ def test_the_scheduled_tick_ends_the_task_once_blocks_the_second_wait_and_closes
     # bgA is reported ended; the writer now waits on bgB for over fifteen minutes.
     two = one + [line(19 * 60, 'user', origin=dict(kind='task-notification'),
                       message=dict(role='user', content='<task-notification><task-id>bgA</task-id></task-notification>')),
-                 result(19 * 60 + 1, 'w-bgA')] + wait_call(root, 'bgB', 19 * 60 + 3)
+                 result(19 * 60 + 1, 'w-bgA')] + wait_call('bgB', 19 * 60 + 3)
     world.tick(20, two)
     status = world.tick(36, two)
     assert 'round-blocked' in status and 'sleep 402' in status

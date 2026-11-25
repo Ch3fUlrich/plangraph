@@ -17,6 +17,7 @@ mod round_host;
 pub mod round_native;
 #[cfg(test)]
 mod round_native_tests;
+mod round_open;
 pub mod round_reader;
 pub mod round_state;
 pub mod round_store;

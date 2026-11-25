@@ -239,13 +239,22 @@ pub(crate) fn explicit_wait(task: &str, wait_call: &str) -> Transcript {
     );
     t.result(2_500, "u1", Some(task));
     t.request(3_000);
-    t.tool(4_000, "u2", "Bash", json!({"command": wait_call}));
+    if wait_call == "TaskOutput" {
+        t.tool(
+            4_000,
+            "u2",
+            "TaskOutput",
+            json!({"task_id": task, "block": true}),
+        );
+    } else {
+        t.tool(4_000, "u2", "Bash", json!({"command": wait_call}));
+    }
     t
 }
 
 #[test]
 fn open_wait_names_the_task_and_counts_the_open_tail() {
-    let call = "until grep -q rc= /t/tasks/bg1.output; do sleep 15; done";
+    let call = "TaskOutput";
     let mut t = explicit_wait("bg1", call);
     let wait = t.read().open_wait(T0 + 4_000 + 16 * MIN).expect("blocked");
     assert_eq!(wait.task_id, "bg1");
@@ -286,10 +295,7 @@ fn an_idle_writer_or_an_unnamed_sleep_is_no_wait_to_stop() {
 
 #[test]
 fn a_new_round_closes_the_wait() {
-    let mut t = explicit_wait(
-        "bg1",
-        "until grep -q rc= /t/tasks/bg1.output; do sleep 15; done",
-    );
+    let mut t = explicit_wait("bg1", "TaskOutput");
     t.prompt(5 * MIN, "p2");
     assert_eq!(t.read().open_wait(T0 + 60 * MIN), None);
 }
@@ -354,19 +360,25 @@ fn a_first_output_of_another_request_is_not_model_wait() {
 }
 
 #[test]
-fn a_task_id_is_named_as_a_whole_word_never_as_a_prefix() {
-    let call = "until grep -q rc= /t/tasks/bg10.output; do sleep 15; done";
-    // bg1 is the only task: a wait for bg10 names none of the running tasks.
-    assert_eq!(
-        explicit_wait("bg1", call).read().open_wait(T0 + 60 * MIN),
-        None
+fn a_task_id_is_named_exactly_never_as_a_prefix() {
+    // bg1 is running; a call for bg10 names none of the running tasks.
+    let mut t = explicit_wait("bg1", "echo started");
+    t.0.pop();
+    t.tool(
+        4_000,
+        "u2",
+        "TaskOutput",
+        json!({"task_id": "bg10", "block": true}),
     );
-    let wait = explicit_wait("bg10", call)
+    assert_eq!(t.read().open_wait(T0 + 60 * MIN), None);
+    let wait = explicit_wait("bg10", "TaskOutput")
         .read()
         .open_wait(T0 + 60 * MIN)
         .unwrap();
-    assert_eq!(wait.task_id, "bg10");
-    assert_eq!(wait.call_id, "u2");
+    assert_eq!(
+        (wait.task_id.as_str(), wait.call_id.as_str()),
+        ("bg10", "u2")
+    );
 }
 
 #[test]
@@ -377,8 +389,8 @@ fn idle_time_before_a_wait_call_does_not_count_toward_the_cap() {
     t.tool(
         20 * MIN + 1_000,
         "w9",
-        "Bash",
-        json!({"command":"until grep -q rc= /t/tasks/bg1.output; do sleep 15; done"}),
+        "TaskOutput",
+        json!({"task_id": "bg1", "block": true}),
     );
     let reader = t.read();
     let wait = reader.open_wait(T0 + 20 * MIN + 31_000).unwrap();
@@ -401,45 +413,54 @@ fn lines_after_a_closed_round_are_not_booked_but_the_open_gap_is_booked_to_the_c
 }
 
 #[test]
-fn a_comment_or_a_bare_id_binds_no_wait() {
+fn a_shell_command_naming_the_output_path_is_telemetry_only() {
+    let loop_call = "until grep -q rc= /t/tasks/bg1.output; do sleep 15; done";
     for call in [
+        loop_call,
+        "until grep -q rc= \"/t/tasks/bg1.output\"; do sleep 15; done",
         "sleep 900 # waiting for /t/tasks/bg1.output",
         "sleep 900; echo bg1",
-        "sleep 900 && echo /t/tasks/bg1.output.old",
+        "tail -f /t/tasks/bg1.output",
     ] {
-        assert_eq!(
-            explicit_wait("bg1", call).read().open_wait(T0 + 60 * MIN),
-            None,
-            "{call}"
-        );
+        let t = explicit_wait("bg1", call);
+        assert_eq!(t.read().open_wait(T0 + 60 * MIN), None, "{call}");
     }
-    let quoted = "until grep -q rc= \"/t/tasks/bg1.output\"; do sleep 15; done";
-    assert!(explicit_wait("bg1", quoted)
-        .read()
-        .open_wait(T0 + 60 * MIN)
-        .is_some());
+    // The same loop still books its minutes to the task's class.
+    let mut t = explicit_wait("bg1", loop_call);
+    t.result(4_000 + 9 * MIN, "u2", None);
+    assert_eq!(cause(&t.read().rows[0], Cause::WaitTest), 9 * MIN);
+    // A comment or a bare id binds nothing, not even for telemetry.
+    let mut c = explicit_wait("bg1", "sleep 900 # /t/tasks/bg1.output");
+    c.result(4_000 + 9 * MIN, "u2", None);
+    assert_eq!(cause(&c.read().rows[0], Cause::WaitSleep), 9 * MIN);
 }
 
 #[test]
-fn a_task_output_call_binds_by_its_structured_task_id_only() {
-    let mut t = explicit_wait("bg1", "echo started");
-    t.0.pop();
-    t.tool(
-        4_000,
-        "u2",
-        "TaskOutput",
-        json!({"task_id": "bg1", "block": true}),
+fn a_task_output_call_binds_by_its_structured_task_id_and_only_when_it_blocks() {
+    let call = |input: serde_json::Value| {
+        let mut t = explicit_wait("bg1", "echo started");
+        t.0.pop();
+        t.tool(4_000, "u2", "TaskOutput", input);
+        t.read().open_wait(T0 + 20 * MIN)
+    };
+    assert_eq!(
+        call(json!({"task_id": "bg1", "block": true}))
+            .unwrap()
+            .task_id,
+        "bg1"
     );
-    assert_eq!(t.read().open_wait(T0 + 20 * MIN).unwrap().task_id, "bg1");
-    let mut other = explicit_wait("bg1", "echo started");
-    other.0.pop();
-    other.tool(
-        4_000,
-        "u2",
-        "TaskOutput",
-        json!({"task_id": "bg10", "block": true}),
+    assert_eq!(
+        call(json!({"task_id": "bg1"})).unwrap().task_id,
+        "bg1",
+        "block defaults on"
     );
-    assert_eq!(other.read().open_wait(T0 + 20 * MIN), None);
+    assert_eq!(
+        call(json!({"task_id": "bg1", "block": false})),
+        None,
+        "a poll is no wait"
+    );
+    assert_eq!(call(json!({"task_id": "bg10", "block": true})), None);
+    assert_eq!(call(json!({"block": true})), None, "no task named");
 }
 
 #[test]
@@ -467,4 +488,23 @@ fn a_closed_round_books_its_open_wait_up_to_the_close() {
     let row = &Reader::read_closed("sess", &text.join("\n"), closed).rows[0];
     assert_eq!(cause(row, Cause::WaitTest), 20 * MIN - 4_000);
     assert_eq!(row.ended_ms, T0 + 20 * MIN);
+}
+
+#[test]
+fn time_after_an_ended_turn_with_nothing_running_is_between_rounds_not_harness() {
+    let mut t = Transcript::new();
+    t.prompt(0, "p1");
+    t.request(1_000);
+    t.text(2_000, true);
+    // Driven again 30 minutes later by a steer or a notification, then a new request.
+    t.request(30 * MIN);
+    t.text(30 * MIN + 1_000, true);
+    let row = &t.read().rows[0];
+    assert_eq!(cause(row, Cause::BetweenRounds), 30 * MIN - 2_000);
+    assert_eq!(cause(row, Cause::Harness), 1_000);
+    assert_eq!(
+        row.wall_ms(),
+        3_000,
+        "prompt to request, and two model waits"
+    );
 }

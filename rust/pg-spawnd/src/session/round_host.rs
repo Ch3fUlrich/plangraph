@@ -28,6 +28,18 @@ pub struct LocalHost {
     /// Launch window slack; none skips the check (fixtures that start processes now
     /// under a transcript of another time).
     pub launch_slack_ms: Option<i64>,
+    /// Sends one signal to one process; true only when the kernel accepted it.
+    pub send_signal: fn(u32, i32) -> bool,
+    /// The `claude` binary of `claude stop`; the environment's, then the PATH's when none.
+    pub claude_bin: Option<PathBuf>,
+}
+
+fn kill_process(pid: u32, signal: i32) -> bool {
+    if pid <= 1 || pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: kill takes numeric identifiers and dereferences nothing.
+    unsafe { libc::kill(pid as i32, signal) == 0 }
 }
 
 impl LocalHost {
@@ -37,6 +49,8 @@ impl LocalHost {
             session_id,
             roots: Roots::default(),
             launch_slack_ms: Some(LAUNCH_SLACK_MS),
+            send_signal: kill_process,
+            claude_bin: None,
         }
     }
 
@@ -157,8 +171,21 @@ impl Host for LocalHost {
             // Nothing left to signal: it ended by itself, or after our earlier signal.
             return if signalled { Stop::Ended } else { Stop::Gone };
         }
-        // Members were seen alive: this signal is the evidence of the watchdog's stop.
-        group.terminate();
+        // The kernel must accept a signal for a member that was seen alive: that
+        // acceptance is the evidence of the watchdog's stop. A member that exited
+        // between the scan and the signal is not a stop of ours.
+        let accepted = members
+            .iter()
+            .filter(|pid| (self.send_signal)(**pid, libc::SIGTERM))
+            .count();
+        if accepted == 0 {
+            let left = group.members().unwrap_or_default();
+            return match (left.is_empty(), signalled) {
+                (true, true) => Stop::Ended,
+                (true, false) => Stop::Gone,
+                (false, _) => Stop::Survivors,
+            };
+        }
         match stop_group(&group, Duration::from_secs(5), Duration::from_secs(5)) {
             StopOutcome::Empty => Stop::Ended,
             StopOutcome::Survivors(_) => Stop::Survivors,
@@ -172,15 +199,45 @@ impl Host for LocalHost {
     fn end_session(&self, _session: &str) -> bool {
         // `claude stop` takes the short job id: the first eight characters of the session id.
         let job: String = self.session_id.chars().take(8).collect();
-        let bin = std::env::var("PLANGRAPH_CLAUDE_BIN")
-            .ok()
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| "claude".into());
-        std::process::Command::new(bin)
-            .args(["stop", &job])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .is_ok_and(|out| out.status.success())
+        let bin = self.claude_bin.clone().unwrap_or_else(|| {
+            std::env::var("PLANGRAPH_CLAUDE_BIN")
+                .ok()
+                .filter(|v| !v.is_empty())
+                .map_or_else(|| "claude".into(), PathBuf::from)
+        });
+        let run = |args: &[&str]| {
+            std::process::Command::new(&bin)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+        };
+        if run(&["stop", &job]).is_none() {
+            return false;
+        }
+        // Exit zero is not a stopped session: `claude agents` must no longer list it live
+        // (the same confirmation Sessions._ensure_stopped uses). A failing poll is unconfirmed.
+        let Some(listing) = run(&["agents", "--json"]) else {
+            return false;
+        };
+        let text = String::from_utf8_lossy(&listing.stdout);
+        let rows: serde_json::Value = if text.trim().is_empty() {
+            json!([])
+        } else {
+            match serde_json::from_str(text.trim()) {
+                Ok(rows) => rows,
+                Err(_) => return false,
+            }
+        };
+        let Some(rows) = rows.as_array() else {
+            return false;
+        };
+        !rows.iter().any(|row| {
+            row["sessionId"] == json!(self.session_id)
+                && !["finished", "stopped", "done", "failed"]
+                    .contains(&row["state"].as_str().unwrap_or(""))
+        })
     }
 
     fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {

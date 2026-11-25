@@ -1,6 +1,7 @@
 //! Durable per-session state of the round watchdog: where it lives and how it is read.
 
 use super::round_time::OpenWait;
+use pg_worker_core::run::scrub::Scrubber;
 use serde_json::{json, Value};
 use std::{collections::HashMap, fs, path::Path};
 
@@ -60,7 +61,7 @@ pub(super) fn notice_line(wait: &OpenWait, strikes: usize) -> String {
         "Watchdog ended your background command `{}` (task {}) after {minutes} min of waiting; \
          the cap is {} min. Do not wait on one command that long: split it or run it in the \
          foreground with a timeout.",
-        wait.command,
+        redacted(&wait.command),
         wait.task_id,
         super::round_watch::WAIT_LIMIT_MS / 60_000
     );
@@ -68,9 +69,17 @@ pub(super) fn notice_line(wait: &OpenWait, strikes: usize) -> String {
         format!(
             "BLOCKED: second wait over the cap in this round, last command `{}`; this session \
              is ended. {first}",
-            wait.command
+            redacted(&wait.command)
         )
     } else {
         first
     }
+}
+
+/// Command text with credentials withheld, for every line that leaves the transcript:
+/// the notice queued for delivery and the watchdog log. Environment values and
+/// secret-shaped words are replaced by the shared redactor.
+pub(super) fn redacted(text: &str) -> String {
+    let env: Vec<_> = std::env::vars_os().collect();
+    Scrubber::from_env(&env).scrub(text)
 }
