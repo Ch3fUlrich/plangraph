@@ -277,12 +277,18 @@ impl Model {
                 let stale = t.base != main;
                 if matches!(t.kind, Kind::Retry { .. }) && stale {
                     // No third rebuild in tested fast-forward when a stale landing is valid (what main
-                    // gained touches none of the train's paths); a rebuild that main's changes make
-                    // necessary is not refused. Only rebuilds caused by a stale base count.
+                    // gained touches none of the train's paths) and there is a green result to land; a
+                    // rebuild that main's changes make necessary is not refused. Only rebuilds caused by a
+                    // stale base count.
+                    // Only while there is a green result to land: a train that has not got one (it was not
+                    // bound yet, or its CI is still running) is rebuilt like any stale train.
+                    let green =
+                        t.ci == Ci::Green && t.bound && t.checked && t.tested == Some(t.tree);
                     if policy.landing == Landing::TestedFf
                         && policy.stale_k > 0
                         && t.rebuilds >= policy.stale_k
                         && moved & own == 0
+                        && green
                     {
                         return Err(Denied::StaleBound);
                     }

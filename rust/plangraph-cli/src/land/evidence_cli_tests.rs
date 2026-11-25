@@ -1,10 +1,13 @@
-//! The carries reach the builder only through the CLI dispatch that reads `--parts`.
-use super::build::*;
+//! The carries file `evidence-assess --carry-out` writes goes through the `build` and `verify` commands;
+//! a refusal by carry admission is told from a failure of the freeze by its message.
+use super::build::BuildResult;
 use super::build_tests::{g, part, Fx};
 use super::evidence::Evidence;
 use super::evidence_git;
+use super::main_state::State;
 use super::train::*;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn file(dir: &Path, name: &str, value: &impl Serialize) -> String {
@@ -23,16 +26,14 @@ fn python() -> std::process::Command {
     command
 }
 
-/// A part whose head was amended (same patch, same base): its receipt is the one of the old head.
+/// A batch whose head was amended on the same base: same patch, so its ACCEPT and CI carry.
 struct Case {
     fx: Fx,
     dir: tempfile::TempDir,
+    base: String,
     old: String,
     new: String,
-    evidence: Evidence,
-    manifest: Manifest,
-    open: BuildOpen,
-    result: BuildResult,
+    carries: String,
 }
 
 fn case() -> Case {
@@ -54,80 +55,105 @@ fn case() -> Case {
     );
     let new = g(fx.path(), &["rev-parse", "HEAD"]);
     g(fx.path(), &["checkout", "-q", "main"]);
-    let carry = Carry {
-        old_head: old.clone(),
-        new_head: new.clone(),
-        evidence: evidence.clone(),
-    };
-    let mut p = part(1, &new, None);
-    p.receipt.head = old.clone();
-    p.receipt.carried = Some(carry);
-    let outcome = build(&fx.input(vec![p], "", None)).unwrap();
-    let m = outcome.manifest.unwrap();
-    let open = BuildOpen {
-        build: m.build.clone(),
-        base: m.base.clone(),
-        policy_version: m.policy.version.clone(),
-        grant_digest: "fixture".into(),
-        snapshot_position: 1,
-    };
+    // The file the CLI writes: `evidence-assess --carry-out`.
+    let dir = tempfile::tempdir().unwrap();
+    let carries = dir.path().join("carries.json").to_str().unwrap().to_owned();
+    let flags: BTreeMap<String, String> = [
+        ("repo", fx.path().to_str().unwrap()),
+        ("evidence", &file(dir.path(), "evidence.json", &evidence)),
+        ("main", &base),
+        ("head", &new),
+        ("trains-now", "1"),
+        ("carry-out", &carries),
+    ]
+    .iter()
+    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+    .collect();
+    super::evidence_cli::assess_cli(&flags).unwrap();
     Case {
         fx,
-        dir: tempfile::tempdir().unwrap(),
+        dir,
+        base,
         old,
         new,
-        evidence,
-        manifest: m,
-        open,
-        result: outcome.result,
+        carries,
     }
 }
 
 impl Case {
-    /// `verify` through the dispatch with the parts file as given and the carries file as given.
-    fn verify(
-        &self,
-        embedded: bool,
-        frozen: bool,
-        carries: Option<&[Carry]>,
-        trains: &str,
-    ) -> Result<Vec<String>, String> {
+    /// The parts file of the registrar: the part's receipt is the one of the old head.
+    fn parts(&self) -> Vec<PartIn> {
         let mut p = part(1, &self.new, None);
         p.receipt.head = self.old.clone();
-        let carry = Carry {
-            old_head: self.old.clone(),
-            new_head: self.new.clone(),
-            evidence: self.evidence.clone(),
+        vec![p]
+    }
+
+    fn flags(&self, carries: bool, trains: &str, out: &Path) -> BTreeMap<String, String> {
+        let mut f: BTreeMap<String, String> = [
+            ("repo", self.fx.path().to_str().unwrap()),
+            ("base", &self.base),
+            ("name", "t1"),
+            ("grant-digest", "fixture"),
+            ("snapshot-position", "1"),
+            ("out", out.to_str().unwrap()),
+            ("trains-landed", trains),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+        if carries {
+            f.insert("carries".into(), self.carries.clone());
+        }
+        f
+    }
+
+    fn build(
+        &self,
+        parts: Vec<PartIn>,
+        carries: bool,
+        trains: &str,
+        out: &Path,
+    ) -> Result<Vec<String>, String> {
+        let flags = self.flags(carries, trains, out);
+        super::cli::run_build(&flags, parts, vec![], &State::Green, &self.base)
+    }
+
+    /// `verify` over the artifacts `build` wrote, with the parts as the registrar gives them.
+    fn verify(&self, out: &Path, carries: bool, trains: &str) -> Result<Vec<String>, String> {
+        let read = |n: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(out.join(n)).unwrap()).unwrap()
         };
-        // The freeze records the selection as the builder admitted it.
-        p.receipt.carried = frozen.then(|| carry.clone());
+        let open: BuildOpen = serde_json::from_value(read("t1.open.json")).unwrap();
+        let result: BuildResult = serde_json::from_value(read("t1.result.json")).unwrap();
         let freeze = Freeze {
-            policy_version: self.open.policy_version.clone(),
-            base: self.open.base.clone(),
-            grant_digest: self.open.grant_digest.clone(),
-            selection: vec![p.clone()],
+            policy_version: open.policy_version.clone(),
+            base: open.base.clone(),
+            grant_digest: open.grant_digest.clone(),
+            selection: result.snapshot.clone(),
         };
-        p.receipt.carried = embedded.then_some(carry);
         let d = self.dir.path();
-        let mut args: Vec<String> = vec![
-            "verify".into(),
-            "--repo".into(),
-            self.fx.path().to_str().unwrap().into(),
-            "--manifest".into(),
-            file(d, "manifest.json", &self.manifest),
-            "--parts".into(),
-            file(d, "parts.json", &vec![p]),
-            "--open".into(),
-            file(d, "open.json", &self.open),
-            "--freeze".into(),
-            file(d, "freeze.json", &freeze),
-            "--result".into(),
-            file(d, "result.json", &self.result),
-        ];
-        if let Some(carries) = carries {
+        let mut args: Vec<String> = [
+            "verify",
+            "--repo",
+            self.fx.path().to_str().unwrap(),
+            "--manifest",
+            out.join("t1.manifest.json").to_str().unwrap(),
+            "--parts",
+            &file(d, "parts.json", &self.parts()),
+            "--open",
+            out.join("t1.open.json").to_str().unwrap(),
+            "--freeze",
+            &file(d, "freeze.json", &freeze),
+            "--result",
+            out.join("t1.result.json").to_str().unwrap(),
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        if carries {
             args.extend([
                 "--carries".into(),
-                file(d, "carries.json", &carries),
+                self.carries.clone(),
                 "--trains-landed".into(),
                 trains.into(),
             ]);
@@ -136,35 +162,42 @@ impl Case {
     }
 }
 
+type Out = tempfile::TempDir;
+
 #[test]
-fn a_carry_embedded_in_the_parts_file_is_dropped_and_only_a_validated_carry_is_taken() {
+fn the_carries_file_of_evidence_assess_is_admitted_by_build_and_verify_within_the_bound() {
     let c = case();
-    let carry = Carry {
-        old_head: c.old.clone(),
-        new_head: c.new.clone(),
-        evidence: c.evidence.clone(),
-    };
-    // Embedded in --parts with no --carries: refused, the receipt names the old head.
-    let err = c.verify(true, false, None, "1").unwrap_err();
-    // The embedded carry no longer matches the selection the builder froze with it.
-    assert!(
-        err.contains("freeze refused") || err.contains("receipt"),
-        "{err}"
-    );
-    // Through --carries, assessed again at admission: accepted within the train bound ...
-    c.verify(false, true, Some(std::slice::from_ref(&carry)), "1")
-        .unwrap();
-    // ... refused once four trains landed, although the embedded carry says otherwise.
-    let err = c
-        .verify(true, false, Some(std::slice::from_ref(&carry)), "4")
-        .unwrap_err();
-    // The embedded carry no longer matches the selection the builder froze with it.
-    assert!(
-        err.contains("freeze refused") || err.contains("receipt"),
-        "{err}"
-    );
-    // A carry file of another head attaches nothing.
-    let mut other = carry.clone();
-    other.new_head = c.old.clone();
-    assert!(c.verify(false, false, Some(&[other]), "1").is_err());
+    let out: Out = tempfile::tempdir().unwrap();
+    c.build(c.parts(), true, "1", out.path()).unwrap();
+    c.verify(out.path(), true, "1").unwrap();
+}
+
+#[test]
+fn build_and_verify_refuse_the_receipt_of_the_old_head_without_a_carry_it_can_admit() {
+    let c = case();
+    let good: Out = tempfile::tempdir().unwrap();
+    c.build(c.parts(), true, "1", good.path()).unwrap();
+    // Without --carries, and past the train bound: the build refuses at admission, by the receipt.
+    for (carries, trains) in [(false, "1"), (true, "4")] {
+        let out: Out = tempfile::tempdir().unwrap();
+        let err = c.build(c.parts(), carries, trains, out.path()).unwrap_err();
+        assert!(err.contains("receipt:"), "{err}");
+    }
+    // The verifier refuses the same artifacts the same way, after the freeze matched: not a freeze failure.
+    for (carries, trains) in [(false, "1"), (true, "4")] {
+        let err = c.verify(good.path(), carries, trains).unwrap_err();
+        assert!(err.contains("receipt:"), "{err}");
+        assert!(!err.contains("freeze refused"), "{err}");
+    }
+}
+
+#[test]
+fn a_carry_embedded_in_the_parts_is_dropped_by_the_build_too() {
+    let c = case();
+    let carry: Vec<Carry> = serde_json::from_slice(&std::fs::read(&c.carries).unwrap()).unwrap();
+    let mut parts = c.parts();
+    parts[0].receipt.carried = Some(carry[0].clone());
+    let out: Out = tempfile::tempdir().unwrap();
+    let err = c.build(parts, false, "1", out.path()).unwrap_err();
+    assert!(err.contains("receipt:"), "{err}");
 }

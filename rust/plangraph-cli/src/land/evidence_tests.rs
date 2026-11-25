@@ -197,8 +197,10 @@ fn the_report_counts_per_day_and_every_carry_names_old_and_new_head() {
         &facts(key("pid1", &["a.txt", "b.txt"]), &[], false, 2),
     );
     let void = decide(&evidence(1), &facts(key("x", &[]), &[], false, 2));
-    let mut recs = records_of(&carried, "2026-11-24", "b1", "head1", true);
-    recs.extend(records_of(&void, "2026-11-24", "b2", "head2", true));
+    let mut recs = records_of(&carried, "2026-11-24", "b1", "head1");
+    recs.extend(records_of(&void, "2026-11-24", "b2", "head2"));
+    recs.push(Record::new("2026-11-24", "b1", "head1", Kind::Rebase));
+    recs.push(Record::new("2026-11-24", "b2", "head2", Kind::Rebase));
     recs.push(Record::new(
         "2026-11-25",
         "b1",

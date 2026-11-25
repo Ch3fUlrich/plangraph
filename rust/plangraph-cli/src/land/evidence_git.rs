@@ -39,25 +39,32 @@ fn paths_touched_since(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Stri
         )
     };
     let commits = list("--no-merges", "--diff-merges=off")?;
-    let merges = list("--merges", "--diff-merges=dense-combined")?;
+    // A merge off the mainline counts by what it changed against all its parents; a merge on main's own
+    // line counts by what it changed against main (its first parent), so a merge that takes a side
+    // parent's version of a file still counts while a side branch that synced main inherits nothing.
+    let nested = list("--merges", "--diff-merges=dense-combined")?;
+    let mainline = git::out(
+        dir,
+        &[
+            "log",
+            "--first-parent",
+            "--merges",
+            "--diff-merges=first-parent",
+            "--no-renames",
+            "--name-only",
+            "--format=",
+            "--end-of-options",
+            &range,
+            "--",
+        ],
+    )?;
     Ok(commits
         .lines()
-        .chain(merges.lines())
+        .chain(nested.lines())
+        .chain(mainline.lines())
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
         .collect())
-}
-
-/// Whether `new_head` is a rebase of the evidence's head: history rewritten (it does not contain the old
-/// head) onto a different base than the one the old head sat on. A commit on top of the old head, a merge
-/// of main into it and an amendment on the same base are not rebases.
-pub fn was_rebased(dir: &Path, old: &Evidence, main: &str, new_head: &str) -> Result<bool, String> {
-    if old.head == new_head || git::is_ancestor(dir, &old.head, new_head)? {
-        return Ok(false);
-    }
-    let was = git::out(dir, &["merge-base", &old.head, &old.base])?;
-    let now = git::out(dir, &["merge-base", new_head, main])?;
-    Ok(was != now)
 }
 
 /// The identity of the diff `from..to` that keeps every byte of content, whitespace included (`git

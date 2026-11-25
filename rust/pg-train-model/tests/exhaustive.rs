@@ -5,7 +5,7 @@ use pg_train_model::*;
 use std::collections::HashSet;
 use support::*;
 
-const DEPTH: usize = 6;
+const DEPTH: usize = 7;
 const PARTS: PartId = 4;
 const TRAINS: TrainId = 3;
 

@@ -270,3 +270,18 @@ fn under_policy_a_an_overlap_reason_is_refused_for_a_part_that_was_already_due_a
         Err(Denied::Disposition)
     );
 }
+
+#[test]
+fn an_overlap_reason_for_a_part_that_was_not_ready_at_the_cut_is_refused() {
+    let specs = vec![spec(1, None), spec(1, None)];
+    let mut m = Model::new(policy(9, 5, 0, Order::Oldest), specs);
+    register_all(&mut m, [0]);
+    ok(&mut m, Event::Select);
+    // Part 1 registers after the cut and ages by one tick; no selection ever deferred it.
+    register_all(&mut m, [1]);
+    ok(&mut m, Event::Tick);
+    record(&mut m, 1, Disposition::Overlap { with: 0, waited: 0 });
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+    record(&mut m, 1, Disposition::Overlap { with: 0, waited: 1 });
+    assert_eq!(verify(&mut m, 1), Err(Denied::Disposition));
+}

@@ -44,7 +44,7 @@ predecessor.
   retry group of seven runs although no ordinary part is due, a legacy settled train whose child waits for
   the verified outcome, the child of a reverted part refused at registration and at build, a stack of three
   or more dropped or reverted while held, a restart that keeps deferral age and red rounds.
-- `tests/exhaustive.rs`: every ordering of the alphabet to depth 6 from three starting points (a fresh model, a train under test with a part waiting, two parts under test) over four parts (a stack of three with
+- `tests/exhaustive.rs`: every ordering of the alphabet to depth 7 from three starting points (a fresh model, a train under test with a part waiting, two parts under test) over four parts (a stack of three with
   an overlap, and an independent part), under policy (a), policy (b) and the default.
 - `tests/replay.rs`: replay of trains 9 to 16 (`fixtures/trains_9_16.json`, 52 batches from git history;
   ready = committer time of the batch head, paths = indices of the files of its own diff). The ignored test
@@ -92,11 +92,17 @@ In tested fast-forward a retry train rebuilt twice because its base went stale i
 when what main gained since its tested base touches none of its paths (`Event::MainMove { paths }` and the
 landings carry theirs), so the tested tree is what a fast-forward of the current main would hold; a move
 that touches them makes a rebuild necessary and it is not refused. Rebuilds on an unchanged base do not
-count. In pull request merge mode, once the live retry train was rebuilt twice an ordinary selection runs
+count, and the third rebuild is refused only while there is a green result to land (a train not yet
+bound, or still running, is rebuilt as any stale train). In pull request merge mode, once the live retry train was rebuilt twice an ordinary selection runs
 beside it; that ordinary train goes on after the retry train closes, and the queued retry groups start when
 it has landed or gone red. `stale_k` 0 (`without_stale_bound`)
 is the plain per-group bound; the test `with_the_plain_per_group_bound_main_moves_restart_a_retry_train_without_end_*`
 keeps the three moves of main giving four runs under it.
+
+A stale landing is the experiment's accepted risk: the landed tree was tested on the older base, and the
+path check shows only that main's changes miss the train's paths, not that the merged tree equals the
+tested one. A reading that demands a valid fast-forward of the tested commit, or a green required CI on the
+current-main result, is the plain per-group bound with a third rebuild; it is the revert, not this ruling.
 
 What the experiment records, per retry train and per day, from the live landing journal (the model counts
 runs and rebuilds, not minutes): CI runs of the retry train (`run`; model: 3 at most in tested fast-forward,

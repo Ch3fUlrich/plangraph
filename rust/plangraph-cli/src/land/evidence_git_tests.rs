@@ -150,7 +150,6 @@ fn the_cli_prints_the_verdicts_naming_both_heads_and_the_daily_report() {
         "2026-11-24",
         "b1",
         &new_head,
-        true,
     )
     .iter()
     .map(|r| serde_json::to_string(r).unwrap())
@@ -159,7 +158,7 @@ fn the_cli_prints_the_verdicts_naming_both_heads_and_the_daily_report() {
     let rflags = [("records".to_owned(), rec.to_str().unwrap().to_owned())].into();
     assert_eq!(
         super::evidence_cli::report_cli(&rflags).unwrap(),
-        ["2026-11-24 rebases 1 accepts_carried 1 ci_carried 1 re_reviews 0 fix_rounds_after_rebase 0 landed 0"]
+        ["2026-11-24 rebases 0 accepts_carried 1 ci_carried 1 re_reviews 0 fix_rounds_after_rebase 0 landed 0"]
     );
 }
 
@@ -170,15 +169,12 @@ fn a_void_condition_without_a_prior_accept_has_nothing_to_void_and_no_re_review_
     let d = decide(&e, &facts(key("other", &["a.txt", "b.txt"]), &[], false, 0));
     assert_eq!(d.accept, Accept::None);
     assert_eq!(d.ci, Ci::Rerun(CiRerun::Void(Void::PatchIdChanged)));
-    let kinds = |rebased| -> Vec<Kind> {
-        records_of(&d, "2026-11-24", "b1", "h", rebased)
-            .into_iter()
-            .map(|r| r.kind)
-            .collect()
-    };
-    // Only an actual rebase is a rebase; an assessment of an unchanged head is not.
-    assert_eq!(kinds(true), [Kind::Rebase]);
-    assert!(kinds(false).is_empty());
+    // An assessment logs what it decided, never a rebase: that is logged by whoever ran it.
+    let kinds: Vec<Kind> = records_of(&d, "2026-11-24", "b1", "h")
+        .into_iter()
+        .map(|r| r.kind)
+        .collect();
+    assert!(kinds.is_empty());
 }
 
 pub(super) fn flags(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -215,18 +211,22 @@ fn assess_appends_its_records_and_the_record_command_adds_a_rebase_fix_round() {
     ]);
     super::evidence_cli::assess_cli(&assess).unwrap();
     super::evidence_cli::assess_cli(&assess).unwrap();
-    // The same head again (main moved, nothing rebased) carries but is not a rebase.
+    // The same head again (main moved) carries too. Whoever ran the rebase logs it once.
     let mut same = assess.clone();
     same.insert("head".into(), head.clone());
     super::evidence_cli::assess_cli(&same).unwrap();
-    let rec = flags(&[
-        ("records-out", log.to_str().unwrap()),
-        ("day", "2026-11-25"),
-        ("batch", "b1"),
-        ("head", "h9"),
-        ("kind", "fix-round-after-rebase"),
-    ]);
-    super::evidence_cli::record_cli(&rec).unwrap();
+    let rec = |day: &str, head: &str, kind: &str| {
+        flags(&[
+            ("records-out", log.to_str().unwrap()),
+            ("day", day),
+            ("batch", "b1"),
+            ("head", head),
+            ("kind", kind),
+        ])
+    };
+    super::evidence_cli::record_cli(&rec("2026-11-24", &new_head, "rebase")).unwrap();
+    super::evidence_cli::record_cli(&rec("2026-11-24", &new_head, "rebase")).unwrap();
+    super::evidence_cli::record_cli(&rec("2026-11-25", "h9", "fix-round-after-rebase")).unwrap();
     assert!(super::evidence_cli::record_cli(&flags(&[
         ("records-out", "x"),
         ("day", "d"),
@@ -438,33 +438,6 @@ fn a_merge_is_judged_by_what_it_changed_against_main_and_a_reverted_branch_commi
 }
 
 #[test]
-fn only_a_rewritten_head_on_a_new_base_is_a_rebase_an_amendment_or_a_merge_of_main_is_not() {
-    let fx = Fx::new();
-    let base = fx.base();
-    let head = fx.commit(&base, "a.txt", "a\n");
-    let old = recorded(&fx, &base, &head);
-    let on_top = fx.commit(&head, "b.txt", "b\n");
-    let main1 = advance_main(&fx, "log.txt", "entry 1\n");
-    let moved = rebased(&fx, &head, &main1);
-    let p = fx.path();
-    g(p, &["checkout", "-q", "--detach", &head]);
-    g(p, &["merge", "--no-ff", "-q", "-m", "merge main", &main1]);
-    let merged = g(p, &["rev-parse", "HEAD"]);
-    // An amendment of the head on the same base: a different commit that does not contain the old one.
-    g(p, &["checkout", "-q", "--detach", &head]);
-    g(p, &["commit", "-q", "--amend", "-m", "reworded"]);
-    let amended = g(p, &["rev-parse", "HEAD"]);
-    g(p, &["checkout", "-q", "main"]);
-    let was = |main: &str, new: &str| evidence_git::was_rebased(p, &old, main, new).unwrap();
-    assert!(!was(&base, &head));
-    assert!(!was(&base, &on_top));
-    assert!(!was(&main1, &merged));
-    assert!(!was(&base, &amended));
-    assert!(!was(&main1, &amended));
-    assert!(was(&main1, &moved));
-}
-
-#[test]
 fn a_nested_merge_that_synced_main_into_a_side_branch_inherits_nothing() {
     let fx = Fx::new();
     let base0 = fx.base();
@@ -502,4 +475,59 @@ fn a_nested_merge_that_synced_main_into_a_side_branch_inherits_nothing() {
     g(p, &["checkout", "-q", "main"]);
     let d = assess(&fx, &old, &landed, &head, 1);
     assert!(matches!(d.accept, Accept::Carried { .. }), "{d:?}");
+}
+
+#[test]
+fn a_mainline_merge_that_takes_a_side_parents_version_of_a_file_still_counts() {
+    let fx = Fx::new();
+    let base0 = fx.base();
+    let p = fx.path();
+    let ev_base = advance_main(
+        &fx,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nline 6\n",
+    );
+    let head = fx.commit(
+        &ev_base,
+        "shared.txt",
+        "head change\nline 2\nline 3\nline 4\nline 5\nmine\n",
+    );
+    let old = recorded(&fx, &ev_base, &head);
+    // Two merges on main's own line: the first takes the old parent's tree (shared.txt goes back to
+    // its earlier content), the second takes main's tree again. Neither differs from all its parents.
+    let tree = |c: &str| g(p, &["rev-parse", &format!("{c}^{{tree}}")]);
+    let m1 = g(
+        p,
+        &[
+            "commit-tree",
+            &tree(&base0),
+            "-p",
+            &ev_base,
+            "-p",
+            &base0,
+            "-m",
+            "take the old version",
+        ],
+    );
+    let m2 = g(
+        p,
+        &[
+            "commit-tree",
+            &tree(&ev_base),
+            "-p",
+            &m1,
+            "-p",
+            &ev_base,
+            "-m",
+            "restore",
+        ],
+    );
+    g(p, &["update-ref", "refs/heads/main", &m2]);
+    g(p, &["reset", "-q", "--hard", "main"]);
+    assert_eq!(tree(&m2), tree(&ev_base));
+    let d = assess(&fx, &old, &m2, &head, 1);
+    assert!(
+        matches!(&d.accept, Accept::Void { reason: Void::MainTouched(t), .. } if t.contains("shared.txt")),
+        "{d:?}"
+    );
 }

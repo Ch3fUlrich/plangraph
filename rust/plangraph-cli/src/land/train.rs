@@ -178,6 +178,19 @@ pub enum FreezeRefusal {
     SelectionChanged,
 }
 
+/// A selection without its admission evidence: a carried receipt says how the receipt was admitted at
+/// this build, not which parts were selected, so it is not part of what a freeze must equal.
+pub fn selection_identity(parts: &[PartIn]) -> Vec<PartIn> {
+    parts
+        .iter()
+        .cloned()
+        .map(|mut p| {
+            p.receipt.carried = None;
+            p
+        })
+        .collect()
+}
+
 /// The freeze compares the full selections before any exclusion is applied.
 pub fn check_freeze(
     open: &BuildOpen,
@@ -193,7 +206,7 @@ pub fn check_freeze(
     if freeze.grant_digest != open.grant_digest {
         return Err(FreezeRefusal::GrantDigest);
     }
-    if freeze.selection != snapshot {
+    if selection_identity(&freeze.selection) != selection_identity(snapshot) {
         return Err(FreezeRefusal::SelectionChanged);
     }
     Ok(())

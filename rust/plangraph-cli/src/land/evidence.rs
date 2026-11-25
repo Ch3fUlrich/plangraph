@@ -230,14 +230,11 @@ impl Record {
     }
 }
 
-/// The log lines of one decision about `batch` at `head`; `rebased` is true when the head changed,
-/// which is what a rebase is.
-pub fn records_of(d: &Decision, day: &str, batch: &str, head: &str, rebased: bool) -> Vec<Record> {
+/// The log lines of one decision about `batch` at `head`. The rebase itself is logged by whoever ran it
+/// (`evidence-record --kind rebase`): a head that changed is not evidence of how it changed.
+pub fn records_of(d: &Decision, day: &str, batch: &str, head: &str) -> Vec<Record> {
     let rec = |kind| Record::new(day, batch, head, kind);
     let mut out = Vec::new();
-    if rebased {
-        out.push(rec(Kind::Rebase));
-    }
     match &d.accept {
         Accept::Carried { old_head, new_head } => out.push(rec(Kind::AcceptCarried {
             old_head: old_head.clone(),
