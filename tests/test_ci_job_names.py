@@ -16,10 +16,6 @@ import merge_batch_util as util  # noqa: E402
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
 JOBS = WORKFLOW["jobs"]
 EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}")
-DRAFT_LANE_SKIP = (
-    "!(github.event_name == 'pull_request' && github.event.pull_request.draft"
-    " && startsWith(github.head_ref, 'lane/'))"
-)
 
 
 def _static(name: str) -> str:
@@ -63,7 +59,11 @@ def _evaluate(expression, *, event="pull_request", action="", head="", draft=Fal
     expr = expression.replace("&&", " and ").replace("||", " or ")
     expr = re.sub(r"!(?!=)", " not ", expr)
     expr = re.sub(r"\btrue\b", "True", re.sub(r"\bfalse\b", "False", expr))
-    expr = re.sub(r"always\(\)", "True", expr)
+    expr = re.sub(r"(?:always|success)\(\)", "True", expr)
+    draft_lane = event == "pull_request" and draft and head.startswith("lane/") and "base" not in changes
+    metadata = event == "pull_request" and action == "edited" and "base" not in changes and (
+        "title" in changes or "body" in changes)
+    expr = expr.replace("needs.select.outputs.full", repr("" if draft_lane or metadata else "true"))
     values = {
         "event_name": event,
         "event.action": action,
@@ -116,17 +116,35 @@ CASES = [
 
 
 def test_only_a_draft_lane_pull_request_runs_no_job():
-    for event, head, draft, expected in CASES:
-        got = {job: _runs(job, event, head, draft) for job in JOBS}
-        assert set(got.values()) == {expected}, (event, head, draft, got)
+    # The draft exception still skips every test job. The literal gate reports the witness.
+    for event, head, draft, full in CASES:
+        visible = {job for job in JOBS if _runs(job, event, head, draft)}
+        assert visible == (set(JOBS) if full else {"ci-gate"}), (event, head, draft, visible)
 
 
 def test_draft_lane_pr_skips_the_required_ci_gate_too():
-    # A skipped required job reports success, so no check stays pending.
-    assert not _runs("ci-gate", "pull_request", "lane/b", True)
-    assert _runs("ci-gate", "pull_request", "land/train-1", True)
-    # always() stays: the gate must still judge a skipped or failed needed job on every other run.
-    assert JOBS["ci-gate"]["if"].startswith("${{ always() && ")
+    # The real Gate step stays skipped inside the literal check job.
+    context = {"event": "pull_request", "action": "opened", "head": "lane/b", "draft": True}
+    assert JOBS["ci-gate"]["if"] == "${{ always() }}"
+    assert _render(JOBS["ci-gate"]["name"], **context) == "ci-gate"
+    assert _render(WORKFLOW["run-name"], **context) == "Draft lane check 42"
+    executed = [step.get("name", step.get("uses")) for step in JOBS["ci-gate"]["steps"]
+                if "if" not in step or _value(step["if"], **context)]
+    assert executed == ["Draft lane without test proof"]
+
+
+def test_draft_lane_metadata_uses_the_policy_job_and_base_edits_use_the_real_gate():
+    context = {"event": "pull_request", "action": "edited", "head": "lane/b", "draft": True}
+    for changes in (("body",), ("title",)):
+        assert _render(WORKFLOW["run-name"], **context, changes=changes) == "PR metadata check 42"
+        assert _render(JOBS["ci-gate"]["name"], **context, changes=changes) == "ci-pr-description"
+        assert {job for job in JOBS if _runs(job, **context, changes=changes)} == {"ci-gate"}
+        steps = {step.get("name"): step for step in JOBS["ci-gate"]["steps"]}
+        assert _value(steps["Commit trailers"]["if"], **context, changes=changes)
+        assert not _value(steps["Draft lane without test proof"]["if"], **context, changes=changes)
+    assert all(_runs(job, **context, changes=("body", "base")) for job in JOBS)
+    assert _render(JOBS["ci-gate"]["name"], **context, changes=("base",)) == "ci-gate"
+    assert _render(WORKFLOW["run-name"], **context, changes=("base",)) == "Tests: Example PR"
 
 
 def test_body_and_title_edits_run_the_policy_check_in_isolated_concurrency():
@@ -209,3 +227,39 @@ def test_description_policy_is_not_a_ci_rollup_verdict():
     assert util.ci_state([description, dict(full_gate, conclusion="SUCCESS")]) == "green"
     assert util.ci_state([description, full_gate]) == "red"
     assert util.ci_state([dict(description, workflowName="another-workflow")]) == "red"
+
+
+def test_draft_lane_never_supplies_actual_attempt_evidence(monkeypatch):
+    head = "a" * 40
+    draft = {"id": 42, "run_attempt": 2, "head_sha": head, "head_branch": "lane/x",
+             "event": "pull_request", "pull_requests": [{"number": 7}],
+             "status": "completed", "conclusion": "success", "display_title": "Draft lane check 42"}
+    jobs = [{"name": "ci-gate", "status": "completed", "conclusion": "success",
+             "steps": [{"name": "Draft lane without test proof", "status": "completed", "conclusion": "success"},
+                       {"name": "Gate", "status": "completed", "conclusion": "skipped"}]},
+            {"name": "Select suites for this change", "status": "completed", "conclusion": "skipped"}]
+    endpoints = []
+
+    def api(_verb, path):
+        endpoints.append(path)
+        if "/workflows/tests.yml/" in path:
+            return {"workflow_runs": [draft]}
+        return {"jobs": jobs, "total_count": len(jobs)}
+
+    monkeypatch.setattr(build, "gh_json", api)
+    monkeypatch.setattr(land, "gh_json", api)
+    assert build.ci_attempts("o/r", 7, head) == []
+    assert any("/runs/42/attempts/2/jobs" in path for path in endpoints)
+    with pytest.raises(land.MergeBatchError, match="no tests run"):
+        land.require_full_run("o/r", head, "lane/x")
+    jobs[0]["steps"][0]["name"] = "Other step"
+    with pytest.raises(land.MergeBatchError, match="draft lane marker"):
+        build.ci_attempts("o/r", 7, head)
+
+
+def test_ready_lane_rollup_does_not_reuse_an_earlier_draft_gate_as_test_proof():
+    gate = {"__typename": "CheckRun", "workflowName": "tests", "name": "ci-gate",
+            "status": "COMPLETED", "conclusion": "SUCCESS"}
+    selector = dict(gate, name="Select suites for this change", conclusion="SKIPPED")
+    assert util.ci_state([gate, selector], lane=True) == "none"
+    assert util.ci_state([gate, dict(selector, conclusion="SUCCESS")], lane=True) == "green"

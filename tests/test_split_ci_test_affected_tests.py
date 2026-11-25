@@ -3,7 +3,6 @@ import subprocess
 
 import pytest
 from test_affected_tests import selector
-from test_ci_job_names import DRAFT_LANE_SKIP
 
 
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
@@ -15,8 +14,10 @@ def test_pytest_matrix_finishes_sibling_shards(job):
     assert workflow['jobs'][job]['strategy']['fail-fast'] is False
     gate = workflow['jobs']['ci-gate']
     assert job in gate['needs']
-    assert gate['if'] == '${{ always() && ' + DRAFT_LANE_SKIP + ' }}'
-    assert any('tools/ci_select.py gate' in step.get('run', '') for step in gate['steps'])
+    assert gate['if'] == '${{ always() }}'
+    gate_step = next(step for step in gate['steps']
+                     if 'tools/ci_select.py gate' in step.get('run', ''))
+    assert gate_step['if'] == workflow['jobs']['select']['if']
 
 
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])

@@ -369,6 +369,36 @@ def runner_wide_receipts(repo, infos, order, api=gh_json):
     return receipts
 
 
+def _draft_tests_jobs(jobs):
+    witness = "Draft lane without test proof"
+    def done(row, conclusion):
+        return (row.get("status"), row.get("conclusion")) == ("completed", conclusion)
+
+    gates = [job for job in jobs if job.get("name") == "ci-gate"]
+    if len(gates) != 1 or not done(gates[0], "success"):
+        return False
+    steps = gates[0].get("steps")
+    return (isinstance(steps, list)
+            and any(job.get("name") == "Select suites for this change" and done(job, "skipped") for job in jobs)
+            and all(job.get("name") == "ci-gate" or done(job, "skipped") for job in jobs)
+            and sum(step.get("name") == witness for step in steps) == 1
+            and all(done(step, "success" if step.get("name") in
+                         (witness, "Set up job", "Complete job") else "skipped") for step in steps))
+
+
+def draft_tests_run(repo, run, api):
+    run_id, title = run.get("id"), run.get("display_title")
+    attempt = run.get("run_attempt")
+    if (run.get("event") == "pull_request" and type(run_id) is int and run_id > 0
+            and title == f"Draft lane check {run_id}" and type(attempt) is int and attempt > 0):
+        endpoint = f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+        response = api("api", endpoint)
+        jobs = response.get("jobs")
+        if isinstance(jobs, list) and response.get("total_count") == len(jobs) and _draft_tests_jobs(jobs):
+            return "draft lane check without test proof"
+    raise MergeBatchError(f"run {run_id}: draft lane marker's job is unconfirmed")
+
+
 def workflow_attempt_jobs(endpoint, run_id, attempt, api):
     jobs, page = [], 1
     while True:
