@@ -63,7 +63,8 @@ pub struct PinnedTurn {
     pub turn_sha256: String,
     pub utc_timestamp: String,
     pub kind: Kind,
-    pub relay_of: Option<PinRef>,
+    /// Empty for a human row; for a relay the exact source pins, strictly ascending.
+    pub relay_of: Vec<PinRef>,
     pub session_uuid: String,
     pub transcript_line: u64,
     pub decision: String,
@@ -208,6 +209,16 @@ fn parse_pin_ref(value: &str) -> Option<PinRef> {
     })
 }
 
+/// Comma-joined pin references, at least one, strictly ascending (no duplicate).
+fn parse_pin_refs(value: &str) -> Option<Vec<PinRef>> {
+    let refs: Vec<PinRef> = value
+        .split(',')
+        .map(parse_pin_ref)
+        .collect::<Option<Vec<_>>>()?;
+    let text: Vec<String> = refs.iter().map(PinRef::to_string).collect();
+    text.windows(2).all(|w| w[0] < w[1]).then_some(refs)
+}
+
 fn parse_lifts(value: &str) -> Result<Vec<Lift>, &'static str> {
     let lifts: Vec<Lift> =
         serde_json::from_str(value).map_err(|_| "not a JSON array of item and gate objects")?;
@@ -240,27 +251,29 @@ fn parse_row(line: usize, text: &str) -> Result<PinnedTurn, Vec<Problem>> {
         )]);
     }
     let mut out = Vec::new();
-    for (name, value) in COLUMNS.iter().zip(&fields) {
+    // A blank or padded field is reported once; the other fields of the row are still checked.
+    let mut blank = [false; 10];
+    for (i, (name, value)) in COLUMNS.iter().zip(&fields).enumerate() {
         if value.is_empty() {
             out.push(field_problem(line, name, "empty"));
+            blank[i] = true;
         } else if value.trim() != *value {
             out.push(field_problem(line, name, "outer whitespace"));
+            blank[i] = true;
         }
     }
-    if !out.is_empty() {
-        return Err(out);
-    }
-    if fields[0] != "1" {
+    if !blank[0] && fields[0] != "1" {
         out.push(problem(line, "version", "v must be 1"));
     }
     let mut bad = |column: &str, detail: &str| out.push(field_problem(line, column, detail));
-    if !valid_hash(fields[1]) {
+    if !blank[1] && !valid_hash(fields[1]) {
         bad("turn_sha256", "not 64 lowercase hex digits");
     }
-    if !valid_time(fields[2]) {
+    if !blank[2] && !valid_time(fields[2]) {
         bad("utc_timestamp", "not YYYY-MM-DDTHH:MM:SS.mmmZ");
     }
     let kind = match fields[3] {
+        _ if blank[3] => None,
         "human" => Some(Kind::Human),
         "relay" => Some(Kind::Relay),
         _ => {
@@ -269,23 +282,25 @@ fn parse_row(line: usize, text: &str) -> Result<PinnedTurn, Vec<Problem>> {
         }
     };
     let relay_of = match (kind, fields[4]) {
-        (Some(Kind::Human), "-") | (None, _) => None,
+        _ if blank[4] => Vec::new(),
+        (Some(Kind::Human), "-") | (None, _) => Vec::new(),
         (Some(Kind::Human), _) => {
             bad("relay_of", "a human row must hold -");
-            None
+            Vec::new()
         }
-        (Some(Kind::Relay), value) => {
-            let parsed = parse_pin_ref(value);
-            if parsed.is_none() {
-                bad("relay_of", "not <turn_sha256>@<utc_timestamp>@D-<n>");
-            }
-            parsed
-        }
+        (Some(Kind::Relay), value) => parse_pin_refs(value).unwrap_or_else(|| {
+            bad(
+                "relay_of",
+                "not strictly ascending <turn_sha256>@<utc_timestamp>@D-<n>, comma-joined",
+            );
+            Vec::new()
+        }),
     };
-    if !valid_uuid(fields[5]) {
+    if !blank[5] && !valid_uuid(fields[5]) {
         bad("session_uuid", "not a lowercase 8-4-4-4-12 hex uuid");
     }
     let transcript_line = match fields[6].parse::<u64>() {
+        _ if blank[6] => 0,
         Ok(n)
             if n >= 1
                 && !fields[6].starts_with('0')
@@ -302,21 +317,23 @@ fn parse_row(line: usize, text: &str) -> Result<PinnedTurn, Vec<Problem>> {
         }
     };
     let decision = canonical_decision(fields[7]);
-    if decision.is_none() {
+    if !blank[7] && decision.is_none() {
         bad("decision", "not exactly one canonical D-<n>");
     }
     let lifts = match parse_lifts(fields[8]) {
+        _ if blank[8] => Vec::new(),
         Ok(lifts) => lifts,
         Err(why) => {
             bad("lifts", why);
             Vec::new()
         }
     };
-    let withdrawn_by = if fields[9] == "-" {
+    let withdrawn_by = if blank[9] || fields[9] == "-" {
         None
     } else {
         match (canonical_decision(fields[9]), decision) {
             (Some(w), Some(d)) if w > d => Some(fields[9].to_string()),
+            (Some(_), None) => None, // the decision column is reported already
             _ => {
                 bad(
                     "withdrawn_by",
@@ -349,10 +366,12 @@ pub fn format_row(turn: &PinnedTurn) -> String {
         Kind::Human => "human",
         Kind::Relay => "relay",
     };
-    let relay_of = turn
-        .relay_of
-        .as_ref()
-        .map_or_else(|| "-".to_string(), PinRef::to_string);
+    let relay_of = if turn.relay_of.is_empty() {
+        "-".to_string()
+    } else {
+        let refs: Vec<String> = turn.relay_of.iter().map(PinRef::to_string).collect();
+        refs.join(",")
+    };
     let lifts = serde_json::to_string(&turn.lifts).unwrap_or_else(|_| "[]".into());
     [
         "1",
@@ -461,30 +480,39 @@ fn cross_row(rows: &[PinnedTurn]) -> Vec<Problem> {
         }
     }
     for row in rows {
-        let Some(source_ref) = &row.relay_of else {
+        if row.relay_of.is_empty() {
             continue;
-        };
-        let source = pins
-            .get(&(
-                source_ref.turn_sha256.as_str(),
-                source_ref.utc_timestamp.as_str(),
-                source_ref.decision.as_str(),
-            ))
-            .filter(|s| s.kind == Kind::Human && s.utc_timestamp <= row.utc_timestamp);
-        let Some(source) = source else {
-            out.push(problem(
-                row.line,
-                "relay_source_missing",
-                format!("no earlier human pin {source_ref}"),
-            ));
+        }
+        let mut sources: Vec<&PinnedTurn> = Vec::new();
+        for source_ref in &row.relay_of {
+            let found = pins
+                .get(&(
+                    source_ref.turn_sha256.as_str(),
+                    source_ref.utc_timestamp.as_str(),
+                    source_ref.decision.as_str(),
+                ))
+                .filter(|s| s.kind == Kind::Human && s.utc_timestamp <= row.utc_timestamp);
+            match found {
+                Some(source) => sources.push(source),
+                None => out.push(problem(
+                    row.line,
+                    "relay_source_missing",
+                    format!("no earlier human pin {source_ref}"),
+                )),
+            }
+        }
+        if sources.len() != row.relay_of.len() {
             continue;
-        };
-        for lift in row.lifts.iter().filter(|l| !source.lifts.contains(l)) {
-            out.push(problem(
-                row.line,
-                "relay_scope",
-                format!("{} is not a lift of the source pin {source_ref}", lift.item),
-            ));
+        }
+        // Each relayed lift is held by at least one of the named source pins.
+        for lift in &row.lifts {
+            if !sources.iter().any(|s| s.lifts.contains(lift)) {
+                out.push(problem(
+                    row.line,
+                    "relay_scope",
+                    format!("{} is not a lift of any source pin", lift.item),
+                ));
+            }
         }
     }
     out
@@ -616,28 +644,65 @@ pub fn load(data_dir: &Path) -> Result<Vec<PinnedTurn>, Vec<Problem>> {
     validate(&tsv, &texts)
 }
 
-/// The lifts a decision releases now: its pins are not withdrawn and, for a relay, the exact
-/// source pin it names is live too. A sibling pin on the source turn never stands in for it.
+/// The lifts a decision releases now: its pins are not withdrawn and a relayed lift is held by
+/// a live source pin the relay names. A sibling pin on the source turn, never named, does not
+/// stand in for it.
 pub fn live_lifts<'a>(turns: &'a [PinnedTurn], decision: &str) -> Vec<&'a Lift> {
     let mut out: Vec<&Lift> = Vec::new();
     for row in turns.iter().filter(|t| t.decision == decision) {
         if row.withdrawn_by.is_some() {
             continue;
         }
-        let source_live = match &row.relay_of {
-            None => true,
-            Some(source) => turns
-                .iter()
-                .find(|t| t.pin_ref() == *source)
-                .is_some_and(|t| t.kind == Kind::Human && t.withdrawn_by.is_none()),
-        };
-        if source_live {
-            for lift in &row.lifts {
-                if !out.contains(&lift) {
-                    out.push(lift);
-                }
+        for lift in &row.lifts {
+            let authorized = row.relay_of.is_empty()
+                || row.relay_of.iter().any(|source| {
+                    turns.iter().any(|t| {
+                        t.pin_ref() == *source
+                            && t.kind == Kind::Human
+                            && t.withdrawn_by.is_none()
+                            && t.lifts.contains(lift)
+                    })
+                });
+            if authorized && !out.contains(&lift) {
+                out.push(lift);
             }
         }
     }
     out
+}
+
+const CITATION_KEY: &str = "operator-turns=";
+
+/// The statement a D-row carries for the turns pinned to `decision`:
+/// `operator-turns=<turn_ref>[,<turn_ref>...]`, refs distinct and ascending; `None` without a pin.
+pub fn citation(turns: &[PinnedTurn], decision: &str) -> Option<String> {
+    let refs: BTreeSet<String> = turns
+        .iter()
+        .filter(|t| t.decision == decision)
+        .map(PinnedTurn::turn_ref)
+        .collect();
+    (!refs.is_empty()).then(|| format!("{CITATION_KEY}{}", Vec::from_iter(refs).join(",")))
+}
+
+/// The turn refs a D-row cell cites: exactly one whitespace-delimited token that starts with
+/// `operator-turns=` (a second one, or any token fault, refuses the cell); `None` when it has none.
+pub fn cited_refs(cell: &str) -> Result<Option<Vec<String>>, &'static str> {
+    let mut tokens = cell
+        .split_whitespace()
+        .filter_map(|t| t.strip_prefix(CITATION_KEY));
+    let Some(list) = tokens.next() else {
+        return Ok(None);
+    };
+    if tokens.next().is_some() {
+        return Err("more than one operator-turns statement");
+    }
+    let refs: Vec<String> = list.split(',').map(String::from).collect();
+    let well_formed = refs.iter().all(|r| {
+        r.split_once('@')
+            .is_some_and(|(h, t)| valid_hash(h) && valid_time(t))
+    });
+    if !well_formed || !refs.windows(2).all(|w| w[0] < w[1]) {
+        return Err("operator-turns refs are not distinct ascending <turn_sha256>@<utc_timestamp>");
+    }
+    Ok(Some(refs))
 }
