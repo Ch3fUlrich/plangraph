@@ -124,7 +124,7 @@ pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolErr
     let record = read_record_file(&path.join("record.json"))?;
     if record["run_kind"] == "native-codex"
         && record["overflow_remote"] == true
-        && record["status"] == "running"
+        && (record["status"] == "running" || record["ended"].is_null())
     {
         return crate::placement::native_control(state, &record, "result");
     }

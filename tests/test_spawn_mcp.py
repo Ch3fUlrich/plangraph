@@ -73,3 +73,40 @@ def test_refute_finding_6_mcp_review_scope_only_in_spawn():
             assert 'review_scope' not in tool['inputSchema'].get('properties', {}), (
                 f"{name} should not have review_scope in its inputSchema"
             )
+
+def test_native_rpc_wait_reports_only_settled_refusals(tmp_path, monkeypatch):
+    record = dict(run_id='run-native', run_kind='native-codex', status='refused',
+                  ended=None, exit_code=0, error='fixture refusal')
+    calls = []
+
+    async def run():
+        server = MCPSpawnerServer(state=tmp_path)
+
+        async def spawn(**kwargs):
+            calls.append(('spawn', kwargs['wait_seconds']))
+            return record.copy()
+
+        async def wait(run_id, timeout):
+            assert run_id == record['run_id']
+            calls.append(('wait', timeout))
+            raise TimeoutError('still settling')
+
+        monkeypatch.setattr(server.service, 'spawn', spawn)
+        monkeypatch.setattr(server.service, 'wait', wait)
+        monkeypatch.setattr(server.service, 'result', lambda run_id: record.copy())
+        request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+            'name': 'plangraph_agent_spawn', 'arguments': {
+                'card': {'run_kind': 'native-codex', 'repo': str(tmp_path)},
+                'prompt': 'fixture', 'wait_seconds': 0.1,
+            }}}
+        pending = await server.handle_rpc_request(request)
+        assert 'error' not in pending, pending
+        assert json.loads(pending['result']['content'][0]['text'])['ended'] is None
+        assert calls[0] == ('spawn', 0)
+        assert len(calls) == 2 and calls[1][0] == 'wait' and 0 <= calls[1][1] <= 0.1
+        record['ended'] = 1
+        settled = await server.handle_rpc_request(request)
+        assert settled['error']['data']['run_id'] == record['run_id']
+        assert settled['error']['data']['exit_code'] == 1
+
+    asyncio.run(run())

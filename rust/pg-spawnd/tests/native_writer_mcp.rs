@@ -289,3 +289,34 @@ fn native_mcp_spawn_through_the_python_launch_boundary_reports_the_lane_reason()
         "{reply}"
     );
 }
+
+#[test]
+fn native_mcp_spawn_wait_reports_settled_refusal() {
+    let mut fixture = Fixture::new(false, "running");
+    let adapter = fixture.state.path().join("adapter");
+    pg_worker_core::executable_test_support::write_private_executable(
+        adapter,
+        r#"#!/bin/sh
+while [ "$#" -gt 1 ]; do
+    if [ "$1" = '--' ]; then break; fi
+    if [ "$1" = '--wait' ] && [ "$2" = 1.25 ]; then
+        printf '%s' '{"run_id":"run-native","run_kind":"native-codex","status":"refused","ended":1760000000,"exit_code":0,"error":"fixture refused"}'
+        exit 1
+    fi
+    shift
+done
+echo 'native wait was not forwarded' >&2
+exit 2
+"#,
+    );
+    let reply = fixture.client.request(
+        "tools/call",
+        json!({"name":"plangraph_agent_spawn","arguments":{
+            "card":{"run_kind":"native-codex","repo":"/repo"},
+            "prompt":"brief", "wait_seconds":1.25
+        }}),
+    );
+    assert_eq!(reply["error"]["message"], "fixture refused", "{reply}");
+    assert_eq!(reply["error"]["data"]["run_id"], "run-native", "{reply}");
+    assert_eq!(reply["error"]["data"]["exit_code"], 1, "{reply}");
+}

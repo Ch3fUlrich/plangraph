@@ -1,4 +1,4 @@
-"""D-3605 (a/F1/F2): dispatch-refusal detection window and quiet-confirmation gate, shared with run_watchdog."""
+"""Preserve dispatch and placement refusals across process or host boundaries."""
 import asyncio
 import re
 import time
@@ -72,3 +72,51 @@ class RefusalGate:
         while True:
             await asyncio.sleep(.5)
             self.poll(time.time())
+
+
+_LANE_REFUSALS = ('lane_unreadable:', 'lane_collision:', 'lane_too_many_keys:')
+
+
+def _lane_refusal(value):
+    return isinstance(value, str) and value.startswith(_LANE_REFUSALS)
+
+
+def remote_refusal_fields(receipt, native, sandbox_unavailable):
+    """Keep safe failure text and an exact native target receipt when it has a valid run ID."""
+    error, reason = receipt.get('error'), receipt.get('reason')
+    if not (native and isinstance(reason, str) and reason.startswith(sandbox_unavailable)):
+        reason = error if _lane_refusal(error) else 'target rejected admission'
+    run_id = receipt.get('run_id')
+    retain = native and isinstance(run_id, str) and re.fullmatch(r'run-[A-Za-z0-9]+', run_id)
+    return reason, receipt if retain else None
+
+
+def keep_lane(held, host, refusal):
+    """Keep the target's ownership refusal across readiness refreshes and generic retries."""
+    if _lane_refusal(refusal):
+        held[host] = refusal
+    return refusal
+
+
+def placement_refusal(reason, held, hosts, *, elapsed=None):
+    """Build the origin-side refusal when there is no durable target receipt to retain."""
+    fields = dict(status='refused', reason=reason, overflow_reason=reason, exit_code=2)
+    if held or elapsed is not None:
+        fields['error'] = '; '.join([*held.values(), elapsed if elapsed is not None else reason])
+    if not hosts:
+        fields['hint'] = ('hosts.json has no eligible remote host. Check the registry, '
+                          'then run fleet_sync genconfig write and host_ready.')
+    return fields
+
+
+def retain_target_refusal(previous, receipt, placement):
+    """Keep the target run identity and prefer a concrete lane refusal on placement exhaustion."""
+    from .remote_ps import native_receipt
+
+    if (previous is not None and _lane_refusal(previous[0].get('error'))
+            and not _lane_refusal(receipt.get('error'))):
+        return previous
+    host = receipt.get('host') or placement['host']
+    retained = native_receipt(dict(receipt, host=host, run_kind='native-codex',
+                                   overflow_reason=placement['reason'], overflow_remote=True))
+    return retained, dict(placement, host=host)

@@ -232,14 +232,22 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
         .ok_or_else(|| parameter("prompt must be a string"))?;
     let mut argv = route_args(args)?;
     argv[0] = "spawn".into();
-    argv.extend(["--".into(), prompt.into()]);
-    if let Some(wait) = args.get("wait_seconds") {
-        if !wait.as_f64().is_some_and(|n| n >= 0.0) {
-            return Err(parameter("wait_seconds must be a number >= 0"));
-        }
-        // The adapter only waits for base admission; callers poll the durable record.
+    let wait = args
+        .get("wait_seconds")
+        .map(|wait| {
+            wait.as_f64()
+                .filter(|n| *n >= 0.0)
+                .ok_or_else(|| parameter("wait_seconds must be a number >= 0"))
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    let timeout = Duration::try_from_secs_f64(200.0 + wait)
+        .map_err(|_| parameter("wait_seconds exceeds the supported adapter duration"))?;
+    if wait > 0.0 {
+        argv.extend(["--wait".into(), wait.to_string()]);
     }
-    native_call(state, &argv, Duration::from_secs(200))
+    argv.extend(["--".into(), prompt.into()]);
+    native_call(state, &argv, timeout)
 }
 fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
     let (code, bytes, line) = Adapter(state).run(argv, timeout)?;

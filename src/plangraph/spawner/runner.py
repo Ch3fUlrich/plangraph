@@ -39,7 +39,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, origin_refusal, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
@@ -879,7 +879,7 @@ def spawn_service(*args, **kwargs):
                 if record.get('status') == 'needs_input':
                     record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
-            if terminal:
+            if terminal and not origin_refusal(record):
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
@@ -922,7 +922,7 @@ def spawn_service(*args, **kwargs):
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
                     markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
                 pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
-                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg'):
+                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg') and not origin_refusal(record):
                     try:
                         self._save(record, retry=True)
                     except Exception:

@@ -13,18 +13,26 @@ _start_supervisor = subprocess.Popen
 from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
-from .base_fresh import admitted_spawn, spawn_runs, spawn_exit_code
+from .base_fresh import admitted_spawn, run_exit_code, run_settled, spawn_runs, spawn_exit_code
 from .seat_spawn import live_runner
 
 def _wait_runs(service, result, wait):
-    """Poll running leaf records until `wait` seconds pass; exit codes derive from the updated leaves."""
+    """Poll leaf records until every one is settled or `wait` seconds pass; exit codes derive from the updated leaves.
+
+    A run is settled once its durable `ended` is set (a status alone can be provisional), so a bounded
+    spawn returns a running acknowledgement only for `wait` 0 or when the bound ends first."""
     deadline = time.monotonic() + max(0, wait)
     runs = spawn_runs(result)
-    while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
+    while not all(run_settled(r) for r in runs) and time.monotonic() < deadline:
         interval = 2 if any(run.get('overflow_remote') for run in runs) else .02
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
         for run in runs:
-            if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
+            if not run_settled(run): run.update(_read_result(service, run['run_id']))
+    if wait > 0:
+        for run in runs:
+            if (run.get('run_kind') == 'native-codex' and run.get('status') != 'running'
+                    and not run_settled(run)):
+                raise TimeoutError(f"{run['run_id']}: wait timed out before the run settled")
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
@@ -157,6 +165,30 @@ def _prune_supervisor_logs(state):
             except OSError:
                 pass
 
+def _status_line(run):
+    """One redacted line for the launcher log: the durable status, its exit code, ALERT when refused."""
+    status = str(run.get('status') or 'unknown')
+    line = f"SPAWN {run.get('run_id')} {status.upper()}"
+    reason = run.get('reason') or run.get('error')
+    if reason:
+        line += f": {redact_output(' '.join(str(reason).split()))}"   # the run id stays readable
+    line += f' (exit {run_exit_code(run)})'
+    return f'ALERT {line}' if status == 'refused' else line
+
+def _exception_record(service, exc, role):
+    """The saved record of a refusal raised during admission, found by the run id it carries.
+
+    SeatSpawnMixin.spawn attaches the id after save_refusal; matching by error text could pick another
+    run. An unreadable record yields a nonzero failure and never a second refusal."""
+    run_id = getattr(exc, 'run_id', None)
+    if run_id is None:
+        return service.save_refusal(exc, role)
+    try:
+        return service.result(run_id)
+    except (OSError, ValueError):
+        return dict(run_id=run_id, status='failed', exit_code=1, ended=time.time(), refusal=type(exc).__name__,
+                    error='refusal_record_unreadable')
+
 def _supervise():
     payload = json.loads(sys.stdin.readline())
     service = SpawnService(state=payload.pop('state'))
@@ -164,16 +196,25 @@ def _supervise():
         try:
             record = await admitted_spawn(service, payload)
         except Exception as exc:
-            record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
-            if record is None:
-                record = service.save_refusal(exc, payload.get('role', 'implement'))
+            record = _exception_record(service, exc, payload.get('role', 'implement'))
             print(json.dumps(record), flush=True)
-            return record['exit_code']
+            print(_status_line(record), file=sys.stderr, flush=True)
+            return run_exit_code(record)
         print(json.dumps(record), flush=True)
         sys.stdout.close()
         for run in spawn_runs(record):
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
+            elif run.get('status') in ('running', 'queued', 'dry_run'):
+                continue  # no local task and nothing final to report
+            # The admission snapshot can say 'running' or carry a stale code: the saved leaf decides,
+            # whether a task ran or a refusal came back before any task existed.
+            try:
+                run.update(service.result(run['run_id']))
+            except (OSError, ValueError):
+                pass
+            if run_settled(run):
+                print(_status_line(run), file=sys.stderr, flush=True)
         return spawn_exit_code(record)
     return asyncio.run(run())
 
@@ -594,6 +635,8 @@ raise SystemExit(code)
                 if args.verb == 'route' and options.get('repository_preview') and not result.get('legs'):
                     return 0
                 return 2 if result.get('error') else 0
+            if args.verb in ('spawn', 'wait'):
+                return run_exit_code(result)   # one terminal rule for `spawn --wait` and `wait RUN_ID`
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)
         return 0
