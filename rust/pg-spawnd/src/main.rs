@@ -41,6 +41,10 @@ mod native_writer_host;
 mod native_writer_sandbox;
 mod native_writer_steps;
 #[cfg(test)]
+mod native_writer_steps_fake;
+#[cfg(test)]
+mod native_writer_steps_review_tests;
+#[cfg(test)]
 mod native_writer_steps_tests;
 mod native_writer_tool;
 mod native_writer_tools;

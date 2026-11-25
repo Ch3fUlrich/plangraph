@@ -25,6 +25,10 @@ pub struct KeeperCli<R: CommandRunner> {
     pub runner: R,
     pub dir: PathBuf,
     pub prefix: Vec<String>,
+    /// Holds the idempotency key of the claim between the call and the saved row. A process
+    /// killed after the keeper granted the claim retries with the same key, and the keeper
+    /// answers from its receipt instead of refusing the keys as already claimed.
+    pub key_file: PathBuf,
 }
 
 impl<R: CommandRunner> KeeperCli<R> {
@@ -37,6 +41,25 @@ impl<R: CommandRunner> KeeperCli<R> {
 }
 
 impl<R: CommandRunner> KeeperCli<R> {
+    /// The key of this batch's claim: the saved one, or a new one saved before it is used.
+    fn claim_key(&self, keys: &[String]) -> Result<String, String> {
+        if let Ok(saved) = std::fs::read_to_string(&self.key_file) {
+            if !saved.trim().is_empty() {
+                return Ok(saved.trim().to_owned());
+            }
+        }
+        use sha2::{Digest, Sha256};
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let digest = Sha256::digest(format!("{keys:?}:{now}:{}", std::process::id()));
+        let key: String = digest.iter().take(16).map(|b| format!("{b:02x}")).collect();
+        std::fs::write(&self.key_file, &key)
+            .map_err(|err| format!("claim key not saved at {}: {err}", self.key_file.display()))?;
+        Ok(key)
+    }
+
     /// Release one claim of this attempt at the epoch it was granted: the CLI would otherwise
     /// look up the current epoch, which may belong to a claim another batch holds.
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String> {
@@ -51,7 +74,9 @@ impl<R: CommandRunner> KeeperCli<R> {
 
 impl<R: CommandRunner> Keeper for KeeperCli<R> {
     fn claim_batch(&mut self, keys: &[String]) -> Result<Vec<(String, u64)>, String> {
-        let claim = self.argv("claim-batch", keys);
+        let key = self.claim_key(keys)?;
+        let mut claim = vec!["env".to_owned(), format!("PG_IDEMPOTENCY_KEY={key}")];
+        claim.extend(self.argv("claim-batch", keys));
         // The CLI exits non-zero when a row is refused but still prints every row.
         let answer = self
             .runner
@@ -72,6 +97,8 @@ impl<R: CommandRunner> Keeper for KeeperCli<R> {
         if refused.is_empty() {
             return Ok(held);
         }
+        // The refusal is the settled answer for this key: the next attempt asks anew.
+        let _ = std::fs::remove_file(&self.key_file);
         // Give back what this attempt got, at the epochs it got, and say what could not be.
         let failures: Vec<String> = held
             .iter()

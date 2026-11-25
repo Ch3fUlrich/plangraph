@@ -28,16 +28,27 @@ pub(crate) struct Production {
     _owner: pg_worker_core::lockfile::LockGuard,
 }
 
+/// The lane branch of the pull request: the call's, else `lane/<batch key>`.
+pub(crate) fn branch_of(args: &Args) -> String {
+    args.branch
+        .clone()
+        .unwrap_or_else(|| format!("lane/{}", args.inputs.batch_key))
+}
+
+/// `publish` opens a draft pull request, and a draft from a `lane/*` branch is a part: its
+/// workflow jobs are skipped by design (`.github/workflows/tests.yml`; D-6773).
+pub(crate) fn is_draft_part(branch: &str) -> bool {
+    branch.starts_with("lane/")
+}
+
 pub(crate) fn production(args: &Args, host: StepHost) -> Production {
     let inputs = &args.inputs;
+    let branch = branch_of(args);
     let shell = ShellSteps {
         config: ShellConfig {
             repo_dir: host.repo.clone(),
             worktree_dir: host.worktree.clone(),
-            branch: args
-                .branch
-                .clone()
-                .unwrap_or_else(|| format!("lane/{}", inputs.batch_key)),
+            branch: branch.clone(),
             // The Host's gates run the checks; the shell only publishes.
             checks: Vec::new(),
             pr_title: inputs.batch_key.clone(),
@@ -53,6 +64,7 @@ pub(crate) fn production(args: &Args, host: StepHost) -> Production {
                 .keeper_cmd
                 .clone()
                 .unwrap_or_else(|| vec!["pg".into(), "--json".into()]),
+            key_file: args.steps.with_extension("claim-key"),
         },
         ci: GhCi {
             runner: SystemRunner,
@@ -66,6 +78,7 @@ pub(crate) fn production(args: &Args, host: StepHost) -> Production {
         },
         wait: CiWait::default(),
         required: args.ci_workflows.clone(),
+        draft_part: is_draft_part(&branch),
         sleep: Box::new(std::thread::sleep),
         rest: host.agents,
     };
@@ -95,8 +108,10 @@ impl StepActions for Production {
     fn fix(&mut self, head: &str, session: &str, review: &str) -> Result<Fix, String> {
         self.services.rest.fix(head, session, review)
     }
-    fn push(&mut self, head: &str, stamp: &str, _review: &str) -> Result<Push, String> {
+    fn push(&mut self, head: &str, stamp: &str, review: &str) -> Result<Push, String> {
+        // A resumed row can name any receipt: publish only what the host's own records back.
         self.services.rest.verify_stamp(head, stamp)?;
+        self.services.rest.verify_review(head, review)?;
         self.shell.publish(head)
     }
     fn ci_class(&mut self, head: &str, pr: u64) -> Result<CiClass, String> {

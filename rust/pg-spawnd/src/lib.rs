@@ -15,4 +15,6 @@ mod step_runner_tests;
 pub mod step_services;
 pub mod step_services_cli;
 #[cfg(test)]
+mod step_services_cli_tests;
+#[cfg(test)]
 mod step_services_tests;
