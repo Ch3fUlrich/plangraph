@@ -1,6 +1,6 @@
 //! `plangraph quota pool`: the per-window readout of one provider pool from quota snapshots.
 use super::adapters::{quota_snapshot_history, Env};
-use super::quota::{field, identity, observed, remaining_percent, stamp_ns, window};
+use super::quota::{field, observed, pool_identity, remaining_percent, stamp_ns, window};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -58,12 +58,16 @@ struct WindowSeen<'a> {
 /// after that window began. Each account's pace is its own elapsed fraction at its own
 /// observation time. The snapshot source has no account roster, so `coverage.full_pool` stays
 /// "unknown" and the averages describe the cohort only. Rows with no account identity are
-/// counted apart and never averaged. `now`, observations and resets share one nanosecond clock.
-pub(crate) fn pool_use_samples(rows: &Value, target: &str, now: f64, max_age: i64) -> Vec<Value> {
-    let now_ns = (now * NANOS).round() as i128;
+/// counted apart and never averaged. `now_ns`, observations and resets share one integer nanosecond clock.
+pub(crate) fn pool_use_samples(
+    rows: &Value,
+    target: &str,
+    now_ns: i128,
+    max_age: i64,
+) -> Vec<Value> {
     let mut latest: BTreeMap<(&str, &str), (Option<i128>, &Value)> = BTreeMap::new();
     for r in rows.as_array().into_iter().flatten() {
-        let Some((provider, account)) = identity(r) else {
+        let Some((provider, account)) = pool_identity(r) else {
             continue;
         };
         let Some(w) = window(r) else { continue };
@@ -112,19 +116,21 @@ pub(crate) fn pool_use_samples(rows: &Value, target: &str, now: f64, max_age: i6
                     .map(|l| ((seconds(c.at) - (seconds(c.reset) - l)) / l).clamp(0.0, 1.0) * 100.0)
             };
             let reset = seen.cohort.iter().map(|c| c.reset).min().map(seconds);
+            let newest = seen.cohort.iter().map(|c| c.at).max();
             let accounts: Vec<Value> = seen
                 .cohort
                 .iter()
                 .map(|c| {
                     serde_json::json!({"account":c.account,"used_pct":c.used,
-                        "observed_at":num(seconds(c.at)),"reset_at":num(seconds(c.reset)),
+                        "observed_at":num(seconds(c.at)),"observed_at_ns":c.at as i64,
+                        "reset_at":num(seconds(c.reset)),"reset_at_ns":c.reset as i64,
                         "elapsed_pct":elapsed(c)})
                 })
                 .collect();
-            serde_json::json!({"pool":target,"window":w,"now":num(now),
+            serde_json::json!({"pool":target,"window":w,"now":num(seconds(now_ns)),
                 "used_pct":mean(seen.cohort.iter().map(|c| c.used)),
                 "pace_pct":mean(seen.cohort.iter().filter_map(elapsed)),
-                "observed_at":seen.cohort.iter().map(|c| c.at).max().map(|at| num(seconds(at))),
+                "observed_at":newest.map(|at| num(seconds(at))),"observed_at_ns":newest.map(|at| at as i64),
                 "reset_at":reset.map(num),
                 "window_start":reset.zip(length).map(|(r, l)| num(r - l)),
                 "accounts":accounts,
@@ -134,8 +140,8 @@ pub(crate) fn pool_use_samples(rows: &Value, target: &str, now: f64, max_age: i6
         .collect()
 }
 /// The `plangraph quota pool` document: samples per window, or an explicit unknown status.
-fn pool_report(rows: Option<&Value>, target: &str, now: f64, max_age: i64) -> Value {
-    let windows = rows.map_or_else(Vec::new, |r| pool_use_samples(r, target, now, max_age));
+fn pool_report(rows: Option<&Value>, target: &str, now_ns: i128, max_age: i64) -> Value {
+    let windows = rows.map_or_else(Vec::new, |r| pool_use_samples(r, target, now_ns, max_age));
     let usable = windows
         .iter()
         .any(|w| w["coverage"]["usable_accounts"].as_u64().unwrap_or(0) > 0);
@@ -164,10 +170,10 @@ pub(super) fn run_pool(env: &Env, args: &[String]) -> i32 {
     let rows = std::env::current_dir()
         .ok()
         .and_then(|repo| quota_snapshot_history(&effective, &repo).ok());
-    let now = std::time::SystemTime::now()
+    let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |d| d.as_secs_f64());
-    println!("{}", pool_report(rows.as_ref(), "codex", now, MAX_AGE_S));
+        .map_or(0, |d| d.as_nanos() as i128);
+    println!("{}", pool_report(rows.as_ref(), "codex", now_ns, MAX_AGE_S));
     0
 }
 
@@ -175,6 +181,9 @@ pub(super) fn run_pool(env: &Env, args: &[String]) -> i32 {
 mod tests {
     use super::*;
     use serde_json::json;
+    fn secs(s: f64) -> i128 {
+        (s * 1e9).round() as i128
+    }
     #[test]
     fn pool_use_samples_are_per_window_with_earliest_reset_and_mean_use() {
         let now = 1_800_000_000_i64;
@@ -191,7 +200,7 @@ mod tests {
             json!({"provider":"claude","window_key":"weekly","created_at":now - 60,
                 "remaining_percentage":1,"next_reset_at":now + 100}),
         ]);
-        let got = pool_use_samples(&rows, "codex", now as f64, 10_800);
+        let got = pool_use_samples(&rows, "codex", secs(now as f64), 10_800);
         let by = |w: &str| got.iter().find(|s| s["window"] == w).cloned();
         let weekly = by("weekly").unwrap();
         assert_eq!(weekly["used_pct"], 30.0);
@@ -206,7 +215,7 @@ mod tests {
         );
         assert!(by("daily").unwrap()["used_pct"].is_null() && got.len() == 4);
         // Nothing fresh: every window is still listed, with unknown usage and zero usable accounts.
-        let stale = pool_use_samples(&rows, "codex", (now + 20_000) as f64, 10_800);
+        let stale = pool_use_samples(&rows, "codex", secs((now + 20_000) as f64), 10_800);
         assert!(stale.iter().all(|s| s["used_pct"].is_null()
             && s["coverage"]["usable_accounts"] == 0
             && s["coverage"]["observed_accounts"].as_u64() > Some(0)));
@@ -216,7 +225,7 @@ mod tests {
             row("b", "weekly", 80, now + 86_400)
         ]);
         assert_eq!(
-            pool_use_samples(&mixed, "codex", now as f64, 10_800)[0]["used_pct"],
+            pool_use_samples(&mixed, "codex", secs(now as f64), 10_800)[0]["used_pct"],
             20.0
         );
     }
@@ -228,7 +237,7 @@ mod tests {
             {"provider":"codex","connection_id":"a","window_key":"weekly","created_at":now - 60,"remaining_percentage":"bad","next_reset_at":now + 100},
             {"provider":"codex","window_key":"weekly","created_at":now - 60,"remaining_percentage":0,"next_reset_at":now + 100},
         ]);
-        let w = &pool_use_samples(&rows, "codex", now as f64, 10_800)[0];
+        let w = &pool_use_samples(&rows, "codex", secs(now as f64), 10_800)[0];
         assert!(w["used_pct"].is_null() && w["accounts"] == json!([]));
         assert_eq!(
             w["coverage"],
@@ -240,7 +249,7 @@ mod tests {
         let now = 1_800_000_000_i64;
         let rows = json!([{"provider":"codex:a","connection_id":"","window_key":"weekly",
             "created_at":now - 60,"remaining_percentage":70,"next_reset_at":now + 86_400}]);
-        let w = &pool_use_samples(&rows, "codex", now as f64, 10_800)[0];
+        let w = &pool_use_samples(&rows, "codex", secs(now as f64), 10_800)[0];
         assert_eq!(w["accounts"][0]["account"], "a");
         assert_eq!(w["coverage"]["unidentified"], 0);
     }
@@ -255,12 +264,12 @@ mod tests {
         let early = pool_use_samples(
             &row(second as f64 + 0.25, half + 3_600.0),
             "codex",
-            half,
+            secs(half),
             10_800,
         );
         assert_eq!(early[0]["coverage"]["usable_accounts"], 1, "{early:?}");
         // A reset a quarter second ago has passed, though its whole second has not ended.
-        let ended = pool_use_samples(&row(half - 60.0, half - 0.25), "codex", half, 10_800);
+        let ended = pool_use_samples(&row(half - 60.0, half - 0.25), "codex", secs(half), 10_800);
         assert_eq!(ended[0]["coverage"]["usable_accounts"], 0, "{ended:?}");
     }
     #[test]
@@ -272,20 +281,20 @@ mod tests {
             {"provider":"codex:b","window_key":"weekly","created_at":now - 60,
                 "remaining_percentage":60,"next_reset_at":now + 86_400},
         ]);
-        let w = &pool_use_samples(&rows, "codex", now as f64, 10_800)[0];
+        let w = &pool_use_samples(&rows, "codex", secs(now as f64), 10_800)[0];
         assert_eq!(w["used_pct"], 40.0);
         assert_eq!(w["coverage"]["usable_accounts"], 1);
     }
     #[test]
     fn a_response_without_window_identity_is_an_explicit_unknown() {
         let api = json!([{"provider":"codex:a1","remainingPct":0}]);
-        let got = pool_report(Some(&api), "codex", 1_800_000_000.0, 10_800);
+        let got = pool_report(Some(&api), "codex", secs(1_800_000_000.0), 10_800);
         assert_eq!(
             (got["status"].as_str(), got["reason"].as_str()),
             (Some("unknown"), Some("no identifiable windows"))
         );
         assert_eq!(
-            pool_report(None, "codex", 1.0, 1)["reason"],
+            pool_report(None, "codex", secs(1.0), 1)["reason"],
             "snapshots unreadable"
         );
     }

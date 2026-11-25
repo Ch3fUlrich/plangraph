@@ -5,12 +5,19 @@ pub(super) fn field<'a>(r: &'a Value, names: &[&str]) -> Option<&'a Value> {
     names.iter().find_map(|n| r.get(n).filter(|v| !v.is_null()))
 }
 pub(super) fn identity(row: &Value) -> Option<(&str, &str)> {
+    identity_with(row, false)
+}
+/// The pool readout's identity: an empty connection id names no account, the provider suffix
+/// does. The other readers keep `identity`, which reads an empty id as the account itself.
+pub(super) fn pool_identity(row: &Value) -> Option<(&str, &str)> {
+    identity_with(row, true)
+}
+fn identity_with(row: &Value, empty_id_is_absent: bool) -> Option<(&str, &str)> {
     let name = row["provider"].as_str()?;
     let (provider, suffix) = name.split_once(':').unwrap_or((name, ""));
-    // An empty connection id names no account: the provider suffix still does.
     let account = field(row, &["connection_id", "connectionId"])
         .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
+        .filter(|id| !(empty_id_is_absent && id.is_empty()))
         .unwrap_or(suffix);
     Some((provider, account))
 }
@@ -38,30 +45,55 @@ pub(super) fn remaining_percent(row: &Value) -> Option<f64> {
     .filter(|q| (0.0..=100.0).contains(q))
 }
 fn stamp(v: &Value) -> Option<i64> {
-    stamp_ns(v).map(|t| t.div_euclid(1_000_000_000) as i64)
-}
-/// Epoch nanoseconds, exact for text, so observations in one second still order. A zone-less
-/// text is UTC, as the snapshot store writes it; `T` or a space may separate date and time.
-pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
-    use chrono::{DateTime, NaiveDateTime, Utc};
     if let Some(n) = v.as_f64() {
-        let secs = if n > 1e11 { n / 1000.0 } else { n };
-        return n.is_finite().then(|| (secs * 1e9).round() as i128);
+        return n.is_finite().then_some(if n > 1e11 {
+            (n / 1000.0) as i64
+        } else {
+            n as i64
+        });
     }
-    let s = v.as_str()?.trim();
-    let ns = |t: DateTime<Utc>| {
-        i128::from(t.timestamp()) * 1_000_000_000 + i128::from(t.timestamp_subsec_nanos())
-    };
-    DateTime::parse_from_rfc3339(s)
-        .or_else(|_| DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%#z"))
-        .map(|t| ns(t.to_utc()))
+    let s = v.as_str()?;
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|t| t.timestamp())
         .ok()
         .or_else(|| {
-            ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"]
-                .iter()
-                .find_map(|f| NaiveDateTime::parse_from_str(s, f).ok())
-                .map(|t| ns(t.and_utc()))
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .ok()
+                .map(|t| t.and_utc().timestamp())
         })
+}
+/// Latest instant `stamp_ns` accepts: nanoseconds fit an i64 (year 2255).
+const STAMP_MAX_NS: i128 = 9_000_000_000 * 1_000_000_000;
+/// Epoch nanoseconds for the pool readout, exact for numbers and text alike, so one instant
+/// ranks the same in any form and observations inside one second still order. A zone-less text
+/// is UTC, as the snapshot store writes it; `T` or a space may separate date and time. An
+/// instant outside 1970..2255 is not a reading and gives `None`, never an arithmetic input.
+pub(super) fn stamp_ns(v: &Value) -> Option<i128> {
+    use chrono::{DateTime, NaiveDateTime, Utc};
+    let ns = if let Some(n) = v.as_f64() {
+        let (unit, whole) = (if n > 1e11 { 1e6 } else { 1e9 }, n.floor());
+        if !n.is_finite() || whole.abs() > 1e16 {
+            return None;
+        }
+        // Whole and fraction apart: epoch seconds times 1e9 is not exact in a float.
+        whole as i128 * unit as i128 + ((n - whole) * unit).round() as i128
+    } else {
+        let s = v.as_str()?.trim();
+        let ns = |t: DateTime<Utc>| {
+            i128::from(t.timestamp()) * 1_000_000_000 + i128::from(t.timestamp_subsec_nanos())
+        };
+        DateTime::parse_from_rfc3339(s)
+            .or_else(|_| DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%#z"))
+            .map(|t| ns(t.to_utc()))
+            .ok()
+            .or_else(|| {
+                ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"]
+                    .iter()
+                    .find_map(|f| NaiveDateTime::parse_from_str(s, f).ok())
+                    .map(|t| ns(t.and_utc()))
+            })?
+    };
+    (0..=STAMP_MAX_NS).contains(&ns).then_some(ns)
 }
 /// Latest snapshot per account/window; stale or malformed windows disable that
 /// account, never an independent healthy account. Hourly store default: 3 hours.
@@ -221,5 +253,33 @@ mod tests {
             {"provider":"codex","connection_id":"b","window_key":"day","created_at":"2026-01-01 00:00:01","remaining_percentage":40}
         ]);
         assert_eq!(remaining(&rows, 1767225602, 10800), Some(40.0));
+    }
+    #[test]
+    fn stamp_ns_reads_one_instant_alike_and_refuses_out_of_range_values() {
+        let iso = stamp_ns(&json!("2027-01-15T08:00:00.250000000")).unwrap();
+        assert_eq!(stamp_ns(&json!(1_799_999_999.25 + 1.0)), Some(iso)); // seconds, a float fraction
+        assert_eq!(stamp_ns(&json!(1_799_999_999_250.0 + 1_000.0)), Some(iso)); // milliseconds
+        assert_eq!(stamp_ns(&json!("2027-01-15 08:00:00.25+00:00")), Some(iso));
+        assert_eq!(stamp_ns(&json!("2027-01-15 09:00:00.25 +01:00")), Some(iso));
+        for bad in [
+            json!(-1e100),
+            json!(1e300),
+            json!(-1.0),
+            json!("9999-12-31T00:00:00Z"),
+        ] {
+            assert_eq!(stamp_ns(&bad), None, "{bad}");
+        }
+    }
+    #[test]
+    fn the_legacy_readers_keep_an_empty_connection_id_apart_from_the_suffix_account() {
+        let now = 1_800_000_000;
+        let rows = json!([
+            {"provider":"codex:a","connection_id":"","window_key":"day","created_at":now - 10,"remaining_percentage":80},
+            {"provider":"codex","connection_id":"a","window_key":"week","created_at":now - 10,"remaining_percentage":10},
+        ]);
+        // Two accounts (the unnamed one and `a`): the pool takes the better, not the merged minimum.
+        assert_eq!(remaining(&rows, now, 10_800), Some(80.0));
+        assert_eq!(identity(&rows[0]), Some(("codex", "")));
+        assert_eq!(pool_identity(&rows[0]), Some(("codex", "a")));
     }
 }

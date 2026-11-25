@@ -1,131 +1,11 @@
-#[cfg(test)]
-#[path = "../../test_support/python.rs"]
-mod test_python;
+#[path = "quota_pool/fixtures.rs"]
+mod fixtures;
 
+use fixtures::*;
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
-
-const WEEK: f64 = 604_800.0;
-
-fn now() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as f64
-}
-
-/// Rows are (id, provider, connection_id, window, remaining, observed_at, reset_at).
-type Row = (
-    i64,
-    &'static str,
-    Option<&'static str>,
-    &'static str,
-    Option<f64>,
-    f64,
-    f64,
-);
-
-fn database(directory: &Path, rows: &[Row]) -> std::path::PathBuf {
-    let sql = |value: Option<&str>| value.map_or("NULL".into(), |v| format!("'{v}'"));
-    let inserts: String = rows
-        .iter()
-        .map(|(id, provider, connection, window, left, at, reset)| {
-            let left = left.map_or("NULL".into(), |v| v.to_string());
-            insert(
-                *id,
-                provider,
-                &sql(*connection),
-                window,
-                &left,
-                &at.to_string(),
-                *reset,
-            )
-        })
-        .collect();
-    database_sql(directory, &inserts)
-}
-
-/// One INSERT whose connection, remaining and observation are raw SQL literals.
-fn insert(
-    id: i64,
-    provider: &str,
-    connection: &str,
-    window: &str,
-    left: &str,
-    at: &str,
-    reset: f64,
-) -> String {
-    format!("INSERT INTO quota_snapshots VALUES ({id}, '{provider}', {connection}, '{window}', {left}, 0, {reset}, {at});")
-}
-
-fn database_sql(directory: &Path, inserts: &str) -> std::path::PathBuf {
-    let db = directory.join("quota.sqlite");
-    let script = format!(
-        "CREATE TABLE quota_snapshots (id INTEGER PRIMARY KEY, provider, connection_id,
-          window_key, remaining_percentage, is_exhausted, next_reset_at, created_at);{inserts}"
-    );
-    let fixture = test_python::command()
-        .args([
-            "-c",
-            "import sqlite3, sys\nwith sqlite3.connect(sys.argv[1]) as db: db.executescript(sys.argv[2])",
-        ])
-        .arg(&db)
-        .arg(script)
-        .status()
-        .unwrap();
-    assert!(fixture.success());
-    db
-}
-
-/// A zone-less ISO text of whole `secs` plus `nanos`, `sep` between date and time and `digits`
-/// fractional digits; integers keep differences f64 seconds cannot hold.
-fn iso(secs: f64, nanos: u32, sep: char, digits: usize) -> String {
-    let t = chrono::DateTime::from_timestamp(secs as i64, nanos).unwrap();
-    let format = format!("%Y-%m-%d{sep}%H:%M:%S%.{digits}f");
-    format!("'{}'", t.naive_utc().format(&format))
-}
-
-fn pool(db: Option<&Path>) -> Value {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_plangraph"));
-    cmd.current_dir(repo)
-        .env_remove("QUOTA_SNAPSHOT_DB")
-        .env("PLANGRAPH_ENV_FILE", "/nonexistent/plangraph.env")
-        .args(["quota", "pool"]);
-    if let Some(db) = db {
-        cmd.arg("--db").arg(db);
-    }
-    let result = cmd.output().unwrap();
-    assert!(result.status.success(), "{result:?}");
-    serde_json::from_slice(&result.stdout).unwrap()
-}
-
-fn window<'a>(report: &'a Value, key: &str) -> &'a Value {
-    report["windows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|w| w["window"] == key)
-        .unwrap_or_else(|| panic!("window {key} missing in {report}"))
-}
-
-fn account<'a>(window: &'a Value, name: &str) -> &'a Value {
-    window["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["account"] == name)
-        .unwrap_or_else(|| panic!("account {name} missing in {window}"))
-}
-
-fn near(value: &Value, expected: f64) {
-    let got = value
-        .as_f64()
-        .unwrap_or_else(|| panic!("{value} is not a number"));
-    assert!((got - expected).abs() < 1e-3, "{got} != {expected}");
-}
 
 #[test]
 fn quota_pool_reports_latest_active_windows_from_read_only_db() {
@@ -318,6 +198,11 @@ fn quota_pool_orders_zone_less_t_timestamps_and_sub_microsecond_ties() {
     near(&account(&weekly, "a")["used_pct"], 60.0);
     near(&account(&weekly, "b")["used_pct"], 20.0);
     assert_eq!(weekly["coverage"]["usable_accounts"], 2, "{weekly}");
+    // The report keeps the selected observation to the nanosecond; a float time could not.
+    let at_ns = |name: &str| account(&weekly, name)["observed_at_ns"].as_i64().unwrap();
+    assert_eq!(at_ns("a"), t as i64 * 1_000_000_000 + 123_456_800);
+    assert_eq!(at_ns("b"), t as i64 * 1_000_000_000);
+    assert_eq!(weekly["observed_at_ns"], at_ns("a"));
 }
 
 #[test]
@@ -399,4 +284,49 @@ fn quota_pool_leaves_out_an_observation_made_before_its_window_began() {
     assert_eq!(weekly["coverage"]["observed_accounts"], 2, "{weekly}");
     assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
     assert_eq!(weekly["accounts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn quota_pool_rejects_out_of_range_timestamps_without_hiding_healthy_accounts() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    let directory = tempfile::tempdir().unwrap();
+    let inserts = [
+        insert(1, "codex:a", "NULL", "weekly", "50", &t.to_string(), reset),
+        // Finite but absurd observations and resets are unusable, never arithmetic input.
+        insert(2, "codex:b", "NULL", "weekly", "50", "-1e100", reset),
+        insert(3, "codex:c", "NULL", "weekly", "50", "1e300", reset),
+        insert(4, "codex:d", "NULL", "weekly", "50", &t.to_string(), -1e100),
+        insert(5, "codex:e", "NULL", "weekly", "50", &t.to_string(), 1e300),
+    ]
+    .concat();
+    let report = pool(Some(&database_sql(directory.path(), &inserts)));
+    let weekly = window(&report, "weekly");
+    near(&weekly["used_pct"], 50.0);
+    assert_eq!(weekly["coverage"]["observed_accounts"], 5, "{weekly}");
+    assert_eq!(weekly["coverage"]["usable_accounts"], 1, "{weekly}");
+    assert_eq!(weekly["accounts"][0]["account"], "a");
+}
+
+#[test]
+fn quota_pool_ranks_numeric_and_iso_timestamps_of_one_instant_alike() {
+    let t = now() - 100.0;
+    let reset = now() + 86_400.0;
+    let (numeric, text) = (format!("{}", t + 0.25), iso(t, 250_000_000, 'T', 9));
+    let directory = tempfile::tempdir().unwrap();
+    // One instant written both ways: the later id wins whichever form it is in.
+    let inserts = [
+        insert(1, "codex:a", "NULL", "weekly", "90", &text, reset),
+        insert(2, "codex:a", "NULL", "weekly", "40", &numeric, reset),
+        insert(3, "codex:b", "NULL", "weekly", "40", &numeric, reset),
+        insert(4, "codex:b", "NULL", "weekly", "90", &text, reset),
+    ]
+    .concat();
+    let weekly = pool(Some(&database_sql(directory.path(), &inserts)))["windows"][0].clone();
+    near(&account(&weekly, "a")["used_pct"], 60.0);
+    near(&account(&weekly, "b")["used_pct"], 10.0);
+    assert_eq!(
+        account(&weekly, "a")["observed_at_ns"],
+        account(&weekly, "b")["observed_at_ns"]
+    );
 }
