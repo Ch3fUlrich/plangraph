@@ -14,7 +14,7 @@ Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
 `~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
 shared cleanup lease. It checks the host cache cap before and after each Cargo
 command; never override this with a private target. See [disk limits and
-cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty. md-sync reports a close the keeper's live-evidence gate would refuse as `held`, so an item needs a `no deploy needed: <reason>` line or a deploy row.
+cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty. md-sync screens closes using verified deploy evidence from the snapshot's current item epoch. Moving an open item into review advances its epoch, so the importer holds its close until the next import if it needs deploy proof. Keeper checks the latest landing when it applies a close.
 
 On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
 finish and the build leases have been released. Older pg-spawnd installs
@@ -62,7 +62,7 @@ A part (a batch waiting for a train) enters a train only after its own head pass
 `merge_batch build` requires a successful full Tests run on the exact head of each part that changes shared test
 execution, setup, fixtures, or workflows, including the Rust toolchain pin and shared deadline and process-group code.
 The part table shows the run ID. This requirement also applies with `--force-set`. The documented `tools/merge_batch.py build`
-path in the [batch runbook](docs/batch-merge-check.md) checks changed-test replay. Train 68 used manual readiness. Active adoption is pending.
+path in the [batch runbook](docs/batch-merge-check.md) checks changed-test replay with exact pytest node outcomes and saves both output streams. Train 68 used manual readiness. Active adoption is pending.
 
 Outside lane preflight, with sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Before any build preflight trims the shared target (over `PLANGRAPH_CARGO_TARGET_CAP_GB` it is removed; `cli-tests/<hash>` builds are kept to the newest `PLANGRAPH_CLI_TESTS_KEEP`, default 3, and 24 h), then builds pg-policy once into `policy-bin/<source hash>` of that target (equal sources share a warm build, different sources never share an artifact; the newest 3 are kept) and hands a private copy to the policy step as `PG_POLICY_BIN`, outside the 60-second check bound. See docs/TESTING.md.
 `tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
@@ -154,7 +154,7 @@ CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge q
 event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
 Every other pull request, draft or ready, runs the affected selection
 (`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
-Title and description corrections use the isolated `ci-pr-description` policy check. Base edits still run normal CI (see [CI gate](docs/ci-gate.md)). Ordinary draft lane checks report a literal `ci-gate` without test proof. The legacy landing readers exclude this check from CI admission.
+Title and description corrections use the isolated `ci-pr-description` policy check. The legacy landing reader looks up attempt 1 when metadata evidence omits the attempt or reports null. Base edits still run normal CI (see [CI gate](docs/ci-gate.md)). Ordinary draft lane checks report a literal `ci-gate` without test proof. The legacy landing readers exclude this check from CI admission.
 Marking a draft ready starts no run; `merge_batch land` names a pending required check and exits. `land` also asks `plangraph main-state --admit` and refuses with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` while main is not green (`EXCEPTION:main-red-fix` passes only while red; see docs/ci-parallel.md).
 
 Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
