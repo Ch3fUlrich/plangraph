@@ -283,7 +283,14 @@ def test_flake():
     assert seen != 2
 """
     browser = "tests/browser/test_browser.py"
-    files = {test_path: content, browser: "import pytest\n@pytest.mark.browser\ndef test_browser():\n    pass\n"}
+    browser_content = """import pytest
+
+
+@pytest.mark.browser
+def test_browser():
+    pass
+"""
+    files = {test_path: content, browser: browser_content}
     root, base, head = tree(tmp_path, files, {"README.md": "fixture\n"})
     telemetry = tmp_path / "telemetry"
     monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(telemetry))
@@ -298,7 +305,7 @@ def test_flake():
     logs = [receipt.parent / attempt[stream] for attempt in first["attempts"] for stream in ("stdout", "stderr")]
     assert len(logs) == len(set(logs)) == 10
     assert all("stdout evidence" in item.read_text() for item in logs[::2])
-    assert all("stderr evidence" in item.read_text() for item in logs[1::2])
+    assert all("stderr evidence" in item.read_text() for item in logs[slice(1, None, 2)])
     before = {item: item.read_bytes() for item in logs}
 
     assert ci_select.main(args) == 0
