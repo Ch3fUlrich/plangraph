@@ -1,5 +1,10 @@
 {
   "project": "plangraph",
+  "line_caps": {
+    "rust/worker-core/src/bin/pg-disk-hygiene.rs": {"max_changed_lines": 460, "max_final_lines": 780},
+    "rust/worker-core/src/disk_hygiene_plan.rs": {"max_changed_lines": 440, "max_final_lines": 440},
+    "rust/worker-core/src/disk_hygiene_plan_discovery.rs": {"max_changed_lines": 440, "max_final_lines": 440}
+  },
   "cards": {
     "LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS": {
       "outcome": "Reclaim idle rebuildable caches while unrelated builds run and alert on zero progress below the cleanup floor or partial progress below the alarm floor.",
@@ -61,6 +66,7 @@
         "rust/worker-core/src/disk_fast_worktrees.rs",
         "rust/worker-core/src/disk_hygiene.rs",
         "rust/worker-core/src/disk_hygiene_plan.rs",
+        "rust/worker-core/src/disk_hygiene_plan_discovery.rs",
         "rust/worker-core/src/disk_runtime.rs",
         "rust/worker-core/src/disk_runtime_tests.rs",
         "rust/worker-core/src/disk_watermark.rs",

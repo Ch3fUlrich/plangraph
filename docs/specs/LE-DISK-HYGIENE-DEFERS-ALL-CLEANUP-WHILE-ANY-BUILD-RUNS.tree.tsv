@@ -26,7 +26,7 @@ rust/worker-core/Cargo.toml	read	yes	E1 E2	observed
 rust/worker-core/src/affected_scratch.rs	write	yes	E1 E2	predicted (<= 55 changed lines)
 rust/worker-core/src/bin/flow_watchdog_hosts/disks.rs	read	yes	E3	observed
 rust/worker-core/src/bin/flow_watchdog_hosts/local.rs	read	yes	E3	observed
-rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E1 E2 E3 E4	predicted (<= 360 changed lines)
+rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E1 E2 E3 E4	predicted (<= 460 changed lines; <= 780 final lines)
 rust/worker-core/src/bin/pg-process-cwds.rs	write	yes	E2	predicted (<= 23 changed lines)
 rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E1 E2 E3	predicted (<= 395 changed lines)
 rust/worker-core/src/cargo_cache.rs	read	yes	E1 E2	observed
@@ -36,6 +36,7 @@ rust/worker-core/src/cargo_pool_trim_tests.rs	write	yes	E1 E2	predicted (<= 90 c
 rust/worker-core/src/disk_fast_worktrees.rs	write	yes	E1 E2	predicted (<= 35 changed lines)
 rust/worker-core/src/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 220 changed lines)
 rust/worker-core/src/disk_hygiene_plan.rs	write	yes	E1 E2 E3	predicted (<= 440 changed lines)
+rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E1 E2 E3	predicted (<= 440 changed lines)
 rust/worker-core/src/disk_runtime.rs	write	yes	E1 E2 E3	predicted (<= 210 changed lines)
 rust/worker-core/src/disk_runtime_tests.rs	write	yes	E1 E2	predicted (<= 145 changed lines)
 rust/worker-core/src/disk_watermark.rs	write	yes	E1 E3	predicted (<= 75 changed lines)

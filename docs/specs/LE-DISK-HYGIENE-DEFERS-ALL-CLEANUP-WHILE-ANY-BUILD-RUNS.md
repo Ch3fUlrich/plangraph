@@ -4,8 +4,8 @@ Outcome. Reclaim idle rebuildable caches while unrelated builds run and alert on
 
 - plan_source. Keeper brief for plangraph:LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS, priority 10, review tier high, with the supplied 2026-11-26 incident measurements.
 - base commit. d948affa1da9565f12c58fb981bbf2dbc04974ad
-- card SHA-256. ec566393483c6940773da3608ffc48e272b137a6f3b029c2f876b86a459f63ca
-- tree SHA-256. e441ac63206683300c9baacda8829c50c84f188786c0e1e5e6b4aa252085132c
+- card SHA-256. 5934a4e9ee869dfa3154206864d10657e80c81526956d3a426e13956060747e0
+- tree SHA-256. abc3a0f001db8b7a5e5a59907b4f109c09ed5e5adfed5caffc5e6703f23dc137
 - evidence_after_deploy. Collect a 24-hour workstation series after approved deployment in the order specified under Process inventory and rollout. Apply S1 to a pressured timer invocation overlapping an observed Cargo or rustc process. Retain the overlapping invocation's NDJSON row, timestamps, deployed head and any matching Keeper alert ID, together with the root usage samples. The 85% outcome depends on N1.
 
 ## Decisions
