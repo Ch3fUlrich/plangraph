@@ -10,6 +10,8 @@ Antigravity Sonnet reviews use plan mode, a disposable checkout bound to the rev
 
 The round watchdog retries transient executable-busy errors from `claude stop` and `claude agents --json`.
 
+The Temporal test runner exports the CLI used to start its dev server, including when it finds the CLI on `PATH`.
+
 Tests cover reviewer selection, subscription fallback, and writer priority.
 
 - `test_review_route_agy_sonnet_before_subscription`

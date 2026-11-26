@@ -86,6 +86,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             Some(
                 Command::new(&args[0])
                     .args(&args[1..])
+                    .env("TEMPORAL_CLI", &cli)
                     .env("PG_TEMPORAL_ADDR", format!("http://{address}"))
                     .env("SPIKE_ADDR", format!("http://{address}"))
                     .env("TEMPORAL_TEST_ADDRESS", &address)
