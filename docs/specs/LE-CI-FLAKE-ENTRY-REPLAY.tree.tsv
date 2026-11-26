@@ -1,0 +1,13 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-CI-FLAKE-ENTRY-REPLAY.md	write	yes	E1 E2 E3	predicted
+docs/TESTING.md	read	yes	E1 E2 E3	predicted
+docs/ci-gate.md	write	yes	E1 E2 E3	predicted
+rust/plangraph-cli/src/land/chain.rs	sibling	yes	E3	predicted
+tests/test_ci_select_entry.py	write	yes	E1 E2 E3	predicted
+tests/test_merge_batch_build.py	write	yes	E1 E2 E3	predicted
+tests/test_merge_batch_part_entry.py	write	yes	E1 E2 E3	predicted
+tools/ci_select.py	write	yes	E1 E2 E3	predicted
+tools/merge_batch_build.py	write	yes	E1 E2 E3	predicted
+tools/merge_batch_plan.py	write	yes	E1 E2 E3	predicted
+tools/merge_batch_util.py	caller	yes	E1	predicted
+tools/preflight.py	read	yes	E1 E2 E3	predicted
