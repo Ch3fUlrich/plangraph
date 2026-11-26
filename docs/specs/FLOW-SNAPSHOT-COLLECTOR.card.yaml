@@ -1,0 +1,28 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FLOW-SNAPSHOT-COLLECTOR": {
+      "outcome": "Produce the existing watchdog snapshot from the configured read-only sources and publish it atomically.",
+      "read_set": [
+        "docs/flow-watchdog.md",
+        "rust/plangraph-cli/Cargo.toml",
+        "rust/worker-core/Cargo.toml"
+      ],
+      "write_set": [
+        "rust/plangraph-cli/src/flow_snapshot/",
+        "rust/plangraph-cli/tests/flow_snapshot.rs",
+        "rust/plangraph-cli/src/lib.rs",
+        "rust/plangraph-cli/src/main.rs",
+        "rust/worker-core/src/flow_collect/",
+        "rust/worker-core/tests/flow_collect.rs",
+        "rust/worker-core/src/lib.rs",
+        "docs/flow-watchdog.md",
+        "changelog.d/FLOW-SNAPSHOT-COLLECTOR.md"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test flow_snapshot && cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --test flow_collect",
+      "risk_tags": [],
+      "estimate_tokens": 28000,
+      "window_class": "128k"
+    }
+  }
+}
