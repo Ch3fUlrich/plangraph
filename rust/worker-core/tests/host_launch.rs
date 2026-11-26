@@ -89,7 +89,7 @@ fn with_ssh_fixture(test_name: &str, check: impl FnOnce(&std::path::Path)) {
     // Only the child gets a fixture PATH so concurrent tests keep their own environment.
     let tmp = tempfile::tempdir().unwrap();
     pg_worker_core::executable_test_support::write_private_executable(
-        &tmp.path().join("ssh"),
+        tmp.path().join("ssh"),
         format!(
             "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > \"${FIXTURE}/ssh-argv\"\n{}",
             worker_shim_handshake()
