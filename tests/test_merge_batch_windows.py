@@ -220,7 +220,8 @@ def test_push_adopts_an_existing_part_before_selecting_windows(tmp_path, monkeyp
     workflow.parent.mkdir(parents=True)
     workflow.write_text(WORKFLOW)
     st = state(root, base, head, "batch/docs")
-    st.update(status="built", repo="o/p", merged=[{"pr": 1}])
+    st.update(status="built", repo="o/p", merged=[{"pr": 1, "head": head}],
+              prs={"1": {"ref": "lane/docs"}})
     monkeypatch.setattr(land, "load_state", lambda _: st)
     real_git = land.git
     monkeypatch.setattr(land, "git", lambda *a, **k: SimpleNamespace(stdout="") if a[0] == "push" else real_git(*a, **k))
@@ -229,6 +230,14 @@ def test_push_adopts_an_existing_part_before_selecting_windows(tmp_path, monkeyp
     monkeypatch.setattr(util, "gh_json", land.gh_json)
     monkeypatch.setattr(land, "render_body", lambda _: "")
     monkeypatch.setattr(land, "update_pr", lambda *a: None)
+
+    def landing_journal(_repo, action, **fields):
+        if action == "acquire":
+            return {"owner": fields["owner"], "token": "fixture"}
+        assert action in ("stage", "prepare", "release")
+        return {}
+
+    monkeypatch.setattr(build, "landing_journal", landing_journal)
     monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "fixture")
     transport = Transport()
     gate = land.windows_gate
