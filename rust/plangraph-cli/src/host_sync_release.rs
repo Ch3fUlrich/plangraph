@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+#[path = "host_sync_release/projections.rs"]
 mod projections;
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
