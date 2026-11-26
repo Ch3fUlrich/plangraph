@@ -71,11 +71,12 @@ fn scrub(v: &mut serde_json::Value) {
         serde_json::Value::Array(a) => a.iter_mut().for_each(scrub),
         serde_json::Value::String(s) => {
             // sticky queue names look like "<pid>@<hostname>-<uuid>"
-            if let Some((pid, rest)) = s.split_once('@') {
-                if !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) {
-                    let uuid = rest.rsplit('-').next().unwrap_or("");
-                    *s = format!("1@spike-{uuid}");
-                }
+            if let Some((pid, rest)) = s.split_once('@')
+                && !pid.is_empty()
+                && pid.bytes().all(|b| b.is_ascii_digit())
+            {
+                let uuid = rest.rsplit('-').next().unwrap_or("");
+                *s = format!("1@spike-{uuid}");
             }
         }
         _ => {}
