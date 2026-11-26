@@ -1,6 +1,6 @@
 # Writer feeder
 
-`plangraph feed --once` starts at most one native Codex writer on the current
+`plangraph feed --once` fills available native Codex writer slots on the current
 host. Run the supplied `deploy/systemd/pg-feeder.service` and `.timer` every two
 minutes after configuring the host; these units are examples and are not installed
 by the CLI. `KillMode=process` lets detached supervisors and writers outlive the
@@ -19,7 +19,12 @@ creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
 errors. Decisions are `idle`, `refused`, `would_spawn`, `pending` or `spawned`.
 Routine admission refusals exit 0 so the timer stays healthy; adapter/envelope/
-start errors carry `error: true` and exit 2.
+start errors before the first launch carry `error: true` and exit 2.
+Each batch consumes one slot and one run's RAM. The next batch avoids all files
+held by earlier batches in the tick. A dry run lists each batch, card and brief
+under `would_start`. A live tick lists accepted launches under `started`.
+Both lists report `slots` and the `stopped` reason. A later refusal preserves the
+successful decision and its earlier launches.
 There is no LLM in scheduling. Claims never update priority.
 
 ## Activity boundaries
