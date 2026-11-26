@@ -1,0 +1,8 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-ATTEMPT-ROWS-MISSING-ON-MOST-SPAWN-PATHS.md	write	yes	E1 E2 E3	predicted
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2 E3	predicted
+rust/pg-spawnd/src/attempt_coverage.rs	read	yes	E1 E2 E3	predicted
+rust/pg-spawnd/tests/attempt_outcome.rs	write	yes	E1 E2 E3	predicted
+rust/pg-spawnd/tests/fleet_launch_parity.rs	caller	yes	E2	predicted
+rust/pg-spawnd/tests/hand_run.rs	caller	yes	E2	predicted
+rust/pg-spawnd/tests/spawn_attempt_delivery/mod.rs	write	yes	E1 E2 E3	predicted
