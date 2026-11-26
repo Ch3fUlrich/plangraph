@@ -1,0 +1,59 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "ROUTE-ORDER-D6804": {
+      "outcome": "Prefer Antigravity Sonnet high for the Claude-family review seat and use the Claude subscription when its fallback condition is met.",
+      "read_set": [
+        "src/plangraph/routing_support/resolver.py"
+      ],
+      "write_set": [
+        "changelog.d/ROUTE-ORDER-D6804.md",
+        "deploy/systemd/README.md",
+        "deploy/systemd/plangraph-review-probe.service",
+        "docs/routing.md",
+        "rust/pg-spawnd/src/cli_review.rs",
+        "rust/pg-spawnd/src/cli_review_tests.rs",
+        "rust/pg-spawnd/src/seat_admission_tests.rs",
+        "rust/pg-spawnd/tests/agy_account_admission.rs",
+        "rust/pg-spawnd/tests/agy_quota.rs",
+        "rust/pg-spawnd/tests/agy_review_spawn.rs",
+        "rust/pg-spawnd/tests/native_evidence.rs",
+        "src/plangraph/planner/legs.py",
+        "src/plangraph/planner/routing.py",
+        "tests/test_bench_required.py",
+        "tests/test_claude_child_env.py",
+        "tests/test_gemini_flash_retired.py",
+        "tests/test_leg_claude_haiku.py",
+        "tests/test_leg_probe_d3465.py",
+        "tests/test_leg_probe_w1.py",
+        "tests/test_opencode_served_witness.py",
+        "tests/test_registry_route.py",
+        "tests/test_review_gpt_native_codex_leg.py",
+        "tests/test_review_launch_windows.py",
+        "tests/test_review_order.py",
+        "tests/test_review_probe_own_harness.py",
+        "tests/test_route_agy_reset.py",
+        "tests/test_route_claude_effort_legs.py",
+        "tests/test_route_free_first.py",
+        "tests/test_route_order_d5696.py",
+        "tests/test_route_order_d6652.py",
+        "tests/test_route_policy_review_choice.py",
+        "tests/test_route_seat_slot_family.py",
+        "tests/test_spawn_win_render.py",
+        "tests/test_spawner_cli_catalog.py",
+        "tests/test_spawner_doctor.py",
+        "tests/test_spawner_host_bench.py",
+        "tests/test_spawner_launch_spec.py",
+        "tests/test_spawner_leg_state.py",
+        "tests/test_spawner_overflow.py",
+        "tests/test_spawner_prompt_argv_limit.py",
+        "tests/test_w30_regressions.py"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_route_order_d6652.py tests/test_claude_child_env.py tests/test_leg_claude_haiku.py tests/test_spawner_host_bench.py tests/test_spawner_doctor.py",
+      "risk_tags": [],
+      "estimate_tokens": 22000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test agy_review_spawn --test native_evidence"
+    }
+  }
+}
