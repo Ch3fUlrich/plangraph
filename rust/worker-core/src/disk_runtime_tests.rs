@@ -155,7 +155,8 @@ fn hygiene_inventory_matches_environment_and_fd_per_path() {
         b"CARGO_BUILD_TARGET_DIR=alias\0",
         b"CARGO_BUILD_TARGET_DIR=/work/future/\xff\0",
         b"CARGO_BUILD_TARGET_DIR=\0",
-        b"OTHER=CARGO_TARGET_DIR=target-a2\0",
+        b"OTHER=",
+        b"CARGO_TARGET_DIR=target-a2\0",
     ];
     fs::write(pid.join("environ"), environ.concat()).unwrap();
     fs::create_dir(proc.join("124")).unwrap(); // PID vanished before stat was read.
