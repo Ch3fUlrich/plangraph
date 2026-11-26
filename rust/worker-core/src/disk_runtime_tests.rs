@@ -182,7 +182,7 @@ fn hygiene_inventory_matches_environment_and_fd_per_path() {
         )
     };
     let write_reader = |payload| {
-        crate::executable_test_support::write_private_executable(&reader, &reader_script(payload));
+        crate::executable_test_support::write_private_executable(&reader, reader_script(payload));
     };
     write_reader(&payload);
     let denied = || Err(io::Error::from(io::ErrorKind::PermissionDenied));
