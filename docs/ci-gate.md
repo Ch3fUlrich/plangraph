@@ -78,3 +78,32 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 | `rust-worker` | Rust worker crate: fmt, clippy, tests | standalone `rust/worker` crate (not in the workspace) | none |
 | `rust-spike` | Rust replay spike tests | `rust/spikes/temporal-spike` replay test | none |
 | `ci-gate` | ci-gate | aggregates the jobs above | none |
+
+
+## Changed-test replay for the Python batch builder
+
+`python3 tools/merge_batch.py build` requires five consistent observations of each applicable changed test in addition
+to the part's hosted Tests run and successful `ci-gate`. Use the declared parent head as a stacked part's comparison
+base. Use the fetched protected-branch head for an independent part. Generate separate receipts on the hosts and in
+the environments selected by the part's changes.
+
+```sh
+python3 tools/ci_select.py entry-set --base BASE_SHA --head PART_SHA --replay --environment default
+```
+
+The replay uses a detached checkout of `PART_SHA`. It runs changed Python test files and Rust test functions whose
+lines changed, following edited renames to their destination. Linux runs `default`, `postgres` (with `PG_DSN`), and
+`browser`. The `windows` replay runs on native Windows and uses the Rust packages selected by the Windows CI job.
+The builder compares the receipt's base, head, environment, and selected inventory to its own Git calculation.
+A test skipped consistently in its environment counts as inapplicable. A missing observation, consistent failure,
+or a mix of results refuses readiness. Mixed pass, fail, or skip outcomes are reported as `FLAKY`.
+
+The producer and builder use the same `PLANGRAPH_TELEMETRY_DIR` (default `~/.local/share/plangraph/telemetry`).
+For a replay on another host, place its receipt and preserved evidence in the builder's telemetry store.
+Below `entry-replay/PART_SHA`, `ENVIRONMENT.json` is the latest receipt. Each replay keeps its own receipt
+and separate stdout and stderr files. Their paths in the receipt are relative to the part directory.
+An empty applicable inventory
+needs no replay. The ordinary `entry-set --run` and hosted CI checks remain required where already selected.
+
+This is the documented Python entry point. Train 68 used manual readiness. Active-train adoption and a live
+receipt with the ordinary required CI result are still pending.

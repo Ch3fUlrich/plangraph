@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -192,3 +193,122 @@ def test_the_entry_run_executes_workspace_and_standalone_nextest_commands(tmp_pa
         [*runner, "-p", "pg-spawnd"],
         [*runner, "--manifest-path", str(root / "rust/worker/Cargo.toml"), "--lib", "--bins"],
     ]
+
+
+def test_replay_matches_platform_and_changed_inventory(tmp_path, monkeypatch):
+    manifest = "rust/pg-spawnd/Cargo.toml"
+    old = "rust/pg-spawnd/tests/old.rs"
+    new = "rust/pg-spawnd/tests/renamed.rs"
+    original = """// A stable comment makes Git detect this as a rename.
+#[cfg(windows)]
+#[test]
+fn native_only() {
+    assert_eq!(1, 1);
+}
+
+#[test]
+fn unchanged() {
+    assert!(true);
+}
+"""
+    workflow = "jobs:\n  rust-windows:\n    steps:\n      - run: cargo test -p pg-spawnd\n"
+    root, base, _ = tree(tmp_path, {"docs/x.md": "x\n"},
+                         {**BASE, old: original, ".github/workflows/tests.yml": workflow})
+    git(root, "mv", old, new)
+    (root / new).write_text(original.replace("assert_eq!(1, 1)", "assert_eq!(2, 2)"))
+    git(root, "commit", "-qam", "edit a renamed Windows test")
+    head = git(root, "rev-parse", "HEAD")
+    plan = ci_select._load_tool("merge_batch_plan")
+    inventory = plan.replay_inventory(root, base, head)
+    assert inventory == {"windows": {"python": [], "rust": [[manifest, new, "native_only"]]}}
+
+    telemetry = tmp_path / "telemetry"
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(telemetry))
+    receipt_dir = telemetry / "entry-replay" / head
+    receipt_dir.mkdir(parents=True)
+    receipt = receipt_dir / "windows.json"
+    valid = {"base": base, "head": head, "environment": "windows",
+             "inventory": inventory["windows"], "runs": 5, "ok": True,
+             "observations": {f"{new}::native_only": ["pass"] * 5}}
+    receipt.write_text(json.dumps(valid))
+    facts = {"fast_checks": True, "entry_set": True, "attempts": [{"attempt": 1, "conclusion": "success"}],
+             **plan.replay_facts(root, base, head)}
+    assert ci_select.ready_problems(facts) == []
+
+    for key, value in [("environment", "default"), ("inventory", {"python": [], "rust": []}),
+                       ("runs", 4), ("head", base), ("observations", {f"{new}::native_only": ["pass"] * 4})]:
+        receipt.write_text(json.dumps({**valid, key: value}))
+        problems = ci_select.ready_problems({**facts, **plan.replay_facts(root, base, head)})
+        assert any("windows" in problem and key in problem for problem in problems), problems
+
+    no_test_inventory = plan.replay_facts(root, base, git(root, "rev-parse", "HEAD^"))
+    assert ci_select.ready_problems({**facts, **no_test_inventory}) == []
+    assert ci_select.ready_problems({**facts, **no_test_inventory, "attempts": []}) == [
+        "no completed attempt on this head"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows Cargo")
+def test_native_windows_replay_records_five_observations(tmp_path, monkeypatch):
+    path = "rust/pg-spawnd/tests/replay_windows.rs"
+    manifest = '[package]\nname = "pg-spawnd"\nversion = "0.1.0"\nedition = "2021"\n'
+    workflow = "jobs:\n  rust-windows:\n    steps:\n      - run: cargo test -p pg-spawnd\n"
+    root, base, head = tree(tmp_path, {
+        path: '#![cfg(windows)]\n#[test]\nfn native_only() { assert!(cfg!(windows)); }\n',
+    }, {"rust/pg-spawnd/Cargo.toml": manifest, ".github/workflows/tests.yml": workflow})
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "cargo"))
+    monkeypatch.setenv("CARGO_NET_OFFLINE", "true")
+    telemetry = tmp_path / "telemetry"
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(telemetry))
+    args = ["entry-set", "--root", str(root), "--base", base, "--head", head, "--replay"]
+    assert ci_select.main(args + ["--environment", "windows"]) == 0
+    path_to_receipt = telemetry / "entry-replay" / head / "windows.json"
+    receipt = json.loads(path_to_receipt.read_text(encoding="utf-8"))
+    assert receipt["observations"] == {f"{path}::native_only": ["pass"] * 5}
+    assert all((path_to_receipt.parent / attempt["stderr"]).is_file() for attempt in receipt["attempts"])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="default replay runs on Linux")
+def test_inconsistent_replay_preserves_each_log(tmp_path, monkeypatch):
+    test_path = "tests/test_flake.py"
+    content = """import os
+from pathlib import Path
+
+
+def test_flake():
+    print("stdout evidence")
+    print("stderr evidence", file=__import__("sys").stderr)
+    counter = Path(os.environ["REPLAY_FIXTURE_COUNT"])
+    seen = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(seen + 1))
+    assert seen != 2
+"""
+    browser = "tests/browser/test_browser.py"
+    files = {test_path: content, browser: "import pytest\n@pytest.mark.browser\ndef test_browser():\n    pass\n"}
+    root, base, head = tree(tmp_path, files, {"README.md": "fixture\n"})
+    telemetry = tmp_path / "telemetry"
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(telemetry))
+    monkeypatch.setenv("REPLAY_FIXTURE_COUNT", str(tmp_path / "counter"))
+    args = ["entry-set", "--root", str(root), "--base", base, "--head", head, "--replay"]
+    receipt = telemetry / "entry-replay" / head / "default.json"
+
+    assert ci_select.main(args) == 1
+    first = json.loads(receipt.read_text())
+    assert first["flaky"] == [f"{test_path}::test_flake"]
+    assert first["runs"] == 5 and not first["ok"]
+    logs = [receipt.parent / attempt[stream] for attempt in first["attempts"] for stream in ("stdout", "stderr")]
+    assert len(logs) == len(set(logs)) == 10
+    assert all("stdout evidence" in item.read_text() for item in logs[::2])
+    assert all("stderr evidence" in item.read_text() for item in logs[1::2])
+    before = {item: item.read_bytes() for item in logs}
+
+    assert ci_select.main(args) == 0
+    second = json.loads(receipt.read_text())
+    assert not second["flaky"] and second["ok"] and second["runs"] == 5
+    assert {item: item.read_bytes() for item in logs} == before
+    assert all(receipt.parent / row["stdout"] not in logs for row in second["attempts"])
+    assert ci_select.main(args + ["--environment", "browser"]) == 0
+    browser_run = json.loads(receipt.with_name("browser.json").read_text())
+    assert browser_run["observations"] == {f"{browser}::test_browser": ["pass"] * 5}
+    assert all(receipt.parent / row["stdout"] not in logs for row in browser_run["attempts"])
+    assert json.loads(receipt.read_text()) == second
+    assert json.loads((receipt.parent / first["record"]).read_text()) == first
