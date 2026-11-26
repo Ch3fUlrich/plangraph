@@ -74,7 +74,8 @@ def read_messages(server, principal, query, *, committed=False):
 
 def _legacy_read_lock(server):
     if hasattr(server.lock, "__enter__"):
-        return timing.RequestTimer(server.lock, "read", verb="messages")
+        # HTTP dispatch already times the whole poll. Each read only needs lock attribution.
+        return timing.lock_scope(server.lock, "messages", phase="dispatch")
     return nullcontext()
 
 

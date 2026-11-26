@@ -380,9 +380,11 @@ def test_commit_failure_never_returns_receipt(world, monkeypatch):
     assert world.store.messages(world.p("router")) == []
 
 
-def test_wait_releases_lock_and_rereads_without_notify(srv):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_wait_releases_lock_and_rereads_without_notify(srv, http_srv, monkeypatch, capsys, legacy):
     import threading
     import time
+    monkeypatch.setattr(http_srv, "read_path", None if legacy else http_srv.read_path)
     result = []
     thread = threading.Thread(target=lambda: result.append(
         srv.get("/messages?since=0&wait_ms=1000")))
@@ -394,6 +396,8 @@ def test_wait_releases_lock_and_rereads_without_notify(srv):
         thread.join(3)
     assert not thread.is_alive()
     assert result[0].json()["rows"][0]["seq"] == 1
+    lines = capsys.readouterr().err.splitlines()
+    assert sum("request_timing" in line and "verb=messages" in line for line in lines) == 1
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "postgres"])
