@@ -4,7 +4,6 @@
     "LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT": {
       "outcome": "Publish coherent Keeper snapshots without holding the global request lock for the configured production rebuild.",
       "read_set": [
-        "src/plangraph/keeper/api.py",
         "src/plangraph/keeper/db.py",
         "src/plangraph/keeper/db_pg.py",
         "src/plangraph/keeper/store_read.py",
@@ -19,22 +18,25 @@
         ".docs-map",
         "src/plangraph/keeper/store_runs.py",
         "src/plangraph/keeper/store_messages.py",
-        "src/plangraph/keeper/store_close.py"
+        "src/plangraph/keeper/store_close.py",
+        "src/plangraph/keeper/store_verbs.py",
+        "src/plangraph/keeper/store_context.py"
       ],
       "write_set": [
         "src/plangraph/keeper/snapshot_io.py",
         "src/plangraph/keeper/snapshot_writer.py",
         "src/plangraph/keeper/daemon.py",
         "tests/test_keeper_snapshot_writer.py",
-        "tests/test_keeper_timing.py",
         "docs/keeper-snapshot-staleness.md",
         "docs/keeper/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md",
         "changelog.d/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md",
         "src/plangraph/keeper/messages_poll.py",
         "src/plangraph/keeper/api_routes.py",
-        "src/plangraph/keeper/timing.py",
         "tests/test_keeper_messages.py",
-        "tests/test_keeper_merge_refresh_budget.py"
+        "tests/test_keeper_merge_refresh_budget.py",
+        "src/plangraph/keeper/api.py",
+        "src/plangraph/keeper/timing.py",
+        "tests/test_keeper_timing.py"
       ],
       "exports": [
         "write_snapshot(server, principal)",
@@ -57,7 +59,8 @@
       "risk_tags": [
         "live-step"
       ],
-      "estimate_tokens": 26000
+      "estimate_tokens": 26000,
+      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_snapshot_writer.py::test_pg_heldout_whoami_claim_during_paused_snapshot"
     }
   }
 }

@@ -4,7 +4,7 @@ changelog.d/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md
 docs/keeper-snapshot-staleness.md	write	yes	E1 E2	predicted
 docs/keeper/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md	write	yes	E1 E2	predicted
 src/plangraph/fleet_snapshot.py	read	yes	E1 E2	predicted
-src/plangraph/keeper/api.py	caller	yes	E1 E2 E3	predicted
+src/plangraph/keeper/api.py	write	yes	E1 E2 E3 E6	predicted
 src/plangraph/keeper/api_routes.py	write	yes	E4	predicted
 src/plangraph/keeper/config.py	read	yes	E1 E2	predicted
 src/plangraph/keeper/daemon.py	write	yes	E3	predicted
@@ -17,14 +17,16 @@ src/plangraph/keeper/snapshot_pull.py	caller	yes	E3	predicted
 src/plangraph/keeper/snapshot_serve.py	caller	yes	E3	predicted
 src/plangraph/keeper/snapshot_writer.py	write	yes	E1 E2 E3	predicted
 src/plangraph/keeper/store_close.py	read	yes	E4	predicted
+src/plangraph/keeper/store_context.py	read	yes	E4	predicted
 src/plangraph/keeper/store_messages.py	read	yes	E5	predicted
 src/plangraph/keeper/store_read.py	read	yes	E1 E2	predicted
 src/plangraph/keeper/store_runs.py	read	yes	E4	predicted
-src/plangraph/keeper/timing.py	write	yes	E1 E4 E5	predicted
+src/plangraph/keeper/store_verbs.py	read	yes	E6	predicted
+src/plangraph/keeper/timing.py	write	yes	E1 E4 E5 E6	predicted
 tests/test_keeper_api.py	caller	yes	E1	predicted
 tests/test_keeper_merge_refresh_budget.py	write	yes	E4	predicted
 tests/test_keeper_messages.py	write	yes	E5	predicted
 tests/test_keeper_snapshot_setbased.py	read	yes	E1 E2	predicted
 tests/test_keeper_snapshot_writer.py	write	yes	E1 E2 E3	predicted
-tests/test_keeper_timing.py	write	yes	E1	predicted
+tests/test_keeper_timing.py	write	yes	E6	predicted
 tests/test_m2b_signed_snapshot.py	caller	yes	E3	predicted
