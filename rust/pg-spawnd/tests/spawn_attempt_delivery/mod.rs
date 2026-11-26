@@ -20,9 +20,19 @@ pub fn check_rows(state: &Path, expected: &[Value]) {
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
-from plangraph.keeper import auth, db
+# SQLite opening does not use the Keeper daemon's singleton lock.
+needs_fcntl_placeholder = sys.platform == 'win32' and 'fcntl' not in sys.modules
+if needs_fcntl_placeholder:
+    sys.modules['fcntl'] = ModuleType('fcntl')
+try:
+    from plangraph.keeper import auth, db
+finally:
+    if needs_fcntl_placeholder:
+        del sys.modules['fcntl']
+
 from plangraph.keeper.store import Store
 from plangraph.spawner.notify import retry_spawn_attempts
 from plangraph.spawner.stall_watchdog import read_runs
