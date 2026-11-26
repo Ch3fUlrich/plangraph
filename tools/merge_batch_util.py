@@ -685,7 +685,8 @@ def non_test_tests_run(repo, run, api):
     if (run.get("event") != "pull_request" or not isinstance(run_id, int)
             or run.get("display_title") != f"PR metadata check {run_id}"):
         return False
-    jobs = workflow_attempt_jobs(f"repos/{repo}/actions", run_id, run.get("run_attempt", 1), api)
+    attempt = run.get("run_attempt")
+    jobs = workflow_attempt_jobs(f"repos/{repo}/actions", run_id, 1 if attempt is None else attempt, api)
     names = [job.get("name") for job in jobs]
     metadata = names.count(TESTS_METADATA_JOB) == 1 and all(
         name == TESTS_METADATA_JOB

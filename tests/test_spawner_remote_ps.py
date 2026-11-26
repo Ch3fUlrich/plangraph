@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 import shlex
 import sys
 import subprocess
@@ -159,8 +158,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, tmp_path, src, dis
 def test_wsl_hop_sets_registry_path(tmp_path, monkeypatch):
     guest = dict(name='node-a', target='target', src='/srv/repo/src', wsl_distro='Ubuntu')
     config(tmp_path, monkeypatch, [dict(guest, env={'PATH': '/stale/bin'})])
-    directory = tmp_path / 'plangraph'
-    (directory / 'hosts.json').write_text(json.dumps({'hosts': [dict(
+    (tmp_path / 'plangraph' / 'hosts.json').write_text(json.dumps({'hosts': [dict(
         id='node-a', transport='ssh', os='linux', ssh_target='target', wsl_distro='Ubuntu',
         repos={'plangraph': {'root': '/srv/repo'}}, caps={'mem_floor_mb': 1},
         env={'PATH': '/srv/worker/.local/bin:/usr/bin:/bin'})]}))
@@ -179,16 +177,14 @@ def test_wsl_hop_without_path_unchanged():
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='fixture executes the Linux guest argv')
 def test_wsl_hop_without_login_path_finds_tools(tmp_path):
-    guest_bin = tmp_path / 'bin'
-    guest_bin.mkdir()
-    (guest_bin / 'pg-spawnd').symlink_to(sys.executable)
+    (tmp_path / 'pg-spawnd').symlink_to(sys.executable)
     (tmp_path / 'steps').write_text('import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n')
-    host = {'wsl_distro': 'Ubuntu', 'env': {'PATH': f'{guest_bin}:/usr/bin:/bin'}}
+    host = {'wsl_distro': 'Ubuntu', 'env': {'PATH': f'{tmp_path}:/usr/bin:/bin'}}
     command, body = remote_ps.invocation(host, 'true')
     argv = shlex.split(command)
     assert argv[:4] == ['wsl.exe', '--distribution', 'Ubuntu', '--exec']
     output = subprocess.run(argv[4:], cwd=tmp_path, input=body, capture_output=True, check=True,
-                            env={'PATH': '/usr/bin:/bin', 'HOME': os.fspath(tmp_path)})
+                            env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)})
     assert json.loads(output.stdout) == {'host_env_defaults': True, 'steps': [{'argv': ['true']}]}
 
 
@@ -726,7 +722,11 @@ def test_batch_card_keys_land_on_the_run_record():
         assert 'item_keys' not in record, card
 
 
-def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize('prompt_text', [
+    pytest.param(r'fix the literal \0 string', id='literal-backslash-zero'),
+    pytest.param('reject an embedded \0 byte', id='nul-byte'),
+])
+def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys, prompt_text):
     from types import SimpleNamespace
     from plangraph.spawner import cli, overflow
     from plangraph.spawner.service import SpawnService
@@ -747,7 +747,7 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
     record_path.parent.mkdir(parents=True)
     record_path.write_text(json.dumps(prior))
     prompt = tmp_path / 'fix.md'
-    prompt.write_text('fix the round', encoding='utf-8')
+    prompt.write_text(prompt_text, encoding='utf-8')
     calls = []
 
     def fake_ssh(argv, **kwargs):
@@ -758,7 +758,7 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
             assert step['argv'] == ['pg-spawnd', 'resume-local', 'run-a', '--state', '/target-state']
             assert json.loads(step['stdin_text']) == dict(
                 host='ash', session_id=prior['session_id'], cwd=prior['cwd'],
-                final_head=prior['final_head'], resume_number=0, prompt='fix the round')
+                final_head=prior['final_head'], resume_number=0, prompt=prompt_text)
             body = dict(ok=True, run_id='run-a', resume_number=1, started=3)
         else:
             assert step['argv'][-2:] == ['result', 'run-a']
@@ -772,7 +772,15 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
             receipt['begin'] + '\n' + json.dumps(body) + '\n' + receipt['end'] + '\n').encode())
 
     monkeypatch.setattr(remote_ps.subprocess, 'run', fake_ssh)
-    assert cli.main(['resume', 'run-a', '--prompt-file', str(prompt)]) == 0
+    rc = cli.main(['resume', 'run-a', '--prompt-file', str(prompt)])
+    if '\0' in prompt_text:
+        assert calls == []
+        assert rc == 1
+        assert capsys.readouterr().err.strip() == 'resume prompt must contain between 1 byte and 1 MiB of text'
+        assert service.result('run-a') == prior
+        return
+
+    assert rc == 0
     resumed = json.loads(capsys.readouterr().out)
     assert resumed['resume_number'] == 1
     assert resumed['resume_from']['head'] == 'a' * 40

@@ -1,9 +1,12 @@
 path	disposition	required	row IDs	label
 changelog.d/HOST-READY-WSL-HOP-FULL-PATH-AND-DOCTOR-SKIP.md	write	yes	E1 E2 E3	predicted
+docs/host-tools.md	write	yes	E1	predicted
 docs/placement-rules.md	read	yes	E1 E2 E3	predicted
 rust/pg-spawnd/src/worker_liveness.rs	write	yes	E1 E2 E3	predicted
 rust/worker-core/src/host_command.rs	write	yes	E1 E2 E3	predicted
+rust/worker-core/src/host_launch.rs	read	yes	E3	predicted
 rust/worker-core/src/hosts.rs	read	yes	E1 E2 E3	predicted
+rust/worker-core/tests/host_launch.rs	write	yes	E3	predicted
 src/plangraph/fleet_sync/genconfig.py	read	yes	E1 E2 E3	predicted
 src/plangraph/spawner/host_ready.py	read	yes	E1 E2 E3	predicted
 src/plangraph/spawner/host_ready_source.py	write	yes	E1 E2 E3	predicted
