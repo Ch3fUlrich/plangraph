@@ -1,0 +1,33 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FIX-ROUND-RESUME-THROUGH-SPAWNER": {
+      "outcome": "Resume a fix round on the original host and writer session with the admitted worktree and fresh round state.",
+      "read_set": [
+        "rust/pg-spawnd/src/native_writer_sandbox.rs",
+        "rust/pg-spawnd/Cargo.toml"
+      ],
+      "write_set": [
+        "rust/pg-spawnd/src/cli.rs",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_session.rs",
+        "rust/pg-spawnd/src/native_writer_remote_resume.rs",
+        "src/plangraph/spawner/cli.py",
+        "src/plangraph/spawner/remote_ps.py",
+        "rust/pg-spawnd/tests/native_writer.rs",
+        "rust/pg-spawnd/tests/native_resume_route.rs",
+        "rust/pg-spawnd/tests/native_writer_fixture/codex.rs",
+        "changelog.d/FIX-ROUND-RESUME-THROUGH-SPAWNER.md",
+        "tests/test_spawner_remote_ps.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test native_writer && cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test native_resume_route && python3 -m pytest -q tests/test_spawner_remote_ps.py",
+      "risk_tags": [
+        "auth"
+      ],
+      "estimate_tokens": 27000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --lib"
+    }
+  }
+}
