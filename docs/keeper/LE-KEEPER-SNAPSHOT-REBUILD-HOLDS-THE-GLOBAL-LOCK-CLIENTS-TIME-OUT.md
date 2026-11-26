@@ -46,6 +46,10 @@ the validated route names plus `auth`, `writer`, `snapshot`, `messages`, `merge_
 `changelog`, `reaper`, `host_samples`, and `read_audit`. Other raw holds use
 `unclassified` and contribute zero labelled coverage.
 
+Legacy message polls emit one `request_timing` summary per HTTP request. Each
+database read still uses the `messages` lock label, so the lock logs can attribute
+contention to individual reads.
+
 Production evidence remains pending. Use a two-hour window with reviews active and at least
 100 successful automatic builds. Report elapsed and hold p95, query timing, staleness, and
 timeouts by observed primary holder or unknown. For each wait over 2 seconds require at least
