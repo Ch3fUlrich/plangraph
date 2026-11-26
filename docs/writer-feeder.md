@@ -97,6 +97,12 @@ Deploy this compatibility fix on every queried host. Host-health diagnostic rows
 without a run ID are not running writers and do not block selection; actual
 anonymous writers consume their host slot. Remote scope uses observed run records;
 unreachable-host diagnostics do not prove a writer exists.
+Fleet-launch writers also consume a slot on their host and hold every plangraph
+item key on their card. The feeder matches launcher records to spawner rows by
+run ID and counts each run once. A recent working job record, an active Claude
+roster entry or a live PID establishes liveness for sessions absent from ps.
+Whole item-key tokens in fleet-session rows carry the same scope before the
+launcher's session record appears.
 An item-level claim refusal records its key/reason in `skipped` and tries the next
 eligible item in the same tick, at most once per item. Authentication, unavailable
 keeper/decisions, and start/compensation errors stop the tick. A lost claim response

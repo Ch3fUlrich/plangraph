@@ -588,7 +588,9 @@ not a five-minute completion or delivery SLA; see the operations guide for detai
 Cross-host ps: see [site configuration and transport](spawner-ps.md); [host readiness](placement-rules.md#host-readiness-consumer-contract) requires a matching ps entry and string source paths. Its ps `target` and overflow `ssh` must be the same string, even for aliases of one machine; mismatch lines name both values. A malformed run inventory reports `runs: invalid_response` and leaves the live-run count unknown. Ordinary malformed host/probe and state-write errors emit per-host failure lines rather than aborting the fan-out; resource exhaustion (`MemoryError`, `RecursionError`) and process-control exceptions propagate instead.
 # Remote ps protocol
 
-The SSH ps endpoint serializes only running and queued records. Terminal history
+The SSH ps endpoint serializes only running and queued records. It carries
+`run_kind` so the feeder can read the item keys in a fleet-session card.
+Terminal history
 does not consume the 1 MiB transport budget. For durable transitions including terminal results, use `plangraph-spawn runs --changed-since CURSOR_JSON` with a separate cursor per host. On each legacy producer host, set `PLANGRAPH_LIFECYCLE_PUBLISHER` to the installed Rust `pg-spawnd` binary when activating the journal.
 Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume

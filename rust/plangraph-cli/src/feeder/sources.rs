@@ -1,6 +1,8 @@
 use super::adapters::{output, python, quota_snapshots, Env, Keeper, Transport};
+use super::lanes;
 use super::*;
 use pg_worker_core::work_disks;
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,6 +79,18 @@ fn read_runs(data: &Value) -> Result<Vec<Run>, String> {
             run.item_keys =
                 serde_json::from_value(row["card"]["item_keys"].clone()).unwrap_or_default();
         }
+        if lanes::is_fleet_row(row) && row["lane_card"] != true {
+            // Registration can reach ps before fleet-launch publishes its session record.
+            let card = std::mem::take(&mut run.item_key);
+            let keys = lanes::item_keys(&card)
+                .into_iter()
+                .map(str::to_owned)
+                .chain(std::mem::take(&mut run.item_keys));
+            let mut seen = BTreeSet::new();
+            let mut keys = keys.filter(|key| seen.insert(key.clone()));
+            run.item_key = keys.next().unwrap_or_default();
+            run.item_keys = keys.collect();
+        }
     }
     Ok(runs)
 }
@@ -87,7 +101,8 @@ fn decode_runs(
     receipts: &[Value],
 ) -> Result<Vec<Run>, String> {
     let mut runs = read_runs(data)?;
-    for run in runs.iter_mut().filter(|r| r.active()) {
+    let rows = data["runs"].as_array().expect("decoded runs");
+    for (run, row) in runs.iter_mut().zip(rows).filter(|(run, _)| run.active()) {
         if let Some(receipt) = receipts
             .iter()
             .find(|v| v["run_id"].as_str() == Some(&run.run_id) && !run.run_id.is_empty())
@@ -131,28 +146,58 @@ fn decode_runs(
                 })
                 .find(|i| i["key"].as_str() == Some(key))
         };
-        // A batch run holds the files of every one of its items.
-        let item = find(&run.item_key).ok_or("writer_item_missing")?;
-        run.files = decode_task(item)?.files;
-        for key in run.item_keys.clone() {
-            let member = find(&key).ok_or("writer_item_missing")?;
-            run.files.extend(decode_task(member)?.files);
+        let lane = row["lane_card"] == true || lanes::is_fleet_row(row);
+        // A hand lane can list items absent from the keeper's current response. It
+        // still holds those keys, and any other members can supply their file scope.
+        run.files.clear();
+        for key in std::iter::once(&run.item_key).chain(&run.item_keys) {
+            match find(key) {
+                Some(member) => run.files.extend(decode_task(member)?.files),
+                None if lane => {}
+                None => return Err("writer_item_missing".into()),
+            }
         }
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         run.files.retain(|file| seen.insert(file.clone()));
     }
     Ok(runs)
 }
+
+fn merge_hand_lanes(data: &mut Value, home: &Path, env: &Env) -> Result<(), String> {
+    let rows = data["runs"].as_array().ok_or("ps missing runs")?;
+    let listed = rows
+        .iter()
+        .filter_map(|row| row["run_id"].as_str().map(str::to_owned))
+        .collect();
+    let sessions = lanes::sessions_dir(home, env);
+    lanes::mark_lane_cards(data, &lanes::lane_cards(&sessions));
+    let extra = lanes::live_lane_runs(&lanes::Evidence {
+        sessions: &sessions,
+        jobs: &lanes::jobs_dir(home, env),
+        now: std::time::SystemTime::now(),
+        listed: &listed,
+        roster: &|| lanes::claude_roster(env),
+        pid_alive: &lanes::pid_alive,
+    });
+    data["runs"]
+        .as_array_mut()
+        .expect("checked runs")
+        .extend(extra);
+    Ok(())
+}
+
 pub(super) fn runs(
     env: &Env,
     repo: &Path,
     ready: &Value,
     state: &Path,
+    home: &Path,
     dry: bool,
 ) -> Result<Vec<Run>, String> {
     let mut cmd = python(env, repo);
     cmd.args(["-m", "plangraph.spawner.cli", "ps"]);
-    let data = output(cmd)?;
+    let mut data = output(cmd)?;
+    merge_hand_lanes(&mut data, home, env)?;
     // Snapshot is the existing API with full persisted notes, including claimed
     // items. Show omits note; brief only includes its final line and truncates it.
     let raw = read_runs(&data)?;
@@ -242,6 +287,101 @@ fn disk_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spawner_row_holding_the_whole_card_is_split_into_its_keys() {
+        let data = json!({"runs":[{
+            "run_id":"fleet-run", "host":"dell", "status":"running", "role":"implement",
+            "run_kind":"fleet-session", "item_key":"lane/one plangraph:ALPHA-1, plangraph:BETA-1",
+        }]});
+        let ready = json!({"items":[
+            {"key":"plangraph:ALPHA-1","files":["src/a.rs"]},
+            {"key":"plangraph:NEW-1","files":["src/n.rs"]},
+            {"key":"plangraph:BETA-2","files":["src/b.rs"]},
+        ]});
+        let runs = decode_runs(&data, &ready, &json!({"items":[]}), &[]).unwrap();
+        let run = &runs[0];
+        assert!(run.holds("plangraph:ALPHA-1") && run.holds("plangraph:BETA-1"));
+        assert_eq!(run.files, ["src/a.rs"]);
+        assert_eq!(
+            pick(&ready, &runs, &Policy::default()).unwrap().key,
+            "plangraph:NEW-1"
+        );
+    }
+
+    fn working_lane(home: &Path, card: &str) -> String {
+        let env = Env::new();
+        let sessions = lanes::sessions_dir(home, &env);
+        let job = lanes::jobs_dir(home, &env).join("fixture-job");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&job).unwrap();
+        fs::write(job.join("state.json"), r#"{"state":"working"}"#).unwrap();
+        let run_id = "run-fixture";
+        let record = json!({"name":"writer","session_name":"writer-fixture",
+            "host":"dell","run_id":run_id,"job_id":"fixture-job","card":card});
+        fs::write(sessions.join("writer-fixture.json"), record.to_string()).unwrap();
+        run_id.into()
+    }
+
+    #[test]
+    fn hand_lanes_count_as_host_writers_and_every_key_of_their_card_is_held() {
+        let fixture = tempfile::tempdir().unwrap();
+        let id = working_lane(
+            fixture.path(),
+            "lane/one plangraph:ALPHA-1, plangraph:BETA-1",
+        );
+        let ready = json!({"items":[
+            {"key":"plangraph:ALPHA-1","priority":10},
+            {"key":"plangraph:BETA-1","priority":9},
+            {"key":"plangraph:OTHER-1","priority":8},
+        ]});
+        let mut data = json!({"runs":[]});
+        merge_hand_lanes(&mut data, fixture.path(), &Env::new()).unwrap();
+        let runs = decode_runs(&data, &ready, &json!({"items":[]}), &[]).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, id);
+        assert_eq!(
+            pick(&ready, &runs, &Policy::default()).unwrap().key,
+            "plangraph:OTHER-1"
+        );
+        let policy = Policy::default();
+        let sample: HostFacts = serde_json::from_value(json!({
+            "host":"dell","free_ram_bytes":16000000000u64,"free_disk_bytes":20000000000u64,
+            "quota_remaining_percent":70,"observed_at":1000
+        }))
+        .unwrap();
+        let apply = |sample| apply_facts(sample, &runs, &policy, 1001, false, None, None).unwrap();
+        let local = apply(sample.clone());
+        assert_eq!(local.running_writers, 1);
+        assert_eq!(local.free_ram_bytes, 12_000_000_000);
+        assert_eq!(
+            apply(HostFacts {
+                host: "coding".into(),
+                ..sample
+            })
+            .running_writers,
+            0
+        );
+    }
+
+    #[test]
+    fn a_session_both_listed_by_the_spawner_and_recorded_is_counted_once() {
+        let fixture = tempfile::tempdir().unwrap();
+        let id = working_lane(
+            fixture.path(),
+            "lane/one plangraph:ALPHA-1, plangraph:BETA-1",
+        );
+        let mut data = json!({"runs":[{
+            "run_id":id,"host":"dell","status":"running","role":"implement",
+            "item_key":"lane/one plangraph:ALPHA-1, plangraph:BETA-1",
+        }]});
+        merge_hand_lanes(&mut data, fixture.path(), &Env::new()).unwrap();
+        let empty = json!({"items":[]});
+        let runs = decode_runs(&data, &empty, &empty, &[]).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, id);
+        assert!(runs[0].holds("plangraph:ALPHA-1") && runs[0].holds("plangraph:BETA-1"));
+    }
 
     #[test]
     fn feeder_reads_work_disk_settings_from_its_environment_file() {
