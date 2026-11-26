@@ -27,7 +27,7 @@ Outcome. The remote command for a WSL host finds pg-spawnd and the other host to
 
 ## Verification
 
-- X1. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_without_login_path_finds_tools and the Rust steps_cli guest-defaults regression. Assert B1's observable result.
+- X1. E1, changed. Run `test_wsl_hop_without_login_path_finds_tools` in `test_spawner_remote_ps.py` and `readiness_followup_steps_supply_guest_defaults_without_replacing_process_values` in the Rust `steps_cli` suite. These tests cover B1.
 - X2. E2, changed. pytest tests/test_fleet_sync.py::test_ps_hosts_regenerated_from_registry and the Rust host_sync_release integration test. Assert B2's observable result.
 
 Anchors for new tests and files are predicted until checked on the implementation head.
