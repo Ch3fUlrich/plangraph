@@ -30,6 +30,7 @@ fn policy(batch: usize) -> Policy {
 struct Registry {
     claimed: BTreeMap<String, Vec<String>>,
     started: Vec<Vec<String>>,
+    status_paths: Vec<(String, String)>,
     released: Vec<String>,
     /// The epoch the keeper issued for each claim, and each release as (key, epoch).
     epochs: BTreeMap<String, u64>,
@@ -119,7 +120,7 @@ impl Launch for Host {
             })
             .map(|(other, _)| other.clone()))
     }
-    fn start(&mut self, card: &Value, _: &str) -> Result<Value, String> {
+    fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
         if self.fail_start {
             return Err("spawner denied".into());
         }
@@ -131,7 +132,17 @@ impl Launch for Host {
                     .collect()
             },
         );
-        self.registry.lock().unwrap().started.push(keys);
+        let mut registry = self.registry.lock().unwrap();
+        if let Some((_, payload)) = brief.split_once('\n').filter(|(version, _)| {
+            *version == "PLANGRAPH-BATCH-INPUT-V1"
+        }) {
+            let payload: Value = serde_json::from_str(payload).unwrap();
+            registry.status_paths.push((
+                card["writer_status_path"].as_str().unwrap_or_default().into(),
+                payload["run"]["status_file"].as_str().unwrap().into(),
+            ));
+        }
+        registry.started.push(keys);
         Ok(json!({"run_id":"run-1","status":if self.queued {"queued"} else {"running"}}))
     }
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String> {
@@ -161,6 +172,51 @@ fn drive(ready: &Value, host: &mut Host, name: &str, batch: usize, dry: bool) ->
         dry,
         host,
     )
+}
+
+#[test]
+fn related_ready_items_launch_one_batch_under_each_default_policy() {
+    let items = vec![item("ALPHA-1", 9, &["src/a.rs"]), item("ALPHA-2", 8, &["src/a.rs"])];
+    let policies = [
+        Policy::default(),
+        toml::from_str("").unwrap(),
+        toml::from_str(include_str!("../../../deploy/feeder/policy.toml")).unwrap(),
+    ];
+    for policy in policies {
+        let registry: Arc<Mutex<Registry>> = Arc::default();
+        let mut host = Host::new(&registry, &items);
+        tick(&ready(items.clone()), &[], &facts("dell"), &policy, "rules", "/repo", "/reviews", false, &mut host);
+        assert_eq!(registry.lock().unwrap().started, [["plangraph:ALPHA-1", "plangraph:ALPHA-2"]]);
+        assert_eq!(policy.batch_max_items, 6);
+    }
+}
+
+#[test]
+fn overlapping_feeder_launches_pass_distinct_status_paths_to_the_card_and_brief() {
+    let items = [
+        item("ALPHA-1", 9, &["src/a.rs"]),
+        item("ALPHA-2", 8, &["src/a.rs"]),
+        item("BETA-1", 7, &["src/b.rs"]),
+        item("BETA-2", 6, &["src/b.rs"]),
+    ];
+    let registry: Arc<Mutex<Registry>> = Arc::default();
+    let meet = Arc::new(Barrier::new(2));
+    std::thread::scope(|scope| {
+        for (name, own) in [("dell", &items[..2]), ("coding", &items[2..])] {
+            let mut host = Host::new(&registry, &items);
+            host.meet = Some(meet.clone());
+            let doc = ready(own.to_vec());
+            scope.spawn(move || drive(&doc, &mut host, name, 2, false));
+        }
+    });
+    let registry = registry.lock().unwrap();
+    let paths = &registry.status_paths;
+    assert_eq!(paths.len(), 2);
+    for (card, brief) in paths {
+        assert!(card.starts_with("/reviews/"), "{paths:?}");
+        assert_eq!(card, brief);
+    }
+    assert_ne!(paths[0].0, paths[1].0);
 }
 fn claimed_files(registry: &Registry) -> Vec<(String, Vec<String>)> {
     registry
@@ -206,7 +262,7 @@ fn related_items_share_one_batch_in_priority_order() {
 }
 
 #[test]
-fn one_item_per_run_is_the_default() {
+fn policy_can_select_one_item_per_run() {
     let items = vec![
         item("ALPHA-1", 9, &["src/a.rs"]),
         item("ALPHA-2", 5, &["src/a.rs"]),

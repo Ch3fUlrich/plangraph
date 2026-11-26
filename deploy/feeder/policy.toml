@@ -6,6 +6,7 @@ quota_floor_percent = 10.0
 facts_max_age_seconds = 300
 quota_max_age_seconds = 10800
 estimate_tokens = 100000
+batch_max_items = 6
 
 # Match full configured host names first, then their first DNS label.
 [max_writers]

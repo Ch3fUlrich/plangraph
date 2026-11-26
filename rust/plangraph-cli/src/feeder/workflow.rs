@@ -109,6 +109,44 @@ fn with_failures(reason: String, failures: &[(String, String)]) -> String {
         format!("{reason}; release of {key} failed: {error}")
     })
 }
+/// The status file of one launch, directly inside the review directory: the file-safe slug of
+/// the first key, a digest of every raw key (so `FOO.BAR-1` and `FOO_BAR-1` differ) and the
+/// first claim's epoch (so a retry of the same items differs). The card carries it as
+/// `writer_status_path` (the native writer host records it) and the brief quotes the same path
+/// as STATUS_FILE, so a run never reads or writes another run's DONE lines. A dry run has no
+/// claim and uses epoch 0.
+fn status_path(items: &[Task], epoch: u64, reviews: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let slug: String = items[0]
+        .key
+        .rsplit(':')
+        .next()
+        .unwrap_or("batch")
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut digest = Sha256::new();
+    for item in items {
+        digest.update(item.key.as_bytes());
+        digest.update([0]);
+    }
+    let digest: String = digest.finalize()[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let slug = if slug.is_empty() { "batch" } else { &slug };
+    format!(
+        "{}/status-{slug}-{digest}-e{epoch}.txt",
+        reviews.trim_end_matches('/')
+    )
+}
 /// The card and brief of one writer run for `items`: the plain item card for one item, the
 /// first item's card with every key and the union of the files for a batch.
 /// The run name, and with it the lane, of a feeder batch: `feeder-<first item slug>`.
@@ -121,8 +159,9 @@ fn run_name(first_key: &str) -> String {
     format!("feeder-{slug}")
 }
 
-fn batch_card(items: &[Task], repo: &str, reviews: &str, policy: &Policy) -> Value {
+fn batch_card(items: &[Task], repo: &str, reviews: &str, status: &str, policy: &Policy) -> Value {
     let mut c = card(&items[0], repo, reviews, policy);
+    c["writer_status_path"] = json!(status);
     // The native host pushes the accepted head with its receipt to this lane (nothing is pushed
     // without a target); the brief's run name and this ref name the same lane.
     c["push_ref"] = json!(format!("refs/heads/lane/{}", run_name(&items[0].key)));
@@ -141,7 +180,7 @@ const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spa
 /// The shared batch writer input (`PLANGRAPH-BATCH-INPUT-V1`) that pg-spawnd renders into the
 /// `# Items` and `# Run values` sections, so a batch gets the batch-writer skill. The native
 /// worker enforces its own fast-check and review policy; the values here are the brief's text.
-fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
+fn batch_brief(items: &[Task], rules: &str, status: &str) -> String {
     if items.len() == 1 {
         return brief(&items[0], rules);
     }
@@ -162,7 +201,7 @@ fn batch_brief(items: &[Task], rules: &str, reviews: &str) -> String {
     let input = json!({"items":named, "run":{
         "name":run_name(&items[0].key), "worktree":"the run worktree (the current directory)",
         "base":"origin/main at launch", "writer_family":"gpt",
-        "status_file":format!("{}/status.txt", reviews.trim_end_matches('/')),
+        "status_file":status,
         // The native host pushes the accepted head and its receipt itself: no writer push line.
         "push":false,
         "review_cmd":"the native worker starts the review of another family on the exact head",
@@ -194,8 +233,9 @@ pub fn tick(
             return json!({"decision":"refused","item_key":seed.key,"reason":reason,"skipped":skipped});
         }
         if dry {
+            let status = status_path(&batch, 0, reviews);
             let mut row = json!({"decision":"would_spawn",
-                "card":batch_card(&batch, repo, reviews, policy), "brief":batch_brief(&batch, rules, reviews)});
+                "card":batch_card(&batch, repo, reviews, &status, policy), "brief":batch_brief(&batch, rules, &status)});
             row["item_key"] = json!(seed.key);
             row["skipped"] = json!(skipped);
             return row;
@@ -219,8 +259,17 @@ pub fn tick(
             continue;
         }
         let items: Vec<Task> = held.iter().map(|(t, _)| t.clone()).collect();
-        let c = batch_card(&items, repo, reviews, policy);
-        let started = launch.start(&c, &batch_brief(&items, rules, reviews));
+        // The path is reserved for this launch alone before the card is built.
+        let status = match launch.allocate_status(&status_path(&items, held[0].1, reviews)) {
+            Ok(status) => status,
+            Err(e) => {
+                let failures = release_held(&held, launch);
+                let reason = with_failures(format!("status file unavailable: {e}"), &failures);
+                return json!({"decision":"refused","item_key":items[0].key,"reason":reason,"skipped":skipped,"error":true});
+            }
+        };
+        let c = batch_card(&items, repo, reviews, &status, policy);
+        let started = launch.start(&c, &batch_brief(&items, rules, &status));
         match started {
             Ok(run) => {
                 let mut row = decided(run);

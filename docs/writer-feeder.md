@@ -185,14 +185,20 @@ A successful reader returning no valid fresh codex account refuses; an unavailab
 the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
 The fallback quota has the same freshness bound as the other supplied facts.
 
-Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
+Policy `batch_max_items` defaults to 6 in both the shipped policy loaded by the feeder service
+and the built-in policy. The range is 1..=50. Set it to 1 for single-item runs. A value outside
+the range refuses the tick as `invalid_policy`. A batch holds the
 first eligible item in launch order plus later eligible items of its family or sharing its
 files, in launch order. Every item is claimed on its own, then checked against the claimed
 items of every host (the keeper snapshot, queued runs included): a claim whose files overlap
 another live claim outside the batch is released by its own epoch and skipped as
 `files_reserved_by:<key>`, so two hosts that claim at once never both keep overlapping files
 (both may yield; the next tick retries). A failed launch releases only its own batch's claims.
-The card of a batch lists every key as `item_keys` and the union of the files. Its brief is a `PLANGRAPH-BATCH-INPUT-V1` payload (one item per key, one `Plan-Item` trailer each), so the run receives the batch-writer skill, not the single-task one.
+The card of a batch lists every key as `item_keys` and the union of the files. Its
+`PLANGRAPH-BATCH-INPUT-V1` brief gives the batch-writer one `Plan-Item` trailer per key.
+Each live launch reserves its own status file in the review directory. The batch brief's
+`STATUS_FILE` and the recorded `writer_status_path` name that same file, so review briefs read
+only the DONE lines of their own run.
 
 `--house-rules PATH` defaults to `deploy/feeder/house-rules.md`. Brief generation
 preserves the keeper title, description (including Why/How), done criteria and
