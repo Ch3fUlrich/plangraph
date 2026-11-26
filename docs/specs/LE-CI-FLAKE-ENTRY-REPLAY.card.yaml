@@ -1,0 +1,34 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-CI-FLAKE-ENTRY-REPLAY": {
+      "outcome": "Require replay evidence for changed tests to match the landing part and its applicable environments.",
+      "read_set": [
+        "tools/preflight.py",
+        "docs/TESTING.md"
+      ],
+      "write_set": [
+        "tools/ci_select.py",
+        "tools/merge_batch_build.py",
+        "tools/merge_batch_plan.py",
+        "tests/test_ci_select_entry.py",
+        "tests/test_merge_batch_part_entry.py",
+        "tests/test_merge_batch_build.py",
+        "docs/ci-gate.md",
+        "changelog.d/LE-CI-FLAKE-ENTRY-REPLAY.md"
+      ],
+      "forbid_paths": [
+        ".github/workflows/",
+        "tools/ci_commit_gate.py",
+        "rust/plangraph-cli/src/land/go_verify.rs"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_ci_select_entry.py tests/test_merge_batch_part_entry.py tests/test_merge_batch_build.py",
+      "risk_tags": [
+        "public-contract"
+      ],
+      "estimate_tokens": 24000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_ci_select_rust_inputs.py tests/test_merge_batch_plan.py"
+    }
+  }
+}
