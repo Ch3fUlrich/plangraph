@@ -255,9 +255,12 @@ session `.service` unit (when it has one) keeping the group and other write bits
 ten-minute freshness window expires, and the `package-readiness` record before
 its 120-second window expires.
 
-On the orchestration host, the deploy manifest installs the user units
-`host-ready.service` and `host-ready.timer`. The timer starts a sweep 30 seconds
-after boot and 60 seconds after the previous sweep ends. Each sweep runs
+The deploy manifest assigns the `host-ready.service` and `host-ready.timer`
+user units to the keeper role. Install the files from `deploy/host-ready/` in
+the orchestration user's `~/.config/systemd/user/`, run `systemctl --user
+daemon-reload`, then enable `host-ready.timer` with `systemctl --user enable
+--now host-ready.timer`. The timer starts a sweep 30 seconds after boot and
+60 seconds after the previous sweep ends. Each sweep runs
 `python3 -m plangraph.spawner.host_ready` for all registry readiness candidates
 and writes `~/.local/state/plangraph/host-ready/<host>.json`. Check the schedule
 with `systemctl --user list-timers host-ready.timer` and individual results
