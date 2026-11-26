@@ -16,6 +16,93 @@ pub struct Guards {
     pub pinned: Vec<PathBuf>,
     pub live: Vec<PathBuf>,
 }
+#[cfg(target_os = "linux")]
+pub use inventory::HygieneInventory;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn file_identity(meta: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn invalid_inventory() -> io::Error {
+    io::Error::other("unusable hygiene process inventory")
+}
+
+#[cfg(target_os = "linux")]
+mod inventory {
+    use super::*;
+    use std::{collections::BTreeSet, ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    /// Versioned process paths. Byte arrays preserve paths that are not UTF-8.
+    #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct HygieneInventory {
+        version: u8,
+        pub(crate) cwds: BTreeSet<Vec<u8>>,
+        pub(crate) open_paths: BTreeSet<Vec<u8>>,
+        pub(crate) cargo_targets: BTreeSet<Vec<u8>>,
+    }
+
+    fn paths(bytes: &BTreeSet<Vec<u8>>) -> impl Iterator<Item = &Path> {
+        bytes
+            .iter()
+            .map(|bytes| Path::new(OsStr::from_bytes(bytes)))
+    }
+
+    impl Default for HygieneInventory {
+        fn default() -> Self {
+            Self {
+                version: 1,
+                cwds: BTreeSet::new(),
+                open_paths: BTreeSet::new(),
+                cargo_targets: BTreeSet::new(),
+            }
+        }
+    }
+
+    impl HygieneInventory {
+        pub(crate) fn merge(&mut self, mut row: Self) {
+            self.cwds.append(&mut row.cwds);
+            self.open_paths.append(&mut row.open_paths);
+            self.cargo_targets.append(&mut row.cargo_targets);
+        }
+
+        pub(crate) fn decode(bytes: &[u8]) -> io::Result<Self> {
+            let rows: HygieneInventory =
+                serde_json::from_slice(bytes).map_err(|_| invalid_inventory())?;
+            if rows.version != 1
+                || rows.references().any(|path| {
+                    !path.is_absolute()
+                        || path.as_os_str().as_bytes().contains(&0)
+                        || path
+                            .components()
+                            .any(|part| part == std::path::Component::ParentDir)
+                })
+            {
+                return Err(invalid_inventory());
+            }
+            Ok(rows)
+        }
+
+        fn references(&self) -> impl Iterator<Item = &Path> {
+            paths(&self.cwds)
+                .chain(paths(&self.open_paths))
+                .chain(self.cargo_targets())
+        }
+
+        /// Explicit Cargo allocation roots observed in process environments.
+        pub fn cargo_targets(&self) -> impl Iterator<Item = &Path> {
+            paths(&self.cargo_targets)
+        }
+
+        /// A path reference protects the scope that contains it.
+        pub fn blocks(&self, scope: &Path) -> bool {
+            self.references().any(|path| path.starts_with(scope))
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub free_bytes: u64,

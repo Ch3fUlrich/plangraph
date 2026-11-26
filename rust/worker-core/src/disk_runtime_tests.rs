@@ -1,18 +1,23 @@
+#[cfg(target_os = "linux")]
+use super::hygiene::{read_hygiene_processes, scan_hygiene_processes};
 use super::*;
 #[test]
 fn disk_hygiene_denied_cwd_needs_authoritative_reader() {
     let rows = resolve_processes(
         Err(io::Error::from(io::ErrorKind::PermissionDenied)),
-        || Ok((vec!["/protected/tree".into()], false)),
+        || Ok((vec![std::path::PathBuf::from("/protected/tree")], false)),
     )
     .unwrap();
     assert_eq!(rows.0, vec![std::path::PathBuf::from("/protected/tree")]);
-    assert!(resolve_processes(
+    assert!(resolve_processes::<(Vec<std::path::PathBuf>, bool)>(
         Err(io::Error::from(io::ErrorKind::PermissionDenied)),
         || Err(io::Error::other("reader unavailable"))
     )
     .is_err());
-    let rows = resolve_processes(Ok((vec![], false)), || panic!("reader should not run")).unwrap();
+    let rows = resolve_processes(Ok((Vec::<std::path::PathBuf>::new(), false)), || {
+        panic!("reader should not run")
+    })
+    .unwrap();
     assert!(rows.0.is_empty());
 }
 #[test]
@@ -116,6 +121,106 @@ fn disk_hygiene_process_inventory_reads_builds_and_cwds() {
     assert!(cwds.is_empty());
     fs::create_dir(pid.join("cwd")).unwrap();
     assert!(scan_process_paths(tmp.path(), false).is_err());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn hygiene_inventory_matches_environment_and_fd_per_path() {
+    use std::os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::symlink,
+    };
+    use std::time::{Duration, Instant};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let host = tmp.path().join("host");
+    let target = host.join("work/target-a");
+    fs::create_dir_all(&target).unwrap();
+    fs::create_dir(host.join("work/target-b")).unwrap();
+    symlink("/work/target-a", host.join("work/alias")).unwrap();
+    let proc = tmp.path().join("proc");
+    let pid = proc.join("123");
+    fs::create_dir_all(pid.join("fd")).unwrap();
+    let stat = format!("123 (worker ) name) S {} 789\n", "0 ".repeat(18));
+    fs::write(pid.join("stat"), stat).unwrap();
+    symlink(&host, pid.join("root")).unwrap();
+    symlink(host.join("work"), pid.join("cwd")).unwrap();
+    symlink(target.join("debug/.cargo-lock (deleted)"), pid.join("fd/5")).unwrap();
+    symlink("socket:[42]", pid.join("fd/6")).unwrap();
+    // Both spellings of the Cargo setting, duplicates, and an unrelated field
+    // with an embedded setting name. The unused sibling must stay unprotected.
+    fs::write(pid.join("environ"), b"CARGO_TARGET_DIR=alias\0CARGO_TARGET_DIR=/work/target-b\0CARGO_BUILD_TARGET_DIR=alias\0CARGO_BUILD_TARGET_DIR=/work/future/\xff\0CARGO_BUILD_TARGET_DIR=\0OTHER=CARGO_TARGET_DIR=target-a2\0").unwrap();
+    fs::create_dir(proc.join("124")).unwrap(); // PID vanished before stat was read.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let rows = scan_hygiene_processes(&proc, deadline).unwrap();
+    assert!(rows.blocks(&target));
+    assert!(rows.blocks(&host.join("work/target-b")));
+    assert!(!rows.blocks(&host.join("work/target-a2")));
+    assert_eq!(rows.cargo_targets.len(), 3);
+    let future = host
+        .join("work/future")
+        .join(std::ffi::OsString::from_vec(vec![255]));
+    assert!(rows.cargo_targets.contains(future.as_os_str().as_bytes()));
+    assert!(rows
+        .open_paths
+        .contains(target.join("debug/.cargo-lock").as_os_str().as_bytes()));
+
+    let reader = tmp.path().join("reader");
+    let payload = serde_json::to_string(&rows).unwrap();
+    let reader_script = |payload: &str| {
+        format!(
+            "#!/bin/sh\n[ \"$1\" = --hygiene-references ] || exit 2\nprintf '%s\\n' '{payload}'\n"
+        )
+    };
+    let write_reader = |payload| {
+        crate::executable_test_support::write_private_executable(&reader, &reader_script(payload));
+    };
+    write_reader(&payload);
+    let denied = || Err(io::Error::from(io::ErrorKind::PermissionDenied));
+    assert_eq!(
+        resolve_processes(denied(), || read_hygiene_processes(&reader, deadline)).unwrap(),
+        rows
+    );
+    fs::remove_file(&reader).unwrap();
+    write_reader("[[],false]");
+    assert!(resolve_processes(denied(), || read_hygiene_processes(&reader, deadline)).is_err());
+    // A surviving PID with failed metadata cannot yield a partial inventory.
+    fs::remove_file(pid.join("environ")).unwrap();
+    fs::create_dir(pid.join("environ")).unwrap();
+    assert!(scan_hygiene_processes(&proc, deadline).is_err());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn hygiene_fd_only_cargo_lock_protects_target() {
+    use std::os::unix::fs::symlink;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("target");
+    fs::create_dir_all(target.join("debug")).unwrap();
+    let lock = target.join("debug/.cargo-lock");
+    let mut child = Command::new("cat")
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(fs::File::create(&lock).unwrap())
+        .spawn()
+        .unwrap();
+    let proc = tmp.path().join("proc");
+    fs::create_dir(&proc).unwrap();
+    symlink(format!("/proc/{}", child.id()), proc.join("1")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let rows = scan_hygiene_processes(&proc, deadline);
+    fs::remove_file(lock).unwrap();
+    let deleted = scan_hygiene_processes(&proc, deadline);
+    child.stdin.take();
+    child.wait().unwrap();
+    let rows = rows.unwrap();
+    assert!(rows.blocks(&target));
+    assert!(rows.cargo_targets.is_empty());
+    assert!(!rows.blocks(&tmp.path().join("target-sibling")));
+    assert!(deleted.unwrap().blocks(&target));
 }
 #[test]
 #[cfg(target_os = "linux")]

@@ -82,17 +82,8 @@ fn scan_process_paths(
 ) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
     let mut cwds = Vec::new();
     let mut building = false;
-    for entry in fs::read_dir(root)? {
-        let path = entry?.path();
-        if !path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-        {
-            continue;
-        }
+    for path in process_dirs(root)? {
+        let path = path?;
         match fs::read_to_string(path.join("comm")) {
             Ok(name) => {
                 building |= [
@@ -124,6 +115,18 @@ fn scan_process_paths(
         }
     }
     Ok((cwds, building))
+}
+
+fn process_dirs(root: &Path) -> io::Result<impl Iterator<Item = io::Result<std::path::PathBuf>>> {
+    Ok(fs::read_dir(root)?.filter_map(|entry| {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => return Some(Err(error)),
+        };
+        let name = entry.file_name();
+        let numeric = name.as_encoded_bytes().iter().all(u8::is_ascii_digit);
+        numeric.then(|| Ok(entry.path()))
+    }))
 }
 
 fn push_process_path(path: &Path, output: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
@@ -159,16 +162,7 @@ pub fn process_references() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
 }
 
 fn read_processes(args: &[&str]) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
-    let reader = std::env::var_os("PG_PROCESS_CWD_READER")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "/usr/local/libexec/pg-process-cwds".into());
-    if !reader.is_absolute() {
-        return Err(io::Error::other("process reader must be absolute"));
-    }
-    let bytes = crate::host_command::output(
-        std::process::Command::new(reader).args(args),
-        std::time::Duration::from_secs(30),
-    )?;
+    let bytes = process_reader_output(&process_reader(), args, std::time::Duration::from_secs(30))?;
     let rows: (Vec<std::path::PathBuf>, bool) =
         serde_json::from_slice(&bytes).map_err(io::Error::other)?;
     if rows.0.iter().any(|p| !p.is_absolute()) {
@@ -176,6 +170,171 @@ fn read_processes(args: &[&str]) -> io::Result<(Vec<std::path::PathBuf>, bool)> 
     }
     Ok(rows)
 }
+
+fn process_reader() -> std::path::PathBuf {
+    std::env::var_os("PG_PROCESS_CWD_READER")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/usr/local/libexec/pg-process-cwds".into())
+}
+
+fn process_reader_output(
+    reader: &Path,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> io::Result<Vec<u8>> {
+    if !reader.is_absolute() {
+        return Err(io::Error::other("process reader must be absolute"));
+    }
+    crate::host_command::output(std::process::Command::new(reader).args(args), timeout)
+}
+
+#[cfg(target_os = "linux")]
+pub use hygiene::{hygiene_references, hygiene_references_direct};
+
+#[cfg(target_os = "linux")]
+mod hygiene {
+    use super::*;
+    use crate::disk_hygiene::{file_identity, invalid_inventory, HygieneInventory};
+    use crate::private_targets::{process_cargo_path, resolve_deleted_path};
+    use std::{
+        collections::BTreeSet,
+        ffi::OsStr,
+        os::unix::ffi::OsStrExt,
+        time::{Duration, Instant},
+    };
+
+    fn remaining(deadline: Instant) -> io::Result<Duration> {
+        deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| io::ErrorKind::TimedOut.into())
+    }
+
+    /// Obtain hygiene evidence from the bounded proc scan or the authoritative reader.
+    pub fn hygiene_references(deadline: Instant) -> io::Result<HygieneInventory> {
+        let reader = || read_hygiene_processes(&process_reader(), deadline);
+        if reader_only() {
+            return reader();
+        }
+        resolve_processes(scan_hygiene_processes(Path::new("/proc"), deadline), reader)
+    }
+
+    /// Read the hygiene inventory in the privileged, read-only helper.
+    pub fn hygiene_references_direct() -> io::Result<HygieneInventory> {
+        scan_hygiene_processes(Path::new("/proc"), Instant::now() + Duration::from_secs(30))
+    }
+
+    pub(super) fn read_hygiene_processes(
+        reader: &Path,
+        deadline: Instant,
+    ) -> io::Result<HygieneInventory> {
+        let bytes = process_reader_output(
+            reader,
+            &["--hygiene-references"],
+            remaining(deadline)?.min(Duration::from_secs(30)),
+        )?;
+        let rows = HygieneInventory::decode(&bytes)?;
+        remaining(deadline)?;
+        Ok(rows)
+    }
+
+    fn start_time(pid: &Path) -> io::Result<Option<u64>> {
+        let stat = match fs::read(pid.join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if vanished(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let field = stat.rsplit(|b| *b == b')').next().unwrap();
+        std::str::from_utf8(field)
+            .ok()
+            .and_then(|rest| rest.split_ascii_whitespace().nth(19)?.parse().ok())
+            .map(Some)
+            .ok_or_else(invalid_inventory)
+    }
+
+    fn insert_link(link: &Path, paths: &mut BTreeSet<Vec<u8>>) -> io::Result<()> {
+        let name = match fs::read_link(link) {
+            Ok(name) if name.is_absolute() => name,
+            Ok(_) => return Ok(()),
+            Err(error) if vanished(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let meta = match fs::metadata(link) {
+            Err(error) if !vanished(&error) => return Err(error),
+            result => result.ok(),
+        };
+        let bytes = name.as_os_str().as_bytes();
+        if let (Some(actual), Ok(named)) = (&meta, fs::canonicalize(&name)) {
+            if file_identity(actual) == file_identity(&fs::metadata(&named)?) {
+                paths.insert(named.into_os_string().into_encoded_bytes());
+                return Ok(());
+            }
+        }
+        if let Some(base) = bytes.strip_suffix(b" (deleted)") {
+            if base.starts_with(b"/memfd:")
+                || base.starts_with(b"/SYSV") && !base[1..].contains(&b'/')
+            {
+                return Ok(());
+            }
+            let base = Path::new(OsStr::from_bytes(base));
+            let base = resolve_deleted_path(base, meta.as_ref().map(file_identity))?;
+            paths.extend([bytes.to_vec(), base.into_os_string().into_encoded_bytes()]);
+        } else if meta.is_some() {
+            return Err(invalid_inventory());
+        }
+        Ok(())
+    }
+
+    pub(super) fn scan_hygiene_processes(
+        root: &Path,
+        deadline: Instant,
+    ) -> io::Result<HygieneInventory> {
+        let mut rows = HygieneInventory::default();
+        for pid in process_dirs(root)? {
+            remaining(deadline)?;
+            let pid = pid?;
+            let Some(start) = start_time(&pid)? else {
+                continue;
+            };
+            let mut row = HygieneInventory::default();
+            let scanned = (|| {
+                insert_link(&pid.join("cwd"), &mut row.cwds)?;
+                for name in ["root", "exe"] {
+                    insert_link(&pid.join(name), &mut row.open_paths)?;
+                }
+                for fd in fs::read_dir(pid.join("fd"))? {
+                    remaining(deadline)?;
+                    match fd {
+                        Ok(fd) => insert_link(&fd.path(), &mut row.open_paths)?,
+                        Err(error) if vanished(&error) => continue,
+                        Err(error) => return Err(error),
+                    }
+                }
+                for field in fs::read(pid.join("environ"))?.split(|byte| *byte == 0) {
+                    remaining(deadline)?;
+                    if let Some(value) = field
+                        .strip_prefix(b"CARGO_TARGET_DIR=")
+                        .or_else(|| field.strip_prefix(b"CARGO_BUILD_TARGET_DIR="))
+                        .filter(|value| !value.is_empty())
+                    {
+                        row.cargo_targets.insert(
+                            process_cargo_path(&pid, Path::new(OsStr::from_bytes(value)))?
+                                .into_os_string()
+                                .into_encoded_bytes(),
+                        );
+                    }
+                }
+                Ok(())
+            })();
+            if start_time(&pid)? == Some(start) {
+                scanned?;
+                rows.merge(row);
+            }
+        }
+        remaining(deadline)?;
+        Ok(rows)
+    }
+}
+
 fn vanished(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
@@ -400,10 +559,10 @@ fn remove_cache_entry(
     Some(credit)
 }
 
-fn resolve_processes(
-    direct: io::Result<(Vec<std::path::PathBuf>, bool)>,
-    reader: impl FnOnce() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
-) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+fn resolve_processes<T>(
+    direct: io::Result<T>,
+    reader: impl FnOnce() -> io::Result<T>,
+) -> io::Result<T> {
     match direct {
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => reader(),
         other => other,

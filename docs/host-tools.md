@@ -69,10 +69,16 @@ Process discovery fails closed; symlinked cache roots and children are refused.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
 `cap_sys_ptrace=ep` (operator installation: `install -o root -g root -m 0755`
-then `setcap cap_sys_ptrace=ep`). This read-only helper accepts no arguments for cwd discovery and `--references` for reaper
-process paths. It reads process metadata, prints JSON and never starts children.
+then `setcap cap_sys_ptrace=ep`). This read-only helper accepts no arguments for
+cwd discovery and `--references` for reaper process paths. On Linux,
+`--hygiene-references` reports a version-1 JSON object with `cwds`, `open_paths`
+and `cargo_targets`. Each field contains absolute paths as byte arrays. The
+helper selects only the two Cargo target settings from process environments and
+emits only the resolved paths. It never starts children.
 `PG_PROCESS_CWD_READER` can select an absolute path to an equivalent authoritative
-reader; its output is `[absolute_cwd_paths, build_running_boolean]`. The helper is
+reader. The legacy modes return `[absolute_cwd_paths, build_running_boolean]`.
+Install the updated helper first and verify both legacy modes and the new mode
+before deploying the delivery bridge and per-path hygiene binary. The helper is
 used only when direct discovery is denied. An absent/failed reader still blocks
 cleanup; a denied cwd is never silently ignored, including a foreign or root-owned
 proc entry. Inode ownership is not used to waive process protection. Inspect a dry run after install. Cache cleanup
