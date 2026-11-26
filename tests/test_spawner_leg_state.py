@@ -17,6 +17,9 @@ def test_missing_legs_roles_and_probe_evidence(leg_id, store):
     if leg_id == 'opencode-glm-5.3-flash-free':
         assert not leg_active(leg)
         assert leg.disabled.startswith('D-6310:')
+    elif leg_id == 'agy-gemini-4-neon-medium':
+        assert not leg_active(leg)
+        assert leg.disabled == 'D-6957 operator cost hold'
     else:
         assert leg_active(leg)
     expected = {'review'} if leg_id == 'agy-gemini-4-neon-medium' else {'review', 'implement'}

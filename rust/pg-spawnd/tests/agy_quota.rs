@@ -45,9 +45,9 @@ with legacy._connect() as db:
 legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
 snapshot = plan_spawn(card, role='review', writer_families=['openai'], now=42, catalog_rows=[],
     leg_reader=lambda model, **kw: dict(state='limited' if 'gemini-4-argon' in model else 'ok', evidence=dict(ts=kw['now']))).to_dict()
-neon_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='ok' if 'gemini-4-neon' in model else 'limited', evidence=None)).to_dict()
-print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, neon_only=neon_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
+gemini_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
+    leg_reader=lambda model, **kw: dict(state='ok' if any(name in model for name in ('gemini-4-hydrogen', 'gemini-4-argon')) else 'limited', evidence=None)).to_dict()
+print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, gemini_only=gemini_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
         .output()
@@ -81,7 +81,6 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, neon_only=neon_onl
             "opencode-go/glm-5.3-flash",
             "gemini-4-hydrogen-high",
             "opencode/deepseek-v4.1-flash-free",
-            "gemini-4-neon-medium",
             "gemini-4-argon-low",
             "gemini-4-argon-medium"
         ]
@@ -121,12 +120,12 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, neon_only=neon_onl
         .any(|l| l["model"] == "claude-sonnet-5-5-high"));
     assert_eq!(result["legacy"]["state"], "limited");
     assert_eq!(
-        result["neon_only"]["first_leg"]["model"],
-        "gemini-4-neon-medium"
+        result["gemini_only"]["first_leg"]["model"],
+        "gemini-4-hydrogen-high"
     );
     // D-6652: every head needs two seats from distinct families.
     assert_eq!(
-        result["neon_only"]["error"],
+        result["gemini_only"]["error"],
         "two distinct review families unavailable"
     );
     let states = &result["hydrogen"]["agy_quota_states"];

@@ -106,7 +106,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
     from plangraph.planner.legs import REVIEW_ORDER
     assert [leg["id"] for leg in bare["legs"]] == [
-        *[id for id in REVIEW_ORDER if id not in ("claude-sonnet-5-5-high", "mimo-v2.6-pro", "mimo-v2.6-flash",
+        *[id for id in REVIEW_ORDER if id not in ("claude-sonnet-5-5-high", "agy-claude-sonnet-5-5-high",
+                                                  "agy-gemini-4-neon-medium", "mimo-v2.6-pro", "mimo-v2.6-flash",
                                                   "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")],
         "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",   # argon is last
     ]
@@ -119,12 +120,12 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     reads = []
     def ambient_catalog():
         reads.append(1)
-        return [{'id': 'agy/gemini-4-neon-medium', 'tier': 'paid', 'available': 1, 'active': True}]
+        return [{'id': 'agy/gemini-4-hydrogen-high', 'tier': 'paid', 'available': 1, 'active': True}]
 
     monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
-    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-neon-medium')['tier'] == 'paid'
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-hydrogen-high')['tier'] == 'paid'
     assert ambient['first_leg']['id'] == 'opencode-go-deepseek-v4-flash'   # D-6652 required seat
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
@@ -283,7 +284,7 @@ def test_explicit_leg_of_head_writer_family_is_refused(tmp_path, monkeypatch):
     service = SpawnService(state=tmp_path / "state")
     with pytest.raises(SpawnRefused, match="excluded writer family"):
         asyncio.run(service._spawn(card=card, role="review", writer_families=["mimo"],
-                                   leg="agy-gemini-4-neon-medium", dry_run=True))
+                                   leg="agy-gemini-4-hydrogen-medium", dry_run=True))
 
 
 def test_exclude_family_flag_and_deprecated_writer_family_alias(tmp_path, capsys):
@@ -314,7 +315,7 @@ def test_explicit_leg_of_any_head_writer_family_is_refused_with_several_writers(
                                               capture_output=True, text=True).stdout.strip()
     with pytest.raises(SpawnRefused, match="excluded writer family"):
         asyncio.run(SpawnService(state=tmp_path / "state")._spawn(
-            card=card, role="review", writer_families=["mimo"], leg="agy-gemini-4-neon-medium", dry_run=True))
+            card=card, role="review", writer_families=["mimo"], leg="agy-gemini-4-hydrogen-medium", dry_run=True))
 
 
 def test_unreadable_review_head_refuses_instead_of_assuming_no_writer(tmp_path, monkeypatch):

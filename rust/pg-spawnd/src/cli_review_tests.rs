@@ -495,3 +495,12 @@ fn agy_argon_and_neon_review_legs_are_eligible() {
         &json!({"harness":"agy","model":"gemini-4-argon-high"})
     ));
 }
+
+#[test]
+fn agy_cli_selector_refuses_a_stale_neon_route() {
+    let args = json!({"leg":"agy-cli"});
+    let neon =
+        json!({"id":"agy-gemini-4-neon-medium", "harness":"agy", "model":"gemini-4-neon-medium"});
+    let route = json!({"first_leg":neon, "legs":[neon]});
+    assert!(select(args.as_object().unwrap(), route.to_string()).is_err());
+}

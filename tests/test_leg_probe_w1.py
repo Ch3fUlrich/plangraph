@@ -85,11 +85,12 @@ def test_probe_writes_through_the_reader_store(tmp_path):
 
     store = LegStateStore(tmp_path / 'legs.sqlite')
     runner = SpawnerRunner(process_factory=factory)
-    result = asyncio.run(leg_probe.probe(runner, SimpleNamespace(model='gemini-4-neon-medium', harness='agy'), timeout_s=.3, store=store))
+    model = 'gemini-4-hydrogen-medium'
+    result = asyncio.run(leg_probe.probe(runner, SimpleNamespace(model=model, harness='agy'), timeout_s=.3, store=store))
     assert result['ok'] is False
     assert result['reason'] == 'timeout' and not result['infra']
-    assert store.leg_status('agy/gemini-4-neon-medium')['state'] == 'reprobe'
-    assert leg_state.leg_status('agy/gemini-4-neon-medium')['state'] == 'ok'
+    assert store.leg_status('agy/' + model)['state'] == 'reprobe'
+    assert leg_state.leg_status('agy/' + model)['state'] == 'ok'
 
 
 def test_harness_limit_stderr_is_error_shaped_or_anchored():
@@ -153,7 +154,7 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
 
     runner = SpawnerRunner(process_factory=factory)
     # a model the runner's catalog accepts: the probe must reach the child commit
-    leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy')
+    leg = SimpleNamespace(model='gemini-4-hydrogen-medium', harness='agy')
     result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=20))
     assert result['ok'] is True, result
     assert result['infra'] is False and result['reason'] == ''
@@ -523,7 +524,7 @@ def test_echoed_tool_output_is_not_a_harness_limit():
 
 
 def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_path, monkeypatch):
-    from plangraph.planner.legs import REVIEW_ORDER
+    from plangraph.planner.legs import REVIEW_NEON, REVIEW_ORDER
     from plangraph.planner.routing import plan_spawn
     from plangraph.routing_support import leg_state, resolver
     from plangraph.spawner import leg_probe
@@ -560,7 +561,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     runner = Runner()
     first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert first['ok'] is False
-    assert [row['id'] for row in first['probes']] == list(REVIEW_ORDER)
+    assert [row['id'] for row in first['probes']] == [leg_id for leg_id in REVIEW_ORDER if leg_id != REVIEW_NEON]
     assert all(role == 'review' and prompt == leg_probe.REVIEW_PROMPT for _, role, prompt in seen)
     assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'down'
 
@@ -637,14 +638,14 @@ def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):
 
 
 def test_review_probe_coverage_equals_review_route(tmp_path, monkeypatch):
-    from plangraph.planner.legs import REVIEW_ORDER, routed_review_legs
+    from plangraph.planner.legs import REVIEW_NEON, REVIEW_ORDER, routed_review_legs
     from plangraph.planner.routing import plan_spawn
     from plangraph.routing_support import resolver
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=LegStateStore(tmp_path / 'l.sqlite'), catalog_rows=())
     assert [leg.id for leg in plan.legs] == [leg.id for leg in routed_review_legs() if leg.family not in {'gpt', 'claude'}]
-    assert [leg.id for leg in routed_review_legs()] == list(REVIEW_ORDER)
+    assert [leg.id for leg in routed_review_legs()] == [leg_id for leg_id in REVIEW_ORDER if leg_id != REVIEW_NEON]
 
 
 def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkeypatch):
@@ -733,7 +734,7 @@ def test_failed_writer_probe_preserves_quota_booking(tmp_path, monkeypatch):
     """A commit from a nonzero exit is no pass: the booking stays and a 503 row is written."""
     from plangraph.spawner import leg_probe
 
-    leg = SimpleNamespace(model='gemini-4-neon-medium', harness='agy', roles=('implement',), id='probe-leg')
+    leg = SimpleNamespace(model='gemini-4-hydrogen-high', harness='agy', roles=('implement',), id='probe-leg')
     store = _booked_store(tmp_path, leg)
     before = len(_events(store))
     # exit 3 is reached only after the commit succeeded (check=True), so git did not fail here

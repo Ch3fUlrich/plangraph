@@ -122,7 +122,7 @@ def test_opencode(request_data):
 
 
 def test_agy_stream_spec(request_data):
-    request_data.update(leg={'id': 'agy-gemini-4-neon-medium'}, prompt='é\n' + 'x' * (300 * 1024))
+    request_data.update(leg={'id': 'agy-gemini-4-hydrogen-medium'}, prompt='é\n' + 'x' * (300 * 1024))
     result = spec.build(request_data)
     assert request_data['prompt'] not in result['argv']
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] and result['prompt'].endswith(request_data['prompt'])
@@ -143,7 +143,7 @@ def test_research_stream_spec(request_data):
     assert invoke(request_data) == (2, '', 'web_access_unavailable: agy-gemini-4-hydrogen-high\n')
 
 
-@pytest.mark.parametrize('leg_id', ['agy-gemini-4-neon-medium', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
+@pytest.mark.parametrize('leg_id', ['agy-gemini-4-hydrogen-medium', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
 @pytest.mark.parametrize('dry_run', [False, True])
 @pytest.mark.parametrize('size', [16, 200 * 1024], ids=['short', '200KiB'])
 def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id, dry_run, size):
@@ -171,7 +171,7 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     assert payload == result['prompt'] and payload.endswith(prompt)
 
 
-@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-4-neon-medium'), ('qodercli', 'qodercli-qwen3.8-flash')])
+@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-4-hydrogen-medium'), ('qodercli', 'qodercli-qwen3.8-flash')])
 @pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
 def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
     request_data['leg'] = {'id': leg}

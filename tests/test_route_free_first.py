@@ -184,7 +184,8 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     # An OpenAI writer gets the operator order without the gpt leg (rule 3.61).
-    assert [leg.id for leg in plan.legs] == [id for id in REVIEW_ORDER if id not in ("gpt-6.2-sol-medium", REVIEW_AGY_SONNET, SONNET)]
+    assert [leg.id for leg in plan.legs] == [id for id in REVIEW_ORDER
+                                            if id not in ("gpt-6.2-sol-medium", REVIEW_NEON, REVIEW_AGY_SONNET, SONNET)]
     argon = next(leg for leg in plan.legs if leg.id == "agy-gemini-4-argon-low")
     assert argon.model == "gemini-4-argon-low"
     assert argon.family == "gemini" and argon.effort == "low"
@@ -207,7 +208,7 @@ def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
     argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_AGY_SONNET, SONNET, *argon)],
+    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_NEON, REVIEW_AGY_SONNET, SONNET, *argon)],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
@@ -226,7 +227,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[1]].startswith("disabled: D-6310")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [
-        REVIEW_HYDROGEN, "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
+        REVIEW_HYDROGEN, "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
         "cx-gpt-6-luna", "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -235,8 +236,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
 
 def test_agy_skipped_while_out_of_quota():
     def reader(model, **kwargs):
-        limited = model in ("gemini-4-hydrogen-high", "agy/gemini-4-hydrogen-high",
-                            "gemini-4-neon-medium", "agy/gemini-4-neon-medium")
+        limited = model in ("gemini-4-hydrogen-high", "agy/gemini-4-hydrogen-high")
         return {"state": "limited" if limited else "available",
                 "evidence": {"unavailable_until": 1000} if limited else None}
     plan = plan_spawn(CARD, role="implement", leg_reader=reader)
@@ -244,7 +244,7 @@ def test_agy_skipped_while_out_of_quota():
     assert ids == [id for id in WRITERS if id != SUBS[1]]
     assert "agy-gemini-4-hydrogen-high" not in ids
     review = plan_spawn(CARD, role="review", writer_families=("gpt",), leg_reader=reader)
-    assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-4-neon-medium"] == "limited"
+    assert {s["leg"]: s["reason"] for s in review.skipped}["agy-gemini-4-argon-low"] == "limited"
 
 
 def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
@@ -258,7 +258,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
     argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_AGY_SONNET, SONNET, *argon)],
+    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_NEON, REVIEW_AGY_SONNET, SONNET, *argon)],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids[:3] == [*REVIEW_REQUIRED, REVIEW_HYDROGEN]
@@ -305,9 +305,9 @@ def test_renamed_and_second_haiku_remain_last():
     haiku = table["claude-haiku-5.5"]
     legs = (replace(haiku, id="renamed-review"),
             replace(haiku, id="second-review", model="claude-haiku-next"),
-            table["agy-gemini-4-neon-medium"])
+            table["agy-gemini-4-hydrogen-medium"])
     assert [leg.id for leg in route_card(CARD, legs=legs, role="review").legs] == [
-        "agy-gemini-4-neon-medium", "renamed-review", "second-review"]
+        "agy-gemini-4-hydrogen-medium", "renamed-review", "second-review"]
 
 
 @pytest.mark.parametrize("benchmark", [None, {}])
@@ -318,7 +318,7 @@ def test_haiku_last_across_tiers_and_measurements(monkeypatch, benchmark):
     table = {leg.id: leg for leg in DEFAULT_LEGS}
     legs = (dataclasses.replace(table["claude-haiku-5.5"], tier="free"),
             dataclasses.replace(table["agy-opus-5.5"], tier="paid"),
-            dataclasses.replace(table["agy-gemini-4-neon-medium"], tier="paid"))
+            dataclasses.replace(table["agy-gemini-4-hydrogen-medium"], tier="paid"))
     if benchmark is not None:
         benchmark = {leg.model: {"aa_intelligence": 100 - i * 40,
                      "cost_per_task_usd": 0, "pool_burn_weight": 0}
@@ -329,7 +329,7 @@ def test_haiku_last_across_tiers_and_measurements(monkeypatch, benchmark):
     assert {leg.id for leg in result.legs} == {leg.id for leg in legs}
     # Main's reviewed tier boundary wins even for a catalog-repriced Haiku;
     # it remains last within a shared tier when no measurements supersede it.
-    assert [leg.id for leg in result.legs] == ["claude-haiku-5.5", "agy-opus-5.5", "agy-gemini-4-neon-medium"]
+    assert [leg.id for leg in result.legs] == ["claude-haiku-5.5", "agy-opus-5.5", "agy-gemini-4-hydrogen-medium"]
     same_tier = tuple(dataclasses.replace(leg, tier="subscription") for leg in legs)
     fallback = plan_spawn(CARD, role="review", legs=same_tier,
                           writer_families=("gpt",), policy=RoutePolicy(),
@@ -452,7 +452,8 @@ def test_codex_writer_aliases_and_cross_family_review_routes():
     assert all(p.legs == plans[0].legs and p.review_seats == plans[0].review_seats for p in plans)
     ids = {l.id for l in plans[0].legs}
     assert 'omniroute-deepseek-flash' not in ids
-    assert [l.id for l in plans[0].legs] == [id for id in REVIEW_ORDER if id not in ('gpt-6.2-sol-medium', REVIEW_AGY_SONNET, SONNET)]
+    assert [l.id for l in plans[0].legs] == [id for id in REVIEW_ORDER
+                                             if id not in ('gpt-6.2-sol-medium', REVIEW_NEON, REVIEW_AGY_SONNET, SONNET)]
     assert any(l.family == 'gemini' for l in plans[0].legs)
     assert any(l.family == 'deepseek' for l in plans[0].legs)
     assert any(l.family == 'glm' for l in plans[0].legs)
@@ -500,7 +501,6 @@ def test_d6310_route_orders_low_risk_and_families():
         (REVIEW_HYDROGEN, 'high'),
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('agy-gemini-4-neon-medium', 'medium'),
         ('mimo-v2.6-flash', None),
         ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),

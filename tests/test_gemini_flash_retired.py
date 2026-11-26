@@ -200,7 +200,7 @@ def test_no_diff_review_keeps_hydrogen_when_other_seats_unavailable():
     plan = plan_spawn(dict(estimate_tokens=1000), role='review',
                       writer_families=('gpt', 'claude'), leg_reader=reader, catalog_rows=[])
     assert plan.error is None
-    assert 'agy-gemini-4-neon-medium' in [leg.id for leg in plan.legs]
+    assert 'agy-gemini-4-hydrogen-high' in [leg.id for leg in plan.legs]
 
 
 @pytest.mark.parametrize('field', ['leg', 'chosen_leg', 'legs', 'override'])

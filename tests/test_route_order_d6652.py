@@ -115,6 +115,14 @@ def test_review_needs_two_seats_on_a_standard_head_too():
     assert len(plan.review_seats) == 2 and plan.error is None
 
 
+def test_review_route_excludes_neon_on_operator_cost_hold():
+    neon = "agy-gemini-4-neon-medium"
+    plan = review({"risk_tags": ["auth"]})
+    assert neon not in {leg.id for leg in (*plan.legs, *plan.review_seats)}
+    skipped = next(row for row in plan.skipped if row["leg"] == neon)
+    assert skipped["reason"] == "disabled: D-6957 operator cost hold"
+
+
 def test_review_route_agy_sonnet_before_subscription():
     plan = review({"risk_tags": ["auth"]})
     index = REVIEW_ORDER.index(SUBSCRIPTION_SONNET)

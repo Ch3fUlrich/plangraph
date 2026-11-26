@@ -179,7 +179,7 @@ def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
 
 
 @pytest.mark.parametrize('model,leg_id', [
-    ('agy/gemini-4-neon-medium', 'agy-gemini-4-neon-medium'),
+    ('agy/gemini-4-hydrogen-medium', 'agy-gemini-4-hydrogen-medium'),
     # agy-sonnet-5.5 (orchestrate only) shares this model; the seat leg wins.
     ('agy/claude-sonnet-5-5-medium', 'agy-claude-sonnet-5-5-medium')])
 def test_agy_prefixed_model_prefers_the_seat_leg(model, leg_id):
