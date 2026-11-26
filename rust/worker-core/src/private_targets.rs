@@ -7,9 +7,12 @@ use std::{
 };
 
 pub(crate) fn cargo_target(path: &Path) -> bool {
-    path.join(".rustc_info.json").is_file()
-        && ["debug", "release"].iter().any(|p| path.join(p).is_dir())
-        && !path.join("Cargo.toml").exists()
+    fs::symlink_metadata(path.join(".rustc_info.json")).is_ok_and(|entry| entry.is_file())
+        && ["debug", "release"].iter().any(|profile| {
+            fs::symlink_metadata(path.join(profile)).is_ok_and(|entry| entry.is_dir())
+        })
+        && fs::symlink_metadata(path.join("Cargo.toml"))
+            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
 #[cfg(target_os = "linux")]

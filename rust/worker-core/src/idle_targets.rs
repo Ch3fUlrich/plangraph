@@ -18,27 +18,50 @@ pub const LEGACY_CONTAINERS: [&str; 2] = [".cache/cargo-target", ".cache/pg-targ
 /// A target untouched for this long belongs to no build.
 pub const IDLE_AFTER: Duration = Duration::from_secs(24 * 3600);
 
-fn targets_in(container: &Path) -> io::Result<Vec<PathBuf>> {
-    let meta = match fs::symlink_metadata(container) {
+/// Discover known targets without walking inside one. An exhausted budget returns partial results.
+pub fn targets_in(
+    container: &Path,
+    depth: u8,
+    exclusions: &[PathBuf],
+    mut permit: impl FnMut() -> bool,
+) -> io::Result<(Vec<PathBuf>, bool)> {
+    let mut found = vec![];
+    let complete = collect_targets(container, depth, exclusions, &mut permit, &mut found)?;
+    found.sort();
+    Ok((found, complete))
+}
+
+fn collect_targets(
+    path: &Path,
+    depth: u8,
+    exclusions: &[PathBuf],
+    permit: &mut impl FnMut() -> bool,
+    found: &mut Vec<PathBuf>,
+) -> io::Result<bool> {
+    if !permit() {
+        return Ok(false);
+    }
+    if exclusions.iter().any(|root| path.starts_with(root)) {
+        return Ok(true);
+    }
+    let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(true),
         Err(e) => return Err(e),
     };
     if !meta.is_dir() {
-        return Ok(vec![]);
+        return Ok(true);
     }
-    if cargo_target(container) {
-        return Ok(vec![container.to_path_buf()]);
-    }
-    let mut found = vec![];
-    for entry in fs::read_dir(container)? {
-        let entry = entry?;
-        if entry.file_type().is_ok_and(|t| t.is_dir()) && cargo_target(&entry.path()) {
-            found.push(entry.path());
+    if cargo_target(path) {
+        found.push(path.to_path_buf());
+    } else if depth > 0 {
+        for entry in fs::read_dir(path)? {
+            if !collect_targets(&entry?.path(), depth - 1, exclusions, permit, found)? {
+                return Ok(false);
+            }
         }
     }
-    found.sort();
-    Ok(found)
+    Ok(true)
 }
 
 /// Report each legacy target and, with `apply`, remove the ones idle for [`IDLE_AFTER`] while no
@@ -52,7 +75,7 @@ pub fn sweep(
     mut processes: impl FnMut() -> io::Result<(Vec<PathBuf>, bool)>,
 ) -> io::Result<()> {
     for container in containers {
-        for target in targets_in(container)? {
+        for target in targets_in(container, 1, &[], || true)?.0 {
             if !owned(&target)? {
                 report.skipped.push(format!(
                     "{}: legacy target owned by another user",

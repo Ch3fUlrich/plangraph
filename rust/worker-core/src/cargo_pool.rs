@@ -178,6 +178,26 @@ pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec
     slots.into_iter().partition(|slot| !is_review_slot(slot))
 }
 
+/// Private and scratch discovery must leave every shared cache and its pool to the pool policy.
+pub fn hygiene_exclusions(shared: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    let fallback = shared
+        .first()
+        .and_then(|primary| crate::cargo_cache::review_fallback_primary(primary, home));
+    let mut exclusions = Vec::new();
+    for target in shared.iter().chain(fallback.iter()) {
+        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+        for primary in [target, &canonical] {
+            if let Ok(pool) = pool_root(primary) {
+                exclusions.push(pool.canonicalize().unwrap_or(pool));
+            }
+        }
+        exclusions.push(canonical);
+    }
+    exclusions.sort();
+    exclusions.dedup();
+    exclusions
+}
+
 /// Trim every idle slot of the pool at `primary` to `cap_bytes` each, ordinary slots together to
 /// N x cap and review slots together to their fixed budget. Leased slots are skipped.
 pub fn enforce_pool(

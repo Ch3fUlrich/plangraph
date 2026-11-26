@@ -197,11 +197,13 @@ fn execute_with(
             pinned: guards.pinned.clone(),
             live: guards.live.clone(),
         };
-        private_guards.pinned.extend(shared.iter().cloned());
         // Pool slots look like private Cargo targets; only the guarded pool trimmer may reach them.
         private_guards
             .pinned
-            .extend(pool_roots(shared.first().map(PathBuf::as_path)));
+            .extend(pg_worker_core::cargo_pool::hygiene_exclusions(
+                &shared,
+                Path::new(&home),
+            ));
         let worktrees = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
             .lines()
             .filter_map(|line| line.strip_prefix("worktree "))
@@ -302,19 +304,6 @@ fn execute_with(
         }
     }
     Ok(report)
-}
-/// The pool root of the configured primary target and of the fallback pool review seats use.
-fn pool_roots(primary: Option<&Path>) -> Vec<PathBuf> {
-    let Some(primary) = primary else {
-        return vec![];
-    };
-    let fallback = env::var_os("HOME").and_then(|home| {
-        pg_worker_core::cargo_cache::review_fallback_primary(primary, Path::new(&home))
-    });
-    std::iter::once(primary.to_path_buf())
-        .chain(fallback)
-        .filter_map(|target| pg_worker_core::cargo_pool::pool_root(&target).ok())
-        .collect()
 }
 
 /// Trims the ordinary and the review slots of the pool at `primary`; a failure is the run's alarm.

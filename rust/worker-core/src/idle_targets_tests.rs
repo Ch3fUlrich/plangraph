@@ -19,6 +19,51 @@ fn target(container: &Path, name: &str, age: Duration) -> PathBuf {
     path
 }
 
+#[test]
+fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let cache = home.join(".cache");
+    let age = Duration::from_secs(3600);
+    let nested = target(&cache, "session/target", age);
+    let deep = target(&cache, "other/level/target", age);
+    let shared = [
+        target(&cache, "shared-a", age),
+        target(&cache, "shared-b", age),
+    ];
+    let pools = shared
+        .each_ref()
+        .map(|root| crate::cargo_pool::pool_root(root).unwrap());
+    for pool in &pools {
+        target(pool, "slot-1", age);
+    }
+    symlink(&pools[1], cache.join("alias-of-pool")).unwrap();
+    let lookalike = cache.join("not-a-cache");
+    fs::create_dir_all(lookalike.join("debug")).unwrap();
+    symlink(
+        nested.join(".rustc_info.json"),
+        lookalike.join(".rustc_info.json"),
+    )
+    .unwrap();
+    let excluded = crate::cargo_pool::hygiene_exclusions(&shared, &home);
+    let (found, complete) = targets_in(&cache, 2, &excluded, || true).unwrap();
+    assert!(complete);
+    assert_eq!(found, [nested.as_path()]);
+    assert!(deep.is_dir() && pools.iter().all(|pool| pool.join("slot-1").is_dir()));
+
+    let mut budget = 2usize;
+    let (_, complete) = targets_in(&cache, 2, &excluded, || {
+        let room = budget != 0;
+        budget = budget.saturating_sub(1);
+        room
+    })
+    .unwrap();
+    assert!(!complete);
+    assert!(nested.is_dir());
+}
+
 fn run(containers: &[PathBuf], guards: &Guards, apply: bool, building: bool) -> Report {
     let mut report = Report::default();
     sweep(
