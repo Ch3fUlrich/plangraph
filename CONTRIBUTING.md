@@ -154,7 +154,7 @@ CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge q
 event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
 Every other pull request, draft or ready, runs the affected selection
 (`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
-Title and description corrections use the isolated `ci-pr-description` policy check. Base edits still run normal CI (see [CI gate](docs/ci-gate.md)). Ordinary draft lane checks report a literal `ci-gate` without test proof. The legacy landing readers exclude this check from CI admission.
+Title and description corrections use the isolated `ci-pr-description` policy check. The legacy landing reader looks up attempt 1 when metadata evidence omits the attempt or reports null. Base edits still run normal CI (see [CI gate](docs/ci-gate.md)). Ordinary draft lane checks report a literal `ci-gate` without test proof. The legacy landing readers exclude this check from CI admission.
 Marking a draft ready starts no run; `merge_batch land` names a pending required check and exits. `land` also asks `plangraph main-state --admit` and refuses with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` while main is not green (`EXCEPTION:main-red-fix` passes only while red; see docs/ci-parallel.md).
 
 Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
