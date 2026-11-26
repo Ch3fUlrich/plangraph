@@ -382,8 +382,10 @@ class ReviewMixin:
                 if (row["kind"] in ("commit", "commit+ci") and row["verified"] and row["epoch"] == item["epoch"]
                         and row["ref"].get("sha")):
                     where = row["ref"].get("repo")
-                    stamps.append(self._sha_landed_at(where if where and git.repo_path(where) else project,
-                                                      row["ref"]["sha"], ref))
+                    if not where or not git.repo_path(where):
+                        where = project
+                    stamps.append(self._sha_landed_at(where, row["ref"]["sha"],
+                                                      ref if where == project else git.repo_ref(where)))
             stamps += [self._sha_landed_at(project, sha, ref) for sha in landed]
         except Exception:  # noqa: BLE001 - an unreadable landing never lets a stale row through
             return float("inf")
