@@ -46,9 +46,11 @@ the validated route names plus `auth`, `writer`, `snapshot`, `messages`, `merge_
 `changelog`, `reaper`, `host_samples`, and `read_audit`. Other raw holds use
 `unclassified` and contribute zero labelled coverage.
 
-Legacy message polls emit one `request_timing` summary per HTTP request. Each
-database read still uses the `messages` lock label, so the lock logs can attribute
-contention to individual reads.
+The daemon logs one `request_timing` summary for each message poll that reaches
+the poll timer. Other read and write verbs outside the latency sample list emit
+a summary only when lock wait plus hold or fleet projection reaches 250 ms.
+Each legacy poll database read uses the `messages` lock label, so the lock logs
+can attribute contention to individual reads.
 
 Production evidence remains pending. Use a two-hour window with reviews active and at least
 100 successful automatic builds. Report elapsed and hold p95, query timing, staleness, and

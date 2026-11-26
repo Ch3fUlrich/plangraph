@@ -121,7 +121,7 @@ def run(cfg, *, host=None, port=None, ready=None):
     try:
         loaded_state = write_loaded_state(cfg)
         store = _make_store(conn, cfg)
-        server = api.make_server(store, cfg, host=host, port=port)
+        server = api.make_server(store, cfg, host=host, port=port, log_timing=True)
         # M1: fail() may already have been recorded while the server was being
         # built (bus restore, a hook). Notice it before the writes below can
         # trip over a dead session and before serve_forever could accept one

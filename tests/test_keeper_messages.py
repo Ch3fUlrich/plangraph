@@ -382,20 +382,20 @@ def test_commit_failure_never_returns_receipt(world, monkeypatch):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_wait_releases_lock_and_rereads_without_notify(srv, http_srv, monkeypatch, capsys, legacy):
-    import threading
     import time
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+
     monkeypatch.setattr(http_srv, "read_path", None if legacy else http_srv.read_path)
-    result = []
-    thread = threading.Thread(target=lambda: result.append(
-        srv.get("/messages?since=0&wait_ms=1000")))
-    thread.start()
-    try:
+    monkeypatch.setattr(http_srv.lock, "log_timing", True)
+    with (ThreadPoolExecutor(max_workers=1) as pool,
+          patch.object(Store, "messages", autospec=True, side_effect=Store.messages) as reads):
+        result = pool.submit(srv.get, "/messages?since=0&wait_ms=1000")
         time.sleep(.1)
         srv.call("post_message", {"from": "relay", "to": "keeper", "body": {}})
-    finally:
-        thread.join(3)
-    assert not thread.is_alive()
-    assert result[0].json()["rows"][0]["seq"] == 1
+        assert result.result(3).json()["rows"][0]["seq"] == 1
+    assert reads.call_count >= 2
+    assert all((args[0].conn is http_srv.store.conn) == legacy for args, _ in reads.call_args_list)
     lines = capsys.readouterr().err.splitlines()
     assert sum("request_timing" in line and "verb=messages" in line for line in lines) == 1
 

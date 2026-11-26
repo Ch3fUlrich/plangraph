@@ -212,7 +212,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _committed_read(self, name, extra, query, token):
         server = self.server
         try:
-            with timing.RequestTimer(None, "read", verb=name), ExitStack() as stack:
+            with timing.RequestTimer(server.lock, "read", verb=name, unlocked=True), ExitStack() as stack:
                 try:
                     store = stack.enter_context(server.read_store())
                 except (RuntimeError, *db_errors.OPERATIONAL) as exc:
@@ -599,10 +599,10 @@ class KeeperHTTPServer(ThreadingHTTPServer):
     request_queue_size = 32
     allow_reuse_address = True
 
-    def __init__(self, address, store, config, system=None):
+    def __init__(self, address, store, config, system=None, *, log_timing=False):
         self.store = store
         self.config = config
-        self.lock = timing.KeeperLock()
+        self.lock = timing.KeeperLock(log_timing=log_timing)
         self.snapshot_publication = SnapshotPublication(getattr(config, "db", None), store.conn)
         self.merge_refresh = api_routes.MergeRefresh(self)
         self._audit_thread = None
@@ -784,12 +784,12 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(store, config, *, host=None, port=None) -> KeeperHTTPServer:
-    """Bind to ``config``'s address and start the reaper (not yet serving)."""
+def make_server(store, config, *, host=None, port=None, log_timing=False) -> KeeperHTTPServer:
+    """Bind and start the reaper; the daemon opts into timing on stderr."""
     bind_host = host or config.host
     bind_port = config.port if port is None else port
     if getattr(config, "batch_roots", None):
         store.batch_roots = list(config.batch_roots)  # X7-FIX-B: config wins
-    server = KeeperHTTPServer((bind_host, bind_port), store, config)
+    server = KeeperHTTPServer((bind_host, bind_port), store, config, log_timing=log_timing)
     server.start_reaper()
     return server
