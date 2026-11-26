@@ -39,7 +39,8 @@
         "tests/test_keeper_merge_refresh_budget.py",
         "src/plangraph/keeper/api.py",
         "src/plangraph/keeper/timing.py",
-        "tests/test_keeper_timing.py"
+        "tests/test_keeper_timing.py",
+        "tests/contract/contract_harness.py"
       ],
       "exports": [
         "write_snapshot(server, principal)",
