@@ -534,7 +534,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
-    from plangraph.routing_support.leg_state import leg_key, quota_key, routing_status
+    from plangraph.routing_support.leg_state import agy_model_key, leg_key, quota_key, routing_status
     def read_status(model, **scope):
         return routing_status(reader(model, now=now, account=card.get("account"),
                                      combo=card.get("combo"), **scope))
@@ -550,29 +550,37 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 return alt
         return st
 
-    states = {l.id: _leg_status(l) for l in candidates}
-    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
-        read_status("agy:" + model))
-        for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
-                             ("gemini-4-argon", REVIEW_ARGON_LOW),
-                             ("claude-sonnet-5-5", REVIEW_SONNET))}
-    agy_models = {leg.id: quota_key(leg_key(leg)) for leg in candidates if leg.harness == "agy"}
-    probe_times = ({model: stamp for model in set(quota_states) | set(agy_models.values())
-                    if (stamp := probe_time(model, now=now)) is not None}
-                   if probe_time is not None else {})
-    quota_states = {model: dict(status, last_probe_at=probe_times[model])
-                    if model in probe_times else status for model, status in quota_states.items()}
-    blocked = {key for key, state in states.items() if unavailable(state)
-               or (state["state"] == "unknown" and state.get("reason"))}
     def quota_limited(state):
         return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
 
+    agy_models = {leg.id: agy_model_key(leg_key(leg)) for leg in candidates if leg.harness == "agy"}
+    argon_quota = "agy:gemini-4-argon"
+    gemini_quota = quota_key(argon_quota)
+    sonnet_quota = "agy:claude-sonnet-5-5"
+    gemini_status = read_status(gemini_quota)
+    states = {leg.id: gemini_status if quota_key(agy_models.get(leg.id)) == gemini_quota
+               and quota_limited(gemini_status) else _leg_status(leg) for leg in candidates}
+    # Legacy readers can report availability on the bare model instead of its quota key.
+    gemini_status = next((states[leg.id] for leg in candidates if quota_key(agy_models.get(leg.id)) == gemini_quota
+                          and quota_limited(states[leg.id])), gemini_status)
+    quotas = {gemini_quota: gemini_status, sonnet_quota: read_status(sonnet_quota)}
+    probe_times = ({model: stamp for model in quotas.keys() | {argon_quota} | set(agy_models.values())
+                    if (stamp := probe_time(model, now=now)) is not None}
+                   if probe_time is not None else {})
+    quota_states = {model: dict(status, last_probe_at=probe_times[model])
+                    if model in probe_times else status for model, status in quotas.items()}
+    pool_stamp = max((probe_times[model] for model in (argon_quota, gemini_quota) if model in probe_times), default=None)
+    if pool_stamp is not None:
+        quota_states[gemini_quota] = dict(gemini_status, last_probe_at=pool_stamp)
+    quota_states[argon_quota] = quota_states[gemini_quota]
+    blocked = {key for key, state in states.items() if unavailable(state)
+               or (state["state"] == "unknown" and state.get("reason"))}
     claude_quota_fallback = False
     writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
     # D-6652 correction: the Sonnet writers serve only while the Codex lead is limited (429 or quota).
     codex_limited = native_implement and any(
         quota_limited(read_status(key, harness="codex")) for key in (writer_model, LEAD_WRITER))
-    if native_implement and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
+    if native_implement and quota_limited(gemini_status):
         claude_quota_fallback = any(
             quota_limited(read_status(key, harness="codex"))
             for key in (writer_model, LEAD_WRITER, REVIEW_GPT))

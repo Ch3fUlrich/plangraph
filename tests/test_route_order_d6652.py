@@ -4,6 +4,7 @@ import pytest
 from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_REQUIRED, SONNET_WRITER,
                                     SONNET_WRITER_HARD, SONNET_WRITERS)
 from plangraph.planner.routing import plan_spawn
+from plangraph.routing_support.leg_state import LegStateStore
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
@@ -25,6 +26,20 @@ def review(card=None, writers=("gpt",), down=()):
 
 
 CODEX = {"cx-gpt-6.2-sol-medium", "omniroute/cx-gpt-6.2-sol-medium"}
+
+
+def test_agy_quota_states_share_the_gemini_pool(tmp_path):
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    store.record_harness_limit("agy/gemini-4-argon-low", "HTTP 429: quota reached", "fixture", now=100)
+    gemini = {"agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
+              "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium"}
+    for role in ("review", "research"):
+        plan = plan_spawn({"estimate_tokens": 1000}, role=role, writer_families=("gpt",),
+                          leg_reader=store, now=101, catalog_rows=())
+        assert plan.agy_quota_states["agy:gemini-4-argon"] == plan.agy_quota_states["agy:gemini-4-hydrogen"]
+        assert plan.agy_quota_states["agy:gemini-4-argon"]["state"] == "limited"
+        assert {entry["leg"] for entry in plan.skipped if entry["reason"] == "limited"} >= gemini
+        assert gemini.isdisjoint(leg.id for leg in plan.legs)
 
 
 def test_with_codex_serving_implement_never_returns_a_claude_leg():

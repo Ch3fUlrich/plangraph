@@ -1,0 +1,1 @@
+Antigravity Gemini Argon and Hydrogen share one quota (D-6952). Review and research routing honor bookings for either model, including existing Argon rows, under the Hydrogen quota key. Model-specific probe failures, account scope, and the Neon and Sonnet quotas stay independent.

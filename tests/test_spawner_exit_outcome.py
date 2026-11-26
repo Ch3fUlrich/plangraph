@@ -252,4 +252,6 @@ def test_review_quota_booking_retains_the_card_account(tmp_path):
     assert store.leg_status(model, account="fixture-A")["state"] == "limited"
     assert store.leg_status(model, account="fixture-B")["state"] == "ok"
     assert store.leg_status(model)["state"] == "ok"
-    assert store.leg_status("agy:gemini-4-argon", account="fixture-A")["state"] == "ok"
+    argon = "agy:gemini-4-argon"
+    assert store.leg_status(argon, account="fixture-A")["state"] == "limited"
+    assert store.leg_status(argon, account="fixture-B")["state"] == "ok"
