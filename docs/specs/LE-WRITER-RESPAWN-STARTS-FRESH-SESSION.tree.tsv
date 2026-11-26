@@ -1,0 +1,16 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-WRITER-RESPAWN-STARTS-FRESH-SESSION.md	write	yes	E1 E2	predicted
+docs/SPAWNER.md	write	yes	E1 E2	predicted
+docs/native-codex-writer.md	write	yes	E1 E2	predicted
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/mod.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/placement.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/remote.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/request.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/storage.rs	caller	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/storage.rs	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/session/tests.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/fleet_launch/remote.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/fleet_launch/resume.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/fleet_launch/sandbox.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/fleet_launch_parity.rs	write	yes	E1 E2	predicted
