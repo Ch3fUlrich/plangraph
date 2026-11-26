@@ -57,6 +57,11 @@ if 'resume' in sys.argv:
     git_dir = subprocess.check_output(['git', 'rev-parse', '--absolute-git-dir'], text=True).strip()
     assert pathlib.Path(launch[launch.index('--cd') + 1]).resolve() == pathlib.Path.cwd()
     assert launch[launch.index('--add-dir') + 1] == git_dir
+    common_dir = subprocess.check_output(
+        ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip()
+    assert common_dir != git_dir
+    writable = next(arg for arg in sys.argv if arg.startswith('sandbox_workspace_write.writable_roots='))
+    assert {git_dir, common_dir} <= set(json.loads(writable.partition('=')[2]))
     if 'external fix' in prompt:
         import os
         record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())

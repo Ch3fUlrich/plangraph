@@ -368,6 +368,7 @@ fn execute(args: &[String]) -> Result<()> {
             .env("PG_JAIL_BIN", jail_binary(&target.path));
         if step.label == "pg-worker/test" {
             command
+                .env_remove("PG_JAIL_BIN")
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
         }

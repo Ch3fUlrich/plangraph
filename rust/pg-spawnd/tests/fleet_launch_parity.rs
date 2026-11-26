@@ -28,6 +28,9 @@ mod remote;
 #[path = "fleet_launch/restart.rs"]
 mod restart;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/resume.rs"]
+mod resume;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
 #[cfg(target_os = "linux")]
@@ -53,6 +56,12 @@ fn main() {
     }
     use sandbox::Launcher;
     let rust = Launcher::Rust(None);
+    resume::forwarded_respawn_uses_destination_record(&rust);
+    println!("fleet-launch fixture resume::forwarded_respawn_uses_destination_record passed");
+    resume::source_only_record_is_refused(&rust);
+    println!("fleet-launch fixture resume::source_only_record_is_refused passed");
+    resume::success_without_id_preserves_selected_id(&rust);
+    println!("fleet-launch fixture resume::success_without_id_preserves_selected_id passed");
     check(&rust);
     records::check_lifecycle(&rust);
     parent::parent_session_is_recorded(&rust);

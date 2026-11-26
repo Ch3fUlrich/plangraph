@@ -1,0 +1,15 @@
+path	disposition	required	row IDs	label
+changelog.d/FIX-ROUND-RESUME-THROUGH-SPAWNER.md	write	yes	E1 E2	predicted
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/cli.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/main.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/native_writer_commands.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/native_writer_remote_resume.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/src/native_writer_sandbox.rs	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/native_writer_session.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/native_resume_route.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/native_writer.rs	write	yes	E1 E2	predicted
+rust/pg-spawnd/tests/native_writer_fixture/codex.rs	write	yes	E1 E2	predicted
+src/plangraph/spawner/cli.py	write	yes	E1 E2	predicted
+src/plangraph/spawner/remote_ps.py	write	yes	E1 E2	predicted
+tests/test_spawner_remote_ps.py	write	yes	E1 E2	predicted

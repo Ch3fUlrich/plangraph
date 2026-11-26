@@ -3,11 +3,7 @@ use super::test_python;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Write;
-use std::{
-    path::{Component, Path},
-    process::{Output, Stdio},
-};
+use std::path::{Component, Path};
 
 const DRY: &str = "forwarded dry run\n";
 const STARTED: &str = "remote stdout\nfleet-launch: started 12345678-1234-1234-1234-123456789abc\n";
@@ -318,7 +314,7 @@ fn check_destination(launcher: &Launcher) {
     destination["memory_floor_gib"] = json!(0);
     s.write_json("hosts.json", policy);
 
-    let output = deliver(&s, encoded, &payload);
+    let output = s.deliver(encoded, &payload);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -364,35 +360,11 @@ fn check_destination(launcher: &Launcher) {
         .as_array_mut()
         .unwrap()
         .push(json!("--respawn"));
-    let output = deliver(&s, encoded, &payload);
+    let output = s.deliver(encoded, &payload);
     s.expect(
         &output,
         2,
         "",
         "fleet-launch: refused host fixture-remote: missing launch spec; no launch\n",
     );
-}
-
-fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
-    let mut child = s
-        .python_command()
-        .args([
-            "-c",
-            "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
-            encoded,
-        ])
-        .env("HOME", s.path("target"))
-        .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.to_string().as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
 }

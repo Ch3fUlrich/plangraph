@@ -315,6 +315,9 @@ def main(argv=None):
     p = commands.add_parser('steer', help='queue a native writer message read from standard input')
     p.add_argument('run_id')
     p.add_argument('--host', help='configured target host when the run has no local receipt')
+    p = commands.add_parser('resume', help='resume a native writer on its recorded host')
+    p.add_argument('run_id')
+    p.add_argument('--prompt-file', required=True, type=Path)
     args = parser.parse_args(argv)
     if args.verb == 'quota-result':
         from .env_redact import harness_limit_line
@@ -616,6 +619,13 @@ raise SystemExit(code)
         elif args.verb == 'steer':
             from .remote_ps import steer_run
             result = steer_run(service, args.run_id, sys.stdin.read(16385), args.host)
+        elif args.verb == 'resume':
+            from .remote_ps import MAX_OUTPUT, resume_run
+            with args.prompt_file.open('rb') as source:
+                prompt = source.read(MAX_OUTPUT + 1)
+            if len(prompt) > MAX_OUTPUT:
+                raise ValueError('resume prompt must contain between 1 byte and 1 MiB of text')
+            result = resume_run(service, args.run_id, prompt.decode('utf-8'))
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:

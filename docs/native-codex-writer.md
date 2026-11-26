@@ -148,6 +148,9 @@ directory. It runs the same gates and exact-head review before publishing the
 new result. The record keeps the previous outcome in `resume_from` and the
 ledger appends a row for the fix round's usage.
 
+For a numbered fleet writer, `fleet-launch --respawn --session writer-NNNN`
+uses the saved session on the selected host. See the [fleet launcher contract](SPAWNER.md).
+
 Queue a scope change with `plangraph_agent_steer` using `run_id` and
 `message`, or pipe the message into
 `python3 -m plangraph.spawner.cli steer RUN_ID`. Both routes can take an
