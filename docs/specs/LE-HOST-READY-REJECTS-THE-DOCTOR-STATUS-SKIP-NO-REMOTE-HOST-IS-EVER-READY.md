@@ -25,7 +25,7 @@ Outcome. A readiness record accepts every status the doctor emits; the parser an
 
 ## Verification
 
-- X1. E1, changed. pytest tests/test_host_ready.py::test_doctor_skip_rows_parse_as_ok (new). Asserts B1's observable result.
+- X1. E1, changed. pytest tests/test_host_ready.py::test_doctor_skip_rows_parse_as_ok. Feeds the doctor CLI's generated JSON into readiness and checks both passing and failing reports with skip rows.
 - X2. E1, changed. pytest tests/test_host_ready.py::test_doctor_status_list_shared (new). Asserts I1's observable result.
 
 Anchors for new tests and files are predicted until checked on the implementation head.

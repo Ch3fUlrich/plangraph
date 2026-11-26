@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -137,19 +138,40 @@ def test_failures(tmp_path, mode):
 
 
 @pytest.mark.parametrize('failed', [False, True])
-def test_doctor_skip_rows_parse_as_ok(tmp_path, failed):
+def test_doctor_skip_rows_parse_as_ok(tmp_path, monkeypatch, capsys, failed):
+    from plangraph.planner import legs
+    from plangraph.spawner import doctor, service
+
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('CLAUDE_CODE_SHELL', '/bin/bash')
+    monkeypatch.setattr(legs, 'HARNESSES', (sys.executable,))
+    monkeypatch.setattr(doctor, 'mcp', lambda module: (
+        'fail' if failed and module == 'plangraph.spawner.mcp' else 'pass', 'fixture MCP'))
+    monkeypatch.setattr(doctor, 'whoami', lambda: ('pass', 'fixture identity'))
+    monkeypatch.setattr(doctor, 'completion', lambda: ('pass', 'fixture completion sink'))
+    monkeypatch.setattr(service, 'SpawnService', lambda: SimpleNamespace(
+        route=lambda *args, **kwargs: SimpleNamespace(legs=[SimpleNamespace(id='fixture-leg')])))
+
+    def source_probe(argv, **kwargs):
+        assert argv[1:] == ['doctor-sources']
+        return SimpleNamespace(returncode=0, stdout=b'[]')
+
+    with monkeypatch.context() as environment:
+        environment.setattr(doctor.subprocess, 'run', source_probe)
+        exit_code = doctor.main(['--json'])
+    output = capsys.readouterr().out
+    assert exit_code == int(failed)
+    rows = {row['name']: row['status'] for row in json.loads(output)['checks']}
+    assert rows['probe_implement'] == rows['probe_review'] == 'skip'
+
     def fake(argv, **kwargs):
         if 'doctor --json' in argv[-1]:
-            checks = [dict(name='keeper_whoami', status='pass'),
-                      dict(name='probe_implement', status='skip')]
-            if failed:
-                checks.append(dict(name='mcp_spawner', status='fail'))
-            return SimpleNamespace(returncode=int(failed), stdout=json.dumps(
-                dict(ok=not failed, checks=checks)))
+            return SimpleNamespace(returncode=exit_code, stdout=output)
         return runner(argv, **kwargs)
 
     result = h.check_host('fiction', CONFIG, tmp_path, fake)
     assert result['keeper_ok'] and result['doctor_ok'] is not failed
+    assert result['ok'] is not failed
     assert result['failures'] == (['doctor.mcp_spawner: failed', 'doctor: failed'] if failed else [])
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
 
