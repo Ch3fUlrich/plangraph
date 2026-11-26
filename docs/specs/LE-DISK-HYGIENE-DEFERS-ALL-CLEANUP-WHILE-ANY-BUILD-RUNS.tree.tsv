@@ -1,4 +1,5 @@
 path	disposition	required	row IDs	label
+.filesize-baseline	read	yes	E1	observed
 changelog.d/LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS.md	write	yes	E1 E2 E3	predicted (<= 12 changed lines)
 deploy/manifest.toml	read	yes	E1 E3	observed
 deploy/systemd/README.md	read	yes	E3 E4	observed
@@ -15,6 +16,9 @@ docs/host-tools.md	write	yes	E1 E2 E3 E4	predicted (<= 75 changed lines)
 docs/operations/spawner-disk-admission.md	write	yes	E1 E2	predicted (<= 24 changed lines)
 docs/operations/worker-disks.md	write	yes	E3 E4	predicted (<= 34 changed lines)
 docs/stall-watchdog.md	read	yes	E3	observed
+rust/pg-spawnd/src/host_tools.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_session.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/worker_liveness.rs	read	yes	E3	observed
 rust/plangraph-cli/Cargo.toml	read	yes	E3	observed
 rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E3	predicted (<= 65 changed lines)
 rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E3	predicted (<= 105 changed lines)
@@ -22,15 +26,16 @@ rust/worker-core/Cargo.toml	read	yes	E1 E2	observed
 rust/worker-core/src/affected_scratch.rs	write	yes	E1 E2	predicted (<= 55 changed lines)
 rust/worker-core/src/bin/flow_watchdog_hosts/disks.rs	read	yes	E3	observed
 rust/worker-core/src/bin/flow_watchdog_hosts/local.rs	read	yes	E3	observed
-rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E1 E2 E3 E4	predicted (<= 220 changed lines)
+rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E1 E2 E3 E4	predicted (<= 360 changed lines)
 rust/worker-core/src/bin/pg-process-cwds.rs	write	yes	E2	predicted (<= 23 changed lines)
+rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E1 E2 E3	predicted (<= 395 changed lines)
 rust/worker-core/src/cargo_cache.rs	read	yes	E1 E2	observed
 rust/worker-core/src/cargo_pool.rs	write	yes	E1 E2	predicted (<= 52 changed lines)
 rust/worker-core/src/cargo_pool_trim.rs	write	yes	E1 E2	predicted (<= 125 changed lines)
 rust/worker-core/src/cargo_pool_trim_tests.rs	write	yes	E1 E2	predicted (<= 90 changed lines)
 rust/worker-core/src/disk_fast_worktrees.rs	write	yes	E1 E2	predicted (<= 35 changed lines)
 rust/worker-core/src/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 220 changed lines)
-rust/worker-core/src/disk_hygiene_plan.rs	write	yes	E1 E2 E3	predicted (<= 420 changed lines)
+rust/worker-core/src/disk_hygiene_plan.rs	write	yes	E1 E2 E3	predicted (<= 440 changed lines)
 rust/worker-core/src/disk_runtime.rs	write	yes	E1 E2 E3	predicted (<= 210 changed lines)
 rust/worker-core/src/disk_runtime_tests.rs	write	yes	E1 E2	predicted (<= 145 changed lines)
 rust/worker-core/src/disk_watermark.rs	write	yes	E1 E3	predicted (<= 75 changed lines)
@@ -50,8 +55,14 @@ rust/worker-core/src/sweep_runs.rs	read	yes	E1 E2	observed
 rust/worker-core/src/unit_refs/mod.rs	read	yes	E1 E2	observed
 rust/worker-core/src/work_disks.rs	read	yes	E1	observed
 rust/worker-core/tests/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 180 changed lines)
+rust/worker-core/tests/disk_thresholds.rs	read	yes	E3	observed
 rust/worker-core/tests/main_target_cli.rs	write	yes	E1 E2	predicted (<= 60 changed lines)
 rust/worker-core/tests/support/disk_hygiene.rs	read	yes	E1 E2	observed
+src/plangraph/fleet_bus/client.py	read	yes	E3 E4	observed
 src/plangraph/fleet_bus/contract.py	read	yes	E3	observed
+src/plangraph/keeper/store_messages.py	read	yes	E3	observed
+src/plangraph/spawner/host_ready_source.py	read	yes	E3	observed
 src/plangraph/spawner/stall_watchdog.py	read	yes	E3	observed
+tests/test_spawner_overflow_caps.py	read	yes	E3	observed
+tools/check_file_size.py	read	yes	E1	observed
 tools/preflight.py	read	yes	E1 E2	observed

@@ -2,8 +2,9 @@
   "project": "plangraph",
   "cards": {
     "LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS": {
-      "outcome": "Reclaim idle rebuildable caches while unrelated builds run and deliver a reasoned zero-progress alert when a pressured filesystem cannot recover.",
+      "outcome": "Reclaim idle rebuildable caches while unrelated builds run and alert on zero progress below the cleanup floor or partial progress below the alarm floor.",
       "read_set": [
+        ".filesize-baseline",
         "deploy/manifest.toml",
         "deploy/systemd/README.md",
         "deploy/systemd/pg-disk-hygiene.timer",
@@ -14,6 +15,9 @@
         "docs/flow-watchdog.md",
         "docs/host-link.md",
         "docs/stall-watchdog.md",
+        "rust/pg-spawnd/src/host_tools.rs",
+        "rust/pg-spawnd/src/native_writer_session.rs",
+        "rust/pg-spawnd/src/worker_liveness.rs",
         "rust/plangraph-cli/Cargo.toml",
         "rust/worker-core/Cargo.toml",
         "rust/worker-core/src/bin/flow_watchdog_hosts/disks.rs",
@@ -27,9 +31,15 @@
         "rust/worker-core/src/sweep_runs.rs",
         "rust/worker-core/src/unit_refs/mod.rs",
         "rust/worker-core/src/work_disks.rs",
+        "rust/worker-core/tests/disk_thresholds.rs",
         "rust/worker-core/tests/support/disk_hygiene.rs",
+        "src/plangraph/fleet_bus/client.py",
         "src/plangraph/fleet_bus/contract.py",
+        "src/plangraph/keeper/store_messages.py",
+        "src/plangraph/spawner/host_ready_source.py",
         "src/plangraph/spawner/stall_watchdog.py",
+        "tests/test_spawner_overflow_caps.py",
+        "tools/check_file_size.py",
         "tools/preflight.py"
       ],
       "write_set": [
@@ -44,6 +54,7 @@
         "rust/worker-core/src/affected_scratch.rs",
         "rust/worker-core/src/bin/pg-disk-hygiene.rs",
         "rust/worker-core/src/bin/pg-process-cwds.rs",
+        "rust/worker-core/src/bin/pg_disk_hygiene/tests.rs",
         "rust/worker-core/src/cargo_pool.rs",
         "rust/worker-core/src/cargo_pool_trim.rs",
         "rust/worker-core/src/cargo_pool_trim_tests.rs",
@@ -69,7 +80,7 @@
         "process-inventory",
         "alert-delivery"
       ],
-      "estimate_tokens": 42000,
+      "estimate_tokens": 60000,
       "window_class": "128k",
       "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --test flow_watchdog_hosts"
     }
