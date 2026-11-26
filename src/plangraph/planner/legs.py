@@ -231,13 +231,14 @@ REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
+REVIEW_AGY_SONNET = "agy-claude-sonnet-5-5-high"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
 REVIEW_GPT = "gpt-6.2-sol-medium"
 # D-6652 (rule 3.66 (f)): every head needs these two OpenCode seats with file access, each
 # outside every writer family of the diff; both must ACCEPT with FILES READ.  They lead the route.
 REVIEW_REQUIRED = ("opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
 REVIEW_ORDER = (*REVIEW_REQUIRED, REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
-                REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
+                REVIEW_NEON, REVIEW_AGY_SONNET, REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
@@ -254,7 +255,7 @@ REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",
         ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review", "implement", "research"), effort="high",
-        note="D-6652: implement only while the Codex lead is limited; review only for credential diffs or when both required seats are out"),
+        note="D-6652: implement only while the Codex lead is limited; D-6952: review fallback while Antigravity Sonnet is limited or its client is missing"),
 )
 #: D-6652 (operator correction 2026-11-23): the Sonnet writer legs, eligible only while the Codex lead is
 #: limited. ``claude-sonnet-5-5-xhigh`` serves cards marked ``hard``.
@@ -285,14 +286,8 @@ WRITER_ORDER: tuple[str, ...] = (
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
-#: Operator 2026-11-09: Claude 5.5 seats and effort variants, spawnable by an
-#: explicit ``--leg`` pick (or the model override) only.  They are NOT in
-#: DEFAULT_LEGS, except Sol xhigh promoted below (D-5206); Claude is never an
-#: automatic writer; ``SpawnService.route``
-#: appends them as ``explicit_only`` skips, ``plan_spawn`` does not.  Model ids are what ``agy models`` and OmniRoute
-#: /v1/models served that day (agy serves no Sonnet xhigh, cx no -ultra).  Claude
-#: legs are claude-family, so the D-2511 fence keeps them off claude-written work.
-#: A cx effort model needs a per-run opencode entry (``opencode_render``).
+#: Variants available by explicit ``--leg`` or routed through a role's ordered pool.
+#: Claude legs stay subject to the D-2511 writer-family fence and the role's quota gates.
 EXPLICIT_LEGS: tuple[Leg, ...] = (
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
@@ -318,7 +313,7 @@ EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WR
 READINESS_LEGS = tuple(_replace(_sol_default, roles=_plain_sol.roles)
                        if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
 #: D-6550 permits these Claude writers when GPT Sol and Hydrogen are rate-limited.
-CODEX_FALLBACK_WRITERS: tuple[str, ...] = ("agy-claude-sonnet-5-5-high",)
+CODEX_FALLBACK_WRITERS: tuple[str, ...] = (REVIEW_AGY_SONNET,)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
@@ -364,7 +359,8 @@ def leg_active(leg: Leg, now=None) -> bool:
 
 def review_route_pool(base=None) -> tuple[Leg, ...]:
     """Candidate pool of the native review route: the routed legs plus the review fallbacks."""
-    return (*(DEFAULT_LEGS if base is None else base), *REVIEW_FALLBACK_LEGS)
+    agy_sonnet = (leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_AGY_SONNET)
+    return (*(DEFAULT_LEGS if base is None else base), *REVIEW_FALLBACK_LEGS, *agy_sonnet)
 
 
 def research_route_pool(legs) -> tuple[Leg, ...]:

@@ -1,0 +1,1 @@
+Use Antigravity Sonnet high for the Claude-family review seat before the Claude subscription (D-6952). Subscription fallback requires an Antigravity Sonnet quota limit or a missing Antigravity client. Native Codex keeps its writer priority.

@@ -2,13 +2,16 @@
 import pytest
 
 from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_REQUIRED, SONNET_WRITER,
-                                    SONNET_WRITER_HARD, SONNET_WRITERS)
+                                    SONNET_WRITER_HARD, SONNET_WRITERS, explicit_only_skips)
+from plangraph.planner.route_policy import RoutePolicy
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.leg_state import LegStateStore
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 BY_ID = {leg.id: leg for leg in DEFAULT_LEGS}
 REQUIRED_MODELS = {BY_ID[leg_id].model for leg_id in REVIEW_REQUIRED}
+AGY_SONNET = "agy-claude-sonnet-5-5-high"
+SUBSCRIPTION_SONNET = "claude-sonnet-5-5-high"
 
 
 def reader(down=()):
@@ -42,10 +45,10 @@ def test_agy_quota_states_share_the_gemini_pool(tmp_path):
         assert gemini.isdisjoint(leg.id for leg in plan.legs)
 
 
-def test_with_codex_serving_implement_never_returns_a_claude_leg():
+def test_implement_route_unchanged_gpt_first():
     for card in ({}, {"hard": True}, {"risk_tags": ["secrets"]}):
         plan = implement(card)
-        assert plan.first_leg.id == "cx-gpt-6.2-sol-medium", card
+        assert (plan.first_leg.id, plan.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex"), card
         assert not any(leg.claude_family or leg.family == "claude" for leg in plan.legs), card
         assert "codex_limited" not in plan.reasons
     # Hydrogen alone being limited does not admit Claude either.
@@ -105,30 +108,75 @@ def test_review_needs_two_seats_on_a_standard_head_too():
     assert len(plan.review_seats) == 2 and plan.error is None
 
 
+def test_review_route_agy_sonnet_before_subscription():
+    plan = review({"risk_tags": ["auth"]})
+    index = REVIEW_ORDER.index(SUBSCRIPTION_SONNET)
+    assert REVIEW_ORDER[index - 1] == AGY_SONNET
+    assert (plan.first_leg.id, plan.first_leg.harness) == (AGY_SONNET, "agy")
+    assert plan.review_seats[0] == plan.first_leg
+    assert plan.seat_coverage[0] == {"leg": AGY_SONNET, "covers": ["openai"]}
+    assert SUBSCRIPTION_SONNET not in {leg.id for leg in plan.legs}
+    assert AGY_SONNET not in {row["leg"] for row in explicit_only_skips("review")}
+
+
+def test_review_route_subscription_when_agy_sonnet_limited(tmp_path):
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    store.record_provider_response("agy:claude-sonnet-5-5", 429, "quota",
+                                   {"Retry-After": "60"}, "fixture", now=100)
+    card = {"estimate_tokens": 1000, "risk_tags": ["auth"]}
+
+    def route(now):
+        return plan_spawn(card, role="review", writer_families=("gpt",),
+                          leg_reader=store, now=now, catalog_rows=(), installed=lambda _: True)
+
+    limited = route(101)
+    assert (limited.first_leg.id, limited.first_leg.harness) == (SUBSCRIPTION_SONNET, "claude")
+    assert limited.review_seats[0] == limited.first_leg
+    assert limited.seat_coverage[0]["leg"] == SUBSCRIPTION_SONNET
+    blocked = next(row for row in limited.skipped if row["leg"] == AGY_SONNET)
+    assert blocked["evidence"]["status"] == 429
+    assert route(160).first_leg.id == AGY_SONNET
+
+
+def test_review_route_subscription_when_agy_client_missing():
+    plan = plan_spawn({"estimate_tokens": 1000, "risk_tags": ["auth"]}, role="review",
+                      writer_families=("gpt",), leg_reader=reader(), catalog_rows=(),
+                      installed=lambda name: name != "agy")
+    assert (plan.first_leg.id, plan.first_leg.harness) == (SUBSCRIPTION_SONNET, "claude")
+    assert any(row["leg"] == AGY_SONNET and row["reason"] == "client_missing" for row in plan.skipped)
+
+
+def test_review_route_does_not_use_subscription_for_a_paused_agy_client():
+    plan = plan_spawn({"estimate_tokens": 1000, "risk_tags": ["auth"]}, role="review",
+                      writer_families=("gpt",), leg_reader=reader(), catalog_rows=(),
+                      policy=RoutePolicy(paused_harnesses={"agy": ()}), installed=lambda _: True)
+    assert not any(leg.claude_family for leg in plan.legs)
+
+
 def test_a_credential_tagged_diff_gets_the_claude_seat():
     for card in ({"risk_tags": ["secrets"]}, {"risk_tags": ["auth"]}, {"paths": ["src/auth/session.rs"]}):
         plan = review(card)
-        assert plan.first_leg.id == "claude-sonnet-5-5-high", card
-    assert "claude-sonnet-5-5-high" not in [leg.id for leg in review().legs]
+        assert plan.first_leg.id == AGY_SONNET, card
+    assert not any(leg.claude_family for leg in review().legs)
 
 
 def test_a_credential_diff_keeps_both_required_seats_and_adds_sonnet():
     for card in ({"risk_tags": ["secrets"]}, {"paths": ["src/auth/session.rs"]}):
         plan = review(card)
         ids = [leg.id for leg in plan.review_seats]
-        assert ids[0] == "claude-sonnet-5-5-high" and set(REVIEW_REQUIRED) <= set(ids), (card, ids)
+        assert ids[0] == AGY_SONNET and set(REVIEW_REQUIRED) <= set(ids), (card, ids)
         assert len(ids) == 3 and plan.error is None
     # A deepseek-written credential diff fences that required seat; the other stays beside Sonnet.
     plan = review({"risk_tags": ["secrets"]}, writers=("deepseek",))
     ids = [leg.id for leg in plan.review_seats]
-    assert ids[0] == "claude-sonnet-5-5-high" and REVIEW_REQUIRED[1] in ids and REVIEW_REQUIRED[0] not in ids
+    assert ids[0] == AGY_SONNET and REVIEW_REQUIRED[1] in ids and REVIEW_REQUIRED[0] not in ids
     # Without a credential tag the seats stay the two required ones.
     assert [leg.id for leg in review().review_seats] == list(REVIEW_REQUIRED)
 
 
 def test_the_claude_seat_serves_only_when_both_required_seats_are_out():
     assert not any(leg.claude_family for leg in review(down=REQUIRED_MODELS - {BY_ID[REVIEW_REQUIRED[0]].model}).legs)
-    assert any(leg.id == "claude-sonnet-5-5-high" for leg in review(down=REQUIRED_MODELS).legs)
+    assert [leg.id for leg in review(down=REQUIRED_MODELS).legs if leg.claude_family] == [AGY_SONNET]
     # A deepseek-written diff fences one required seat; the other still serves and Claude stays out.
     plan = review(writers=("deepseek",))
     assert plan.legs[0].id == REVIEW_REQUIRED[1]

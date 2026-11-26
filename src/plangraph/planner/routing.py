@@ -413,7 +413,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     refuse_card_sandbox(card)   # before any harness probe or leg resolution
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, REVIEW_REQUIRED, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
+    from .legs import (CLIENT_MISSING, LOW_RISK_ONLY_LEGS, REVIEW_AGY_SONNET, REVIEW_ARGON,
+                       REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_ORDER, REVIEW_REQUIRED, REVIEW_SONNET,
+                       review_route_pool)
     if native_review:
         legs = review_route_pool(legs)
     if role == "research":
@@ -557,13 +559,22 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     argon_quota = "agy:gemini-4-argon"
     gemini_quota = quota_key(argon_quota)
     sonnet_quota = "agy:claude-sonnet-5-5"
+    gemini_legs = [leg_id for leg_id, model in agy_models.items() if quota_key(model) == gemini_quota]
     gemini_status = read_status(gemini_quota)
-    states = {leg.id: gemini_status if quota_key(agy_models.get(leg.id)) == gemini_quota
+    states = {leg.id: gemini_status if leg.id in gemini_legs
                and quota_limited(gemini_status) else _leg_status(leg) for leg in candidates}
     # Legacy readers can report availability on the bare model instead of its quota key.
-    gemini_status = next((states[leg.id] for leg in candidates if quota_key(agy_models.get(leg.id)) == gemini_quota
-                          and quota_limited(states[leg.id])), gemini_status)
-    quotas = {gemini_quota: gemini_status, sonnet_quota: read_status(sonnet_quota)}
+    if not quota_limited(gemini_status):
+        gemini_status = next((states[leg_id] for leg_id in gemini_legs if quota_limited(states[leg_id])), gemini_status)
+        if quota_limited(gemini_status):
+            states.update(dict.fromkeys(gemini_legs, gemini_status))
+    sonnet_status = read_status(sonnet_quota)
+    if native_review and REVIEW_AGY_SONNET in states:
+        if quota_limited(sonnet_status):
+            states[REVIEW_AGY_SONNET] = sonnet_status
+        else:
+            sonnet_status = states[REVIEW_AGY_SONNET]
+    quotas = {gemini_quota: gemini_status, sonnet_quota: sonnet_status}
     probe_times = ({model: stamp for model in quotas.keys() | {argon_quota} | set(agy_models.values())
                     if (stamp := probe_time(model, now=now)) is not None}
                    if probe_time is not None else {})
@@ -588,6 +599,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     required_seats_out = native_review and not any(
         leg.id in REVIEW_REQUIRED and leg.id not in blocked and leg.family not in excluded
         and not policy.skip_reason(leg, role) for leg in candidates)
+    review_sonnet = REVIEW_AGY_SONNET
+    if native_review and (quota_limited(sonnet_status) or any(
+            skip['leg'] == REVIEW_AGY_SONNET and skip['reason'] == CLIENT_MISSING for skip in harness_skipped)):
+        review_sonnet = REVIEW_SONNET
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
@@ -613,9 +628,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if (not reason and (native_implement or native_review) and leg.claude_family
                 and not (native_implement and leg.id in SONNET_WRITERS and codex_limited)
                 and not (native_implement and leg.id not in SONNET_WRITERS and claude_quota_fallback)
-                and not (native_review and leg.id == REVIEW_SONNET and (sensitive_review or required_seats_out))):
-            reason = ("claude_requires_codex_limited" if native_implement and leg.id in SONNET_WRITERS
-                      else "claude_requires_gpt_and_hydrogen_limits")
+                and not (native_review and leg.id == review_sonnet and (sensitive_review or required_seats_out))):
+            if native_review:
+                reason = "review_route_excluded"
+            else:
+                reason = ("claude_requires_codex_limited" if leg.id in SONNET_WRITERS
+                          else "claude_requires_gpt_and_hydrogen_limits")
         if reason == 'limited' and leg.harness == 'agy':
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason == 'limited':
@@ -725,7 +743,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         if sensitive_review:
-            ordered.sort(key=lambda leg: leg.id != REVIEW_SONNET)
+            ordered.sort(key=lambda leg: leg.id != review_sonnet)
         source = "operator-order"
     ordered.sort(key=lambda leg: role in ("orchestrate", "research") and leg.claude_family)  # D-4812/D-297: Claude last
     if role in ('implement', 'review'):

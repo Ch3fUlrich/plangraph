@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
+from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_AGY_SONNET, REVIEW_ORDER, REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
                                     REVIEW_HYDROGEN, REVIEW_NEON, REVIEW_BEAM, REVIEW_REQUIRED, review_route_pool)
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
@@ -175,6 +175,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
         "mimo-v2.6-pro",
         "opencode-deepseek-v4.1-flash-free",
         "agy-gemini-4-neon-medium",
+        "agy-claude-sonnet-5-5-high",
         "claude-sonnet-5-5-high",
         "mimo-v2.6-flash",
         "agy-gemini-4-argon-low",
@@ -183,7 +184,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     # An OpenAI writer gets the operator order without the gpt leg (rule 3.61).
-    assert [leg.id for leg in plan.legs] == [id for id in REVIEW_ORDER if id not in ("gpt-6.2-sol-medium", "claude-sonnet-5-5-high")]
+    assert [leg.id for leg in plan.legs] == [id for id in REVIEW_ORDER if id not in ("gpt-6.2-sol-medium", REVIEW_AGY_SONNET, SONNET)]
     argon = next(leg for leg in plan.legs if leg.id == "agy-gemini-4-argon-low")
     assert argon.model == "gemini-4-argon-low"
     assert argon.family == "gemini" and argon.effort == "low"
@@ -206,7 +207,7 @@ def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
     argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
+    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_AGY_SONNET, SONNET, *argon)],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
@@ -257,7 +258,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
     argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
+    assert ids == [*[id for id in REVIEW_ORDER if id not in (REVIEW_AGY_SONNET, SONNET, *argon)],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids[:3] == [*REVIEW_REQUIRED, REVIEW_HYDROGEN]
@@ -451,7 +452,7 @@ def test_codex_writer_aliases_and_cross_family_review_routes():
     assert all(p.legs == plans[0].legs and p.review_seats == plans[0].review_seats for p in plans)
     ids = {l.id for l in plans[0].legs}
     assert 'omniroute-deepseek-flash' not in ids
-    assert [l.id for l in plans[0].legs] == [id for id in REVIEW_ORDER if id not in ('gpt-6.2-sol-medium', 'claude-sonnet-5-5-high')]
+    assert [l.id for l in plans[0].legs] == [id for id in REVIEW_ORDER if id not in ('gpt-6.2-sol-medium', REVIEW_AGY_SONNET, SONNET)]
     assert any(l.family == 'gemini' for l in plans[0].legs)
     assert any(l.family == 'deepseek' for l in plans[0].legs)
     assert any(l.family == 'glm' for l in plans[0].legs)

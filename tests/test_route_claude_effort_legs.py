@@ -13,7 +13,7 @@ import json
 import pytest
 
 from plangraph.planner.legs import (DEFAULT_LEGS, EXPLICIT_LEGS, EXPLICIT_WRITERS, LEAD_WRITER,
-                                    spawnable_legs)
+                                    REVIEW_AGY_SONNET, spawnable_legs)
 from plangraph.planner.route_policy import RoutePolicy
 from plangraph.planner.routing import SpawnRefused, plan_spawn
 from plangraph.routing_support import leg_state
@@ -90,8 +90,8 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
     assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER} | {'claude-sonnet-5-5-high', 'claude-sonnet-5-5-xhigh'}
 
 
-@pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA,
-                                                    'console-deepseek-flash': 'console-deepseek/deepseek-flash'}),
+@pytest.mark.parametrize('role,listed', [('review', (CLAUDE.keys() | GEMINI.keys() | LUNA.keys()
+                                                    | {'console-deepseek-flash'}) - {REVIEW_AGY_SONNET}),
                                          ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER}
                                                       - {'agy-claude-sonnet-5-5-high'})])   # D-6652 Sonnet writers are routed, not explicit-only
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
@@ -203,7 +203,8 @@ def test_service_route_lists_explicit_legs(tmp_path):
     plan = _svc(tmp_path).route({'estimate_tokens': 20000}, role='review',
                                 writer_families=('gpt',))
     skipped = plan['skipped'] if isinstance(plan, dict) else plan.skipped
-    assert {s['leg'] for s in skipped if s['reason'] == 'explicit_only'} >= set(CLAUDE)
+    explicit = {s['leg'] for s in skipped if s['reason'] == 'explicit_only'}
+    assert explicit & CLAUDE.keys() == CLAUDE.keys() - {REVIEW_AGY_SONNET}
 
 
 def test_agy_command_passes_the_served_model():

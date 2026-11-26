@@ -3,7 +3,7 @@
 mod test_python;
 
 #[test]
-fn agy_limit_admission_distinguishes_account_and_model() {
+fn agy_pool_admission_distinguishes_accounts() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let state = tempfile::tempdir().unwrap();
     let output = test_python::command()
@@ -33,18 +33,17 @@ record_harness_limit('agy/gemini-4-hydrogen-high', '429 Per-model quota reached.
 def served(plan):
     return [leg['id'] for leg in plan['legs']]
 
-# Rule 3.61 puts argon last in the review order: it is served (listed), not first.
 model = route(now)
-assert argon in served(model), model
+assert argon not in served(model), model
 assert model['agy_quota_states']['agy:gemini-4-hydrogen']['evidence']['reset_at'] == now + 7200
 record_harness_limit('agy/gemini-4-hydrogen-high', '429 Individual quota reached. Resets in 3h',
                      'fixture', now=now, account='primary')
 h = 'agy-gemini-4-hydrogen-high'
 account = route(now)
-assert argon in served(account), account
+assert argon not in served(account), account
 assert next(s for s in account['skipped'] if s['leg'] == h)['reason'].startswith('limited_until ')
-assert h in served(route(now, 'secondary'))
-assert h in served(route(now + 10800))
+assert {h, argon} <= set(served(route(now, 'secondary')))
+assert {h, argon} <= set(served(route(now + 10800)))
 
 # Hydrogen was selected in an earlier plan, before the failure was booked.
 try:
