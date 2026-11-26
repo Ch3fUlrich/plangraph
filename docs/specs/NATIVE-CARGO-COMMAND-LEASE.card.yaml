@@ -1,0 +1,51 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "NATIVE-CARGO-COMMAND-LEASE": {
+      "outcome": "Bound shared Cargo lease acquisition and classify a pre-dispatch probe deadline as a local host fault.",
+      "read_set": [
+        "rust/plangraph-cli/src/fast_check_target.rs",
+        "rust/worker-core/src/cargo_cache.rs",
+        "src/plangraph/routing_support/leg_state.py",
+        "src/plangraph/spawner/host_ready_source.py",
+        "src/plangraph/spawner/run_watchdog_limits.py",
+        "src/plangraph/spawner/service.py",
+        "tests/test_leg_probe_w1.py",
+        "tests/test_review_probe_opencode_limit.py",
+        "tests/test_spawn_cancel_outcomes.py"
+      ],
+      "write_set": [
+        "changelog.d/NATIVE-CARGO-COMMAND-LEASE.md",
+        "docs/SPAWNER.md",
+        "rust/pg-spawnd/tests/native_evidence.rs",
+        "src/plangraph/spawner/exit_outcome.py",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/spawner/leg_probe.py",
+        "src/plangraph/spawner/overflow.py",
+        "src/plangraph/spawner/probe_cleanup.py",
+        "src/plangraph/spawner/runner.py",
+        "tests/test_cargo_data_drive_target.py",
+        "tests/test_claude_child_env.py",
+        "tests/test_leg_probe_budget.py",
+        "tests/test_preflight_policy_prebuild.py",
+        "tools/preflight.py"
+      ],
+      "exports": [
+        "cargo_lease",
+        "cargo_child_env",
+        "SpawnerRunner.spawn",
+        "native_spawn",
+        "probe",
+        "probe_many",
+        "before_launch",
+        "refusal_record",
+        "reuse_policy"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_cargo_data_drive_target.py tests/test_leg_probe_budget.py tests/test_preflight_policy_prebuild.py tests/test_claude_child_env.py && cargo test --offline --locked --manifest-path rust/Cargo.toml -p pg-spawnd --test native_evidence merged_review_seats_ignore_native_writers_and_origin_receipts -- --exact",
+      "risk_tags": [],
+      "estimate_tokens": 32000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_leg_probe_w1.py::test_probe_writes_through_the_reader_store tests/test_leg_probe_w1.py::test_timeout_mid_spawn_still_cancels_child tests/test_leg_probe_w1.py::test_probe_many_skips_a_limited_leg tests/test_review_probe_opencode_limit.py tests/test_spawn_cancel_outcomes.py"
+    }
+  }
+}
