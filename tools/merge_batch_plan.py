@@ -14,7 +14,6 @@ import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 
-from affected_tests import OUTCOME_PLUGIN, read_record_file
 from ci_select import REPLAY_ENVIRONMENTS, REPLAY_RUNS, stable_observations
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
                               pr_labels, run, save_state, worktrees)
@@ -701,6 +700,7 @@ def _run_observation(command, cwd, env, evidence, label):
 
 
 def _observe_python(checkout, env, evidence, files, browser, observations, attempts, errors):
+    from affected_tests import OUTCOME_PLUGIN, read_record_file
     options = ["-p", "no:cacheprovider", "--color=no"]
     if browser:
         options += ["-m", "browser"]
