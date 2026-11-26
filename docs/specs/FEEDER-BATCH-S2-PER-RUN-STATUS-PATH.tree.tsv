@@ -1,0 +1,15 @@
+path	disposition	required	row IDs	label
+changelog.d/FEEDER-BATCH-S2-PER-RUN-STATUS-PATH.md	write	yes	E1 E2	observed
+deploy/feeder/policy.toml	write	yes	E1 E2	observed
+deploy/systemd/pg-feeder.service	read	yes	E1 E2	observed
+docs/writer-feeder.md	write	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_commands.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_host.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E1 E2	observed
+rust/pg-spawnd/tests/fixtures/feeder-batch-input.txt	write	yes	E1 E2	observed
+rust/pg-spawnd/tests/fixtures/feeder-overlap-launches.json	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/adapters.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_batches.rs	write	yes	E1 E2	observed
+src/plangraph/review/prompt.py	read	yes	E1 E2	observed
