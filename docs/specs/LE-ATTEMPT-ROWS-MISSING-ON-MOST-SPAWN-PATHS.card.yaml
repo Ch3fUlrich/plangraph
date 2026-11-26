@@ -1,0 +1,24 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-ATTEMPT-ROWS-MISSING-ON-MOST-SPAWN-PATHS": {
+      "outcome": "Verify one complete attempt row per admitted terminal run using the existing lifecycle producer.",
+      "read_set": [
+        "rust/pg-spawnd/src/attempt_coverage.rs",
+        "rust/pg-spawnd/Cargo.toml"
+      ],
+      "write_set": [
+        "rust/pg-spawnd/tests/attempt_outcome.rs",
+        "rust/pg-spawnd/tests/spawn_attempt_delivery/mod.rs",
+        "changelog.d/LE-ATTEMPT-ROWS-MISSING-ON-MOST-SPAWN-PATHS.md"
+      ],
+      "forbid_paths": [
+        "rust/pg-spawnd/tests/native_writer.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test attempt_outcome && cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test hand_run",
+      "risk_tags": [],
+      "estimate_tokens": 14000,
+      "window_class": "128k"
+    }
+  }
+}

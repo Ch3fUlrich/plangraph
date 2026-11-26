@@ -516,3 +516,15 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, n
                 os.kill(int(record.read_text()), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_independent_part_replay_requires_the_fetched_protected_base(env):
+    old_base = env.git("rev-parse", "origin/main")
+    head = env.branch_pr(1, {"tests/test_part.py": "def test_part():\n    assert True\n"})
+    env.seed({"docs/advance.md": "Advance main after the PR was opened.\n"})
+    base = env.git("rev-parse", "origin/main")
+    assert base != old_base
+    result = env.run("build", "--name", "new-base", "--prs", "1")
+    assert result.returncode == 1
+    assert f"PR #1: replay receipt default missing for base {base} and head {head}" in result.stderr
+    assert not env.state_file("new-base").exists()

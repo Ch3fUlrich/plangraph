@@ -135,7 +135,11 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         if !completed {
             return Err("codex ended without a result line".into());
         }
-        thread_id.ok_or_else(|| "codex did not report a session id".into())
+        let actual = thread_id.ok_or("codex did not report a session id")?;
+        if session.is_some_and(|expected| expected != actual) {
+            return Err("codex reported a different session during resume".into());
+        }
+        Ok(actual)
     })();
     if result.is_err() {
         #[cfg(unix)]

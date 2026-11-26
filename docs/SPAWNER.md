@@ -617,6 +617,9 @@ so `tools/hooks/bash_guard.py` denies every non-resume `claude --bg` /
 (only `Sessions` allocates session name counters; `--resume <uuid|hex>` without
 `-n`/`--name` stays allowed).
 
+The Rust fleet launcher's `--respawn` with positional `writer-NNNN` or `--session writer-NNNN` requires a saved record on the selected host for the exact writer name and worktree. Forwarded dry runs check that same destination record.
+The launcher passes the saved ID and name to the harness and retains the ID when a successful resume returns none.
+
 Cancellation waits for an in-flight worktree creation thread before returning;
 new unlaunched attempts are removed, and normal Git branch deletion removes the
 new lane only when it is unoccupied and merged into the fetched origin/main.

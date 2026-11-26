@@ -173,6 +173,10 @@ impl Placement {
                 && matches!(self.local.split('.').next(), Some("coding" | "code")))
     }
 
+    pub fn saved_local(&self, name: &str, selected: &Host) -> bool {
+        name == selected.name() || name == self.local || name == self.hostname
+    }
+
     pub fn policy_host<'a>(&self, host: &'a Host) -> Option<&'a str> {
         (!self.hosts.is_empty()).then(|| host.name())
     }

@@ -1,0 +1,33 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-WRITER-RESPAWN-STARTS-FRESH-SESSION": {
+      "outcome": "Respawn an offline numbered writer with the saved session from the selected destination.",
+      "read_set": [
+        "rust/pg-spawnd/src/session/storage.rs",
+        "rust/pg-spawnd/Cargo.toml"
+      ],
+      "write_set": [
+        "rust/pg-spawnd/src/session/mod.rs",
+        "rust/pg-spawnd/src/session/remote.rs",
+        "rust/pg-spawnd/src/session/request.rs",
+        "rust/pg-spawnd/src/session/placement.rs",
+        "rust/pg-spawnd/src/session/tests.rs",
+        "rust/pg-spawnd/tests/fleet_launch/remote.rs",
+        "rust/pg-spawnd/tests/fleet_launch/resume.rs",
+        "rust/pg-spawnd/tests/fleet_launch/sandbox.rs",
+        "rust/pg-spawnd/tests/fleet_launch_parity.rs",
+        "docs/SPAWNER.md",
+        "docs/native-codex-writer.md",
+        "changelog.d/LE-WRITER-RESPAWN-STARTS-FRESH-SESSION.md"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test fleet_launch_parity",
+      "risk_tags": [
+        "auth"
+      ],
+      "estimate_tokens": 25000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --lib"
+    }
+  }
+}

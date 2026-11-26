@@ -150,18 +150,25 @@ def info(head="a" * 40, ci="green", files=("src/plangraph/planner/provider_stop.
     return {"head": head, "ci": ci, "files": list(files), "truncated": False, "labels": list(labels)}
 
 
-def test_a_green_part_is_ready_and_a_part_without_green_ci_is_not():
-    ok = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=lambda *_: [{"attempt": 1, "conclusion": "success"}])
+@pytest.fixture
+def no_changed_tests(monkeypatch):
+    # These status fixtures do not model a Git tree. The build CLI fixture below does.
+    monkeypatch.setattr(build, "replay_facts", lambda *_: {"replay_inventory": {}})
+    return {1: "b" * 40}
+
+
+def test_a_green_part_is_ready_and_a_part_without_green_ci_is_not(no_changed_tests):
+    ok = build.part_readiness_problems("o/p", {1: info()}, [1], no_changed_tests, attempts_for=lambda *_: [{"attempt": 1, "conclusion": "success"}])
     assert ok == []
-    red = build.part_readiness_problems("o/p", {1: info(ci="red")}, [1], attempts_for=lambda *_: [])
+    red = build.part_readiness_problems("o/p", {1: info(ci="red")}, [1], no_changed_tests, attempts_for=lambda *_: [])
     assert any("seconds-fast checks did not pass" in p for p in red) and all(p.startswith("PR #1: ") for p in red)
 
 
-def test_a_rerun_that_turned_green_needs_the_flake_disposition_label():
+def test_a_rerun_that_turned_green_needs_the_flake_disposition_label(no_changed_tests):
     rows = lambda *_: [{"attempt": 1, "conclusion": "failure"}, {"attempt": 2, "conclusion": "success"}]  # noqa: E731
-    bare = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=rows)
+    bare = build.part_readiness_problems("o/p", {1: info()}, [1], no_changed_tests, attempts_for=rows)
     assert bare and "no flake disposition recorded" in bare[0]
-    labelled = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1], attempts_for=rows)
+    labelled = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1], no_changed_tests, attempts_for=rows)
     assert labelled == []
 
 
@@ -201,25 +208,65 @@ def test_unavailable_open_pr_refuses_entry(env, monkeypatch):
         build.open_pr_heads("pe", "o/p", {})
 
 
-def test_green_rollup_without_tests_run_cannot_admit_a_part(monkeypatch):
+def test_green_rollup_without_tests_run_cannot_admit_a_part(monkeypatch, no_changed_tests):
     monkeypatch.setattr(build, "gh_json", lambda *args: {"workflow_runs": []})
-    assert "PR #1: no completed attempt on this head" in build.part_readiness_problems("o/p", {1: info()}, [1])
+    assert "PR #1: no completed attempt on this head" in build.part_readiness_problems("o/p", {1: info()}, [1], no_changed_tests)
 
 
-def test_green_workflow_without_a_successful_ci_gate_cannot_admit_a_part(monkeypatch):
+def test_green_workflow_without_a_successful_ci_gate_cannot_admit_a_part(monkeypatch, no_changed_tests):
     def api(*args):
         if "/jobs" in args[1]:
             return {"jobs": [{"name": "unrelated", "status": "completed", "conclusion": "success"}]}
         return {"workflow_runs": [{"id": 5, "head_sha": info()["head"], "status": "completed",
                                    "conclusion": "success", "pull_requests": [{"number": 1}]}]}
     monkeypatch.setattr(build, "gh_json", api)
-    assert build.part_readiness_problems("o/p", {1: info()}, [1])
+    assert build.part_readiness_problems("o/p", {1: info()}, [1], no_changed_tests)
 
 
-def test_newer_red_workflow_overrides_older_green_rerun():
+def test_newer_red_workflow_overrides_older_green_rerun(no_changed_tests):
     rows = [{"run_id": 5, "attempt": 1, "conclusion": "failure"},
             {"run_id": 5, "attempt": 2, "conclusion": "success"},
             {"run_id": 6, "attempt": 1, "conclusion": "failure"}]
-    problems = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1],
+    problems = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1], no_changed_tests,
                                              attempts_for=lambda *args: rows)
     assert any("latest completed attempt" in p and "failure" in p for p in problems)
+
+
+def test_stacked_readiness_uses_its_parent_receipt(env, tmp_path):
+    import json
+
+    parent = env.branch_pr(1, {"app/parent.py": "value = 1\n"})
+    child = env.branch_pr(2, {"tests/test_child.py": "def test_child():\n    assert True\n"}, base="lane/p1")
+    protected = env.git("rev-parse", "origin/main")
+    assert protected != parent
+    telemetry = tmp_path / "replay"
+    env.env["PLANGRAPH_TELEMETRY_DIR"] = str(telemetry)
+    env.env["PYTHONPATH"] = str(Path(pytest.__file__).resolve().parents[1])
+    generated = subprocess.run(
+        [sys.executable, str(Path(build.__file__).with_name("ci_select.py")), "entry-set",
+         "--base", parent, "--head", child, "--replay"],
+        cwd=env.repo, env=env.env, capture_output=True, text=True, timeout=60,
+    )
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    path = telemetry / "entry-replay" / child / "default.json"
+    valid = json.loads(path.read_text())
+    assert (valid["base"], valid["head"], valid["inventory"]) == (
+        parent, child, {"python": ["tests/test_child.py"], "rust": []})
+
+    cases = {"base": protected, "inventory": {"python": [], "rust": []}, "environment": "browser"}
+    for key, value in cases.items():
+        path.write_text(json.dumps({**valid, key: value}))
+        result = env.run("build", "--name", f"wrong-{key}", "--prs", "2,1")
+        assert result.returncode == 1, result.stderr
+        assert "PR #2:" in result.stderr and f"replay receipt default {key}" in result.stderr
+        assert not env.state_file(f"wrong-{key}").exists()
+
+    path.write_text(json.dumps({**valid, "flaky": ["tests/test_child.py::test_child"], "ok": False}))
+    flaky = env.run("build", "--name", "flaky", "--prs", "2,1")
+    assert flaky.returncode == 1
+    assert "FLAKY (default): tests/test_child.py::test_child" in flaky.stderr
+
+    path.write_text(json.dumps(valid))
+    result = env.run("build", "--name", "own-base", "--prs", "2,1")
+    assert result.returncode == 0, result.stderr
+    assert [row["pr"] for row in json.loads(env.state_file("own-base").read_text())["merged"]] == [1, 2]

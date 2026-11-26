@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_plan import high_patterns, plan_batches, runner_wide_receipts, set_problems, stack_parents, stack_sorted
+from merge_batch_plan import high_patterns, plan_batches, replay_facts, runner_wide_receipts, set_problems, stack_parents, stack_sorted
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
@@ -356,7 +356,7 @@ def ci_attempts(repo, pr, head):
     return rows
 
 
-def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
+def part_readiness_problems(repo, infos, order, part_bases, attempts_for=ci_attempts):
     """The readiness verdict (tools/ci_select.py ready_problems) of every part, from its own CI on its head.
 
     ci-gate is green only when every selected job passed: the always-on checks, the entry suites and, when the
@@ -372,7 +372,8 @@ def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
         dispositions = [ci_select.attempt_key(a) for a in done[:-1]] if FLAKE_LABEL in pr["labels"] else []
         found = ci_select.ready_problems({
             "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
-            "attempts": attempts, "flake_dispositions": dispositions})
+            "attempts": attempts, "flake_dispositions": dispositions,
+            **replay_facts(Path.cwd(), part_bases[num], pr["head"])})
         problems += [f"PR #{num}: {p}" for p in found]
     return problems
 
@@ -402,11 +403,13 @@ def cmd_build(args):
     base = stack_base(infos, order, parent, default)
     heads = fetch_heads(name, base, order, infos, repo)
     try:
+        base_head = git("rev-parse", f"{REMOTE}/{base}").stdout.strip()
+        part_bases = {num: heads[parent[num]] if num in parent else base_head for num in order}
         forced = rule_problems(args, base, [infos[num] for num in order], heads)
         opens = open_pr_heads(name, repo, infos)
         entry = (part_entry_problems(base, order, heads, parent, opens=opens,
                                      refs={n: infos[n]["ref"] for n in order})
-                 + part_readiness_problems(repo, infos, order))
+                 + part_readiness_problems(repo, infos, order, part_bases))
         if entry and not args.force_set:
             raise MergeBatchError("part entry refused: " + "; ".join(entry) + " (--force-set builds it anyway and logs it)")
         if entry:
@@ -420,17 +423,16 @@ def cmd_build(args):
         raise
     path.parent.mkdir(parents=True, exist_ok=True)
     st = {"version": 1, "name": name, "repo": repo, "base": base, "branch": branch, "worktree": str(path.resolve()),
-          "base_head": git("rev-parse", f"{REMOTE}/{base}").stdout.strip(),
-          "plan": args.plan, "deviations": args.deviations,
+          "base_head": base_head, "plan": args.plan, "deviations": args.deviations,
           "status": "creating", "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(f"{REMOTE}/{base}") + list(args.union))), "pending": order,
+          "skip_conflicts": bool(args.skip_conflicts), "union": list(dict.fromkeys(default_union(base_head) + list(args.union))), "pending": order,
           "current": None, "merging": None, "merged": [], "skipped": [], "forced": forced, "head": None, "pr": None,
           "url": None, "prs": {str(n): {k: infos[n][k] for k in ("title", "head", "ref", "base")} for n in order}}
     for num, run_id in full_ci_runs.items():
         st["prs"][str(num)]["full_ci_run"] = run_id
     save_state(st)  # before the worktree exists: a crash during `worktree add` leaves a state that abort cleans up
     try:
-        git("worktree", "add", "--no-track", "-b", branch, str(path), f"{REMOTE}/{base}")
+        git("worktree", "add", "--no-track", "-b", branch, str(path), base_head)
     except MergeBatchError as exc:
         # the branch or the worktree may exist half made; the state stays (status "creating") so abort finds
         # them and removes only what this build made (it verified the branch and the path absent before)
