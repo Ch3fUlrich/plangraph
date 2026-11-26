@@ -2,6 +2,8 @@ Use Antigravity Sonnet high for the Claude-family review seat before the Claude 
 
 D-6957 places Antigravity Gemini Neon medium on operator cost hold in review routing and CLI seat selection.
 
+The native evidence test checks run annotations without waiting for a Cargo cache lease held by fast checks.
+
 Tests cover reviewer selection, subscription fallback, and writer priority.
 
 - `test_review_route_agy_sonnet_before_subscription`

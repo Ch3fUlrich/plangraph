@@ -61,10 +61,13 @@ with tempfile.TemporaryDirectory() as tmp:
         probe = AsyncMock()
         probe.returncode = 0
         probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{},"sandbox_ok":true}', b'')
+        # Fast checks can hold the cache lease while this test runs. No worker is launched here.
         with patch('plangraph.fleet_snapshot._projection_binary', return_value='/fixture/pg-spawnd'), \
              patch('plangraph.spawner.overflow.lane_admit', side_effect=lambda service, card, prompt: card), \
-             patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
+             patch('plangraph.spawner.host_ready.cargo_lease', return_value=None), \
+             patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]) as spawn:
             record = await native_spawn(service, card, dict(prompt='brief'))
+        assert spawn.await_count == 2
         assert record['item_key'] == 'project:item', record
         assert service.result(record['run_id'])['item_key'] == 'project:item'
     asyncio.run(check_annotation())
@@ -73,7 +76,8 @@ with tempfile.TemporaryDirectory() as tmp:
         .unwrap();
     assert!(
         out.status.success(),
-        "{}",
+        "Python exited with {}: {}",
+        out.status,
         String::from_utf8_lossy(&out.stderr)
     );
 }
