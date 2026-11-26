@@ -12,6 +12,8 @@ use std::{
 
 /// File delivery reports this exit code for a permanent Keeper payload refusal.
 pub const WORKER_ALERT_REFUSED_EXIT: i32 = 3;
+pub const DISK_HYGIENE_ZERO_PROGRESS: &str = "disk-hygiene-zero-progress";
+pub const DISK_HYGIENE_BELOW_ALARM: &str = "disk-hygiene-below-alarm-floor";
 
 pub fn probe_peer(peer: &str) -> io::Result<bool> {
     if peer.is_empty()

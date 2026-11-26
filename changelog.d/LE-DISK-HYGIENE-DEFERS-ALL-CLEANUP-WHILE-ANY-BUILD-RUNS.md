@@ -1,1 +1,1 @@
-- Add a versioned process reader mode for disk hygiene to identify the cache paths in use by individual builds.
+- Add a versioned process reader for disk hygiene and deliver per-device pressure alerts to Keeper routing through the watchdog outbox.
