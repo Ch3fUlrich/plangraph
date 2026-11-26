@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -292,10 +293,14 @@ impl Host for LocalHost {
                 .map_or_else(|| "claude".into(), PathBuf::from)
         });
         let run = |args: &[&str]| {
-            std::process::Command::new(&bin)
+            let mut command = Command::new(&bin);
+            command
                 .args(args)
-                .stdin(std::process::Stdio::null())
-                .output()
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            pg_worker_core::stall::spawn_retrying(&mut command)
+                .and_then(Child::wait_with_output)
                 .ok()
                 .filter(|out| out.status.success())
         };

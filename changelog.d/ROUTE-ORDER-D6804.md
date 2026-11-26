@@ -6,6 +6,8 @@ The native evidence test checks run annotations without waiting for a Cargo cach
 
 The scheduled review probe allows 25 minutes for up to twelve sequential probes. The Claude launch tests cover the Antigravity Sonnet preference and subscription fallback on a host without Antigravity.
 
+The round watchdog retries transient executable-busy errors from `claude stop` and `claude agents --json`.
+
 Tests cover reviewer selection, subscription fallback, and writer priority.
 
 - `test_review_route_agy_sonnet_before_subscription`
