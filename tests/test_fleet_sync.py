@@ -213,6 +213,18 @@ def test_wsl_entry_remote_placement_false_refused(wsl_registry, monkeypatch):
     assert overflow.decide(0, 2048, 6144, rows, True).host is None
 
 
+def test_ps_hosts_regenerated_from_registry(tmp_path, wsl_registry):
+    ps_path = tmp_path / 'ps-hosts.json'
+    ps_path.write_text(json.dumps({'hosts': [dict(
+        name='wsl-worker', target='windows-hop', win_src='C:/old/src')]}))
+    assert genconfig.sync(wsl_registry, write=True, directory=tmp_path) == 0
+    generated = genconfig.generate(wsl_registry)
+    for name, config in generated.items():
+        assert json.loads((tmp_path / name).read_text()) == config
+    assert 'win_src' not in generated[ps_path.name]['hosts'][0]
+    assert genconfig.sync(wsl_registry, directory=tmp_path) == 0
+
+
 def test_fleet_sync_unreachable(capsys, tmp_path):
     from plangraph.fleet_sync.__main__ import main
     path = tmp_path / 'hosts.json'

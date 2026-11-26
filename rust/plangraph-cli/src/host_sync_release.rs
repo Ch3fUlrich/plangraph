@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+mod projections;
+
 pub(super) fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let mut command = Command::new("git");
     pg_worker_core::host_command::isolate_git(&mut command);
@@ -161,6 +163,7 @@ fn install_with(repo: &Path, home: &Path, keeper: bool, planner: Planner) -> io:
                 && verify_installed(&bin, &receipt).is_ok()
         })
     {
+        projections::refresh(&repo, home)?;
         println!("SAME release {tree}");
         return Ok(());
     }
@@ -207,6 +210,7 @@ fn install_with(repo: &Path, home: &Path, keeper: bool, planner: Planner) -> io:
     }
     // No stamp without every marked binary installed, so the next run tries again.
     plan::check_installed(&metadata, &installed, keeper).map_err(io::Error::other)?;
+    projections::refresh(&repo, home)?;
     let receipt = ReleaseReceipt {
         schema: 1,
         build_head,

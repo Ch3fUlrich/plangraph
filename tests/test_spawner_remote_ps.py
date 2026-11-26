@@ -1,5 +1,7 @@
 import base64
 import json
+import os
+import shlex
 import sys
 import subprocess
 from threading import Barrier
@@ -173,6 +175,21 @@ def test_wsl_hop_without_path_unchanged():
     command, body = remote_ps.invocation({'wsl_distro': 'Ubuntu', 'env': {}}, 'true')
     assert command == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
     assert json.loads(body) == {'steps': [{'argv': ['true']}]}
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='fixture executes the Linux guest argv')
+def test_wsl_hop_without_login_path_finds_tools(tmp_path):
+    guest_bin = tmp_path / 'bin'
+    guest_bin.mkdir()
+    (guest_bin / 'pg-spawnd').symlink_to(sys.executable)
+    (tmp_path / 'steps').write_text('import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n')
+    host = {'wsl_distro': 'Ubuntu', 'env': {'PATH': f'{guest_bin}:/usr/bin:/bin'}}
+    command, body = remote_ps.invocation(host, 'true')
+    argv = shlex.split(command)
+    assert argv[:4] == ['wsl.exe', '--distribution', 'Ubuntu', '--exec']
+    output = subprocess.run(argv[4:], cwd=tmp_path, input=body, capture_output=True, check=True,
+                            env={'PATH': '/usr/bin:/bin', 'HOME': os.fspath(tmp_path)})
+    assert json.loads(output.stdout) == {'host_env_defaults': True, 'steps': [{'argv': ['true']}]}
 
 
 @pytest.mark.parametrize('path', ['/bin;&echo', '/bin:%TEMP%', '/bin:$HOME/bin', '/bin\n/bin',

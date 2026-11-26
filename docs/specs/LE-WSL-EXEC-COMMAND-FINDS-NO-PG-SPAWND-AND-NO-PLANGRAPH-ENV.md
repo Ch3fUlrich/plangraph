@@ -4,8 +4,8 @@ Outcome. The remote command for a WSL host finds pg-spawnd and the other host to
 
 - plan_source. keeper card plangraph:LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV (Why/How/done), routing D-6968 and D-6972 (batch P).
 - base commit. 06b885abcc7672087d5557e1120eec21233c4fd4
-- card SHA-256. b51854d4c20ecc45f7fd9865971bbd0c864a9d28ad39d7c6dfb65d7e83e17b68
-- tree SHA-256. 5a35be4f2ea518b380cc3f96667badda9bf6c6ed5ba2e75f6ffca500785dbf49
+- card SHA-256. cb0c0626686f5b4a57638bc66e705df9a876837c5efcd377de4d95060fa7f074
+- tree SHA-256. 6f83214c4aebafd9818b174f66457468185cf5a0dee1f839900e1286f5ebb232
 - evidence_after_deploy. Live: the steps probe of ws-build from the orchestration host returns reachable ok; with the hop fix the /usr/local/bin/pg-spawnd link (operator-approved stopgap, 2026-11-26) is no longer needed.
 
 ## Decisions
@@ -15,8 +15,8 @@ Outcome. The remote command for a WSL host finds pg-spawnd and the other host to
 
 ## Entry points
 
-- E1. src/plangraph/spawner/remote_ps.py::invocation (WSL hop)
-- E2. src/plangraph/fleet_sync/genconfig.py::generate (ps-hosts.json, overflow-hosts.json)
+- E1. src/plangraph/spawner/remote_ps.py::invocation (WSL hop) and Rust step runner, source probe and launch callers
+- E2. src/plangraph/fleet_sync/genconfig.py::generate (ps-hosts.json, overflow-hosts.json), invoked by Rust host-sync release installation
 
 ## Acceptance
 
@@ -27,8 +27,8 @@ Outcome. The remote command for a WSL host finds pg-spawnd and the other host to
 
 ## Verification
 
-- X1. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_without_login_path_finds_tools (new). Asserts B1's observable result.
-- X2. E2, changed. pytest tests/test_fleet_sync.py::test_ps_hosts_regenerated_from_registry (new). Asserts B2's observable result.
+- X1. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_without_login_path_finds_tools and the Rust steps_cli guest-defaults regression. Assert B1's observable result.
+- X2. E2, changed. pytest tests/test_fleet_sync.py::test_ps_hosts_regenerated_from_registry and the Rust host_sync_release integration test. Assert B2's observable result.
 
 Anchors for new tests and files are predicted until checked on the implementation head.
 

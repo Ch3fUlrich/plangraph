@@ -139,6 +139,8 @@ def invocation(host, script, steps=None, **plan):
         return script, None
     path = wsl_path(host)
     env = f'/usr/bin/env PATH={path} ' if path is not None else ''
+    if path is not None:
+        plan['host_env_defaults'] = True
     return f'wsl.exe --distribution {distro} --exec {env}{WSL_RUNNER}', plan_body(script, steps, **plan)
 
 

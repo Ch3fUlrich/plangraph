@@ -232,18 +232,21 @@ entry, current main checkout in `repos.plangraph.root`, role-specific
 reservations, and memory floor. List the repository IDs approved for SSH
 transport in the registry's `public_repos` field. A workstation WSL entry uses
 `os: linux`, the Windows SSH endpoint in `ssh_target`, and the distribution in
-`wsl_distro`. Placement, readiness and status probes reach the guest
-through `wsl.exe --exec pg-spawnd steps` with a JSON step plan on stdin, never a shell; install
-`pg-spawnd` on the guest's `PATH`. Its paths use the distribution's Linux filesystem. Set
+`wsl_distro`. Set `env.PATH` to the guest's Linux tool path, including the
+directory where `pg-spawnd` is installed. Placement, readiness and status
+probes carry that PATH through `wsl.exe --exec` and send a JSON step plan on
+stdin. The guest supplies missing Keeper settings and its host identity from
+its `plangraph.env`. Set
 `placement_fallback: true` on the orchestration host to rank it after ready
 workers. Among ready worker hosts, placement uses free memory above each
 host's floor. The run record includes the selected host and placement reason.
 
 After merge, install the matching spawner and `pg-host-readiness` binaries on
 the three hosts and ensure noninteractive SSH can find them. Configure the
-registry on each host so `self` names that host. Regenerate the status and
-session projections with `python3 -m plangraph.fleet_sync genconfig write`,
-then restart the affected spawner units. Run
+registry on each host so `self` names that host. `host-sync --install-release`
+refreshes both projections during installation. After a registry-only edit,
+run `python3 -m plangraph.fleet_sync genconfig write` to refresh them immediately.
+Restart the affected spawner units. Run
 `python3 -m plangraph.spawner.host_ready --json` on each placement origin.
 Confirm each host reports a trusted checkout, matching main SHA, working
 tools and login, a pre-push test interpreter (the checkout's `.venv`, else
