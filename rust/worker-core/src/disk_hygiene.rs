@@ -1,6 +1,11 @@
 //! Conservative cleanup of registered worktrees under an explicit root.
 #[path = "disk_fast_worktrees.rs"]
 mod fast_worktrees;
+#[cfg(target_os = "linux")]
+#[path = "disk_hygiene_plan.rs"]
+mod plan;
+#[cfg(target_os = "linux")]
+pub use hygiene_report::{Device, HygieneReport, KeptPath};
 
 use crate::host_command;
 use serde::Serialize;
@@ -115,6 +120,120 @@ pub struct Report {
     /// Removals a dry run has named so far: a later pass over the same bytes counts them once.
     #[serde(skip)]
     pub projected: Projection,
+}
+
+#[cfg(target_os = "linux")]
+mod hygiene_report {
+    use super::*;
+    use serde::Serializer;
+    use std::{collections::BTreeMap, fmt::Write as _, os::unix::ffi::OsStrExt};
+
+    #[derive(Debug, Serialize)]
+    pub struct Device {
+        pub device: u64,
+        pub start_free_bytes: Option<u64>,
+        pub end_free_bytes: Option<u64>,
+        pub alarm_floor_bytes: u64,
+        pub cleanup_floor_bytes: u64,
+        pub freed_bytes: u64,
+        pub projected_bytes: u64,
+        #[serde(skip)]
+        pub root: PathBuf,
+        #[serde(skip)]
+        pub(super) observed_at: u64,
+    }
+
+    impl Device {
+        /// Start a ledger for one device and retain the boundary used to sample it.
+        pub fn new(device: u64, root: PathBuf, available: Option<u64>, limits: Thresholds) -> Self {
+            Self {
+                device,
+                start_free_bytes: available,
+                end_free_bytes: None,
+                alarm_floor_bytes: limits.alarm_free_bytes,
+                cleanup_floor_bytes: limits.cleanup_free_bytes,
+                freed_bytes: 0,
+                projected_bytes: 0,
+                root,
+                observed_at: 0,
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct KeptPath {
+        pub device: Option<u64>,
+        #[serde(serialize_with = "serialize_path")]
+        pub path: PathBuf,
+        pub bytes: Option<u64>,
+        pub bytes_is_lower_bound: bool,
+        pub reason: &'static str,
+    }
+
+    pub(super) fn display_path(path: &Path) -> String {
+        let mut display = String::new();
+        for chunk in path.as_os_str().as_bytes().utf8_chunks() {
+            display.push_str(&chunk.valid().replace('%', "%25"));
+            for byte in chunk.invalid() {
+                write!(display, "%{byte:02X}").unwrap();
+            }
+        }
+        display
+    }
+
+    fn serialize_path<S: Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&display_path(path))
+    }
+
+    #[derive(Debug)]
+    pub struct HygieneReport {
+        pub summary: Report,
+        pub devices: BTreeMap<u64, Device>,
+        pub kept: Vec<KeptPath>,
+        pub started_at: Duration,
+        pub time_to_first_removal: Option<f64>,
+        pub first_removal_deadline_missed: bool,
+        pub stage_durations: BTreeMap<&'static str, f64>,
+        pub budget_exhausted: bool,
+    }
+
+    impl HygieneReport {
+        /// Begin a hygiene report with an absolute timestamp and an empty device ledger.
+        pub fn new(started_at: Duration, dry_run: bool) -> Self {
+            Self {
+                summary: Report {
+                    dry_run,
+                    ..Report::default()
+                },
+                devices: BTreeMap::new(),
+                kept: vec![],
+                started_at,
+                time_to_first_removal: None,
+                first_removal_deadline_missed: false,
+                stage_durations: BTreeMap::new(),
+                budget_exhausted: false,
+            }
+        }
+
+        /// Record a device's final sample. A failed sample contributes no available bytes.
+        pub fn sample_end(&mut self, device: u64, free: io::Result<u64>, observed_at: u64) {
+            let row = self
+                .devices
+                .get_mut(&device)
+                .expect("sampled device is in the ledger");
+            row.observed_at = observed_at;
+            row.end_free_bytes = match free {
+                Ok(free) => Some(free),
+                Err(error) => {
+                    self.summary.alarm = true;
+                    self.summary.error.get_or_insert_with(|| {
+                        format!("device {device} final free space unavailable: {error}")
+                    });
+                    None
+                }
+            };
+        }
+    }
 }
 
 /// Paths a dry run would remove, with the bytes credited for each. Nothing is removed, so a

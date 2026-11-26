@@ -379,6 +379,10 @@ fn main() -> std::process::ExitCode {
 }
 
 #[cfg(all(test, target_os = "linux"))]
+#[path = "pg_disk_hygiene/tests.rs"]
+mod pressure_tests;
+
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use std::{fs, time::Duration};

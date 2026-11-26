@@ -60,6 +60,52 @@ fn write_outbox(root: &Path, filename: &str, event: &Value) -> io::Result<()> {
     )
 }
 
+/// Resolve disk hygiene's local host label using the host-link configuration.
+#[cfg(target_os = "linux")]
+pub fn disk_hygiene_alert_host() -> io::Result<String> {
+    if let Some(host) = std::env::var("HOST_LINK_ID")
+        .ok()
+        .filter(|host| crate::fleet_series::valid_host(host))
+    {
+        return Ok(host);
+    }
+    let hostname = fs::read_to_string("/proc/sys/kernel/hostname")?;
+    let hostname = hostname.trim_end_matches('\n');
+    if hostname.is_empty() {
+        return Err(io::Error::other("kernel hostname unavailable"));
+    }
+    Ok(hostname.to_owned())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn enqueue_disk_hygiene(
+    root: &Path,
+    started: Duration,
+    host: &str,
+    mut event: Value,
+) -> io::Result<()> {
+    let rule = event["rule"]
+        .as_str()
+        .ok_or_else(|| io::Error::other("disk hygiene rule unavailable"))?;
+    let device = event["device"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("disk hygiene device unavailable"))?;
+    let nanos = started.as_nanos();
+    let since = started.as_secs();
+    let id = format!(
+        "{:x}",
+        Sha256::digest(format!("disk-hygiene:{rule}:{nanos}:{device}:{host}"))
+    );
+    let filename = format!("{since:020}-{rule}-{id}.json");
+    event["kind"] = json!("alert");
+    event["recipient"] = json!("routing");
+    event["item_key"] = json!("plangraph:LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS");
+    event["host"] = json!(host);
+    event["down_since"] = json!(since);
+    event["event_id"] = json!(id);
+    write_outbox(root, &filename, &event)
+}
+
 pub(crate) fn enqueue_worker_alert(root: &Path, event: &Value) -> io::Result<()> {
     let host = event["host"]
         .as_str()
