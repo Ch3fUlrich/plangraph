@@ -7,6 +7,7 @@ quota_floor_percent = 10.0
 cpu_pressure_max_percent = 50.0
 facts_max_age_seconds = 300
 quota_max_age_seconds = 10800
+quota_facts_max_age_seconds = 900
 estimate_tokens = 100000
 batch_max_items = 6
 

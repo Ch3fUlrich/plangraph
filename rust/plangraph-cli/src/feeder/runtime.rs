@@ -148,7 +148,11 @@ fn decide(
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let mut facts = sources::facts(env, &o.repo, sample, running, home, &policy, local)?;
+    let (mut facts, stale_quota) =
+        match sources::facts(env, &o.repo, sample, running, home, &policy, local)? {
+            sources::FactsOutcome::Ready(facts) => (facts, None),
+            sources::FactsOutcome::QuotaStale { reason, facts } => (facts, Some(reason)),
+        };
     let measurement = if let Some(measured) = measured {
         let free_ram_bytes = facts.free_ram_bytes;
         let budget = capacity::apply(&mut facts, &mut policy, measured.cpu)?;
@@ -162,6 +166,9 @@ fn decide(
     } else {
         None
     };
+    if let Some(reason) = stale_quota {
+        return Ok(json!({"decision":"refused","reason":reason,"capacity":measurement}));
+    }
     if !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item","capacity":measurement}));
     }

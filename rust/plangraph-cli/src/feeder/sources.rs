@@ -255,7 +255,7 @@ pub(super) fn facts(
     home: &Path,
     p: &Policy,
     local: Option<&str>,
-) -> Result<HostFacts, String> {
+) -> Result<FactsOutcome, String> {
     f.free_disk_bytes = disk_limit(
         f.free_disk_bytes,
         work_disks::worktree_disk_with(
@@ -264,16 +264,57 @@ pub(super) fn facts(
             work_disks::mounted_space,
         ),
     )?;
-    let rows = quota_snapshots(env, repo).ok();
-    apply_facts(
+    let now = chrono::Utc::now().timestamp();
+    let center = env
+        .get("PLANGRAPH_QUOTA_FACTS")
+        .filter(|path| !path.is_empty())
+        .map_or_else(
+            || home.join(".config/plangraph/quota-facts.json"),
+            PathBuf::from,
+        );
+    let rows = quota::rows_for_host(
+        quota_snapshots(env, repo).ok(),
+        f.quota_remaining_percent,
+        &center,
+        now,
+        p.quota_facts_max_age_seconds,
+        p.quota_max_age_seconds,
+    );
+    finish_facts(
         f,
         runs,
         p,
-        chrono::Utc::now().timestamp(),
+        now,
         home.join(".config/plangraph/feeder.off").exists(),
         env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local),
-        rows.as_ref(),
+        rows,
     )
+}
+
+/// Quota can refuse admission while the sampled capacity is still usable for diagnostics.
+#[derive(Debug)]
+pub(super) enum FactsOutcome {
+    Ready(HostFacts),
+    QuotaStale { reason: String, facts: HostFacts },
+}
+
+fn finish_facts(
+    sample: HostFacts,
+    runs: &[Run],
+    policy: &Policy,
+    now: i64,
+    off: bool,
+    local: Option<&str>,
+    quota: Result<Option<Value>, quota::StaleQuota>,
+) -> Result<FactsOutcome, String> {
+    match quota {
+        Ok(rows) => apply_facts(sample, runs, policy, now, off, local, rows.as_ref())
+            .map(FactsOutcome::Ready),
+        Err(quota::StaleQuota(reason)) => {
+            let facts = apply_facts(sample, runs, policy, now, off, local, None)?;
+            Ok(FactsOutcome::QuotaStale { reason, facts })
+        }
+    }
 }
 
 fn disk_limit(
@@ -381,6 +422,55 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, id);
         assert!(runs[0].holds("plangraph:ALPHA-1") && runs[0].holds("plangraph:BETA-1"));
+    }
+
+    #[test]
+    fn a_stale_quota_refusal_keeps_the_writers_and_ram_reservation_of_a_fresh_tick() {
+        let sample: HostFacts = serde_json::from_value(json!({
+            "host":"dell","free_ram_bytes":20000000000u64,
+            "free_disk_bytes":20000000000u64,"observed_at":1000
+        }))
+        .unwrap();
+        let runs = [Run {
+            run_id: "run-recent".into(),
+            started: Some(1200.0),
+            host: "dell".into(),
+            status: "running".into(),
+            ..Run::default()
+        }];
+        let ready = Ok(Some(json!([{
+            "provider":"codex:a","windowKey":"week","timestamp":1500,"remainingPct":70
+        }])));
+        let finish = |quota| {
+            finish_facts(
+                sample.clone(),
+                &runs,
+                &Policy::default(),
+                1600,
+                false,
+                None,
+                quota,
+            )
+            .unwrap()
+        };
+        let FactsOutcome::Ready(fresh) = finish(ready) else {
+            panic!("fresh quota")
+        };
+        let FactsOutcome::QuotaStale {
+            reason,
+            facts: stale,
+        } = finish(Err(quota::StaleQuota("quota_stale: fixture".into())))
+        else {
+            panic!("stale quota")
+        };
+        assert_eq!(reason, "quota_stale: fixture");
+        assert_eq!(stale.running_writers, fresh.running_writers);
+        assert_eq!(stale.free_ram_bytes, fresh.free_ram_bytes);
+        assert_eq!(
+            (stale.running_writers, stale.free_ram_bytes),
+            (1, 16_000_000_000)
+        );
+        assert_eq!(fresh.quota_remaining_percent, Some(70.0));
     }
 
     #[test]

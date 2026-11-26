@@ -200,9 +200,15 @@ existing reader's formats. Reader observations older than `quota_max_age_seconds
 (default 10800 seconds, matching the store's hourly cadence) or from the future
 make that account unavailable. A malformed window disables its account, while
 independent healthy accounts remain usable. Exhausted accounts contribute zero.
-A successful reader returning no valid fresh codex account refuses; an unavailable reader uses
-the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
-The fallback quota has the same freshness bound as the other supplied facts.
+Hosts with their own Codex observations keep the local reader. A live host without
+those observations reads the center's `quota-facts.json` in its plangraph config
+directory. Set `PLANGRAPH_QUOTA_FACTS` to use another path. The file holds an
+`observed_at` Unix timestamp in seconds and a `rows` array in the quota reader's
+format. The worker applies its own `quota_facts_max_age_seconds` (default 900) to
+the envelope and `quota_max_age_seconds` to the observations. A missing, unreadable,
+expired or unusable snapshot refuses as `quota_stale` with both ages when available
+and retains the live capacity line. Explicit facts keep their supplied quota
+fallback when the local reader is unavailable. Invalid or exhausted quota refuses.
 
 Policy `batch_max_items` defaults to 6 in both the shipped policy loaded by the feeder service
 and the built-in policy. The range is 1..=50. Set it to 1 for single-item runs. A value outside
