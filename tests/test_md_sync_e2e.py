@@ -19,6 +19,8 @@ import md_sync  # noqa: E402
 from keeper_util import World, defn  # noqa: E402
 from plangraph.keeper import api, config  # noqa: E402
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+from plangraph.keeper.evidence_git import GitAdapter, LegacyCommitVerifier  # noqa: E402
+from test_keeper_merge_close_auto import Repo, env, git  # noqa: E402,F401 - env fixture
 
 FIX = ROOT / "tests" / "fixtures" / "md_sync"
 
@@ -403,3 +405,96 @@ def test_a_close_the_keeper_gate_would_refuse_is_held_and_the_rest_of_the_import
     assert live.ops == [] and "held" in live.skipped[0][1], "a no-deploy line never excuses a Live clause"
     ok = planned({"note": "no deploy needed: decision only"})
     assert [op["op"] for op in ok.ops] == ["add_evidence", "close_on_decision"] and ok.skipped == []
+
+
+def test_snapshot_deploy_proof_closes_answers_and_both_d_row_paths(world, srv, token, site, tmp_path):
+    from keeper_util import FakeVerifier
+
+    router = world.p("router")
+    world.store.verifiers["deploy"] = FakeVerifier()
+    world.store.verifiers["commit"] = LegacyCommitVerifier()
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = Repo(repo_path)
+    head = repo.land("merged", "fixture", 42)
+    repos = {"routing": {"path": str(repo_path), "ref": "main"}}
+    world.store.ctx.git = GitAdapter(repos)
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps(dict(json.loads(cfg.read_text()), repos=repos)), encoding="utf-8")
+    world.clock.t = int(git(repo_path, "show", "-s", "--format=%ct", "main")) + 60
+
+    ids = ("Q-ANS", "DEC", "CODE", "Q-EPOCH", "Q-UNVERIFIED", "STALE")
+    world.store.create_items(router, [
+        defn(ident, project="routing", evidence_kinds=("decision", "commit") if ident in ("CODE", "STALE")
+             else ("decision",), review_tier="none", done_criteria="Live: observe it running.")
+        for ident in ids
+    ] + [defn("LIVE-GOAL", ids, project="routing", kind="goal")])
+    for ident in ("Q-ANS", "DEC", "CODE", "Q-UNVERIFIED", "STALE"):
+        world.store.set_legacy_state(router, f"routing:{ident}", "in_review")
+
+    proof = {"host": "fixture", "unit": "test.service", "is_active": "active"}
+    for ident in ("Q-ANS", "DEC", "CODE", "Q-EPOCH"):
+        assert world.store.add_evidence_router(router, f"routing:{ident}", "deploy", proof)["verified"]
+    world.store.verifiers["deploy"].ok = False
+    assert not world.store.add_evidence_router(router, "routing:Q-UNVERIFIED", "deploy", proof)["verified"]
+    world.store.verifiers["deploy"].ok = True
+    world.clock.t -= 120
+    assert world.store.add_evidence_router(router, "routing:STALE", "deploy", proof)["verified"]
+    world.clock.advance(121)
+
+    (site / "QUESTIONS.md").write_text("", encoding="utf-8")
+    (site / "ANSWERS.md").write_text("## 2026-10-01\n"
+                                     "- Q-ANS answer: done (D-10)\n"
+                                     "- Q-EPOCH answer: done (D-10)\n"
+                                     "- Q-UNVERIFIED answer: done (D-10)\n", encoding="utf-8")
+    with (site / "decisions-log.md").open("a", encoding="utf-8") as log:
+        log.write("| D-20 | routing | Closes: routing:DEC | router | fixture |\n"
+                  f"| D-21 | routing | Closes: routing:CODE@{head} | router | fixture |\n"
+                  f"| D-22 | routing | Closes: routing:STALE@{head} | router | fixture |\n")
+
+    rc, out, err = sync(site, srv, token, "--apply", "--keeper-config", str(cfg))
+    assert rc == 0, out + err
+    assert {ident for ident in ids if state(world, f"routing:{ident}") == "done"} == {"Q-ANS", "DEC", "CODE"}, out
+    assert "held: live_evidence_missing for routing:Q-EPOCH" in out
+    assert "held: live_evidence_missing for routing:Q-UNVERIFIED" in out
+    assert "refused routing:STALE: skipped, re-applying the rest" in out
+    assert state(world, "routing:Q-EPOCH") == "in_review"
+    assert world.store._item("routing:Q-EPOCH")["epoch"] != world.store._evidence("routing:Q-EPOCH")[0]["epoch"]
+    rc, out, err = sync(site, srv, token, "--dry-run", "--keeper-config", str(cfg))
+    assert rc == 0 and "held: live_evidence_missing for routing:Q-EPOCH" in out, out + err
+
+
+def test_track_commit_evidence_uses_its_configured_landing_ref(env, monkeypatch, tmp_path):
+    from test_keeper_deploy_gate_paths import _deploy_row, _live_item, _refused_verdict
+
+    key = "demo:B"
+    _live_item(env, key)
+    track = tmp_path / "track"
+    track.mkdir()
+    for variable in ("GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"):
+        monkeypatch.setenv(variable, "@1 +0000")
+    Repo(track)
+    git(track, "checkout", "-q", "-b", "topic")
+    for variable in ("GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"):
+        monkeypatch.setenv(variable, "@100 +0000")
+    git(track, "commit", "-q", "--allow-empty", "-m", "work on topic")
+    topic = git(track, "rev-parse", "HEAD")
+    git(track, "checkout", "-q", "-b", "release", "main")
+    for variable in ("GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"):
+        monkeypatch.setenv(variable, "@300 +0000")
+    git(track, "merge", "-q", "--no-ff", "-m", "Merge pull request #99 from fixture/topic", "topic")
+
+    adapter = GitAdapter({"demo": str(env.repo.root),
+                          "demo/T0": {"path": str(track), "ref": "release"}},
+                         merge_scan=["demo"])
+    env.store.ctx["git"] = adapter
+    env.store.verifiers["commit"] = LegacyCommitVerifier()
+    assert env.store.add_evidence_router(env.p("router"), key, "commit",
+                                         {"sha": topic, "repo": "demo/T0"})["verified"]
+    item = env.store._item(key)
+    assert env.store._sha_landed_at("demo/T0", topic, "main") == 100
+    _deploy_row(env, key, "test.service", 250, is_active="active")
+    _refused_verdict(env, key)
+    assert env.store._landing_floor(env.store._pin_close(item)) == 300
+    _deploy_row(env, key, "test.service", 300, is_active="active")
+    assert env.store.verdict(env.p("reviewer"), key, True, "passed")["state"] == "done"
