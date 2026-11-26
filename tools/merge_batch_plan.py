@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 
+from ci_select import REPLAY_ENVIRONMENTS, REPLAY_RUNS, stable_observations
 from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, gh_json, git,
                               pr_labels, run, save_state, worktrees)
+from preflight import run_test_process
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -552,3 +557,244 @@ def cleanup_landed(st, landed, *, strict=False, writers=None):
         if strict:
             raise
         print(f"cleanup sweep failed: {exc}", file=sys.stderr)
+
+_PG_TESTS = {
+    "test_keeper_pg_unit.py", "test_keeper_pg_parity.py", "test_keeper_pg_copy.py",
+    "test_projector_ddl.py", "test_worker_claim.py", "test_claim_parity_dispatch.py",
+}
+_RUST_TEST = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<attrs>(?:#\[[^\n]+\][ \t]*\n(?P=indent))+)"
+    r"(?:async\s+)?fn\s+(?P<name>\w+)\b[^;{]*\{(?:[^\n]*\}[^\n]*|[^\n]*\n"
+    r"(?:[^\n]*\n)*?(?P=indent)\})", re.M,
+)
+
+
+def _diff_entries(root, fork, head):
+    """NUL-separated Git names, keeping rename source and destination together."""
+    fields = iter(git("diff", "-M", "--name-status", "-z", fork, head, cwd=root).stdout.split("\0"))
+    for status in filter(None, fields):
+        source = next(fields)
+        yield status[0], source, next(fields) if status.startswith(("C", "R")) else source
+
+
+def _rust_changed_tests(root, fork, head, kind, source, path):
+    text = git("show", f"{head}:{path}", cwd=root).stdout
+    if kind == "A" or not source.endswith(".rs"):
+        touched = set(range(1, text.count("\n") + 2))
+    else:
+        patch = git("diff", "--no-color", "--no-ext-diff", "-U0", f"{fork}:{source}", f"{head}:{path}", cwd=root).stdout
+        touched = set()
+        for line, size in re.findall(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", patch, re.M):
+            start, count = int(line), int(size or 1)
+            touched.update(range(start if count else max(1, start), start + (count or 2)))
+    for test in _RUST_TEST.finditer(text):
+        attrs = test["attrs"]
+        if not re.search(r"(?m)^ *#\[(?:\w+::)?test(?:\(|\])", attrs):
+            continue
+        start = text.count("\n", 0, test.start()) + 1
+        end = text.count("\n", 0, test.end()) + 1
+        if not any(line in touched for line in range(start, end + 1)):
+            continue
+        # Leading inner cfgs apply to all tests in a file; outer cfgs apply to the function.
+        inner = re.findall(r"^#!\[cfg\((.+)\)\]", text, re.M)
+        platform = set(re.findall(r"#\[cfg\((.+)\)\]", attrs) + inner)
+        windows_only = any(re.fullmatch(r'windows|not\(\s*unix\s*\)|target_(?:os|family)\s*=\s*"windows"', cfg)
+                           for cfg in platform)
+        unix_only = any(re.fullmatch(r'unix|not\(\s*windows\s*\)|target_family\s*=\s*"unix"|target_os\s*=\s*"(?:linux|macos)"', cfg)
+                        for cfg in platform)
+        yield test["name"], not windows_only, not unix_only
+
+
+def _postgres_test(root, head, path):
+    rel = Path(path).relative_to("tests")
+    if rel.parts[0] == "contract":
+        return True
+    if len(rel.parts) > 1:
+        return False
+    if rel.name in _PG_TESTS:
+        return True
+    text = git("show", f"{head}:{path}", cwd=root).stdout
+    return "sqlite3" not in text and bool(re.search(r"keeper_util|door_util|plangraph\.keeper|from plangraph import", text))
+
+
+def _rust_replay_inventory(root, fork, head, paths, inventories):
+    manifests = {name for name in git("ls-tree", "-r", "--name-only", "-z", head, "--", "rust", cwd=root).stdout.split("\0")
+                 if name.endswith("/Cargo.toml")}
+    packages, windows_packages = {}, None
+    for kind, source, path in paths:
+        manifest = next((f"{parent.as_posix()}/Cargo.toml" for parent in Path(path).parents
+                         if f"{parent.as_posix()}/Cargo.toml" in manifests), None)
+        if not manifest:
+            continue
+        for name, on_linux, on_windows in _rust_changed_tests(root, fork, head, kind, source, path):
+            if on_linux:
+                inventories["default"]["rust"].append([manifest, path, name])
+            if not on_windows:
+                continue
+            if windows_packages is None:
+                command_list = windows_commands(git("show", f"{head}:.github/workflows/tests.yml", cwd=root).stdout)
+                windows_packages = {cmd[i + 1] for cmd in command_list for i, arg in enumerate(cmd[:-1])
+                                    if arg in ("-p", "--package")}
+            if manifest not in packages:
+                packages[manifest] = tomllib.loads(git("show", f"{head}:{manifest}", cwd=root).stdout).get("package", {}).get("name")
+            if packages[manifest] in windows_packages:
+                inventories["windows"]["rust"].append([manifest, path, name])
+
+
+def replay_inventory(root, base, head):
+    """The applicable changed-test inventory for each CI environment, at the two commits."""
+    fork = git("merge-base", base, head, cwd=root).stdout.strip()
+    inventories = {env: {"python": [], "rust": []} for env in REPLAY_ENVIRONMENTS}
+    rust_paths = []
+    for kind, source, path in _diff_entries(root, fork, head):
+        if kind not in ("A", "C", "M", "R"):
+            continue
+        if path.startswith("tests/") and re.fullmatch(r"test_.*\.py", Path(path).name):
+            environment = "browser" if path.startswith("tests/browser/") else "default"
+            inventories[environment]["python"].append(path)
+            if environment == "default" and _postgres_test(root, head, path):
+                inventories["postgres"]["python"].append(path)
+        elif path.startswith("rust/") and path.endswith(".rs"):
+            rust_paths.append((kind, source, path))
+    if rust_paths:
+        _rust_replay_inventory(root, fork, head, rust_paths, inventories)
+    return {env: {lang: sorted(tests) for lang, tests in selected.items()}
+            for env, selected in inventories.items() if any(selected.values())}
+
+
+def _replay_dir(head):
+    telemetry = Path(os.environ.get("PLANGRAPH_TELEMETRY_DIR") or Path.home() / ".local/share/plangraph/telemetry")
+    return telemetry / "entry-replay" / head
+
+
+def _read_replay(head, environment):
+    try:
+        return json.loads((_replay_dir(head) / f"{environment}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def replay_facts(root, base, head):
+    """Read receipts for the part's exact own-base and head inventory."""
+    inventory = replay_inventory(root, base, head)
+    return {"replay_base": base, "replay_head": head, "replay_inventory": inventory,
+            "replay_receipts": {env: _read_replay(head, env) for env in inventory}}
+
+
+_PYTEST_STATUS = {"PASSED": "pass", "FAILED": "fail", "ERROR": "fail",
+                  "SKIPPED": "skip", "XFAIL": "skip", "XPASS": "fail"}
+_RUST_STATUS = {"ok": "pass", "FAILED": "fail", "ignored": "skip"}
+
+
+def _run_observation(command, cwd, env, evidence, label):
+    """Write both streams even if a subprocess cannot start or hits its deadline."""
+    out, err = (evidence / f"{label}.{stream}.log" for stream in ("stdout", "stderr"))
+    with out.open("wb") as stdout, err.open("wb") as stderr:
+        try:
+            result = run_test_process(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=1800)
+            rc = result.returncode
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            stderr.write(f"\n{exc}\n".encode("utf-8", errors="replace"))
+            rc = None
+    return out.read_text(encoding="utf-8", errors="replace"), {
+        "command": command, "label": label, "returncode": rc,
+        "stdout": out.relative_to(evidence.parent).as_posix(), "stderr": err.relative_to(evidence.parent).as_posix()}
+
+
+
+def _observe_python(checkout, env, evidence, files, browser, observations, attempts, errors):
+    command = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "--color=no"]
+    if browser:
+        command += ["-m", "browser"]
+    output, collection = _run_observation([*command, "--collect-only", "-q", *files], checkout, env,
+                                          evidence, "python-collect")
+    prefixes = tuple(f"{path}::" for path in files)
+    names = {line.strip() for line in output.splitlines() if line.startswith(prefixes)}
+    if collection["returncode"] != 0 or not all(any(name.startswith(p) for name in names) for p in prefixes):
+        errors.append(f"could not collect all changed Python test files (logs {collection['stdout']} and {collection['stderr']})")
+        return collection
+    observations.update((name, []) for name in sorted(names))
+    for n in range(1, REPLAY_RUNS + 1):
+        output, row = _run_observation([*command, "-v", "-rA", "--capture=tee-sys", *files], checkout, env,
+                                       evidence, f"python-{n}")
+        attempts.append(row)
+        states = {}
+        for status, description in re.findall(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (.+)$", output, re.M):
+            # The diagnostic separator can occur inside a parameter id. Prefer the longest collected match.
+            candidates = (name for name in names if description == name or description.startswith(f"{name} "))
+            name = max(candidates, key=len, default=None)
+            if name and states.get(name) != "fail":
+                states[name] = _PYTEST_STATUS[status]
+        for name in names:
+            observations[name].append(states.get(name, "missing"))
+        if row["returncode"] not in (0, 1) or (row["returncode"] == 1 and "fail" not in states.values()):
+            errors.append(f"Python replay {n} exited {row['returncode']} (logs {row['stdout']} and {row['stderr']})")
+    return collection
+
+
+def _observe_rust(checkout, env, evidence, tests, observations, attempts, errors):
+    for test_index, (manifest, path, name) in enumerate(tests):
+        states = observations[f"{path}::{name}"] = []
+        relative = Path(path).relative_to(Path(manifest).parent)
+        target = ["--test", relative.stem] if relative.parent == Path("tests") else []
+        for n in range(1, REPLAY_RUNS + 1):
+            command = ["cargo", "test", "--color", "never", "--manifest-path", manifest, *target, name, "--", "--test-threads=1"]
+            output, row = _run_observation(command, checkout, env, evidence, f"rust-{test_index}-{n}")
+            attempts.append(row)
+            matches = re.findall(rf"^test (?:\S+::)?{re.escape(name)} \.\.\. (ok|FAILED|ignored)(?:,.*)?$", output, re.M)
+            states.append(_RUST_STATUS[matches[0]] if len(matches) == 1 else "missing")
+            if row["returncode"] not in (0, 101) or (row["returncode"] == 101 and states[-1] != "fail"):
+                errors.append(f"Rust replay {name} #{n} exited {row['returncode']} (logs {row['stdout']} and {row['stderr']})")
+
+
+def entry_replay(root, base, head, environment):
+    """Replay the selected environment from the verified head and publish an atomic receipt."""
+    if environment == "windows" and sys.platform != "win32":
+        raise MergeBatchError("the windows replay needs a native Windows host")
+    if environment != "windows" and not sys.platform.startswith("linux"):
+        raise MergeBatchError(f"the {environment} replay needs a Linux host")
+    if environment == "postgres" and not os.environ.get("PG_DSN"):
+        raise MergeBatchError("the postgres replay needs PG_DSN for its isolated test database server")
+    base, head = (git("rev-parse", "--verify", f"{ref}^{{commit}}", cwd=root).stdout.strip() for ref in (base, head))
+    selected = replay_inventory(root, base, head).get(environment)
+    if not selected:
+        return None
+    destination = _replay_dir(head).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    evidence = Path(tempfile.mkdtemp(prefix=f"{environment}-", dir=destination))
+    start, started = time.monotonic(), time.time()
+    attempts, observations, errors, collection = [], {}, [], None
+    with tempfile.TemporaryDirectory(prefix="pg-entry-replay-") as scratch:
+        checkout = Path(scratch) / "head"
+        git("worktree", "add", "--detach", str(checkout), head, cwd=root)
+        try:
+            if git("rev-parse", "HEAD", cwd=checkout).stdout.strip() != head:
+                raise MergeBatchError(f"the replay checkout is not {head}")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("PYTEST_ADDOPTS", "PYTEST_SHARD", "PG_KEEPER_BACKEND", "PG_DSN")
+                   and not k.startswith("PYTEST_QUARANTINE_")}
+            env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(checkout / "src"), env.get("PYTHONPATH"))))
+            if environment == "postgres":
+                env.update(PG_KEEPER_BACKEND="postgres", PG_DSN=os.environ["PG_DSN"])
+            if selected["python"]:
+                collection = _observe_python(checkout, env, evidence, selected["python"], environment == "browser",
+                                             observations, attempts, errors)
+            _observe_rust(checkout, env, evidence, selected["rust"], observations, attempts, errors)
+            if git("status", "--porcelain", "--untracked-files=no", cwd=checkout).stdout:
+                errors.append("tracked files changed during replay")
+        finally:
+            git("worktree", "remove", "--force", str(checkout), cwd=root)
+    flaky = sorted(name for name, states in observations.items() if len(set(states) - {"missing"}) > 1)
+    unsuccessful = sorted(name for name, states in observations.items() if not stable_observations(states))
+    if unsuccessful:
+        errors.append("unsuccessful observations: " + ", ".join(unsuccessful))
+    result = {"base": base, "head": head, "environment": environment, "inventory": selected,
+              "runs": REPLAY_RUNS, "ok": not errors, "observations": observations, "flaky": flaky,
+              "errors": errors, "collection": collection, "attempts": attempts, "started": started,
+              "elapsed_seconds": round(time.monotonic() - start, 3), "record": f"{evidence.name}/receipt.json"}
+    raw = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    (evidence / "receipt.json").write_text(raw, encoding="utf-8")
+    index = evidence / "latest.tmp"
+    index.write_text(raw, encoding="utf-8")
+    index.replace(destination / f"{environment}.json")
+    return result | {"record": str(evidence / "receipt.json")}

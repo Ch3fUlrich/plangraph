@@ -396,7 +396,7 @@ def _load_tool(name: str):
     """Import a sibling tool lazily: the CI select job runs without the package installed."""
     import importlib.util
 
-    sys.path.insert(0, str(TOOLS_DIR.parent / "src"))
+    sys.path[:0] = [str(TOOLS_DIR), str(TOOLS_DIR.parent / "src")]
     spec = importlib.util.spec_from_file_location(f"ci_select_{name}", TOOLS_DIR / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -467,6 +467,45 @@ def attempt_problems(attempts: list[dict], flake_dispositions=()) -> list[str]:
             for a in done[:-1] if a["conclusion"] != "success" and attempt_key(a) not in flakes]
 
 
+REPLAY_RUNS = 5
+REPLAY_ENVIRONMENTS = ("default", "postgres", "browser", "windows")
+
+
+def stable_observations(states):
+    return states in (["pass"] * REPLAY_RUNS, ["skip"] * REPLAY_RUNS)
+
+
+def _replay_problems(facts: dict) -> list[str]:
+    problems = []
+    for environment, inventory in facts.get("replay_inventory", {}).items():
+        label = f"replay receipt {environment}"
+        base, head = facts["replay_base"], facts["replay_head"]
+        receipt = facts["replay_receipts"].get(environment)
+        if not isinstance(receipt, dict):
+            problems.append(f"{label} missing for base {base} and head {head}")
+            continue
+        expected = {"base": base, "head": head, "environment": environment, "inventory": inventory, "runs": REPLAY_RUNS}
+        for field, value in expected.items():
+            if receipt.get(field) != value:
+                problems.append(f"{label} {field} differs (expected {value!r}, got {receipt.get(field)!r})")
+        observed = receipt.get("observations")
+        rust = {f"{path}::{name}" for _, path, name in inventory["rust"]}
+        python = {f"{path}::" for path in inventory["python"]}
+        if (not isinstance(observed, dict) or not rust <= observed.keys()
+                or not all(any(name.startswith(path) for name in observed) for path in python)
+                or not all((name in rust or any(name.startswith(path) for path in python))
+                           and stable_observations(states) for name, states in observed.items())):
+            problems.append(f"{label} needs five stable observations for each changed test")
+        record = receipt.get("record")
+        evidence = f" (evidence {record})" if record else ""
+        if receipt.get("ok") is not True:
+            problems.append(f"{label} did not pass{evidence}")
+        flaky = receipt.get("flaky", [])
+        if isinstance(flaky, list):
+            problems += [f"FLAKY ({environment}): {test}{evidence}" for test in flaky]
+    return problems
+
+
 def ready_problems(facts: dict) -> list[str]:
     """What still stands between a part and READY on its exact head (the run facts are gathered by the caller)."""
     problems = []
@@ -479,7 +518,7 @@ def ready_problems(facts: dict) -> list[str]:
             problems.append("native Windows entry run missing")
         elif not facts["windows"]:
             problems.append("native Windows entry run failed")
-    return problems + attempt_problems(facts.get("attempts", []), facts.get("flake_dispositions", []))
+    return problems + attempt_problems(facts.get("attempts", []), facts.get("flake_dispositions", [])) + _replay_problems(facts)
 
 
 def _seconds(start: str, end: str) -> int:
@@ -520,6 +559,8 @@ def main(argv: list[str] | None = None) -> int:
     entry_parser.add_argument("--head", required=True)
     entry_parser.add_argument("--root", default=".")
     entry_parser.add_argument("--run", action="store_true")
+    entry_parser.add_argument("--replay", action="store_true", help="record five changed-test observations")
+    entry_parser.add_argument("--environment", choices=REPLAY_ENVIRONMENTS, default="default")
     cost_parser = subparsers.add_parser("part-cost", help="append the CI cost of a part head to telemetry")
     cost_parser.add_argument("--jobs-json", required=True, help="file with the jobs of the run (GitHub jobs API)")
     cost_parser.add_argument("--pr", type=int, required=True)
@@ -613,12 +654,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "entry-set":
         root = Path(args.root).resolve()
+        replay_failed = False
+        if args.replay:
+            batch_plan = _load_tool("merge_batch_plan")
+            try:
+                receipt = batch_plan.entry_replay(root, args.base, args.head, args.environment)
+            except (batch_plan.MergeBatchError, OSError, ValueError) as exc:
+                print(f"entry-set replay: {exc}", file=sys.stderr)
+                return 1
+            if receipt is None:
+                print(f"entry-set replay: no changed tests apply in {args.environment}")
+            else:
+                print(f"entry-set replay: {receipt['record']}", flush=True)
+                for test in receipt["flaky"]:
+                    print(f"FLAKY ({args.environment}): {test}", file=sys.stderr)
+                for error in receipt["errors"]:
+                    print(f"entry-set replay: {error}", file=sys.stderr)
+                replay_failed = not receipt["ok"]
+            if not args.run:
+                return int(replay_failed)
         plan = entry_set(root, args.base, args.head)
         print(json.dumps(plan, sort_keys=True), flush=True)
         # Import the part's source before any installed or inherited checkout.
         python_path = [str(root / "src"), os.environ.get("PYTHONPATH")]
         python_env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, python_path)))
-        failed = 0
+        failed = int(replay_failed)
         for command in entry_commands(plan, args.base, args.head, root) if args.run else []:
             is_cargo = command[0] == "cargo"
             cwd = root / "rust" if is_cargo else root
