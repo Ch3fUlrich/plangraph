@@ -178,7 +178,7 @@ _use_tmpfs_tempdir()
 
 @pytest.fixture(autouse=True)
 def hermetic_writer_env(monkeypatch):
-    """Writer identity/config must not override a test's own setup."""
+    """Keep the writer's identity, config and lane refs out of test setup."""
     for name in (
         "GIT_AUTHOR_NAME",
         "GIT_AUTHOR_EMAIL",
@@ -187,23 +187,12 @@ def hermetic_writer_env(monkeypatch):
         "OPENCODE_DISABLE_PROJECT_CONFIG",
         "OPENCODE_DISABLE_CLAUDE_CODE",
         "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+        "FILESIZE_REQUIRE_BASE",
+        "NEWCODE_BASE",
+        "CHANGELOG_BASE",
+        "CLASS_SEARCH_BASE",
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def isolated_policy_base_env(request, monkeypatch):
-    """Keep lane base refs out of policy tests with their own Git histories."""
-    if request.path.stem in {
-        "test_check_changelog_docs",
-        "test_check_changelog_docs_range",
-        "test_check_file_size",
-        "test_check_new_code_lang",
-        "test_check_push_gate",
-        "test_preflight_policy_prebuild",
-    }:
-        for name in ("FILESIZE_REQUIRE_BASE", "NEWCODE_BASE", "CHANGELOG_BASE", "CLASS_SEARCH_BASE"):
-            monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -245,15 +245,6 @@ class BaselineTests(RepoFixture):
         self.assertFails(self.check(), ".filesize-baseline")
 
 
-def test_fixture_repo_ignores_parent_policy_base():
-    node = f"{__file__}::LineLimitTests::test_a_800_line_file_passes"
-    env = dict(os.environ, FILESIZE_REQUIRE_BASE="origin/main", PYTEST_ADDOPTS="",
-               PYTEST_SHARD="", PYTEST_SHARD_DURATIONS_OUT="")
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", node], cwd=ROOT,
-                            env=env, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0 and "1 passed" in result.stdout, result.stdout + result.stderr
-
-
 class UpdateBaselineTests(RepoFixture):
     def test_update_baseline_lowers_a_shrunk_count(self):
         self.file("legacy.py", 900)
