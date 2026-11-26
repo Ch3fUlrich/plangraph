@@ -64,10 +64,11 @@ def _lock_wait_line(phase, waiter, start, end, spans, evicted):
 class KeeperLock:
     """Track completed outer ownership intervals, using the native RLock as the fence."""
 
-    def __init__(self):
+    def __init__(self, *, log_timing=True):
         self._lock = RLock()
         self._spans = deque(maxlen=512)
         self._evicted = 0
+        self.log_timing = log_timing
 
     def depth(self):
         return self._lock._recursion_count()
@@ -85,7 +86,7 @@ class KeeperLock:
             self._start = end
             self._wait = None
             # Sample every shared-DB auth attempt, including refusals and zero waits.
-            if phase == "auth" or end - start > _LONG_NS:
+            if self.log_timing and (phase == "auth" or end - start > _LONG_NS):
                 phase = phase if phase in _PHASES else "maintenance"
                 spans = tuple(takewhile(lambda span: span[1] > start, reversed(self._spans)))
                 self._wait = phase, _lock_label(waiter or label), start, end, spans, self._evicted
@@ -99,7 +100,7 @@ class KeeperLock:
             self._evicted = self._spans[0][1]
         self._spans.append((start, end, holder))
         self._lock.release()
-        if holder in _RELEVANT or end - start > _LONG_NS:
+        if self.log_timing and (holder in _RELEVANT or end - start > _LONG_NS):
             _output(f"keeper: lock_hold holder={holder} hold_ms={(end - start) // _MS_NS}")
         if waiting is not None:
             _output(_lock_wait_line(*waiting))
@@ -281,10 +282,11 @@ def _emit(event, kind, wait, hold, parts):
 
 
 class RequestTimer:
-    """Own the lock: wait starts at acquire, hold ends before release."""
+    """Time a lock hold or an unlocked operation using the same logging setting."""
 
-    def __init__(self, lock, kind="other", event="request_timing", *, verb=None, label=None):
-        self.lock, self.kind, self.event = lock, kind, event
+    def __init__(self, lock, kind="other", event="request_timing", *, verb=None, label=None, unlocked=False):
+        self.lock, self.kind, self.event = None if unlocked else lock, kind, event
+        self.log_timing = getattr(lock, "log_timing", True)
         self.verb = verb
         self.label = label or verb or _MAINTENANCE.get(event)
 
@@ -328,8 +330,8 @@ class RequestTimer:
             self.parts.total_ms = _ms(self.start, end)
         finally:
             try:
-                if self.token is not None and None not in (self.wait_ms, self.hold_ms,
-                                                           getattr(self.parts, "total_ms", None)):
+                totals = self.wait_ms, self.hold_ms, getattr(self.parts, "total_ms", None)
+                if self.log_timing and self.token is not None and None not in totals:
                     _emit(self.event, self.kind, self.wait_ms, self.hold_ms, self.parts)
                 else:
                     self.parts.pending.clear()

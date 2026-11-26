@@ -67,7 +67,7 @@ def committed_messages(server, principal):
 def send_messages(handler, principal, query):
     from .messages_poll import read_messages
     run_gate(principal, "messages")
-    with timing.RequestTimer(None, "read", verb="messages"):
+    with timing.RequestTimer(handler.server.lock, "read", verb="messages", unlocked=True):
         payload = timing.measured(part="query_ms")(read_messages)(handler.server, principal, query, committed=True)
     handler._json(200, payload)
 

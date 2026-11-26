@@ -62,7 +62,7 @@ class SnapshotWriter(threading.Thread):
         automatic = entry is None
         configured = bool(getattr(self.server, "read_path", None))
         event = "writer_timing" if automatic else "snapshot_timing"
-        timer = timing.RequestTimer(None if configured else self.server.lock, event=event)
+        timer = timing.RequestTimer(self.server.lock, event=event, unlocked=configured)
         with self._build if configured else timer:
             with self._cond:
                 if self._written >= (self._gen if automatic else entry):
@@ -98,7 +98,7 @@ class SnapshotWriter(threading.Thread):
                     if automatic and (configured or not success):
                         self._next = end + max(self.debounce_s, end - start if configured else 0)
                     self._cond.notify_all()
-        if configured and automatic:
+        if configured and automatic and timer.log_timing:
             _log(f"snapshot_build mode=automatic outcome={'ok' if success else 'error'} "
                  f"elapsed_ms={int((end - start) * 1000)} lock_hold_ms=0")
 

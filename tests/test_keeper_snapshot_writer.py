@@ -155,7 +155,7 @@ def test_a_failed_build_is_retried_and_does_not_kill_the_thread(fake, request):
 def _server(tmp_path, world, debounce):
     cfg = make_cfg(tmp_path, world)
     cfg.snapshot_debounce_s, cfg.snapshot_max_delay_s = debounce, 5
-    server = api.make_server(world.store, cfg, port=0)
+    server = api.make_server(world.store, cfg, port=0, log_timing=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     server.base_url = f"http://127.0.0.1:{server.server_address[1]}"
     return server
