@@ -4,7 +4,6 @@ use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub mod spawn_attempt_delivery;
@@ -160,10 +159,7 @@ fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
 #[test]
 fn terminal_records_without_routed_legs_deliver_through_the_lifecycle() {
     let state = tempfile::tempdir().unwrap();
-    let ended = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let ended = chrono::Utc::now().timestamp();
     let mut expected = Vec::new();
     for (index, (kind, role, harness, status, code, leg, outcome)) in [
         ("seat", "review", "claude", "completed", 0, "claude", "ok"),
@@ -228,11 +224,8 @@ fn terminal_records_without_routed_legs_deliver_through_the_lifecycle() {
                 record["exit_code"] = json!(code);
             }
             let output = call_in("record-publish", &record, Some(state.path()));
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{error}");
         }
         expected.push(json!({
             "attempt_id":id, "role":role, "host":"workstation",
@@ -240,6 +233,20 @@ fn terminal_records_without_routed_legs_deliver_through_the_lifecycle() {
         }));
     }
     spawn_attempt_delivery::check_rows(state.path(), &expected);
+}
+
+#[test]
+fn native_quota_stop_projects_the_actual_terminal_outcome() {
+    let record = json!({
+        "run_id": "run-quota", "run_kind": "native-codex", "host": "workstation",
+        "role": "implement", "started": 1, "ended": 2, "status": "failed", "exit_code": 11,
+        "reason": "quota_limited: You've hit your usage limit.", "result": "QUOTA",
+        "quota_limited": {"line": "You've hit your usage limit."}
+    });
+    let output = call("project-spawn-attempt", &record);
+    assert!(output.status.success());
+    let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(row["exit_class"], "usage_limit");
 }
 
 #[test]

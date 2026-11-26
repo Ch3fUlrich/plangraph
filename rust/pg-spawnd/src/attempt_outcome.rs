@@ -162,7 +162,7 @@ pub(crate) fn project(run: Value) -> Result<Value, String> {
         (Some("cancelled" | "killed"), _) => "cancelled",
         (Some("timeout" | "timed_out"), _) => "timeout",
         (Some("stalled" | "stalled_no_leg"), _) => "stall",
-        (_, "usage_limit" | "credit_limit") => "usage_limit",
+        (_, "usage_limit" | "credit_limit" | "quota_limited") => "usage_limit",
         (_, "outage" | "not_served_on_host") => "outage",
         (_, "check_fail") => "check_fail",
         (_, "writer_no_changes") => "no_change",
