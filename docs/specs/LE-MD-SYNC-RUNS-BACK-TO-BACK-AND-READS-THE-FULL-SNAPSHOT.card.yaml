@@ -1,0 +1,70 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT": {
+      "outcome": "Run scheduled Markdown reconciliation at completion-based cadence using a fresh bounded Keeper planning projection and the existing authoritative batch close.",
+      "read_set": [
+        "src/plangraph/keeper/store_rehome.py",
+        "src/plangraph/keeper/store_close.py",
+        "src/plangraph/keeper/db.py",
+        "src/plangraph/keeper/db_pg.py",
+        "tools/apply_batch_transport.py",
+        "tools/md_sync_plan.py",
+        "tools/md_sync_parse.py",
+        "tools/md_sync_gates.py",
+        "tools/md_sync_archive.py",
+        "tools/fetch_keeper_repos.py",
+        "tests/test_snapshot_filter.py",
+        "tests/test_md_sync_dclose.py",
+        "tests/test_md_sync_archive.py",
+        ".docs-map",
+        "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/store_review.py"
+      ],
+      "write_set": [
+        "src/plangraph/keeper/api.py",
+        "src/plangraph/keeper/snapshot_filter.py",
+        "src/plangraph/keeper/store_ops.py",
+        "src/plangraph/keeper/store_read.py",
+        "src/plangraph/keeper/evidence_decisions.py",
+        "tools/md_sync.py",
+        "tests/test_md_sync_e2e.py",
+        "tests/test_md_sync_pin_retry.py",
+        "tests/test_md_sync_snapshot_timeout.py",
+        "tests/test_apply_batch_precondition.py",
+        "tests/test_md_sync_dclose_epoch.py",
+        "docs/RUNBOOK.md",
+        "docs/keeper/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md",
+        "docs/contributing/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md",
+        "changelog.d/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md",
+        "tools/apply_batch.py",
+        "tools/apply_batch_atomic.py",
+        "tests/test_apply_batch_timeout.py",
+        "src/plangraph/keeper/store_support.py",
+        "tools/md_sync_dclose.py"
+      ],
+      "exports": [
+        "GET /v1/snapshot?view=md-sync",
+        "Store.snapshot(principal, **filters)",
+        "tools/md_sync.py --scheduled"
+      ],
+      "forbid_paths": [
+        ".github/",
+        "deploy/",
+        "configuration/",
+        "tools/new_code_allowlist.txt",
+        ".filesize-allow",
+        ".filesize-baseline",
+        ".docs-map"
+      ],
+      "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_md_sync_e2e.py tests/test_md_sync_pin_retry.py tests/test_md_sync_snapshot_timeout.py tests/test_md_sync_dclose_epoch.py tests/test_apply_batch_precondition.py tests/test_snapshot_filter.py tests/test_md_sync_dclose.py tests/test_md_sync_archive.py tests/test_apply_batch_timeout.py",
+      "check_kind": "change",
+      "window_class": "128k",
+      "risk_tags": [
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 36000
+    }
+  }
+}

@@ -1,0 +1,37 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1 E2	predicted
+changelog.d/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md	write	yes	E1 E2	predicted
+docs/RUNBOOK.md	write	yes	E3	predicted
+docs/contributing/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md	write	yes	E1 E2	predicted
+docs/keeper/LE-MD-SYNC-RUNS-BACK-TO-BACK-AND-READS-THE-FULL-SNAPSHOT.md	write	yes	E1 E2	predicted
+src/plangraph/keeper/api.py	write	yes	E1	predicted
+src/plangraph/keeper/api_routes.py	caller	yes	E1 E2 E3	predicted
+src/plangraph/keeper/db.py	read	yes	E1 E2	predicted
+src/plangraph/keeper/db_pg.py	read	yes	E1 E2	predicted
+src/plangraph/keeper/evidence_decisions.py	write	yes	E1 E2	predicted
+src/plangraph/keeper/snapshot_filter.py	write	yes	E1	predicted
+src/plangraph/keeper/store_close.py	caller	yes	E2	predicted
+src/plangraph/keeper/store_ops.py	write	yes	E2	predicted
+src/plangraph/keeper/store_read.py	write	yes	E1	predicted
+src/plangraph/keeper/store_rehome.py	read	yes	E1 E2	predicted
+src/plangraph/keeper/store_review.py	read	yes	E2	predicted
+src/plangraph/keeper/store_support.py	write	yes	E1	predicted
+tests/test_apply_batch_precondition.py	write	yes	E2	predicted
+tests/test_apply_batch_timeout.py	write	yes	E2	predicted
+tests/test_md_sync_archive.py	read	yes	E1 E2	predicted
+tests/test_md_sync_dclose.py	read	yes	E1 E2	predicted
+tests/test_md_sync_dclose_epoch.py	write	yes	E2	predicted
+tests/test_md_sync_e2e.py	write	yes	E1 E2 E3	predicted
+tests/test_md_sync_pin_retry.py	write	yes	E2	predicted
+tests/test_md_sync_snapshot_timeout.py	write	yes	E1	predicted
+tests/test_snapshot_filter.py	read	yes	E1 E2	predicted
+tools/apply_batch.py	write	yes	E2	predicted
+tools/apply_batch_atomic.py	write	yes	E2	predicted
+tools/apply_batch_transport.py	read	yes	E1 E2	predicted
+tools/fetch_keeper_repos.py	caller	yes	E3	predicted
+tools/md_sync.py	write	yes	E1 E2 E3	predicted
+tools/md_sync_archive.py	caller	yes	E3	predicted
+tools/md_sync_dclose.py	write	yes	E1 E2	predicted
+tools/md_sync_gates.py	read	yes	E1 E2	predicted
+tools/md_sync_parse.py	read	yes	E1 E2	predicted
+tools/md_sync_plan.py	read	yes	E1 E2	predicted

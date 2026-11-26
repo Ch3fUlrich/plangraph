@@ -1,0 +1,63 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT": {
+      "outcome": "Publish coherent Keeper snapshots without holding the global request lock for the configured production rebuild.",
+      "read_set": [
+        "src/plangraph/keeper/api.py",
+        "src/plangraph/keeper/db.py",
+        "src/plangraph/keeper/db_pg.py",
+        "src/plangraph/keeper/store_read.py",
+        "src/plangraph/keeper/snapshot_filter.py",
+        "src/plangraph/keeper/snapshot_serve.py",
+        "src/plangraph/keeper/snapshot_pull.py",
+        "src/plangraph/keeper/config.py",
+        "src/plangraph/fleet_snapshot.py",
+        "tests/test_keeper_api.py",
+        "tests/test_m2b_signed_snapshot.py",
+        "tests/test_keeper_snapshot_setbased.py",
+        ".docs-map",
+        "src/plangraph/keeper/store_runs.py",
+        "src/plangraph/keeper/store_messages.py",
+        "src/plangraph/keeper/store_close.py"
+      ],
+      "write_set": [
+        "src/plangraph/keeper/snapshot_io.py",
+        "src/plangraph/keeper/snapshot_writer.py",
+        "src/plangraph/keeper/daemon.py",
+        "tests/test_keeper_snapshot_writer.py",
+        "tests/test_keeper_timing.py",
+        "docs/keeper-snapshot-staleness.md",
+        "docs/keeper/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md",
+        "changelog.d/LE-KEEPER-SNAPSHOT-REBUILD-HOLDS-THE-GLOBAL-LOCK-CLIENTS-TIME-OUT.md",
+        "src/plangraph/keeper/messages_poll.py",
+        "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/timing.py",
+        "tests/test_keeper_messages.py",
+        "tests/test_keeper_merge_refresh_budget.py"
+      ],
+      "exports": [
+        "write_snapshot(server, principal)",
+        "SnapshotWriter.mark()",
+        "SnapshotWriter.flush()",
+        "SnapshotPublication.publish(ticket, path, snapshot, key)"
+      ],
+      "forbid_paths": [
+        ".github/",
+        "deploy/",
+        "configuration/",
+        "tools/new_code_allowlist.txt",
+        ".filesize-allow",
+        ".filesize-baseline",
+        ".docs-map"
+      ],
+      "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_snapshot_writer.py tests/test_keeper_timing.py tests/test_keeper_api.py tests/test_m2b_signed_snapshot.py tests/test_keeper_snapshot_setbased.py tests/test_keeper_messages.py tests/test_keeper_merge_refresh_budget.py",
+      "check_kind": "change",
+      "window_class": "128k",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 26000
+    }
+  }
+}
