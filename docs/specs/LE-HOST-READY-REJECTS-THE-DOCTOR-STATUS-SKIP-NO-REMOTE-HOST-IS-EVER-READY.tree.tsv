@@ -1,5 +1,6 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-HOST-READY-REJECTS-THE-DOCTOR-STATUS-SKIP-NO-REMOTE-HOST-IS-EVER-READY.md	write	yes	E1	predicted
-src/plangraph/spawner/doctor.py	read	yes	E1	predicted
+docs/SPAWNER.md	write	yes	E1	predicted
+src/plangraph/spawner/doctor.py	write	yes	E1	predicted
 src/plangraph/spawner/host_ready_source.py	write	yes	E1	predicted
 tests/test_host_ready.py	write	yes	E1	predicted

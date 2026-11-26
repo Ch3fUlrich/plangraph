@@ -173,6 +173,7 @@ for `.pid` targets or exact `pgrep -x --` otherwise.
 Set `env.PG_SESSION_UNIT` in a host registry entry to a systemd unit, a
 `.pid` file path, or the exact process name (`comm`) to include that session
 in readiness checks.
+Doctor `skip` rows leave readiness passing when the remaining checks pass.
 Migration note: a legacy `overflow-hosts.json` `session_unit` is no longer read; readiness
 takes the session from `env.PG_SESSION_UNIT` in the host's registry entry, and without it the
 session probe is skipped. Move the old value there, and replace a `pgrep -f` command-line

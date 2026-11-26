@@ -154,6 +154,28 @@ def test_doctor_skip_rows_parse_as_ok(tmp_path, failed):
     assert json.loads((tmp_path / 'fiction.json').read_text()) == result
 
 
+@pytest.mark.parametrize('known', [True, False])
+def test_doctor_status_list_shared(tmp_path, monkeypatch, known):
+    from plangraph.spawner import doctor
+
+    def extended_status(status):
+        if status != 'pass' and not (known and status == 'deferred'):
+            raise ValueError(status)
+        return status
+
+    monkeypatch.setattr(doctor, 'DoctorStatus', extended_status, raising=False)
+
+    def fake(argv, **kwargs):
+        if 'doctor --json' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(ok=True, checks=[
+                dict(name='keeper_whoami', status='pass'), dict(name='probe', status='deferred')])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['ok'] is known
+    assert result['failures'] == ([] if known else ['doctor: unknown_status deferred'])
+
+
 def test_parallel_deadlines(tmp_path):
     import threading
     entered, finished = threading.Event(), threading.Event()
