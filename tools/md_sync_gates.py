@@ -96,11 +96,11 @@ def names_seats(item):
 def live_hold(item):
     """The keeper's close-gate code that would refuse this close, or ``None``.
 
-    The import has no deploy rows to read, so an item without a ``no deploy needed: <reason>`` line (or
-    with a ``Live:`` clause) is held here instead of rolling back the whole batch at the keeper. An
-    open item still moves to review first (that advances its epoch): the next import retries the
-    close, and any deploy probe it needs must be recorded against the new epoch."""
-    return live_evidence_status(item, ())
+    The snapshot can establish current-epoch proof. Keeper rechecks the evidence against the
+    latest landing when it applies the close. Moving an open item to review advances its epoch,
+    so deploy proof of the open epoch cannot support a close in the same import."""
+    evidence = () if item.get("state") == "open" else item.get("evidence") or ()
+    return live_evidence_status(item, evidence)
 
 
 #: The note of an item the import creates: a question or step closed by a decision ships nothing.
