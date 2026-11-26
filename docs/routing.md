@@ -262,6 +262,9 @@ authentication and secrets diffs or when both required seats are out of the rout
 D-6952 selects `agy-claude-sonnet-5-5-high` for that seat. The Claude subscription
 `claude-sonnet-5-5-high` follows it in the order and serves when the Antigravity
 Sonnet quota is limited or the Antigravity client is missing on the selected host.
+Both Sonnet seats bind their review to the checked head and require test evidence
+for a passing verdict. Antigravity Sonnet runs in plan mode in a disposable
+checkout and records the served model as Anthropic.
 `plangraph router go-row` accepts a part only with two seats that each ACCEPT its head with a
 `FILES READ` line naming files, and the keeper reads a required-seat record without
 `FILES READ` as no seat.

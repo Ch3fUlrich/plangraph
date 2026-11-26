@@ -5,6 +5,7 @@ deploy/systemd/plangraph-review-probe.service	write	yes	E3	predicted
 docs/routing.md	write	yes	E1	predicted
 rust/pg-spawnd/src/cli_review.rs	write	yes	E2	predicted
 rust/pg-spawnd/src/cli_review_tests.rs	write	yes	E2	predicted
+rust/pg-spawnd/src/review_test_evidence.rs	write	yes	E2	predicted
 rust/pg-spawnd/src/seat_admission_tests.rs	write	yes	E2	predicted
 rust/pg-spawnd/tests/agy_account_admission.rs	write	yes	E2	predicted
 rust/pg-spawnd/tests/agy_quota.rs	write	yes	E2	predicted
@@ -12,6 +13,7 @@ rust/pg-spawnd/tests/agy_review_spawn.rs	write	yes	E2	predicted
 rust/pg-spawnd/tests/native_evidence.rs	write	yes	E4	predicted
 src/plangraph/planner/legs.py	write	yes	E1	predicted
 src/plangraph/planner/routing.py	write	yes	E1	predicted
+src/plangraph/routing_support/clients.py	write	yes	E1 E2	predicted
 src/plangraph/routing_support/resolver.py	read	yes	E1	predicted
 tests/test_bench_required.py	write	yes	E1	predicted
 tests/test_claude_child_env.py	write	yes	E1	predicted

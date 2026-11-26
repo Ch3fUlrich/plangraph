@@ -4,8 +4,8 @@ Outcome. Prefer Antigravity Sonnet high for the Claude-family review seat and us
 
 - plan_source. Keeper card plangraph:ROUTE-ORDER-D6804, D-6952 and D-6953, with D-6957 and D-6965.
 - base commit. d948affa1da9565f12c58fb981bbf2dbc04974ad
-- card SHA-256. 351070979f8d474d22be50ba4a5a0a68d465614f01b08a4baff370de52e8a796
-- tree SHA-256. da6d8f530e616e6e8412210972ab175b6406d9bb39ede94e8319816c9db2e23c
+- card SHA-256. c7ca372acd5badf0caf560bf86c49062cc9052996c4bfb4fc62a01a3d4fb4f5b
+- tree SHA-256. c7a33c6602123afdba794cc3758bfa6bbb5297f34a7f61a9594d9172d89ed096
 - evidence_after_deploy. After deploy, record a role-review route dry run on the placed host showing Antigravity Sonnet high ahead of the Claude subscription.
 
 ## Decisions
@@ -29,6 +29,7 @@ Outcome. Prefer Antigravity Sonnet high for the Claude-family review seat and us
 | I1 | E1 E2 | Native Codex keeps its writer priority and review routing and selection exclude Neon medium on cost hold. | X2 |
 | S1 | E1 E3 | Host admission reports a missing Claude executable for the subscription fallback and the unit allows all configured sequential review probes to finish. | X3 |
 | S2 | E4 | Native evidence checks run annotations independently of the Cargo cache lease. | X4 |
+| S3 | E1 E2 | The CLI selectors admit their Sonnet seats. Antigravity Sonnet binds the diff in a plan-mode checkout and records Anthropic provenance. Both seats require test evidence. | X5 |
 
 ## Verification
 
@@ -36,6 +37,7 @@ Outcome. Prefer Antigravity Sonnet high for the Claude-family review seat and us
 - X2. E1 E2, changed. `test_implement_route_unchanged_gpt_first`, `test_review_route_excludes_neon_on_operator_cost_hold`, and `agy_cli_selector_refuses_a_stale_neon_route`.
 - X3. E1 E3, changed. Claude host admission, benchmark route ordering, and review-probe unit tests.
 - X4. E4, changed. Native evidence integration tests.
+- X5. E1 E2, changed. `test_agy_tools_command_uses_plan_only_for_review`, `agy_cli_selects_and_binds_antigravity_sonnet`, `claude_cli_selects_the_subscription_sonnet_from_the_same_route`, and `both_sonnet_seats_require_test_evidence`.
 
 ## Scope and reuse
 
