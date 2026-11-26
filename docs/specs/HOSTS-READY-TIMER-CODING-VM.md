@@ -4,13 +4,13 @@ Outcome. A host-ready timer on the orchestration host runs the readiness source 
 
 - plan_source. keeper card plangraph:HOSTS-READY-TIMER-CODING-VM (Why/How/done), routing D-6968 and D-6972 (batch P).
 - base commit. 06b885abcc7672087d5557e1120eec21233c4fd4
-- card SHA-256. ae0d6c384267506a33a9f4ef04f945299e5423a5981dd85b2c9e2a7a447d9c9d
-- tree SHA-256. 94f81c5961912a8e6c58b2a28af08c442e732a75057ef5e4159bbac61c876964
+- card SHA-256. 86e9c3681488d46264e09ceafb448387534b320a2ee2df0fb00d05053f04ff39
+- tree SHA-256. 39f708c8e33f15ed445b7217bed9249e5b3f3db23277cf6f9561c088d7716f05
 - evidence_after_deploy. Live: host-ready files for dell and the workstation are fresh on the orchestration host after the deploy.
 
 ## Decisions
 
-- D1. Interval shorter than the readiness record's freshness limit (record expires after 120 s per worskt-spawner's report); the writer reads the limit from host_ready.fresh.
+- D1. Interval shorter than the readiness record's freshness limit (600 s in host_ready.fresh). The timer waits 60 s after a sweep ends.
 
 ## Entry points
 
@@ -26,7 +26,7 @@ Outcome. A host-ready timer on the orchestration host runs the readiness source 
 
 ## Verification
 
-- X1. E1, changed. pytest tests/test_host_ready_unit.py::test_unit_runs_readiness_for_registry_hosts (new). Asserts B1's observable result.
+- X1. E1, changed. cargo test -p plangraph-cli --lib readiness_followup_unit_runs_readiness_for_registry_hosts. Asserts B1's observable result.
 - X2. E2, changed. docs diff review. Asserts B2's observable result.
 
 Anchors for new tests and files are predicted until checked on the implementation head.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep placement readiness records fresh
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=host-ready.service
+
+[Install]
+WantedBy=timers.target

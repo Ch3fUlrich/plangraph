@@ -255,6 +255,15 @@ session `.service` unit (when it has one) keeping the group and other write bits
 ten-minute freshness window expires, and the `package-readiness` record before
 its 120-second window expires.
 
+On the orchestration host, the deploy manifest installs the user units
+`host-ready.service` and `host-ready.timer`. The timer starts a sweep 30 seconds
+after boot and 60 seconds after the previous sweep ends. Each sweep runs
+`python3 -m plangraph.spawner.host_ready` for all registry readiness candidates
+and writes `~/.local/state/plangraph/host-ready/<host>.json`. Check the schedule
+with `systemctl --user list-timers host-ready.timer` and individual results
+with `journalctl --user -u host-ready.service`. Check each host file's `ok` and
+`checked_at` fields before relying on it for placement.
+
 Submit a writer and a review from a placement origin and verify both run types
 land on the remote Linux worker and on the workstation WSL. Record the run IDs
 and selected hosts, then attach a 24-hour sample showing work on all three
