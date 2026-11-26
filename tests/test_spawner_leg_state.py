@@ -530,6 +530,16 @@ def test_hydrogen_429_limits_argon(store):
         assert store.leg_status(model, now=101)['state'] == 'ok'
 
 
+@pytest.mark.parametrize('model,sibling', [('gemini-4-neon', 'claude-sonnet-5-5'),
+                                          ('claude-sonnet-5-5', 'gemini-4-neon')])
+def test_agy_429_applies_only_to_the_model_that_was_called(store, model, sibling):
+    store.record_harness_limit(f'agy/{model}-medium', 'HTTP 429: quota reached',
+                               'fixture', now=100, harness='agy')
+    assert store.leg_status(f'agy/{model}-medium', now=101)['state'] == 'limited'
+    for other in (sibling, 'gemini-4-hydrogen', 'gemini-4-argon'):
+        assert store.leg_status(f'agy:{other}', now=101)['state'] == 'ok'
+
+
 @pytest.mark.parametrize('older_key', ['agy:gemini-4-argon', 'agy/gemini-4-argon-low',
                                       'agy:gemini-4-argon-medium', 'agy/gemini-4-hydrogen-max'])
 def test_pre_pool_argon_booking_counts(store, older_key):

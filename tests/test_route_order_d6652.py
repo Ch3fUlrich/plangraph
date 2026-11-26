@@ -45,7 +45,7 @@ def test_agy_quota_states_share_the_gemini_pool(tmp_path):
         assert gemini.isdisjoint(leg.id for leg in plan.legs)
 
 
-def test_implement_route_unchanged_gpt_first():
+def test_with_codex_serving_implement_never_returns_a_claude_leg():
     for card in ({}, {"hard": True}, {"risk_tags": ["secrets"]}):
         plan = implement(card)
         assert (plan.first_leg.id, plan.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex"), card
@@ -53,6 +53,13 @@ def test_implement_route_unchanged_gpt_first():
         assert "codex_limited" not in plan.reasons
     # Hydrogen alone being limited does not admit Claude either.
     assert not any(leg.claude_family for leg in implement(down={"gemini-4-hydrogen-high"}).legs)
+
+
+def test_implement_route_unchanged_gpt_first():
+    plan = plan_spawn({"estimate_tokens": 1000}, role="implement", leg_reader=reader(),
+                      catalog_rows=(), installed=lambda _: True)
+    assert (plan.first_leg.id, plan.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex")
+    assert all(not leg.claude_family for leg in plan.legs)
 
 
 def test_with_codex_limited_implement_returns_sonnet_high_with_reason_codex_limited():
