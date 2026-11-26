@@ -6,6 +6,54 @@ use serde_json::Value;
 use std::{ffi::OsString, fs, io, os::unix::ffi::OsStringExt, path::Path, time::Duration};
 
 #[test]
+fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
+    use pg_worker_core::{
+        cargo_cache::try_exclusive_lease,
+        disk_hygiene::{Candidate, FinalProof},
+    };
+    use std::{cell::Cell, time::SystemTime};
+
+    for changed in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let target = root.join("target");
+        let file = target.join("data");
+        let now = SystemTime::now();
+        fs::create_dir(&target).unwrap();
+        fs::write(&file, [0u8; 8192]).unwrap();
+        for path in [&target, &file] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(3600))
+                .unwrap();
+        }
+        let mut proof =
+            FinalProof::begin(Candidate::new(target.clone(), root, now).unwrap()).unwrap();
+        let steps = Cell::new(2usize);
+        assert!(!proof
+            .advance(|| {
+                let previous = steps.get();
+                steps.set(previous.saturating_sub(1));
+                previous > 0
+            })
+            .unwrap());
+        assert!(try_exclusive_lease(&target).unwrap().is_none());
+        assert!(proof.remove(true, || Ok(true), || true).is_err());
+        if changed {
+            fs::File::open(&file).unwrap().set_modified(now).unwrap();
+            assert_eq!(proof.advance(|| true), Err("young"));
+            assert!(target.exists());
+        } else {
+            assert!(proof.advance(|| true).unwrap());
+            assert_eq!(proof.remove(true, || Ok(false), || true).unwrap(), None);
+            assert!(target.exists());
+            assert!(proof.remove(true, || Ok(true), || true).unwrap().unwrap() > 0);
+            assert!(!target.exists());
+        }
+    }
+}
+
+#[test]
 fn ranking_orders_allocated_bytes_and_releases_each_slice() {
     use pg_worker_core::{
         cargo_cache::try_exclusive_lease,

@@ -7,7 +7,7 @@ mod plan;
 #[cfg(target_os = "linux")]
 pub use hygiene_report::{Device, HygieneReport, KeptPath};
 #[cfg(target_os = "linux")]
-pub use plan::{rank_candidates, refresh_ranking, Budget, Candidate, Ranked};
+pub use plan::{rank_candidates, refresh_ranking, Budget, Candidate, FinalProof, Ranked};
 
 use crate::host_command;
 use serde::Serialize;

@@ -38,6 +38,15 @@ pub(crate) fn mount_guard(boundary: &Path, path: &Path) -> io::Result<()> {
 /// lie on the way or inside it. Without `apply` it only runs those checks, so a dry run names the
 /// same refusals as the real run. The resolved path is the one removed, never the one asked for.
 pub(crate) fn remove_guarded(boundary: &Path, path: &Path, apply: bool) -> io::Result<()> {
+    remove_guarded_if(boundary, path, apply, |_| true).map(drop)
+}
+
+pub(crate) fn remove_guarded_if(
+    boundary: &Path,
+    path: &Path,
+    apply: bool,
+    confirm: impl FnOnce(&Path) -> bool,
+) -> io::Result<bool> {
     let boundary = boundary.canonicalize()?;
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(io::Error::other("candidate has no parent"));
@@ -47,10 +56,13 @@ pub(crate) fn remove_guarded(boundary: &Path, path: &Path, apply: bool) -> io::R
         return Err(io::Error::other("candidate outside the trusted slot"));
     }
     mount_guard(&boundary, &resolved)?;
+    if !confirm(&resolved) {
+        return Ok(false);
+    }
     if apply {
         remove_path(&resolved)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(target_os = "linux")]

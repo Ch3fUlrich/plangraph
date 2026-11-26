@@ -1,19 +1,19 @@
 //! Device-scoped disk hygiene reclamation and its pressure outcomes.
-use super::{file_identity, hygiene_report::display_path, HygieneReport, KeptPath};
+use super::{hygiene_report::display_path, HygieneReport, KeptPath};
 use crate::host_link::{
     enqueue_disk_hygiene, DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS,
 };
+pub use crate::shared_target::Candidate;
 use crate::{
-    cargo_cache::{try_exclusive_lease, ExclusiveLease},
-    cargo_pool_trim::{mount_guard, stamp, ArtifactWalk},
+    cargo_cache::ExclusiveLease,
+    cargo_pool_trim::{remove_guarded_if, stamp, ArtifactWalk},
 };
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     fs, io,
-    os::unix::fs::MetadataExt,
-    path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime},
+    path::Path,
+    time::{Duration, Instant},
 };
 
 /// One monotonic clock and limits for discovery, ranking, and reclamation.
@@ -49,51 +49,69 @@ impl<'a> Budget<'a> {
     }
 }
 
-pub struct Candidate {
-    pub path: PathBuf,
-    pub boundary: PathBuf,
-    pub scope: PathBuf,
-    pub lease_root: PathBuf,
-    cutoff: SystemTime,
-    identity: (u64, u64),
+/// A candidate's freshness and ownership walk, held under its removal lease.
+pub struct FinalProof {
+    item: Candidate,
+    uid: u32,
+    _lease: ExclusiveLease,
+    walk: ArtifactWalk,
 }
 
-impl Candidate {
-    /// Describe a provider-approved removal unit. Its identity must survive until unlink.
-    pub fn new(path: PathBuf, boundary: PathBuf, cutoff: SystemTime) -> io::Result<Self> {
-        let identity = file_identity(&fs::symlink_metadata(&path)?);
+impl FinalProof {
+    /// Acquire the nonblocking owner lease before inspecting any candidate contents.
+    pub fn begin(item: Candidate) -> Result<Self, &'static str> {
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        item.safe(uid)?;
+        let lease = item.lease()?;
         Ok(Self {
-            scope: path.clone(),
-            lease_root: path.clone(),
-            path,
-            boundary,
-            cutoff,
-            identity,
+            item,
+            uid,
+            _lease: lease,
+            walk: ArtifactWalk::default(),
         })
     }
 
-    fn safe(&self, uid: u32) -> Result<(), &'static str> {
-        let meta = fs::symlink_metadata(&self.path).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => "vanished",
-            _ => "probe_unavailable",
-        })?;
-        if !meta.is_dir()
-            || file_identity(&meta) != self.identity
-            || meta.uid() != uid
-            || !self.path.starts_with(&self.boundary)
-            || self.path == self.boundary
-            || self.path.canonicalize().as_ref().ok() != Some(&self.path)
-            || mount_guard(&self.boundary, &self.path).is_err()
-        {
-            return Err("unsafe");
+    /// Continue until EOF or the current deadline, restarting stale observations under the lease.
+    pub fn advance(&mut self, room: impl Fn() -> bool) -> Result<bool, &'static str> {
+        self.item.safe(self.uid)?;
+        match self.walk.unchanged(&room) {
+            Some(false) => self.walk = ArtifactWalk::default(),
+            Some(true) => (),
+            None => return Ok(false),
         }
-        Ok(())
+        while room() && !self.walk.complete {
+            self.walk.step(
+                &self.item.path,
+                self.item.cutoff,
+                self.item.identity.0,
+                self.uid,
+            )?;
+        }
+        Ok(self.walk.complete)
     }
 
-    fn lease(&self) -> Result<ExclusiveLease, &'static str> {
-        try_exclusive_lease(&self.lease_root)
-            .map_err(|_| "probe_unavailable")?
-            .ok_or("leased")
+    /// Apply a completed proof after refreshing protection. Return bytes only for an allowed action.
+    pub fn remove(
+        &self,
+        apply: bool,
+        allowed: impl FnOnce() -> io::Result<bool>,
+        before_unlink: impl FnOnce() -> bool,
+    ) -> io::Result<Option<u64>> {
+        if !self.walk.complete {
+            return Err(io::Error::other("candidate proof incomplete"));
+        }
+        self.item.safe(self.uid).map_err(io::Error::other)?;
+        let mut authorized = Ok(false);
+        let removed = remove_guarded_if(&self.item.boundary, &self.item.path, apply, |path| {
+            authorized = allowed();
+            matches!(authorized, Ok(true))
+                && fs::symlink_metadata(path).ok().map(|meta| stamp(&meta))
+                    == self.walk.root_stamp()
+                && (!apply || before_unlink())
+        })?;
+        authorized?;
+        Ok(removed.then_some(self.walk.credit))
     }
 }
 

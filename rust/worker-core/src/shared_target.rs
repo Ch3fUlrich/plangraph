@@ -168,6 +168,57 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
         .collect())
 }
 
+#[cfg(target_os = "linux")]
+pub struct Candidate {
+    pub path: PathBuf,
+    pub boundary: PathBuf,
+    pub scope: PathBuf,
+    pub lease_root: PathBuf,
+    pub(crate) cutoff: SystemTime,
+    pub(crate) identity: (u64, u64),
+}
+
+#[cfg(target_os = "linux")]
+impl Candidate {
+    /// Describe a provider-approved removal unit. Its identity must survive until unlink.
+    pub fn new(path: PathBuf, boundary: PathBuf, cutoff: SystemTime) -> io::Result<Self> {
+        let identity = crate::disk_hygiene::file_identity(&fs::symlink_metadata(&path)?);
+        Ok(Self {
+            scope: path.clone(),
+            lease_root: path.clone(),
+            path,
+            boundary,
+            cutoff,
+            identity,
+        })
+    }
+
+    pub(crate) fn safe(&self, uid: u32) -> Result<(), &'static str> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(&self.path).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => "vanished",
+            _ => "probe_unavailable",
+        })?;
+        if !meta.is_dir()
+            || crate::disk_hygiene::file_identity(&meta) != self.identity
+            || meta.uid() != uid
+            || !self.path.starts_with(&self.boundary)
+            || self.path == self.boundary
+            || self.path.canonicalize().as_ref().ok() != Some(&self.path)
+            || crate::cargo_pool_trim::mount_guard(&self.boundary, &self.path).is_err()
+        {
+            return Err("unsafe");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lease(&self) -> Result<crate::cargo_cache::ExclusiveLease, &'static str> {
+        crate::cargo_cache::try_exclusive_lease(&self.lease_root)
+            .map_err(|_| "probe_unavailable")?
+            .ok_or("leased")
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
