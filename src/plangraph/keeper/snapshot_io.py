@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -50,7 +51,7 @@ class SnapshotPublication:
                 self.latest = ticket
 
     def validate_reader(self, conn):
-        if (conn is self._writer or getattr(conn, "_raw", conn) is self._writer_session
+        if (self.source is None or conn is self._writer or getattr(conn, "_raw", conn) is self._writer_session
                 or _database_source(conn) != self.source or not conn.in_transaction):
             raise RuntimeError("snapshot requires a separate committed reader of the configured database")
         if self.source[0] == "postgres":
@@ -61,11 +62,15 @@ class SnapshotPublication:
 
 
 def _database_source(conn):
-    if hasattr(conn, "schema"):
-        info = conn._raw.info
+    info = getattr(getattr(conn, "_raw", None), "info", None)
+    if info is not None:
         return "postgres", conn.schema, info.host, info.hostaddr, info.port, info.dbname, info.user
-    row = conn.execute("SELECT file FROM pragma_database_list WHERE name='main'").fetchone()
-    return "sqlite", Path(row[0]).resolve() if row and row[0] else None
+    if isinstance(conn, sqlite3.Connection):
+        row = conn.execute("SELECT file FROM pragma_database_list WHERE name='main'").fetchone()
+        if row and row[0]:
+            return "sqlite", Path(row[0]).resolve()
+    # An adapter without source metadata can still handle requests, but cannot publish.
+    return None
 
 
 def write_snapshot(server, principal) -> None:
