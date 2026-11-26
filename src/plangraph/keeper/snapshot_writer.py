@@ -4,11 +4,9 @@ The snapshot is derived state: the write that changed the plan is committed in t
 before the HTTP response, the file is rebuilt from the database afterwards.  Rebuilding on every
 write put an O(items) read on the request path (PG: ~870 ms per write at 1000 items).  Here a
 write only ``mark()``s the writer; one thread rebuilds once the writes went quiet for
-``debounce_s``, and never later than ``max_delay_s`` after the first unwritten change, so a
-steady stream of writes cannot starve the file.
+``debounce_s`` or the oldest mark reaches ``max_delay_s``, subject to the automatic build gap.
 
-Contract (bounded staleness): the file lags the database by at most ``max_delay_s`` plus one
-build while the keeper runs; ``flush()`` (shutdown, tests) brings it level before returning; a
+Contract (bounded staleness): ``flush()`` (shutdown, tests) covers its entry generation; a
 crash loses nothing committed because the startup rebuild (daemon) re-derives it from the
 database.  Rewrites stay atomic (temp file + rename; signature first, see snapshot_io).
 ``debounce_s <= 0`` keeps the old behaviour: the request thread rewrites it synchronously.
@@ -40,6 +38,8 @@ class SnapshotWriter(threading.Thread):
         self.debounce_s = float(debounce_s)
         self.max_delay_s = max(float(max_delay_s), self.debounce_s)
         self._cond = threading.Condition()
+        self._build = threading.Lock()
+        self._next = 0.0
         self._gen = 0              # bumped by every mark()
         self._written = 0          # the _gen the file reflects
         self._first = None         # monotonic time of the oldest unwritten mark
@@ -58,25 +58,49 @@ class SnapshotWriter(threading.Thread):
                 self._first = now
             self._cond.notify_all()
 
-    def _write_locked(self):
-        """Read under the server lock, then publish; True when the file is current."""
-        with timing.RequestTimer(self.server.lock, event="writer_timing"):
+    def _attempt(self, *, entry=None):
+        automatic = entry is None
+        configured = bool(getattr(self.server, "read_path", None))
+        event = "writer_timing" if automatic else "snapshot_timing"
+        timer = timing.RequestTimer(None if configured else self.server.lock, event=event)
+        with self._build if configured else timer:
             with self._cond:
+                if self._written >= (self._gen if automatic else entry):
+                    return
+                if automatic and (self._halt or self._due() > time.monotonic()):
+                    return
                 gen = self._gen
-            try:
-                write_snapshot(self.server, self.server.system)
-            except Exception as exc:   # noqa: BLE001 - a committed write stays committed; retry later
-                self._failed(exc)
-                return False
-            self._succeeded()
-        with self._cond:
-            if gen >= self._written:
-                self._written = gen
-            if self._written == self._gen:
+                first, last = self._first, self._last
                 self._first = self._last = None
-            else:
-                self._first = self._last = time.monotonic()
-        return True
+            start = time.monotonic()
+            success = False
+            try:
+                if configured:
+                    with timer:
+                        write_snapshot(self.server, self.server.system)
+                else:
+                    write_snapshot(self.server, self.server.system)
+                success = True
+                self._succeeded()
+            except Exception as exc:   # noqa: BLE001 - a committed write stays committed; retry later
+                if not automatic:
+                    raise
+                self._failed(exc)
+            finally:
+                with self._cond:
+                    if success:
+                        self._written = gen
+                    else:
+                        self._first = first
+                        if self._last is None:
+                            self._last = last
+                    end = time.monotonic()
+                    if automatic and (configured or not success):
+                        self._next = end + max(self.debounce_s, end - start if configured else 0)
+                    self._cond.notify_all()
+        if configured and automatic:
+            _log(f"snapshot_build mode=automatic outcome={'ok' if success else 'error'} "
+                 f"elapsed_ms={int((end - start) * 1000)} lock_hold_ms=0")
 
     def _failed(self, exc):
         """Log one line per failed build (exception type only: messages can carry paths)."""
@@ -93,38 +117,38 @@ class SnapshotWriter(threading.Thread):
             _log(f"snapshot build recovered after {self.failures} failed attempts")
         self.failures, self.alarm = 0, False
 
+    def _due(self):
+        return max(self._next, min(self._last + self.debounce_s, self._first + self.max_delay_s))
+
     def run(self):
         while True:
             with self._cond:
-                while not self._halt and self._written == self._gen:
+                while not self._halt and self._first is None:
                     self._cond.wait()
                 if self._halt:
                     return
-                due = min(self._last + self.debounce_s, self._first + self.max_delay_s)
-                wait = due - time.monotonic()
+                wait = self._due() - time.monotonic()
                 if wait > 0:
                     self._cond.wait(wait)      # more marks move ``due`` out; re-evaluate
                     continue
-            if not self._write_locked():
-                with self._cond:               # failed build: back off one debounce, then retry
-                    self._first = self._last = time.monotonic()
+            self._attempt()
+
+    def _require_unlocked(self):
+        if getattr(self.server, "read_path", None) and self.server.lock._is_owned():
+            raise RuntimeError("configured snapshot lifecycle requires no request lock")
 
     def flush(self):
-        """Synchronously bring the file level with the database (raises on a write error)."""
-        with timing.RequestTimer(self.server.lock, event="snapshot_timing"):
-            with self._cond:
-                gen, pending = self._gen, self._written != self._gen
-            if not pending:
-                return
-            write_snapshot(self.server, self.server.system)
-            self._succeeded()
+        """Synchronously publish at least the entry generation (raises on a write error)."""
+        self._require_unlocked()
         with self._cond:
-            self._written = max(self._written, gen)
-            if self._written == self._gen:
-                self._first = self._last = None
+            entry = self._gen
+            if self._written >= entry:
+                return
+        self._attempt(entry=entry)
 
     def stop(self):
         """Flush what is pending, then end the thread."""
+        self._require_unlocked()
         try:
             self.flush()
         finally:

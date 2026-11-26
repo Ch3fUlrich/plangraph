@@ -396,6 +396,82 @@ def test_wait_releases_lock_and_rereads_without_notify(srv):
     assert result[0].json()["rows"][0]["seq"] == 1
 
 
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+@pytest.mark.parametrize("revoke", [False, True])
+def test_long_poll_has_no_global_hold_and_observes_new_commit(tmp_path, monkeypatch, capsys, backend, revoke):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from test_keeper_snapshot_writer import _server
+    from plangraph.keeper import auth
+
+    if backend == "postgres" and not os.environ.get("PG_DSN"):
+        pytest.skip("PG_DSN not set")
+    world = World(tmp_path, backend=backend)
+    world.store.bus_registry = Registry([])
+    server = _server(tmp_path, world, debounce=30)
+    reads, acquired, deferred, queued = [], [], [], []
+    entered, release = threading.Event(), threading.Event()
+    original, read = type(world.store).messages, server.read_store
+    acquire = server.lock.acquire
+    queue = server._read_audits
+
+    class AuditQueue:
+        get = queue.get
+
+        def put(self, value):
+            if value is not None:
+                queued.append(threading.get_ident())
+            queue.put(value)
+
+    def locked(*args, **kwargs):
+        if reads and threading.get_ident() == reads[0]:
+            acquired.append(1)
+        return acquire(*args, **kwargs)
+
+    def messages(store, principal, **filters):
+        reads.append(threading.get_ident())
+        rows = original(store, principal, **filters)
+        if len(reads) == 3:
+            entered.set()
+            assert release.wait(3)
+        return rows
+
+    def reader(**kwargs):
+        deferred.append(kwargs.get("defer_audit"))
+        return read(**kwargs)
+
+    monkeypatch.setattr(type(world.store), "messages", messages)
+    monkeypatch.setattr(server, "read_store", reader)
+    monkeypatch.setattr(server.lock, "acquire", locked)
+    monkeypatch.setattr(server, "_read_audits", AuditQueue())
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(call, server, "/v1/messages?since=0&wait_ms=3000",
+                                 token=world.tok("router"))
+            try:
+                assert entered.wait(2)
+                with server.lock:
+                    if revoke:
+                        auth.revoke(world.conn, "router")
+                    else:
+                        world.store.post_message(world.p("router"), **{
+                            "from": "router", "to": "keeper", "body": {"fixture": True}})
+            finally:
+                release.set()
+            status, _, body = result.result(3)
+        if revoke:
+            assert status == 403 and jbody(body)["error"] == "forbidden"
+        else:
+            assert status == 200 and jbody(body)["rows"][0]["body"] == {"fixture": True}
+        assert len(reads) >= 4 and not acquired and all(deferred) and queued == reads
+        assert any("hold_ms=0" in line and "verb=messages" in line
+                   for line in capsys.readouterr().err.splitlines() if "request_timing" in line)
+    finally:
+        server.shutdown()
+        server.server_close()
+        world.close()
+
+
 def test_reader_cannot_post(world):
     with pytest.raises(Refused):
         world.store.post_message(world.p("reader"), **{
