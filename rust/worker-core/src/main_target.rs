@@ -16,33 +16,46 @@ fn identified(target: &Path) -> bool {
         || crate::private_targets::cargo_target(target)
 }
 
+/// Track source metadata within one directory without following marker symlinks.
+#[derive(Default)]
+pub(crate) struct GitMarkers(u8);
+
+impl GitMarkers {
+    pub(crate) fn observe(&mut self, name: &std::ffi::OsStr, kind: fs::FileType) {
+        let marker_dir = kind.is_dir() || kind.is_symlink();
+        self.0 |= match name.to_str() {
+            Some(".git") => 8,
+            Some("HEAD") if !kind.is_dir() => 1,
+            Some("objects") if marker_dir => 2,
+            Some("refs") if marker_dir => 4,
+            _ => 0,
+        };
+    }
+
+    pub(crate) fn is_repository(&self) -> bool {
+        self.0 >= 7
+    }
+}
+
 /// A Git repository below the target is someone's source tree, never a build cache, whatever markers
 /// sit beside it: a `.git` directory or file (a repository or linked worktree) or a bare repository
 /// (a `HEAD` file beside `objects` and `refs` directories, which may be symlinks) at any depth.
 pub(crate) fn holds_git_repository(target: &Path) -> io::Result<bool> {
     let mut pending = vec![target.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let (mut head, mut objects, mut refs) = (false, false, false);
+        let mut markers = GitMarkers::default();
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
             let kind = entry.file_type()?;
-            let is_dir = kind.is_dir();
             // A marker directory may be a symlink (a shared object store, a linked refs directory):
             // it counts as present and is never followed.
-            let marker_dir = is_dir || kind.is_symlink();
-            match entry.file_name().to_str() {
-                Some(".git") => return Ok(true),
-                Some("HEAD") => head = !is_dir,
-                Some("objects") => objects = marker_dir,
-                Some("refs") => refs = marker_dir,
-                _ => {}
+            markers.observe(&entry.file_name(), kind);
+            if markers.is_repository() {
+                return Ok(true);
             }
-            if is_dir {
+            if kind.is_dir() {
                 pending.push(entry.path());
             }
-        }
-        if head && objects && refs {
-            return Ok(true);
         }
     }
     Ok(false)

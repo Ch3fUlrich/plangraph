@@ -5,6 +5,100 @@ use pg_worker_core::{
 use serde_json::Value;
 use std::{ffi::OsString, fs, io, os::unix::ffi::OsStringExt, path::Path, time::Duration};
 
+#[test]
+fn ranking_orders_allocated_bytes_and_releases_each_slice() {
+    use pg_worker_core::{
+        cargo_cache::try_exclusive_lease,
+        disk_hygiene::{rank_candidates, Budget, Candidate},
+    };
+    use std::{
+        cell::Cell,
+        time::{Instant, SystemTime},
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let now = SystemTime::now();
+    let old = now - Duration::from_secs(3600);
+    let mut candidates = Vec::new();
+    for (name, bytes) in [("small", 8192), ("large", 65536), ("middle", 32768)] {
+        let path = root.join(name);
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("data"), vec![0; bytes]).unwrap();
+        for file in [path.join("data"), path.clone()] {
+            fs::File::open(file).unwrap().set_modified(old).unwrap();
+        }
+        candidates.push(Candidate::new(path, root.clone(), now).unwrap());
+    }
+    let start = Instant::now();
+    let visits = Cell::new(0);
+    let clock = || {
+        if root.join("middle.plangraph-lock").exists()
+            && try_exclusive_lease(&root.join("middle")).unwrap().is_none()
+        {
+            // The unselected slot must be available while another slot is being scanned.
+            assert!(try_exclusive_lease(&root.join("small")).unwrap().is_some());
+            visits.set(visits.get() + 1);
+        }
+        start
+    };
+    let mut budget = Budget::new(start, &clock);
+    budget.slice_entries = 1;
+    let rows = rank_candidates(candidates, &budget);
+    assert_eq!(
+        rows.iter()
+            .map(|(item, _)| item.path.clone())
+            .collect::<Vec<_>>(),
+        ["large", "middle", "small"].map(|name| root.join(name))
+    );
+    assert!(rows
+        .iter()
+        .all(|(_, row)| row.complete() && row.estimate().unwrap() > 0));
+    assert!(visits.get() > 0);
+}
+
+#[test]
+fn truncated_ranking_refreshes_and_restarts_changed_metadata() {
+    use pg_worker_core::disk_hygiene::{rank_candidates, refresh_ranking, Budget, Candidate};
+    use std::time::{Instant, SystemTime};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let now = SystemTime::now();
+    let old = now - Duration::from_secs(3600);
+    let mut candidates = vec![];
+    for name in ["stable", "changed"] {
+        let path = root.join(name);
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("data"), [0u8; 8192]).unwrap();
+        for entry in [&path, &path.join("data")] {
+            fs::File::open(entry).unwrap().set_modified(old).unwrap();
+        }
+        candidates.push(Candidate::new(path, root.clone(), now).unwrap());
+    }
+    let mut budget = Budget::new(Instant::now(), &Instant::now);
+    budget.candidate_entries = 2;
+    let mut rows = rank_candidates(candidates, &budget);
+    assert!(rows.iter().all(|(_, row)| !row.complete()));
+    fs::File::open(root.join("changed/data"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+    refresh_ranking(&mut rows, &budget);
+    let stable = &rows
+        .iter()
+        .find(|(item, _)| item.path.ends_with("stable"))
+        .unwrap()
+        .1;
+    let changed = &rows
+        .iter()
+        .find(|(item, _)| item.path.ends_with("changed"))
+        .unwrap()
+        .1;
+    assert!(stable.complete());
+    assert_eq!(changed.reason, Some("young"));
+}
+
 fn sample(root: &Path, end: [u64; 2], freed: [u64; 2], dry: bool) -> HygieneReport {
     let mut report = HygieneReport::new(Duration::new(100, 123), dry);
     let limits = Thresholds {

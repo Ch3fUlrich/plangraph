@@ -53,6 +53,111 @@ pub(crate) fn remove_guarded(boundary: &Path, path: &Path, apply: bool) -> io::R
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) use artifact_walk::{stamp, ArtifactWalk};
+
+#[cfg(target_os = "linux")]
+mod artifact_walk {
+    use super::*;
+    use crate::main_target::GitMarkers;
+    use std::{collections::HashMap, os::unix::fs::MetadataExt};
+
+    type Stamp = (u64, u64, i64, i64);
+    pub(crate) fn stamp(meta: &fs::Metadata) -> Stamp {
+        (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+    }
+
+    #[derive(Default)]
+    pub(crate) struct ArtifactWalk {
+        dirs: Vec<(fs::ReadDir, GitMarkers)>,
+        seen: Vec<(PathBuf, Stamp)>,
+        links: HashMap<u64, u64>,
+        pub(crate) bytes: u64,
+        pub(crate) credit: u64,
+        pub(crate) complete: bool,
+    }
+
+    impl ArtifactWalk {
+        pub(crate) fn root_stamp(&self) -> Option<Stamp> {
+            self.seen.first().map(|(_, stamp)| *stamp)
+        }
+
+        pub(crate) fn unchanged(&self, room: impl Fn() -> bool) -> Option<bool> {
+            for (path, observed) in &self.seen {
+                if !room() {
+                    return None;
+                }
+                if !fs::symlink_metadata(path).is_ok_and(|meta| stamp(&meta) == *observed) {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        }
+
+        pub(crate) fn step(
+            &mut self,
+            root: &Path,
+            cutoff: SystemTime,
+            dev: u64,
+            uid: u32,
+        ) -> Result<(), &'static str> {
+            let path = if self.seen.is_empty() {
+                root.to_path_buf()
+            } else {
+                loop {
+                    let Some((entries, _)) = self.dirs.last_mut() else {
+                        self.complete = true;
+                        return Ok(());
+                    };
+                    match entries.next() {
+                        Some(Ok(entry)) => break entry.path(),
+                        Some(Err(_)) => return Err("probe_unavailable"),
+                        None => {
+                            self.dirs.pop();
+                        }
+                    }
+                }
+            };
+            let meta = fs::symlink_metadata(&path).map_err(|error| match error.kind() {
+                io::ErrorKind::NotFound => "vanished",
+                _ => "probe_unavailable",
+            })?;
+            let kind = meta.file_type();
+            if meta.dev() != dev
+                || meta.uid() != uid
+                || !(kind.is_dir() || kind.is_file() || kind.is_symlink())
+            {
+                return Err("unsafe");
+            }
+            if let Some((_, git)) = self.dirs.last_mut() {
+                git.observe(path.file_name().unwrap(), kind);
+                if git.is_repository() {
+                    return Err("unsafe");
+                }
+            }
+            if meta.modified().map_err(|_| "probe_unavailable")? >= cutoff {
+                return Err("young");
+            }
+            let bytes = meta.blocks().saturating_mul(512);
+            let (first, last) = if !kind.is_dir() && meta.nlink() > 1 {
+                let link = self.links.entry(meta.ino()).or_default();
+                *link += 1;
+                (*link == 1, *link == meta.nlink())
+            } else {
+                (true, true)
+            };
+            self.bytes = self.bytes.saturating_add(if first { bytes } else { 0 });
+            self.credit = self.credit.saturating_add(if last { bytes } else { 0 });
+            self.seen.push((path.clone(), stamp(&meta)));
+            if kind.is_dir() {
+                let entries = fs::read_dir(path).map_err(|_| "probe_unavailable")?;
+                self.dirs.push((entries, GitMarkers::default()));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A size that cannot be measured is skipped and the run alarms: the totals it feeds are a lower
 /// bound, never a complete-looking number.
 pub(crate) fn note_incomplete(report: &mut Report, path: &Path, error: &io::Error) {
