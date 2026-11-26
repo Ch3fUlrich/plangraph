@@ -4,6 +4,8 @@ D-6957 places Antigravity Gemini Neon medium on operator cost hold in review rou
 
 The native evidence test checks run annotations without waiting for a Cargo cache lease held by fast checks.
 
+The scheduled review probe allows 25 minutes for up to twelve sequential probes. The Claude launch tests cover the Antigravity Sonnet preference and subscription fallback on a host without Antigravity.
+
 Tests cover reviewer selection, subscription fallback, and writer priority.
 
 - `test_review_route_agy_sonnet_before_subscription`

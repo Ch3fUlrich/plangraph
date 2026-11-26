@@ -45,7 +45,7 @@ def test_review_route_ends_with_haiku_for_mimo_writer():
         return {"state": state, "evidence": None}
 
     fallback = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=limited)
-    assert [leg.id for leg in fallback.legs if leg.claude_family] == ["claude-sonnet-5-5-high"]
+    assert [leg.id for leg in fallback.legs if leg.claude_family] == ["agy-claude-sonnet-5-5-high"]
 
 
 def test_claude_or_anthropic_writer_never_gets_haiku():
