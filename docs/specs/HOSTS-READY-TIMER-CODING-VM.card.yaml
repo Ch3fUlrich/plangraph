@@ -1,0 +1,28 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "HOSTS-READY-TIMER-CODING-VM": {
+      "outcome": "A host-ready timer on the orchestration host runs the readiness source for every registry host, so each has a fresh host-ready file.",
+      "read_set": [
+        "src/plangraph/spawner/host_ready.py",
+        "deploy/manifest.toml",
+        "deploy/liveness/liveness-watchdog@.timer"
+      ],
+      "write_set": [
+        "deploy/host-ready/host-ready.service",
+        "deploy/host-ready/host-ready.timer",
+        "deploy/manifest.toml",
+        "docs/host-tools.md",
+        "tests/test_host_ready_unit.py",
+        "changelog.d/HOSTS-READY-TIMER-CODING-VM.md"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_host_ready_unit.py",
+      "risk_tags": [
+        "deploy"
+      ],
+      "estimate_tokens": 20000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_host_ready.py"
+    }
+  }
+}

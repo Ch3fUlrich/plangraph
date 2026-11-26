@@ -1,0 +1,9 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV.md	write	yes	E1 E2	predicted
+rust/worker-core/src/host_command.rs	write	yes	E1 E2	predicted
+rust/worker-core/src/hosts.rs	read	yes	E1 E2	predicted
+src/plangraph/fleet_sync/genconfig.py	write	yes	E1 E2	predicted
+src/plangraph/spawner/host_ready.py	write	yes	E1 E2	predicted
+src/plangraph/spawner/remote_ps.py	write	yes	E1 E2	predicted
+tests/test_fleet_sync.py	write	yes	E1 E2	predicted
+tests/test_spawner_remote_ps.py	write	yes	E1 E2	predicted

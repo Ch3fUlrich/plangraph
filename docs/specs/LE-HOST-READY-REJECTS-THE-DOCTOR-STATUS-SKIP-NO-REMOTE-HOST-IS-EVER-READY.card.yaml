@@ -1,0 +1,23 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-HOST-READY-REJECTS-THE-DOCTOR-STATUS-SKIP-NO-REMOTE-HOST-IS-EVER-READY": {
+      "outcome": "A readiness record accepts every status the doctor emits; the parser and the doctor share one status list, so a healthy remote host reads ready.",
+      "read_set": [
+        "src/plangraph/spawner/doctor.py"
+      ],
+      "write_set": [
+        "src/plangraph/spawner/host_ready_source.py",
+        "tests/test_host_ready.py",
+        "changelog.d/LE-HOST-READY-REJECTS-THE-DOCTOR-STATUS-SKIP-NO-REMOTE-HOST-IS-EVER-READY.md"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_host_ready.py tests/test_spawner_doctor.py",
+      "risk_tags": [
+        "host-exec"
+      ],
+      "estimate_tokens": 20000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_host_ready_path.py"
+    }
+  }
+}

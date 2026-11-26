@@ -1,0 +1,28 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV": {
+      "outcome": "The remote command for a WSL host finds pg-spawnd and the other host tools and carries the plangraph environment without a hand-installed wrapper; generated host configs never go stale.",
+      "read_set": [
+        "rust/worker-core/src/hosts.rs"
+      ],
+      "write_set": [
+        "src/plangraph/spawner/remote_ps.py",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/fleet_sync/genconfig.py",
+        "rust/worker-core/src/host_command.rs",
+        "tests/test_spawner_remote_ps.py",
+        "tests/test_fleet_sync.py",
+        "changelog.d/LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV.md"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_spawner_remote_ps.py tests/test_fleet_sync.py tests/test_host_ready.py",
+      "risk_tags": [
+        "host-exec",
+        "config"
+      ],
+      "estimate_tokens": 50000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_spawner_remote_ps_win.py"
+    }
+  }
+}
