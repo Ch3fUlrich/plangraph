@@ -3,6 +3,7 @@ use super::{
     placement::Host,
     process::capture,
     read_writer_prompt,
+    request::FORWARDED_NUMBERED_RESUME,
     storage::{next_seq, record_path, register_child},
     Caps, Request,
 };
@@ -53,6 +54,32 @@ if rc == 0:
 sys.exit(rc)
 "#;
 
+// A numbered resume is handed to Rust on the destination. The legacy receiver
+// imports the sender's record and its launcher can assign a new session.
+const NUMBERED_RECEIVER: &str = r#"import tempfile
+env=dict(os.environ,FLEET_LOCAL_HOST=p["host"],FLEET_FORWARDED="1")
+env.setdefault("PLANGRAPH_FLEET_OPS",str(root/"ops"))
+a=["pg-spawnd","session",resume_marker]+p["argv"]
+def run():
+ try:
+  return subprocess.run(a,input=p["prompt"],encoding="utf-8",env=env).returncode
+ except OSError as e:
+  print("fleet-launch: destination Rust launcher unavailable: "+str(e),file=sys.stderr)
+  return 2
+if "--dry-run" in a:
+ sys.exit(run())
+with tempfile.TemporaryDirectory(prefix="fleet-resume-") as tmp:
+ mcp=pathlib.Path(tmp)/"mcp.json"
+ mcp.write_text(p["mcp"],encoding="utf-8")
+ a += ["--mcp",str(mcp)]
+ rc=run()
+if rc == 0:
+ state=pathlib.Path(env.get("ROUTING_STATE_DIR") or pathlib.Path.home()/".local/state/routing")
+ record=state/"launch"/"sessions"/(p["numbered_writer"]+".json")
+ print("FLEET_REMOTE_SPEC="+record.read_text(encoding="utf-8").replace(chr(10),""))
+sys.exit(rc)
+"#;
+
 fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String> {
     let args = &request.args;
     let seq = if args.respawn || args.dry {
@@ -89,16 +116,27 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
         .option("mcp")
         .filter(|s| !s.is_empty())
         .map_or_else(|| paths.mcp(), Into::into);
-    let payload = json!({
-        "host": host.name(), "argv": argv, "spec": request.spec, "seq": seq,
+    let numbered = request.numbered_writer_name();
+    let mut payload = json!({
+        "host": host.name(), "argv": argv,
+        "spec": if numbered.is_some() { json!({}) } else { request.spec.clone() }, "seq": seq,
         "prompt": prompt,
         "mcp": read_text(&mcp).map_err(|e| io_text(&e, &mcp))?,
     });
+    if let Some(name) = numbered {
+        payload["numbered_writer"] = json!(name);
+    }
     // The path is installation data. The receiver keeps the old bytes when
     // the candidate has the same layout as the installed fleet launcher.
     let router = paths.remote_router()?;
     let router = serde_json::to_string(&router).expect("serialize path string");
-    let receiver = format!("{RECEIVER_HEADER}root=pathlib.Path.home()/{router}\n{RECEIVER_BODY}");
+    let receiver = format!("{RECEIVER_HEADER}root=pathlib.Path.home()/{router}\n");
+    let receiver = if numbered.is_some() {
+        let marker = serde_json::to_string(FORWARDED_NUMBERED_RESUME).expect("serialize marker");
+        format!("{receiver}resume_marker={marker}\n{NUMBERED_RECEIVER}")
+    } else {
+        receiver + RECEIVER_BODY
+    };
     let suffix = format!(
         "python3 -c {} {}",
         shell_quote(LOADER),

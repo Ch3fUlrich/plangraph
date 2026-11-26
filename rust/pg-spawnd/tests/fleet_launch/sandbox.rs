@@ -1,8 +1,10 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
@@ -193,6 +195,43 @@ impl Sandbox {
         } else {
             symlink(&self.launcher, target).unwrap();
         }
+    }
+
+    pub fn install_fixture_receiver(&self) {
+        let target = self
+            .path("target")
+            .join(&self.remote_router)
+            .join("bin/fleet-launch");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        self.install_destination(target);
+        symlink(env!("CARGO_BIN_EXE_pg-spawnd"), self.path("bin/pg-spawnd")).unwrap();
+    }
+
+    pub fn deliver(&self, encoded: &str, payload: &Value) -> Output {
+        let mut child = self
+            .python_command()
+            .args([
+                "-c",
+                "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
+                encoded,
+            ])
+            .env("HOME", self.path("target"))
+            .env(
+                "ROUTING_STATE_DIR",
+                self.path("target/.local/state/routing"),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
     }
 
     pub fn python_command(&self) -> Command {

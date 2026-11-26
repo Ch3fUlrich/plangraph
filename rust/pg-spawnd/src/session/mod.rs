@@ -42,19 +42,17 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-use arguments::{Arguments, ParseError};
 pub(crate) use external_run::agent_roster;
-use paths::{io_text, normalize, read_text, repr, resolve, shell_quote, var, Paths};
-use placement::Placement;
-use policy::{refused_role, Admission};
+use paths::{io_text, normalize, read_text, resolve, shell_quote, var, Paths};
+use policy::Admission;
 use regex::Regex;
-use request::Request;
+use request::{Request, ResumeIdentity};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     borrow::Cow,
     io::{self, BufWriter, IsTerminal, Write},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     sync::LazyLock,
 };
@@ -93,37 +91,6 @@ impl Caps {
     }
 }
 
-/// A session whose round the wait watchdog closed as BLOCKED is not restarted on its own.
-/// The block is stored under the numbered session name; a role-only respawn reaches that
-/// name through the saved launch record it restarts from.
-fn round_blocked(request: &Request, spawn_state: &Path) -> Option<String> {
-    let args = &request.args;
-    let source = args.option("session").unwrap_or(&args.name);
-    let saved = request.spec["session_name"].as_str();
-    blocked_reason(args.respawn, &[Some(source), saved], spawn_state)
-}
-
-fn blocked_reason(respawn: bool, names: &[Option<&str>], spawn_state: &Path) -> Option<String> {
-    if !respawn {
-        return None;
-    }
-    names
-        .iter()
-        .flatten()
-        .filter(|name| paths::basename(name))
-        .find_map(|name| {
-            let path = round_watch::state_file(spawn_state, name);
-            let blocked = round_watch::blocked_outcome(&path)?;
-            Some(format!(
-                "{name}: {} (command `{}`); clear {} after the operator has looked",
-                blocked["reason"].as_str().unwrap_or("blocked"),
-                // Records written before the command was redacted at write time are redacted here.
-                round_state::redacted(blocked["command"].as_str().unwrap_or("?")),
-                path.display()
-            ))
-        })
-}
-
 fn role_of(name: &str) -> &str {
     static SEQ: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-\d{4,}$").unwrap());
     SEQ.find(name.strip_suffix('\n').unwrap_or(name))
@@ -140,7 +107,7 @@ pub fn run(args: Vec<String>, ops: &Path) -> i32 {
     } else {
         Box::new(BufWriter::new(stdout))
     };
-    let result = launch(args, &Paths::new(ops), &mut out);
+    let result = request::launch(args, &Paths::new(ops), &mut out);
     let flushed = out.flush();
     match result.and_then(|code| flushed.map(|()| code)) {
         Ok(code) => code,
@@ -151,80 +118,12 @@ pub fn run(args: Vec<String>, ops: &Path) -> i32 {
     }
 }
 
-fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i32> {
-    let forwarded = var("FLEET_FORWARDED").is_some();
-    let args = match Arguments::parse(args) {
-        Ok(args) => args,
-        Err(ParseError::Usage) => {
-            writeln!(out, "{}", arguments::USAGE)?;
-            return Ok(2);
-        }
-        Err(ParseError::Guard(guard)) => {
-            eprintln!(
-                "fleet-launch: bad --ctx-guard {}: want N,M positive ints, hard > handoff",
-                repr(&guard)
-            );
-            return Ok(2);
-        }
-    };
-    let policy_path = paths.ops.join("fleet-launch-policy.json");
-    let policy = policy::load(&policy_path);
-    if let Some(pattern) = refused_role(policy.as_ref(), &args.role) {
-        eprintln!("fleet-launch: role {} is refused by policy ({pattern}); no launch: dispatch the work as spawner runs from the L1", args.role);
-        return Ok(2);
-    }
-    let Some(mut request) = Request::new(args, paths) else {
-        return Ok(2);
-    };
-    if let Some(reason) = round_blocked(&request, &round_watch::spawn_state_dir()) {
-        if !request.args.dry {
-            let admission = Admission::check(&request, policy.as_ref(), None, &paths.state);
-            storage::record_outcome(&admission, "refused", None);
-        }
-        eprintln!("fleet-launch: round BLOCKED, no automatic restart: {reason}");
-        return Ok(2);
-    }
-    match restart::prepare(&request, paths, policy.as_ref()) {
-        Ok(Some(restart)) => {
-            request.restart = Some(restart);
-        }
-        Ok(None) => {}
-        Err(reason) => {
-            if !request.args.dry {
-                let admission = Admission::check(&request, policy.as_ref(), None, &paths.state);
-                storage::record_outcome(&admission, "refused", None);
-            }
-            eprintln!("fleet-launch: PROMPT-STALE {reason}");
-            return Ok(2);
-        }
-    }
-    let host_policy = std::env::var_os("FLEET_HOST_POLICY").map_or(policy_path, PathBuf::from);
-    let host_policy = policy::load(&host_policy);
-    let placement = Placement::new(&request, host_policy.as_ref());
-    let host = match placement.choose(&request, forwarded) {
-        Ok(host) => host,
-        Err(error) => {
-            eprintln!("fleet-launch: {error}");
-            return Ok(2);
-        }
-    };
-    if !placement.local(&host) {
-        return remote::launch(&request, paths, &host, out);
-    }
-    let admission = Admission::check(
-        &request,
-        policy.as_ref(),
-        placement.policy_host(&host),
-        &paths.state,
-    );
-    local(&request, paths, &admission, host.name(), out)
-}
-
 fn local(
     request: &Request,
     paths: &Paths,
     admission: &Admission,
     host: &str,
+    resume: Option<&ResumeIdentity>,
     out: &mut dyn Write,
 ) -> io::Result<i32> {
     let args = &request.args;
@@ -298,7 +197,10 @@ fn local(
     } else {
         style
     };
-    let _lock = if !args.dry && var("FLEET_DEFER_RECORD").as_deref() != Some("1") {
+    let _lock = if resume.is_none()
+        && !args.dry
+        && var("FLEET_DEFER_RECORD").as_deref() != Some("1")
+    {
         match storage::role_lock(&paths.state, &args.role) {
             Ok(file) => Some(file),
             Err(error) => {
@@ -310,7 +212,9 @@ fn local(
     } else {
         None
     };
-    let seq = if args.dry {
+    let seq = if let Some(resume) = resume {
+        resume.seq
+    } else if args.dry {
         0
     } else if let Some(given) = var("FLEET_SESSION_SEQ")
         .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
@@ -321,7 +225,10 @@ fn local(
     } else {
         storage::next_seq(&paths.state)?
     };
-    let name = format!("{}-{seq:04}", args.role);
+    let name = resume.map_or_else(
+        || Cow::Owned(format!("{}-{seq:04}", args.role)),
+        |resume| Cow::Borrowed(resume.name.as_str()),
+    );
     let hard = admission.caps.caps.hard;
     let settings = match settings::prepare(paths, &args.role, admission.caps.caps, !args.dry) {
         Ok(settings) => settings,
@@ -337,12 +244,16 @@ fn local(
     } else {
         "Artifact,SendFeedback,Workflow,ReportFindings,AskUserQuestion"
     };
-    let argv = [
-        "claude",
-        "--bg",
+    let mut argv = vec!["claude", "--bg"];
+    if let Some(resume) = resume {
+        argv.extend(["--resume", resume.id.as_str()]);
+    }
+    let mcp_arg = mcp.to_string_lossy();
+    let settings_arg = settings.path.to_string_lossy();
+    argv.extend([
         "--strict-mcp-config",
         "--mcp-config",
-        &mcp.to_string_lossy(),
+        &mcp_arg,
         "--remote-control",
         &name,
         "-n",
@@ -354,13 +265,13 @@ fn local(
         "--permission-mode",
         "bypassPermissions",
         "--settings",
-        &settings.path.to_string_lossy(),
+        &settings_arg,
         "--disallowed-tools",
         deny,
         "--append-system-prompt",
         style,
         &prompt,
-    ];
+    ]);
     if args.dry {
         eprintln!("fleet-launch: admission allowed{admission_suffix}");
         if settings.generated {
@@ -444,7 +355,8 @@ fn local(
         return Ok(code);
     }
     writeln!(out, "fleet-launch: session {name}")?;
-    let sid = identity::session_id(&stdout, &name, launched_ms, &args.cwd);
+    let sid = identity::session_id(&stdout, &name, launched_ms, &args.cwd)
+        .or_else(|| resume.map(|resume| resume.id.clone()));
     lifecycle.save("session_id", json!(sid))?;
     if sid.is_none() {
         eprintln!("fleet-launch: warning: no session id for {name}; fleet hooks will not find this session");
