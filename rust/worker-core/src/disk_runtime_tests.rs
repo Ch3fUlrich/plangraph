@@ -149,7 +149,15 @@ fn hygiene_inventory_matches_environment_and_fd_per_path() {
     symlink("socket:[42]", pid.join("fd/6")).unwrap();
     // Both spellings of the Cargo setting, duplicates, and an unrelated field
     // with an embedded setting name. The unused sibling must stay unprotected.
-    fs::write(pid.join("environ"), b"CARGO_TARGET_DIR=alias\0CARGO_TARGET_DIR=/work/target-b\0CARGO_BUILD_TARGET_DIR=alias\0CARGO_BUILD_TARGET_DIR=/work/future/\xff\0CARGO_BUILD_TARGET_DIR=\0OTHER=CARGO_TARGET_DIR=target-a2\0").unwrap();
+    let environ: &[&[u8]] = &[
+        b"CARGO_TARGET_DIR=alias\0",
+        b"CARGO_TARGET_DIR=/work/target-b\0",
+        b"CARGO_BUILD_TARGET_DIR=alias\0",
+        b"CARGO_BUILD_TARGET_DIR=/work/future/\xff\0",
+        b"CARGO_BUILD_TARGET_DIR=\0",
+        b"OTHER=CARGO_TARGET_DIR=target-a2\0",
+    ];
+    fs::write(pid.join("environ"), environ.concat()).unwrap();
     fs::create_dir(proc.join("124")).unwrap(); // PID vanished before stat was read.
     let deadline = Instant::now() + Duration::from_secs(10);
     let rows = scan_hygiene_processes(&proc, deadline).unwrap();
