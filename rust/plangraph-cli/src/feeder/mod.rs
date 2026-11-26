@@ -7,6 +7,7 @@ pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
+mod windows_ram;
 mod workflow;
 pub(crate) use adapters::MERGE_INDEX_EXPIRED;
 pub use adapters::{Env, SlowKeeper, Transport};
@@ -49,8 +50,10 @@ pub struct Policy {
     pub quota_max_age_seconds: i64,
     pub ram_per_run_bytes: u64,
     pub ram_floor_bytes: u64,
+    pub windows_ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
     pub quota_floor_percent: f64,
+    pub cpu_pressure_max_percent: f64,
     pub facts_max_age_seconds: i64,
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
@@ -64,8 +67,10 @@ impl Default for Policy {
             quota_max_age_seconds: 10_800,
             ram_per_run_bytes: 4_000_000_000,
             ram_floor_bytes: 3_000_000_000,
+            windows_ram_floor_bytes: 6_000_000_000,
             disk_floor_bytes: 10_000_000_000,
             quota_floor_percent: 10.0,
+            cpu_pressure_max_percent: 50.0,
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 6,
@@ -127,6 +132,8 @@ pub struct HostFacts {
     pub free_ram_bytes: u64,
     pub free_disk_bytes: u64,
     pub quota_remaining_percent: Option<f64>,
+    #[serde(default)]
+    pub cpu_pressure_avg300: Option<f64>,
     /// Unix seconds; admission compares with the caller's clock, not an internal clock.
     pub observed_at: i64,
     #[serde(default)]
@@ -149,6 +156,7 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         Some("kill_switch".to_string())
     } else if !p.quota_floor_percent.is_finite()
         || !(0.0..100.0).contains(&p.quota_floor_percent)
+        || !(0.0..=100.0).contains(&p.cpu_pressure_max_percent)
         || p.facts_max_age_seconds < 0
         || p.quota_max_age_seconds < 0
         || p.ram_per_run_bytes == 0
@@ -162,6 +170,14 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         Some("stale_facts".to_string())
     } else if limit.is_none() {
         Some(format!("unknown_host:{}", f.host))
+    } else if let Some(pressure) = f
+        .cpu_pressure_avg300
+        .filter(|pressure| *pressure > p.cpu_pressure_max_percent)
+    {
+        Some(format!(
+            "cpu_pressure avg300={pressure} > {}",
+            p.cpu_pressure_max_percent
+        ))
     } else if f.running_writers >= limit.unwrap_or(0) {
         Some("max_writers".to_string())
     } else if f.free_ram_bytes < p.ram_per_run_bytes {

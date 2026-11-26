@@ -135,19 +135,27 @@ memory, one-minute load, effective CPU count, and disk space on the run-state
 and existing Cargo target filesystems. It uses the spawner host identity from
 `PLANGRAPH_HOST_NAME` or the host registry.
 
+On WSL, the available RAM sample is the lower of WSL's MemAvailable and Windows'
+free physical memory after the Windows floor (6 GB by default). The PowerShell
+read has a 15-second limit. After a failed read, the feeder uses a cached value
+for at most one facts window (300 seconds by default). Without a fresh value it
+refuses as `windows_ram_unreadable`. Dry runs can read the cache.
+
 Live hosts admit by free RAM (D-5122). Free RAM above `ram_floor_bytes`, divided by
 `ram_per_run_bytes`, is `slots_by_ram`; the host's writer limit is its running writers
-plus `new_writers_allowed`. Load1 only paces: where the kernel has no
+plus `new_writers_allowed`. CPU pressure above `cpu_pressure_max_percent` (50% by
+default) refuses new writers and reports the measured `some avg300` and the threshold.
+Facts files can supply `cpu_pressure_avg300`. Where the kernel has no
 `/proc/pressure/cpu` file (only a missing file counts; an unreadable or malformed one
 still belongs to a PSI kernel) and load1 is at or above the cpu count, the host gets
-one new writer per tick (`load_paced`). An unreadable load average means no pacing,
-not a refusal. The cpu pressure thresholds and the Windows RAM of a WSL host come in
-later slices; until the Windows side is sampled the WSL workstation's RAM is
-overstated, so keep its timer disabled (or `feeder.off` set) until then.
+one new writer per tick (`load_paced`). If the load average is unreadable, the
+RAM budget sets the slots. The decision records `psi`, `psi_unreadable` or
+`load_fallback` as its CPU pressure source.
 Every decision with an available sample, including an idle tick, records its capacity
 line: host, cpus, `load1` (null when unavailable), running writers, free RAM, floor,
 RAM per writer, `slots_by_ram`, `new_writers_allowed`, `load_paced`, `writer_limit`
-(null for a host the policy does not list), disk and quota.
+(null for a host the policy does not list), disk and quota. It also records both
+RAM views and the Windows reading's source on WSL.
 
 The policy lists the hosts that run writers under `[max_writers]` (`coding`, `dell`,
 `workstation`). A host it does not list refuses as `unknown_host:<name>` under both
@@ -232,12 +240,11 @@ and
 `install -Dm644 deploy/systemd/pg-feeder.timer ~/.config/systemd/user/pg-feeder.timer`,
 then run `systemctl --user daemon-reload` and
 `systemctl --user enable --now pg-feeder.timer`.
-Do not enable the timer on the WSL workstation. Before its checkout takes the
-RAM-budget policy, the host must show positive evidence of one of two states:
+Before the WSL workstation's feeder rollout is approved, keep the timer
+disabled or set `feeder.off`. The host must show positive evidence of one of two states:
 `systemctl --user is-enabled pg-feeder.timer` prints exactly `disabled` and
 `systemctl --user is-active pg-feeder.timer` prints exactly `inactive` (any other
 output, such as `enabled`, `enabled-runtime`, `active` or `activating`, does not count;
 `systemctl --user disable --now pg-feeder.timer` reaches the state), or
-`~/.config/plangraph/feeder.off` exists. An enabled or active timer still fires and
-admits writers. WSL free RAM overstates
-what the workstation has until the Windows RAM sampling slice is deployed.
+`~/.config/plangraph/feeder.off` exists. Before enabling the timer, verify that
+the deployed binary reports the Windows RAM sample in a dry run.
