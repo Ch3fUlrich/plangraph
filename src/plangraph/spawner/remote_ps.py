@@ -1,6 +1,7 @@
 """Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
 from concurrent.futures import ThreadPoolExecutor, wait
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -573,7 +574,7 @@ def changed_runs(state, bookmark, *, transport=query_host):
 
 
 def native_receipt(record):
-    """A target PID is evidence, never an origin-side process identity."""
+    """Keep target process evidence and the current round on an origin receipt."""
     if record.get('overflow_remote') and (record.get('run_kind') == 'native-codex' or record.get('role') == 'review'):
         record['origin_receipt'] = True
         identity = {key: record.pop(key) for key in list(record)
@@ -581,14 +582,25 @@ def native_receipt(record):
                     or key.startswith('supervisor_')}
         if identity:
             record['remote_process'] = dict(record.get('remote_process') or {}, **identity)
+        previous = record.get('resume_from')
+        if record.get('status') == 'running' and isinstance(previous, dict):
+            for field in ('ended', 'exit_code', 'reason', 'error', 'result', 'status_line'):
+                record.pop(field, None)
+            previous_head = previous.get('head')
+            if record.get('final_head') == previous_head:
+                record.pop('final_head', None)
+            for field in ('review', 'fast_checks', 'review_base'):
+                evidence = record.get(field)
+                if isinstance(evidence, dict) and evidence.get('head') == previous_head:
+                    record.pop(field)
     return record
 
 
 def native_result(record, *, verb='result', message=None):
-    """Refresh a native overflow receipt with target-host terminal evidence."""
+    """Run a bounded native control request on the overflow target."""
     from plangraph.keeper.credential_guard import mask
     try:
-        if verb not in ('result', 'cancel', 'steer'):
+        if verb not in ('result', 'cancel', 'steer', 'resume'):
             raise ValueError('unsupported native control verb')
         from .overflow import placement_config, registry_caps
         host = placement_config(registry_caps())['hosts'][record['host']]
@@ -602,19 +614,20 @@ def native_result(record, *, verb='result', message=None):
             command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
         command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
         state_args = ['--state', host['state_dir']] if host.get('state_dir') else []
-        argv = (['pg-spawnd', 'steer-local', run_id, *state_args] if verb == 'steer' else
+        argv = (['pg-spawnd', f'{verb}-local', run_id, *state_args]
+                if verb in ('steer', 'resume') else
                 ['python3', '-m', 'plangraph.spawner.cli', *state_args, verb, run_id])
         command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join(argv)
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
         step = {'argv': argv, 'env': {'PYTHONPATH': host['spawner_src']},
                 'receipt': {'begin': begin, 'end': end}}
-        if verb == 'steer':
+        if verb in ('steer', 'resume'):
             step['stdin_text'] = message
         plan = {'cwd': host['repo'], 'steps': [step]}
         if host.get('env_file'):
             plan['env_file'] = host['env_file']
         command, body = invocation(host, command, plan.pop('steps'), **plan)
-        if body is None and verb == 'steer':
+        if body is None and verb in ('steer', 'resume'):
             body = message.encode()
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                                 '--', host['ssh'], command], capture_output=True, timeout=10,
@@ -630,19 +643,81 @@ def native_result(record, *, verb='result', message=None):
         remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
         if not isinstance(remote, dict):
             raise ValueError('invalid receipt')
-        if verb == 'steer':
+        if verb in ('steer', 'resume'):
             if remote.get('run_id') != run_id or type(remote.get('ok')) is not bool:
-                raise ValueError('steer receipt mismatch')
+                raise ValueError(f'{verb} receipt mismatch')
             return remote
         if (remote.get('run_id') != run_id or remote.get('host') != record.get('host') or remote.get('run_kind') != record.get('run_kind')
                 or remote.get('role') != record.get('role')):
             raise ValueError('receipt mismatch')
+        if verb == 'result' and record.get('resume_number', 0):
+            remote_round = remote.get('resume_number')
+            if type(remote_round) is not int or remote_round < record['resume_number']:
+                raise ValueError('receipt predates the acknowledged resume')
         return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
                     overflow_reason=record.get('overflow_reason'), placement=record.get('placement')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         if verb == 'steer':
             return dict(run_id=record['run_id'], ok=False, steered=False, error='steer host route failed')
+        if verb == 'resume':
+            return dict(run_id=record['run_id'], ok=False,
+                        error='resume acknowledgement unavailable; retry the same request')
         return native_receipt(dict(record, remote_query_error='host query failed'))
+
+
+def resume_run(service, run_id, prompt):
+    """Resume a recorded native writer on its owning host and save the current round."""
+    from plangraph.fleet_snapshot import _projection_binary
+
+    prior = service.result(run_id)
+    pins = ('host', 'session_id', 'cwd', 'final_head')
+    round_number = prior.get('resume_number', 0)
+    if (prior.get('run_kind') != 'native-codex' or prior.get('role') != 'implement'
+            or not all(isinstance(prior.get(key), str) and prior[key] for key in pins)):
+        raise ValueError('resume requires a native writer record with host, session, worktree and head')
+    if (prior.get('status') not in ('completed', 'failed') or prior.get('ended') is None
+            or type(round_number) is not int or not 0 <= round_number < 2**64 - 1):
+        raise ValueError('native writer has no ended round to resume')
+    if not prompt.strip() or len(prompt.encode()) > MAX_OUTPUT or '\\0' in prompt:
+        raise ValueError('resume prompt must contain between 1 byte and 1 MiB of text')
+
+    request = json.dumps({**{key: prior[key] for key in pins},
+                          'resume_number': round_number, 'prompt': prompt})
+    remote = bool(prior.get('overflow_remote') or prior.get('origin_receipt'))
+    if remote:
+        ack = native_result(prior, verb='resume', message=request)
+    else:
+        reply = subprocess.run([_projection_binary(), 'resume-local', run_id,
+                                '--state', str(service.state)], input=request.encode(),
+                               capture_output=True, timeout=10)
+        if reply.returncode:
+            raise ValueError('local resume acknowledgement unavailable; retry the same request')
+        ack = json.loads(reply.stdout)
+    if not isinstance(ack, dict) or ack.get('run_id') != run_id:
+        raise ValueError('invalid native resume acknowledgement')
+    if ack.get('ok') is False and isinstance(ack.get('error'), str):
+        return ack
+    started = ack.get('started')
+    new_round = ack.get('resume_number')
+    if (ack.get('ok') is not True or type(new_round) is not int or new_round != round_number + 1
+            or type(started) not in (int, float) or not 0 < started < math.inf):
+        raise ValueError('invalid native resume acknowledgement')
+    current = service.result(run_id)
+    if not remote or current.get('resume_number', 0) >= new_round:
+        return current
+
+    previous = dict(head=prior['final_head'], status=prior['status'],
+                    started=prior.get('started'), ended=prior['ended'],
+                    exit_code=prior.get('exit_code'))
+    running = dict(prior, status='running', started=started, overflow_remote=True,
+                   resume_number=new_round, review_rounds=0, resume_from=previous)
+    for field in ('round_stop', 'round_counts', 'review_test_status', 'pushed',
+                  'push_failures', 'ledger_error', 'remote_query_error', 'remote_process',
+                  'quota_limited', 'quota_record_error'):
+        running.pop(field, None)
+    running = native_receipt(running)
+    service._save(running)
+    return running
 
 
 def steer_run(service, run_id, message, host=None):

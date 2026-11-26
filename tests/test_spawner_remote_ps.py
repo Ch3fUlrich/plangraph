@@ -679,3 +679,68 @@ def test_batch_card_keys_land_on_the_run_record():
         record = {}
         annotate_item(record, card)
         assert 'item_keys' not in record, card
+
+
+def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from plangraph.spawner import cli, overflow
+    from plangraph.spawner.service import SpawnService
+
+    host = dict(ssh='alias', repo='/r', spawner_src='/s',
+                wsl_distro='Ubuntu', state_dir='/target-state')
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(overflow, 'placement_config', lambda registry: {'hosts': {'ash': host}})
+    service = SpawnService(state=tmp_path)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: service)
+    prior = dict(run_id='run-a', host='ash', run_kind='native-codex', role='implement',
+                 cwd='/target-state/runs/run-a/worktree', session_id='existing-session',
+                 overflow_remote=True, status='failed', final_head='a' * 40,
+                 started=1, ended=2, exit_code=7, reason='old failure',
+                 status_line='BLOCKED', result='old result', review={'head': 'a' * 40},
+                 fast_checks={'head': 'a' * 40})
+    record_path = service._path('run-a')
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(json.dumps(prior))
+    prompt = tmp_path / 'fix.md'
+    prompt.write_text('fix the round', encoding='utf-8')
+    calls = []
+
+    def fake_ssh(argv, **kwargs):
+        assert argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+        step = json.loads(kwargs['input'])['steps'][0]
+        calls.append(step['argv'])
+        if len(calls) == 1:
+            assert step['argv'] == ['pg-spawnd', 'resume-local', 'run-a', '--state', '/target-state']
+            assert json.loads(step['stdin_text']) == dict(
+                host='ash', session_id=prior['session_id'], cwd=prior['cwd'],
+                final_head=prior['final_head'], resume_number=0, prompt='fix the round')
+            body = dict(ok=True, run_id='run-a', resume_number=1, started=3)
+        else:
+            assert step['argv'][-2:] == ['result', 'run-a']
+            if len(calls) == 2:
+                raise subprocess.TimeoutExpired(argv, 10)
+            body = dict(prior, **({'status': 'completed', 'final_head': 'b' * 40,
+                                   'exit_code': 0, 'ended': 5, 'started': 3, 'resume_number': 1}
+                                  if len(calls) == 4 else {}))
+        receipt = step['receipt']
+        return SimpleNamespace(returncode=0, stdout=(
+            receipt['begin'] + '\n' + json.dumps(body) + '\n' + receipt['end'] + '\n').encode())
+
+    monkeypatch.setattr(remote_ps.subprocess, 'run', fake_ssh)
+    assert cli.main(['resume', 'run-a', '--prompt-file', str(prompt)]) == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed['resume_number'] == 1
+    assert resumed['resume_from']['head'] == 'a' * 40
+    assert resumed['resume_from']['exit_code'] == 7
+    for _ in range(2):
+        assert cli.main(['result', 'run-a']) == 0
+        running = json.loads(capsys.readouterr().out)
+        assert running['status'] == service.result('run-a')['status'] == 'running'
+        assert running['remote_query_error'] == 'host query failed'
+        for field in ('final_head', 'ended', 'exit_code', 'reason', 'status_line', 'result',
+                      'review', 'fast_checks'):
+            assert field not in running
+    assert cli.main(['result', 'run-a']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['status'] == 'completed' and result['exit_code'] == 0
+    assert result['final_head'] == 'b' * 40 and result['resume_number'] == 1

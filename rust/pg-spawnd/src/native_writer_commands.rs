@@ -1,4 +1,6 @@
 use super::{native_writer, writer_effort, Driver, Host, WRITER_EFFORT};
+#[cfg(unix)]
+use crate::native_writer_remote_resume as remote_resume;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
 use serde_json::{json, Value};
 use std::{
@@ -232,7 +234,24 @@ fn read_prompt(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
-fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
+enum ResumeMode<'a> {
+    PromptFile(&'a Path),
+    #[cfg(unix)]
+    Request(&'a remote_resume::Request, &'a mut dyn Write),
+}
+
+#[cfg(unix)]
+impl ResumeMode<'_> {
+    fn acknowledge(self, record: &Value) {
+        if let Self::Request(_, output) = self {
+            // Losing the reply cannot cancel an already-admitted round.
+            let _ = writeln!(output, "{}", remote_resume::acknowledged(record));
+            let _ = output.flush();
+        }
+    }
+}
+
+fn reopen(state: &Path, id: &str, mode: ResumeMode<'_>) -> Result<Value, String> {
     let directory = run_dir(state, id).map_err(|_| "unknown run id")?;
     let path = directory.join("record.json");
     let _owner = crate::writer_control::supervisor_guard(&path)?;
@@ -243,6 +262,13 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
         || record["origin_receipt"] == true
     {
         return Err("resume must run on the native writer's owning host".into());
+    }
+    #[cfg(unix)]
+    if let ResumeMode::Request(request, _) = &mode {
+        if request.check(id, &record)?.is_some() {
+            mode.acknowledge(&record);
+            return Ok(record);
+        }
     }
     if !matches!(record["status"].as_str(), Some("completed" | "failed"))
         || !record["ended"].is_number()
@@ -261,6 +287,10 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     if request["record"]["run_id"] != id {
         return Err("native request belongs to another run".into());
     }
+    #[cfg(unix)]
+    if matches!(mode, ResumeMode::Request(..)) && request["record"]["host"] != record["host"] {
+        return Err("native request belongs to another host".into());
+    }
     let mut host = Host::from_request(&request, &record, path)?;
     host.configure(&request)?;
     let head = host.head()?;
@@ -270,7 +300,11 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     if host.disk_gb()? < 5 {
         return Err("disk_low: need 5 GB free to start".into());
     }
-    let prompt = read_prompt(prompt_path)?;
+    let prompt = match &mode {
+        ResumeMode::PromptFile(path) => read_prompt(path)?,
+        #[cfg(unix)]
+        ResumeMode::Request(request, _) => request.prompt.clone(),
+    };
     let log_offset = fs::metadata(directory.join("native.log"))
         .map_err(|e| format!("native session log unavailable: {e}"))?
         .len();
@@ -288,11 +322,32 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
     record["started"] = json!(chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
     record["review_rounds"] = json!(0);
     native_writer::clear_ended(&mut record, native_writer::RESUME_REOPEN_FIELDS);
+    record.as_object_mut().unwrap().remove("final_head");
+    record
+        .as_object_mut()
+        .unwrap()
+        .remove("resume_prompt_sha256");
+    #[cfg(unix)]
+    if let ResumeMode::Request(request, _) = &mode {
+        request.remember(&mut record);
+    }
     mark_process(&mut record);
     host.save(&record)?;
+    #[cfg(unix)]
+    mode.acknowledge(&record);
     Ok(native_writer::run_resume(
         &mut host, record, &session, &prompt,
     ))
+}
+
+#[cfg(unix)]
+fn resume_from_stdin(state: &Path, id: &str, output: &mut dyn Write) -> Result<(), String> {
+    let result = remote_resume::Request::read(std::io::stdin())
+        .and_then(|request| reopen(state, id, ResumeMode::Request(&request, output)));
+    if let Err(error) = result {
+        writeln!(output, "{}", remote_resume::refused(id, error)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), String> {
@@ -304,22 +359,33 @@ pub(crate) fn resume(args: Vec<String>, output: &mut dyn Write) -> Result<(), St
     }
     let mut prompt_path = None;
     let mut state = None;
+    #[cfg(unix)]
+    let mut request_stdin = false;
     while let Some(flag) = args.next() {
         match flag {
             "--prompt-file" if prompt_path.is_none() => {
                 prompt_path = Some(args.next().ok_or(usage)?)
             }
             "--state" if state.is_none() => state = Some(args.next().ok_or(usage)?),
+            #[cfg(unix)]
+            "--request-stdin" if !request_stdin => request_stdin = true,
             _ => return Err(usage.into()),
         }
     }
     let state = crate::state::resolve_state(state, |key| std::env::var_os(key))?;
+    #[cfg(unix)]
+    if request_stdin {
+        if prompt_path.is_some() {
+            return Err(usage.into());
+        }
+        return resume_from_stdin(&state, id, output);
+    }
     let prompt = Path::new(prompt_path.ok_or(usage)?);
     let directory = run_dir(&state, id).map_err(|_| "unknown run id")?;
     if !directory.join("record.json").exists() {
         return Err("unknown run id".into());
     }
-    let record = reopen(&state, id, prompt)?;
+    let record = reopen(&state, id, ResumeMode::PromptFile(prompt))?;
     writeln!(output, "{record}").map_err(|e| e.to_string())?;
     if record["status"] != "completed" {
         return Err(record["reason"]

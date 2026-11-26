@@ -6,7 +6,7 @@ use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|resume-local|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local> [args]";
@@ -214,6 +214,10 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("resume") {
         return crate::native_writer_host::resume(rest, out);
+    }
+    #[cfg(unix)]
+    if verb.as_deref() == Some("resume-local") {
+        return crate::native_writer_remote_resume::launch(&rest, std::io::stdin(), out);
     }
     if verb.as_deref() == Some("steer-local") {
         return crate::native_steer::local_cli(&rest, std::io::stdin(), out);
