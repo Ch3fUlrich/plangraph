@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_check_file_size.py — the 800-line gate's own tests (AO-400LOC, moved D-3198).
-
-Every case drives `tools/check_file_size.py` the way production runs it: a
-subprocess whose cwd is a repository, so the checker resolves its checkout
-through `git rev-parse --show-toplevel` exactly as the CI step and the pre-push
-gate do (Principle 9 — never verify a branch production does not take).
-Fixture repos are real git repos carrying their own identity, so the tests
-also pass on CI's identity-less runners.
-
-Run directly:
-
-    python3 tests/test_check_file_size.py
-"""
+"""Drive the 800-line gate as a subprocess from real Git fixture repositories."""
 import os
 import re
 import shutil
@@ -255,6 +243,15 @@ class BaselineTests(RepoFixture):
         self.file("legacy.py", 900)
         self.baseline("legacy.py not-a-count\n")
         self.assertFails(self.check(), ".filesize-baseline")
+
+
+def test_fixture_repo_ignores_parent_policy_base():
+    node = f"{__file__}::LineLimitTests::test_a_800_line_file_passes"
+    env = dict(os.environ, FILESIZE_REQUIRE_BASE="origin/main", PYTEST_ADDOPTS="",
+               PYTEST_SHARD="", PYTEST_SHARD_DURATIONS_OUT="")
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", node], cwd=ROOT,
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and "1 passed" in result.stdout, result.stdout + result.stderr
 
 
 class UpdateBaselineTests(RepoFixture):

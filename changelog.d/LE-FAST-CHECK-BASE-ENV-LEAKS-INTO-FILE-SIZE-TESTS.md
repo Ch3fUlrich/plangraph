@@ -1,0 +1,1 @@
+- Policy tests that create temporary Git repositories ignore inherited fast-check base refs, so their checkers use the fixture history.
