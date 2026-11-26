@@ -215,7 +215,48 @@ the queue retains its head and newest 255 events, reporting overflow on stderr.
 
 ## Collectors, freshness and host integration
 
-Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+`plangraph flow-snapshot --json` reads one observation pass and writes the watchdog input.
+Use `--out PATH` to override the default `flow-snapshot.json` under
+`PLANGRAPH_STATE_DIR`, `$XDG_STATE_HOME/plangraph` or
+`~/.local/state/plangraph`. `--json` prints the published payload to stdout.
+The collector syncs a same-directory temporary file and replaces the destination atomically.
+A required input failure exits 3 and keeps the last valid output. Invocation or publication
+errors exit 2. Stderr records the outcome and names missing inputs. On a successful partial
+observation, `unavailable_inputs` in the JSON names the optional readers whose watchdog
+fields are omitted.
+
+- Keeper supplies the JSON snapshot and agent-ready list. The collector checks current
+  item details against the snapshot's state and epoch before reading its review round or
+  activity. A ready-query failure leaves close counts, review and lease facts, and
+  `pending_by_role` available. `ready_families` groups ready projects by Keeper owner.
+  Set `PLANGRAPH_FLOW_CRITICAL_TARGET` to the critical-path stall service's target.
+- Set `PLANGRAPH_ROOT` to the repository checkout, or run from within it. The collector
+  reads its GitHub `origin` and checks forward-only main before counting completed main
+  push runs for the test workflow whose exact heads are on that ancestry, over one
+  seven-day window. The local Git object store must already contain the observed main
+  tip and run heads. The collector leaves Git refs alone. Unit SHAs compare direct-copy
+  units assigned to the local role in the deploy manifest against installed files.
+  The existing `tools/claude_usage.py pace --json` supplies Claude usage.
+- Configure comma-separated `PLANGRAPH_FLOW_CODING_HOSTS` and
+  `PLANGRAPH_FLOW_WORKER_HOSTS` using the sampler's host IDs. The collector reads
+  each host's latest row from `PLANGRAPH_FLEET_SERIES_DIR`, defaulting to the collector
+  state directory's `fleet` subdirectory. A future, unreachable or more than five-minute-old
+  row cannot establish placement. The local checkout observation uses
+  `PLANGRAPH_HOST_NAME`, `PLANGRAPH_HOST` or the host registry.
+- Optional `PLANGRAPH_FLOW_LEGS` selects comma-separated leg keys for recent scoped
+  observations from the existing leg-state store. `PLANGRAPH_FLOW_LEG_STATE_DB` overrides
+  its path. The observations include time, status, account and combo.
+- Optional `PLANGRAPH_FLOW_HOST_IDLE_FILE` names a separately published JSON object with
+  `observed_at` in Unix seconds and `snapshot` in the host-idle schema below. The
+  collector validates that schema through the watchdog's resource evaluator and checks
+  the same five-minute freshness bound. The minute sampler supplies the placement
+  counts and the separate typed observation supplies resource caps, slots, RSS and
+  free bytes.
+
+The collector reports verified operator-order evidence as unavailable and omits
+`ordered_items`. Other conditional watchdog fields also require their own typed evidence.
+Use `--readings FILE` to inject one JSON observation for tests without contacting sources.
+The collector and watchdog run separately. Unit scheduling and activation are deployment work.
 
 ## Optional turn-budget reader
 
