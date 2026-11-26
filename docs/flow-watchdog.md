@@ -215,6 +215,8 @@ the queue retains its head and newest 255 events, reporting overflow on stderr.
 
 ## Collectors, freshness and host integration
 
+Collectors, freshness and host integration are deployment prerequisites, not supplied by this checker.
+
 `plangraph flow-snapshot --json` reads one observation pass and writes the watchdog input.
 Use `--out PATH` to override the default `flow-snapshot.json` under
 `PLANGRAPH_STATE_DIR`, `$XDG_STATE_HOME/plangraph` or
