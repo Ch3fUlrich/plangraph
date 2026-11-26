@@ -2,14 +2,24 @@ use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
+    path::Path,
     process::{Command, Stdio},
 };
 
+pub mod spawn_attempt_delivery;
 #[path = "../../test_support/python.rs"]
 mod test_python;
 
 fn call(verb: &str, value: &Value) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+    call_in(verb, value, None)
+}
+
+fn call_in(verb: &str, value: &Value, state: Option<&Path>) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+    if let Some(state) = state {
+        command.env("PLANGRAPH_SPAWN_STATE", state);
+    }
+    let mut child = command
         .arg(verb)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -147,8 +157,11 @@ fn daily_inventory_includes_separate_fleet_evidence_and_uses_utc_end_time() {
 }
 
 #[test]
-fn terminal_records_project_without_routed_legs() {
-    for (kind, role, harness, status, code, leg, outcome) in [
+fn terminal_records_without_routed_legs_deliver_through_the_lifecycle() {
+    let state = tempfile::tempdir().unwrap();
+    let ended = chrono::Utc::now().timestamp();
+    let mut expected = Vec::new();
+    for (index, (kind, role, harness, status, code, leg, outcome)) in [
         ("seat", "review", "claude", "completed", 0, "claude", "ok"),
         (
             "spawner",
@@ -195,22 +208,45 @@ fn terminal_records_project_without_routed_legs() {
             "native-codex",
             "worker_crash",
         ),
-    ] {
-        let record = json!({
-            "run_id":"run-fixture", "host":"workstation", "role":role, "run_kind":kind,
-            "harness":harness, "status":status, "exit_code":code, "started":1, "ended":2
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = format!("run-fixture{index}");
+        let mut record = json!({
+            "run_id":id, "host":"workstation", "role":role, "run_kind":kind,
+            "harness":harness, "status":"running", "started":ended - 1
         });
-        let output = call("project-spawn-attempt", &record);
-        assert!(output.status.success());
-        let row: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(row["attempt_id"], "run-fixture");
-        assert_eq!(row["role"], role);
-        assert_eq!(row["host"], "workstation");
-        assert_eq!(row["harness"], harness);
-        assert_eq!(row["leg"], leg);
-        assert_eq!(row["task_class"], "adhoc");
-        assert_eq!(row["exit_class"], outcome);
+        for terminal in [false, true] {
+            if terminal {
+                record["status"] = json!(status);
+                record["ended"] = json!(ended);
+                record["exit_code"] = json!(code);
+            }
+            let output = call_in("record-publish", &record, Some(state.path()));
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{error}");
+        }
+        expected.push(json!({
+            "attempt_id":id, "role":role, "host":"workstation",
+            "harness":harness, "leg":leg, "task_class":"adhoc", "exit_class":outcome
+        }));
     }
+    spawn_attempt_delivery::check_rows(state.path(), &expected);
+}
+
+#[test]
+fn native_quota_stop_projects_the_actual_terminal_outcome() {
+    let record = json!({
+        "run_id": "run-quota", "run_kind": "native-codex", "host": "workstation",
+        "role": "implement", "started": 1, "ended": 2, "status": "failed", "exit_code": 11,
+        "reason": "quota_limited: You've hit your usage limit.", "result": "QUOTA",
+        "quota_limited": {"line": "You've hit your usage limit."}
+    });
+    let output = call("project-spawn-attempt", &record);
+    assert!(output.status.success());
+    let row: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(row["exit_class"], "usage_limit");
 }
 
 #[test]
@@ -328,6 +364,10 @@ fn terminal_spawn_projects_final_leg_once() {
         assert_eq!(value["card_key"], json!(item));
         assert_eq!(value["host"], "fixture");
         assert_eq!(value["role"], role);
+        assert_eq!(value["leg"], "winner");
+        assert_eq!(value["harness"], "codex");
+        assert_eq!(value["exit_class"], "ok");
+        assert_eq!(value["route"]["pin"], false);
         assert_eq!(value["requested_model"], "requested");
         assert_eq!(value["served_model"], "witnessed");
         assert_eq!(value["level"], "L3");

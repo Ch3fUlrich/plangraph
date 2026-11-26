@@ -1,0 +1,18 @@
+path	disposition	required	row IDs	label
+changelog.d/FLOW-SNAPSHOT-COLLECTOR.md	write	yes	E1 E2 E3 E4	predicted
+docs/flow-watchdog.md	read	yes	E1 E2 E3 E4	predicted
+docs/flow-watchdog.md	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/Cargo.toml	read	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/src/flow_snapshot/live.rs	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/src/flow_snapshot/live_tests.rs	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/src/flow_snapshot/mod.rs	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/src/lib.rs	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/src/main.rs	write	yes	E1 E2 E3 E4	predicted
+rust/plangraph-cli/tests/flow_snapshot.rs	write	yes	E1 E2 E3 E4	predicted
+rust/worker-core/Cargo.toml	read	yes	E1 E2 E3 E4	predicted
+rust/worker-core/src/bin/flow-watchdog.rs	caller	yes	E4	predicted
+rust/worker-core/src/flow_collect/derive.rs	write	yes	E1 E2 E3 E4	predicted
+rust/worker-core/src/flow_collect/mod.rs	write	yes	E1 E2 E3 E4	predicted
+rust/worker-core/src/flow_collect/stuck.rs	write	yes	E1 E2 E3 E4	predicted
+rust/worker-core/src/lib.rs	write	yes	E1 E2 E3 E4	predicted
+rust/worker-core/tests/flow_collect.rs	write	yes	E1 E2 E3 E4	predicted

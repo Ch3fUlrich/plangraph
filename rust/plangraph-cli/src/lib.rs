@@ -12,6 +12,7 @@ mod fast_check_dispatch;
 mod fast_check_packages;
 pub mod fast_checks;
 pub mod feeder;
+pub mod flow_snapshot;
 pub mod gate_alert;
 pub mod host_link_bridge;
 pub mod host_sync;
