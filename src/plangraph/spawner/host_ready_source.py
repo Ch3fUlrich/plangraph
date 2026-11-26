@@ -419,7 +419,7 @@ def probe_host(name, config, state, runner, timeout, *, persist):
                 if not isinstance(ok, bool) or not isinstance(rows, list):
                     raise ValueError()
                 for row in rows:
-                    if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
+                    if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail', 'skip'):
                         raise ValueError()
                 return ok, rows
             doctor = measure('doctor', prefix + 'doctor --json', parse_doctor, **spawner('doctor --json'))

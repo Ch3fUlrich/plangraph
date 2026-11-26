@@ -4,13 +4,13 @@
     "HOST-READY-WSL-HOP-FULL-PATH-AND-DOCTOR-SKIP": {
       "outcome": "Readiness and placement reach the workstation WSL guest: every WSL hop runs host tools under the registry entry's env.PATH, and a doctor report with skip rows reads as passing.",
       "read_set": [
+        "src/plangraph/spawner/host_ready.py",
         "src/plangraph/fleet_sync/genconfig.py",
         "rust/worker-core/src/hosts.rs",
         "docs/placement-rules.md"
       ],
       "write_set": [
         "src/plangraph/spawner/remote_ps.py",
-        "src/plangraph/spawner/host_ready.py",
         "src/plangraph/spawner/host_ready_source.py",
         "rust/worker-core/src/host_command.rs",
         "rust/pg-spawnd/src/worker_liveness.rs",
@@ -18,7 +18,7 @@
         "tests/test_host_ready.py",
         "changelog.d/HOST-READY-WSL-HOP-FULL-PATH-AND-DOCTOR-SKIP.md"
       ],
-      "check_cmd": "python3 -m pytest -q tests/test_spawner_remote_ps.py tests/test_host_ready.py tests/test_host_ready_path.py && cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --lib host_command",
+      "check_cmd": "python3 -m pytest -q tests/test_spawner_remote_ps.py tests/test_host_ready.py tests/test_host_ready_path.py && cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --lib host_command && cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd worker_liveness",
       "risk_tags": [
         "host-exec"
       ],

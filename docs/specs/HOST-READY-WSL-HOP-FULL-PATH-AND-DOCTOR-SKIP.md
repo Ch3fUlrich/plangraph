@@ -4,8 +4,8 @@ Outcome. Readiness and placement reach the workstation WSL guest: every WSL hop 
 
 - plan_source. keeper card plangraph:HOST-READY-WSL-HOP-FULL-PATH-AND-DOCTOR-SKIP (Why/How/done), routing D-6967 and D-6968.
 - base commit. d948affa1da9565f12c58fb981bbf2dbc04974ad
-- card SHA-256. cee82508531c374199e64a234a55ce4a87eb03e1a20328e5f43fdbc6adcbc290
-- tree SHA-256. 0fb4e40c1e0e0fb03c914a9dbb6268f8fc2a3d7753e77633759b80fc024921ce
+- card SHA-256. 731ca93576dbd647b00dad08c6e9e37440a7d3e2e29d059d8a0bf7b93ea1db8a
+- tree SHA-256. 10bfc7871047d75af57c26f341360e0d235d173d95bf82bf0c0270729c9361d0
 - evidence_after_deploy. Live: on the orchestration host `python3 -m plangraph.spawner.host_ready --host ws-build` prints `ws-build ok` and writes the ws-build readiness record; pg-worker-liveness stays green.
 
 ## Decisions
@@ -32,8 +32,8 @@ Outcome. Readiness and placement reach the workstation WSL guest: every WSL hop 
 
 - X1. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_sets_registry_path (new). Asserts B1's observable result.
 - X2. E2, changed. pytest tests/test_host_ready.py::test_doctor_skip_rows_parse_as_ok (new). Asserts B2's observable result.
-- X3. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_without_path_unchanged (new). Asserts I1's observable result.
-- X4. E3, changed. cargo test -p pg-worker-core host_command::wsl_hop_sets_path (new). Asserts B3's observable result.
+- X3. E1, changed. pytest tests/test_spawner_remote_ps.py::test_wsl_hop_without_path_unchanged and ::test_wsl_hop_rejects_invalid_path. Assert I1's observable result.
+- X4. E3, changed. cargo test -p pg-worker-core --lib host_command and cargo test -p pg-spawnd --bin pg-spawnd worker_liveness. Assert B3's observable result.
 
 Anchors for new tests are predicted until checked on the implementation head.
 

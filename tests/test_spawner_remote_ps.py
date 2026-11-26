@@ -154,6 +154,34 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, tmp_path, src, dis
     if distro is not None:
         assert json.loads(received.read_text()) == {'steps': steps}
 
+def test_wsl_hop_sets_registry_path(tmp_path, monkeypatch):
+    guest = dict(name='node-a', target='target', src='/srv/repo/src', wsl_distro='Ubuntu')
+    config(tmp_path, monkeypatch, [dict(guest, env={'PATH': '/stale/bin'})])
+    directory = tmp_path / 'plangraph'
+    (directory / 'hosts.json').write_text(json.dumps({'hosts': [dict(
+        id='node-a', transport='ssh', os='linux', ssh_target='target', wsl_distro='Ubuntu',
+        repos={'plangraph': {'root': '/srv/repo'}}, caps={'mem_floor_mb': 1},
+        env={'PATH': '/srv/worker/.local/bin:/usr/bin:/bin'})]}))
+    host, = remote_ps.configured_hosts()
+    command, body = remote_ps.host_invocation(host, query=True)
+    assert command == ('wsl.exe --distribution Ubuntu --exec /usr/bin/env '
+                       'PATH=/srv/worker/.local/bin:/usr/bin:/bin pg-spawnd steps')
+    assert json.loads(body)['steps'][-1]['argv'] == ['python3', '-m', 'plangraph.spawner.remote_ps']
+
+
+def test_wsl_hop_without_path_unchanged():
+    command, body = remote_ps.invocation({'wsl_distro': 'Ubuntu', 'env': {}}, 'true')
+    assert command == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+    assert json.loads(body) == {'steps': [{'argv': ['true']}]}
+
+
+@pytest.mark.parametrize('path', ['/bin;&echo', '/bin:%TEMP%', '/bin:$HOME/bin', '/bin\n/bin',
+                                  '/bin::/usr/bin', 'bin:/usr/bin', '', None])
+def test_wsl_hop_rejects_invalid_path(path):
+    with pytest.raises(ValueError, match='invalid WSL PATH'):
+        remote_ps.invocation({'wsl_distro': 'Ubuntu', 'env': {'PATH': path}}, 'true')
+
+
 @pytest.mark.parametrize('wsl', [False, True])
 @pytest.mark.parametrize('src', ['/opt/src;id', '$(id)',
                                    '-src', 'relative/src', '~user/src', '', None,

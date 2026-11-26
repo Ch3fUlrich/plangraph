@@ -136,6 +136,24 @@ def test_failures(tmp_path, mode):
     assert expected[mode] in result['failures']
 
 
+@pytest.mark.parametrize('failed', [False, True])
+def test_doctor_skip_rows_parse_as_ok(tmp_path, failed):
+    def fake(argv, **kwargs):
+        if 'doctor --json' in argv[-1]:
+            checks = [dict(name='keeper_whoami', status='pass'),
+                      dict(name='probe_implement', status='skip')]
+            if failed:
+                checks.append(dict(name='mcp_spawner', status='fail'))
+            return SimpleNamespace(returncode=int(failed), stdout=json.dumps(
+                dict(ok=not failed, checks=checks)))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['keeper_ok'] and result['doctor_ok'] is not failed
+    assert result['failures'] == (['doctor.mcp_spawner: failed', 'doctor: failed'] if failed else [])
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
 def test_parallel_deadlines(tmp_path):
     import threading
     entered, finished = threading.Event(), threading.Event()
@@ -575,19 +593,26 @@ def test_source_probe_plan_reports_missing_and_unimportable_sources_by_exit_code
     assert src['steps'][1]['cwd'] == '/' and src['steps'][1]['argv'][-1] == 'import plangraph'
 
 
-def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
+@pytest.mark.parametrize('path', [None, '/srv/worker/.local/bin:/usr/bin:/bin'])
+def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path, path):
     seen = []
     def fake(argv, **kwargs):
         seen.append((argv, kwargs.get('input')))
         return plan_runner([], missing=())(argv, **kwargs) if 'input' in kwargs else runner(argv, **kwargs)
     (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
         dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
-    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu')
+    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu', session_unit='/run/worker.pid')
+    prefix = 'wsl.exe --distribution Ubuntu --exec '
+    if path:
+        config['env'] = {'PATH': path}
+        prefix += f'/usr/bin/env PATH={path} '
     result = h.check_host('fiction', config, tmp_path, fake)
     assert result['ok'], result['failures']
     assert seen and all(argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-                        and argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+                        and argv[-1] == prefix + 'pg-spawnd steps'
                         and json.loads(body)['steps'] for argv, body in seen)
+    tools = {step['argv'][0] for _, body in seen for step in json.loads(body)['steps']}
+    assert {'pg-host-readiness', 'plangraph', 'codex'} <= tools
 
 
 @pytest.mark.parametrize('wsl', [False, True])
