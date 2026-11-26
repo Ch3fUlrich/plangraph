@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -207,79 +207,79 @@ def test_pg_heldout_whoami_claim_during_paused_snapshot(tmp_path, monkeypatch):
     _paused_capture(tmp_path, monkeypatch, "postgres")
 
 
-def test_pending_mark_and_flush_survive_capture_and_publish_failure(tmp_path, monkeypatch):
-    _paused_capture(tmp_path, monkeypatch, "sqlite", pause=0)
+@pytest.mark.parametrize("failure", [None, "capture", "publish"])
+def test_pending_mark_and_flush_survive_capture_and_publish_failure(tmp_path, monkeypatch, failure):
+    _paused_capture(tmp_path, monkeypatch, "sqlite", pause=0, failure=failure)
 
 
-def _paused_capture(tmp_path, monkeypatch, backend, pause=10):
+def _paused_capture(tmp_path, monkeypatch, backend, pause=10, failure=None):
     world = World(tmp_path, backend=backend)
     seed(world, [("A", []), ("B", [])])
     server = _server(tmp_path, world, debounce=0.02)
     entered, release, flushing = (threading.Event() for _ in range(3))
-    real, captures = type(world.store)._all_items, []
     writer = server.snapshot_writer
-    publish, published = snapshot_io._publish, []
-
+    real, publish, notify = type(world.store)._all_items, snapshot_io._publish, writer._cond.notify_all
+    captures, published, transitions = [], [], []
     def items(view):
         rows = real(view)
         if threading.current_thread() is server.snapshot_writer and not captures:
             captures.append(view.conn)
             entered.set()
             assert release.wait(15)
+            if failure == "capture":
+                raise OSError("capture failed")
         return rows
 
     def graph(snap):
-        return (snap["head_seq"], snap["aliases"],
-                {item["key"]: (item["state"], item["evidence"]) for item in snap["items"]})
+        return snap["head_seq"], snap["aliases"], {i["key"]: (i["state"], i["evidence"]) for i in snap["items"]}
 
     def record(path, snap, key):
+        if failure == "publish" and threading.current_thread() is writer:
+            raise OSError("publish failed")
         publish(path, snap, key)
         published.append(graph(snap))
 
+    def record_pending():
+        transitions.append((writer._written, writer._first, writer._last))
+        notify()
     monkeypatch.setattr(type(world.store), "_all_items", items)
     monkeypatch.setattr(snapshot_io, "_publish", record)
+    monkeypatch.setattr(writer._cond, "notify_all", record_pending)
     def live():
         return json.loads(call(server, "/v1/snapshot", token=world.tok("reader"))[2])
     def flush():
         assert not server.lock._is_owned()
         flushing.set()
         writer.flush()
-    try:
+    with closing(world), server, ExitStack() as shutdown:
+        shutdown.callback(server.shutdown)
         before = live()
-        _mark(server.snapshot_writer)
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            try:
-                assert entered.wait(3)
-                start = time.monotonic()
-                for path in ("whoami", "show/demo:A?fmt=json", "ready?fmt=json", "snapshot"):
-                    assert pool.submit(call, server, "/v1/" + path, token=world.tok("reader")).result(1)[0] == 200
-                claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"),
-                                    body={"key": "demo:A"})
-                assert claim.result(1)[0] == 200
-                assert time.monotonic() - start < 1
-                assert captures[0] is not world.conn
-                assert hasattr(captures[0], "schema") == (backend == "postgres")
-                with server.lock:
-                    world.conn.execute("INSERT INTO aliases(old_key,new_key,ts,actor,reason) VALUES(?,?,?,?,?)",
-                                       ("demo:OLD", "demo:A", world.store._iso(world.clock()), "router", "fixture"))
-                    world.store.add_evidence_router(world.p("router"), "demo:A", "decision", {"id": "D-1"})
-                assert not release.wait(max(0, pause - (time.monotonic() - start)))
-                with server.lock:
-                    future = pool.submit(flush)
-                    assert flushing.wait(1) and writer._build.locked()
-                    release.set()
-                    future.result(2)
-            finally:
+        with ThreadPoolExecutor(max_workers=1) as pool, ExitStack() as unblock:
+            unblock.callback(release.set)
+            _mark(writer)
+            assert entered.wait(3)
+            start = time.monotonic()
+            for path in ("whoami", "show/demo:A?fmt=json", "ready?fmt=json", "snapshot"):
+                assert pool.submit(call, server, "/v1/" + path, token=world.tok("reader")).result(1)[0] == 200
+            claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"), body={"key": "demo:A"})
+            assert claim.result(1)[0] == 200 and time.monotonic() - start < 1
+            assert captures[0] is not world.conn and hasattr(captures[0], "schema") == (backend == "postgres")
+            with server.lock:
+                world.conn.execute("INSERT INTO aliases(old_key,new_key,ts,actor,reason) VALUES(?,?,?,?,?)",
+                                   ("demo:OLD", "demo:A", world.store._iso(world.clock()), "router", "fixture"))
+                world.store.add_evidence_router(world.p("router"), "demo:A", "decision", {"id": "D-1"})
+            assert not release.wait(max(0, pause - (time.monotonic() - start)))
+            with server.lock:
+                future = pool.submit(flush)
+                assert flushing.wait(1) and writer._build.locked()
                 release.set()
+                future.result(2)
+        (_, oldest, _), (_, _, newer), (written, pending, _), _ = transitions
+        assert (written, pending) == ((0, oldest) if failure else (1, newer))
         after = live()
-        assert published == [graph(before), graph(after)]
+        assert published == ([] if failure else [graph(before)]) + [graph(after)]
         assert after["head_seq"] > before["head_seq"] and after["aliases"] == {"demo:OLD": "demo:A"}
         assert graph(after)[2]["demo:A"][1]
-    finally:
-        release.set()
-        server.shutdown()
-        server.server_close()
-        world.close()
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "shared", "wrong_source", "wrong_backend", "wrong_schema", "publish"])

@@ -112,7 +112,7 @@ def test_whoami_accounts_for_auth_wait_and_actual_holder(tmp_path, monkeypatch, 
     monkeypatch.setattr(api.auth, "authenticate", auth)
     monkeypatch.setattr(lock, "acquire", watch)
     try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=2) as pool, monkeypatch.context() as patch:
             with timing.RequestTimer(lock, event="writer_timing"):
                 future = pool.submit(call, server, "/v1/whoami", token=world.tok("reader"))
                 assert auth_wait.wait(2) and not auth.called
@@ -122,24 +122,24 @@ def test_whoami_accounts_for_auth_wait_and_actual_holder(tmp_path, monkeypatch, 
             writer.mark()
             assert _until(lambda: (captured.append(capsys.readouterr().err) or "snapshot_build" in captured[-1]))
             monkeypatch.setattr(snapshot_io, "_publish", stall_publish)
-            with monkeypatch.context() as patch:
-                patch.setattr(server, "snapshot_writer", None)
-                patch.setattr(writer, "debounce_s", 30)
-                claim = pool.submit(call, server, "/v1/claim", method="POST",
-                                    token=world.tok("l1main"), body={"key": "demo:A"})
-                assert publishing.wait(2)
-                with timing.lock_scope(lock, "cancel"):
-                    writer.mark()
-                    release.set()
-                    assert reacquire.wait(2)
-                    pool.submit(writer.flush).result(2)
-                    tick[0] += 2_500_000_000
-                assert claim.result(2)[0] == 200
+            monkeypatch.setattr(writer, "debounce_s", 30)
+            patch.setattr(server, "snapshot_writer", None)
+            claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"), body={"key": "demo:A"})
+            assert publishing.wait(2)
+            with timing.lock_scope(lock, "cancel"):
+                writer.mark()
+                release.set()
+                assert reacquire.wait(2)
+                pool.submit(writer.flush).result(2)
+                tick[0] += 2_500_000_000
+            assert claim.result(2)[0] == 200
         with lock:
+            writer.mark()
+            before = writer._gen, writer._written, writer._first, lock.depth()
             for operation in (writer.flush, writer.stop, lambda: snapshot_io.write_snapshot(server, server.system)):
                 with pytest.raises(RuntimeError):
                     operation()
-        assert not writer._halt
+                assert not writer._halt and (writer._gen, writer._written, writer._first, lock.depth()) == before
         with timing.RequestTimer(lock), lock, pytest.raises(RuntimeError):
             snapshot_io.write_snapshot(server, server.system)
         with timing.RequestTimer(lock), world.store._write(), pytest.raises(RuntimeError):
