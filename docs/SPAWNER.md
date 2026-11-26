@@ -170,15 +170,9 @@ its timeout stops waiting, not the writer. Process waits use `plangraph wait-pid
 (exact `--pid` or `--pid-file`, never a process-table cmdline scan), and
 `host_ready` probes non-unit sessions with `plangraph wait-pid --check --pid-file`
 for `.pid` targets or exact `pgrep -x --` otherwise.
-Set `env.PG_SESSION_UNIT` in a host registry entry to a systemd unit, a
-`.pid` file path, or the exact process name (`comm`) to include that session
-in readiness checks.
-Doctor `skip` rows leave readiness passing when the remaining checks pass.
-A WSL entry with `env.PATH` sets that PATH before starting `pg-spawnd steps`.
-Install the matching step runner on the guest before using that route. It
-fills in missing `PG_URL`, `PG_TOKEN_FILE`, `PLANGRAPH_HOST_NAME` and
-`CLAUDE_CODE_SHELL` from the guest's `plangraph.env`. `PG_TOKEN_FILE` points to
-a local file using an absolute or home-relative path.
+Set `env.PG_SESSION_UNIT` to a systemd unit, `.pid` file path, or exact process
+name (`comm`) to include a session probe. See the
+[WSL readiness and rollout notes](host-tools.md#three-host-writer-and-review-rollout).
 Migration note: a legacy `overflow-hosts.json` `session_unit` is no longer read; readiness
 takes the session from `env.PG_SESSION_UNIT` in the host's registry entry, and without it the
 session probe is skipped. Move the old value there, and replace a `pgrep -f` command-line

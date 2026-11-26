@@ -235,9 +235,13 @@ transport in the registry's `public_repos` field. A workstation WSL entry uses
 `wsl_distro`. Set `env.PATH` to the guest's Linux tool path, including the
 directory where `pg-spawnd` is installed. Placement, readiness and status
 probes carry that PATH through `wsl.exe --exec` and send a JSON step plan on
-stdin. The guest supplies missing Keeper settings and its host identity from
-its `plangraph.env`. Set
-`placement_fallback: true` on the orchestration host to rank it after ready
+stdin. Install the matching `pg-spawnd steps` runner on the guest before using
+the route. It fills in unset `PG_URL`, `PG_TOKEN_FILE`, `PLANGRAPH_HOST_NAME`,
+and `CLAUDE_CODE_SHELL` from the guest's `plangraph.env`. Set `PG_TOKEN_FILE`
+to an absolute or home-relative path on the guest. Doctor `skip` rows leave
+readiness passing when the remaining checks pass.
+
+Set `placement_fallback: true` on the orchestration host to rank it after ready
 workers. Among ready worker hosts, placement uses free memory above each
 host's floor. The run record includes the selected host and placement reason.
 

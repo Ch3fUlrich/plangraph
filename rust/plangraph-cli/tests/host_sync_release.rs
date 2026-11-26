@@ -260,8 +260,9 @@ done
     assert!(check.status.success(), "{check:?}");
 
     // The timer can advance Git without rebuilding when the Rust tree is unchanged.
-    fs::write(repo.join("README.md"), "Documentation").unwrap();
-    git(&["add", "README.md"]);
+    let documentation = "release-fixture-notes.md";
+    fs::write(repo.join(documentation), "Documentation").unwrap();
+    git(&["add", documentation]);
     git(&[
         "-c",
         "user.name=Fixture",
