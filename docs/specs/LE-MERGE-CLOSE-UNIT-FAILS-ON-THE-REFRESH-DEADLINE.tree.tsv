@@ -1,0 +1,17 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	D3	predicted
+rust/plangraph-cli/src/merge_close.rs	read	yes	D2 R5 X4	predicted
+rust/plangraph-cli/src/merge_close_unit.rs	read	yes	D2 R5 X4	predicted
+rust/plangraph-cli/tests/merge_close_scheduled.rs	read	yes	X4	predicted
+src/plangraph/keeper/context_sources.py	read	yes	R1	predicted
+src/plangraph/keeper/store_close.py	read	yes	R1	predicted
+tests/door_util.py	read	yes	X1 X2 X3	predicted
+tests/test_keeper_merge_close_auto.py	read	yes	X1 X2 X3	predicted
+changelog.d/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.md	write	yes	D3	predicted
+docs/KEEPER.md	write	yes	D3 R4 R5	predicted
+src/plangraph/keeper/api_routes.py	write	yes	R1 R2 R3 R4 X1 X3	predicted
+src/plangraph/keeper/evidence_pr.py	write	yes	R2 X2	predicted
+src/plangraph/keeper/store_context.py	write	yes	R2 X2	predicted
+src/plangraph/keeper/store_runs.py	write	yes	R1 R2 X1	predicted
+src/plangraph/keeper/timing.py	write	yes	R2 R3 R4 X1 X3	predicted
+tests/test_keeper_merge_refresh_budget.py	write	yes	X1 X2 X3	predicted
