@@ -1,0 +1,47 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION": {
+      "outcome": "Each work host has one schema-checked profile in configuration/hosts/<host>.toml naming its drives with roles, order and selection rule, its traits and its caps; host sync generates the unit environment from it, the build pool and worktrees pick drives by its rule, placement filters and ranks by its traits, and host readiness reports drift.",
+      "read_set": [
+        "deploy/feeder/policy.toml",
+        "docs/operations/worker-disks.md",
+        "rust/plangraph-cli/src/host_sync_env.rs",
+        "rust/worker-core/src/disk_runtime.rs",
+        "rust/worker-core/src/hosts.rs"
+      ],
+      "write_set": [
+        "changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md",
+        "configuration/hosts/coding.toml",
+        "configuration/hosts/dell.toml",
+        "configuration/hosts/workstation.toml",
+        "deploy/host-ready/host-ready.service",
+        "deploy/systemd/pg-disk-hygiene.service",
+        "deploy/systemd/pg-feeder.service",
+        "deploy/systemd/pg-worktree-sweep.service",
+        "deploy/watchdog/watchdog.service",
+        "docs/operations/host-profiles.md",
+        "docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md",
+        "rust/plangraph-cli/src/host_sync.rs",
+        "rust/plangraph-cli/src/host_sync_profile.rs",
+        "rust/plangraph-cli/tests/host_sync_profile.rs",
+        "rust/worker-core/src/bin/pg-host-readiness.rs",
+        "rust/worker-core/src/cargo_pool.rs",
+        "rust/worker-core/src/host_profile.rs",
+        "rust/worker-core/src/lib.rs",
+        "rust/worker-core/src/work_disks.rs",
+        "rust/worker-core/tests/host_profile.rs",
+        "rust/worker-core/tests/work_disks.rs",
+        "src/plangraph/spawner/overflow.py",
+        "tests/test_overflow_traits.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --locked -p pg-worker-core --test host_profile",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 200000,
+      "window_class": "256k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test host_sync_profile --test host_sync && cargo test --manifest-path rust/Cargo.toml --locked -p pg-worker-core --test work_disks && python3 -m pytest -q tests/test_overflow_traits.py"
+    }
+  }
+}

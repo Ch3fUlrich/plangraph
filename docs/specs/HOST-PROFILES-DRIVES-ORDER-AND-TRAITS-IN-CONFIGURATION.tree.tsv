@@ -1,0 +1,24 @@
+path	disposition	required	row IDs	label
+changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E1	predicted
+configuration/hosts/coding.toml	write	yes	E1	predicted
+configuration/hosts/dell.toml	write	yes	E1	predicted
+configuration/hosts/workstation.toml	write	yes	E1	predicted
+deploy/host-ready/host-ready.service	write	yes	E2	observed
+deploy/systemd/pg-disk-hygiene.service	write	yes	E2	observed
+deploy/systemd/pg-feeder.service	write	yes	E2	observed
+deploy/systemd/pg-worktree-sweep.service	write	yes	E2	observed
+deploy/watchdog/watchdog.service	write	yes	E2	observed
+docs/operations/host-profiles.md	write	yes	E1	predicted
+docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E4	predicted
+rust/plangraph-cli/src/host_sync.rs	write	yes	E2	observed
+rust/plangraph-cli/src/host_sync_profile.rs	write	yes	E2	predicted
+rust/plangraph-cli/tests/host_sync_profile.rs	write	yes	E2	predicted
+rust/worker-core/src/bin/pg-host-readiness.rs	write	yes	E5	observed
+rust/worker-core/src/cargo_pool.rs	write	yes	E3	observed
+rust/worker-core/src/host_profile.rs	write	yes	E1 E5	predicted
+rust/worker-core/src/lib.rs	write	yes	E1	observed
+rust/worker-core/src/work_disks.rs	write	yes	E3	observed
+rust/worker-core/tests/host_profile.rs	write	yes	E1 E5	predicted
+rust/worker-core/tests/work_disks.rs	write	yes	E3	observed
+src/plangraph/spawner/overflow.py	write	yes	E4	observed
+tests/test_overflow_traits.py	write	yes	E4	predicted
