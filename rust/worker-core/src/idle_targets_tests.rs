@@ -21,7 +21,7 @@ fn target(container: &Path, name: &str, age: Duration) -> PathBuf {
 
 #[test]
 fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
@@ -42,13 +42,30 @@ fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
     symlink(&pools[1], cache.join("alias-of-pool")).unwrap();
     let lookalike = cache.join("not-a-cache");
     fs::create_dir_all(lookalike.join("debug")).unwrap();
+    let unreadable = cache.join("unreadable");
+    fs::create_dir(&unreadable).unwrap();
+    let permissions = unreadable.metadata().unwrap().permissions();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0)).unwrap();
+    let denied = unreadable.read_dir().is_err();
     symlink(
         nested.join(".rustc_info.json"),
         lookalike.join(".rustc_info.json"),
     )
     .unwrap();
     let excluded = crate::cargo_pool::hygiene_exclusions(&shared, &home);
-    let (found, complete) = targets_in(&cache, 2, &excluded, || true, |_| {}).unwrap();
+    let mut kept = vec![];
+    let result = targets_in(
+        &cache,
+        2,
+        &excluded,
+        || true,
+        |p, why| kept.push((p.to_path_buf(), why)),
+    );
+    fs::set_permissions(&unreadable, permissions).unwrap();
+    let (found, complete) = result.unwrap();
+    if denied {
+        assert!(kept.contains(&(unreadable, "probe_unavailable")));
+    }
     assert!(complete);
     assert_eq!(found, [nested.as_path()]);
     assert!(deep.is_dir() && pools.iter().all(|pool| pool.join("slot-1").is_dir()));
@@ -63,7 +80,7 @@ fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
             budget = budget.saturating_sub(1);
             room
         },
-        |_| {},
+        |_, _| {},
     )
     .unwrap();
     assert!(!complete);
@@ -294,30 +311,6 @@ fn a_leased_target_with_an_unreadable_child_does_not_stop_the_sweep_of_its_sibli
         .skipped
         .iter()
         .any(|s| s.contains("cache lease held")));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn preflight_discovery_accepts_only_direct_marked_siblings() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
-    let age = Duration::from_secs(3600);
-    let named = target(&root, "preflight-cargo-old", age);
-    let unrelated = target(&root, "ordinary", age);
-    let nested = target(&unrelated, "preflight-cargo-nested", age);
-    fs::create_dir(root.join("preflight-cargo-unmarked")).unwrap();
-    let found = crate::affected_scratch::discover(
-        &root,
-        &[],
-        &mut || true,
-        SystemTime::now(),
-        crate::private_targets::is_preflight_target,
-    )
-    .unwrap();
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].path, named);
-    assert!(!found[0].selector_scratch);
-    assert!(unrelated.exists() && nested.exists());
 }
 
 #[cfg(target_os = "linux")]

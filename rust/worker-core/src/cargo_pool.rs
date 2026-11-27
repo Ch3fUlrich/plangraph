@@ -178,7 +178,23 @@ pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec
     slots.into_iter().partition(|slot| !is_review_slot(slot))
 }
 
-pub use crate::idle_targets::hygiene_exclusions;
+/// Private and scratch discovery must leave every shared cache and its pool to the pool policy.
+pub fn hygiene_exclusions(shared: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    let fallback = shared
+        .first()
+        .and_then(|primary| crate::cargo_cache::review_fallback_primary(primary, home));
+    let mut exclusions = Vec::new();
+    for target in shared.iter().chain(fallback.iter()) {
+        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+        for primary in [target, &canonical] {
+            if let Ok(pool) = crate::cargo_pool::pool_root(primary) {
+                exclusions.push(pool.canonicalize().unwrap_or(pool));
+            }
+        }
+        exclusions.push(canonical);
+    }
+    exclusions
+}
 
 #[cfg(target_os = "linux")]
 pub(crate) fn hygiene_cap_failure(

@@ -2,6 +2,7 @@
 use crate::{
     cargo_cache::CacheLease,
     disk_hygiene::{scan, Guards, Report},
+    idle_targets::discovery_probe,
 };
 use std::{
     fs::{self, OpenOptions},
@@ -72,14 +73,22 @@ pub(crate) fn discover(
     permit: &mut impl FnMut() -> bool,
     cutoff: SystemTime,
     marked: impl Fn(&Path) -> bool,
+    mut keep: impl FnMut(&Path, &'static str),
 ) -> io::Result<Vec<crate::disk_hygiene::Candidate>> {
     let mut found = Vec::new();
-    for entry in fs::read_dir(root)?.take_while(|_| permit()) {
-        let path = entry?.path();
+    let entries = discovery_probe(fs::read_dir(root), root, &mut keep)?;
+    for entry in entries.into_iter().flatten().take_while(|_| permit()) {
+        let Some(entry) = discovery_probe(entry, root, &mut keep)? else {
+            continue;
+        };
+        let path = entry.path();
         if marked(&path) && !excluded.iter().any(|other| path.starts_with(other)) {
-            let mut item = crate::disk_hygiene::Candidate::new(path, root.to_path_buf(), cutoff)?;
-            item.selector_scratch = is_run(&item.path);
-            found.push(item);
+            let item =
+                crate::disk_hygiene::Candidate::new(path.clone(), root.to_path_buf(), cutoff);
+            if let Some(mut item) = discovery_probe(item, &path, &mut keep)? {
+                item.selector_scratch = is_run(&path);
+                found.push(item);
+            }
         }
     }
     Ok(found)

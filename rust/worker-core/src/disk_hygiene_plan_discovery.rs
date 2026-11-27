@@ -1,9 +1,11 @@
 //! Candidate discovery and bounded ranking measurements for disk hygiene.
 use super::*;
-use crate::disk_hygiene::Device;
 use crate::{
+    affected_scratch,
     cargo_cache::ExclusiveLease,
     cargo_pool_trim::{remove_guarded_if, stamp},
+    disk_hygiene::Device,
+    idle_targets,
 };
 use std::{os::unix::fs::MetadataExt, time::SystemTime};
 pub(super) fn rank_candidate(
@@ -87,7 +89,7 @@ impl Layout<'_> {
         let now = SystemTime::now();
         let idle = now - Duration::from_secs(1800);
         let main_idle = now - crate::main_target::IDLE_AFTER;
-        let legacy = now - crate::idle_targets::IDLE_AFTER;
+        let legacy = now - idle_targets::IDLE_AFTER;
         let mut found = vec![];
         for (tree, locked, detached) in super::super::fast_worktrees::registered(
             self.repo,
@@ -143,28 +145,33 @@ impl Layout<'_> {
             .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| self.home.join(".cache"));
-        let legacy_roots = crate::idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
+        let legacy_roots = idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
         for root in self.scratch.iter().chain([&cache]).chain(&legacy_roots) {
             let Ok(boundary) = root.canonicalize() else {
                 continue;
             };
             let scratch = self.scratch.contains(root);
+            let mut boundary_kept = false;
+            let mut keep = |path: &Path, reason| {
+                if path == boundary && std::mem::replace(&mut boundary_kept, true) {
+                    return;
+                }
+                if reason != "unrecognized" || (scratch && !affected_scratch::is_run(path)) {
+                    report.keep_boundary(path.to_path_buf(), reason);
+                }
+            };
             if scratch {
-                found.extend(crate::affected_scratch::discover(
+                found.extend(affected_scratch::discover(
                     &boundary,
                     &excluded,
                     &mut permit,
                     idle,
-                    crate::affected_scratch::is_run,
+                    affected_scratch::is_run,
+                    &mut keep,
                 )?);
             }
-            let unknown = |path: &Path| {
-                if scratch && !crate::affected_scratch::is_run(path) {
-                    report.keep_boundary(path.to_path_buf(), "unrecognized");
-                }
-            };
-            let scan = crate::idle_targets::targets_in;
-            let (mut targets, complete) = scan(&boundary, 2, &excluded, &mut permit, unknown)?;
+            let (mut targets, complete) =
+                idle_targets::targets_in(&boundary, 2, &excluded, &mut permit, keep)?;
             for target in initial
                 .into_iter()
                 .flat_map(|inventory| inventory.cargo_targets())
@@ -197,12 +204,14 @@ impl Layout<'_> {
         let parent = self.shared.first().and_then(|root| root.parent());
         if let Some(path) = parent.and_then(|root| root.canonicalize().ok()) {
             let marked = crate::private_targets::is_preflight_target;
-            found.extend(crate::affected_scratch::discover(
+            let keep = |path: &Path, reason| report.keep_boundary(path.to_path_buf(), reason);
+            found.extend(affected_scratch::discover(
                 &path,
                 &excluded,
                 &mut permit,
                 idle,
                 marked,
+                keep,
             )?);
         }
         self.pool_candidates(&mut found, &mut report.summary, now, &mut permit)?;
@@ -302,17 +311,15 @@ impl Layout<'_> {
             .first()
             .and_then(|path| crate::cargo_cache::review_fallback_primary(path, self.home));
         for (index, primary) in self.shared.iter().chain(fallback.iter()).enumerate() {
-            let (ordinary, review) = if index == 0 || index >= self.shared.len() {
+            let (mut ordinary, review) = if index == 0 || index >= self.shared.len() {
                 pool_slot_sets(primary, summary)
             } else {
                 (vec![primary.clone()], vec![])
             };
             let count = ordinary.len() as u64;
-            let ordinary = if index >= self.shared.len() {
-                vec![]
-            } else {
-                ordinary
-            };
+            if index >= self.shared.len() {
+                ordinary.clear();
+            }
             for (slots, count) in [(ordinary, count), (review, DEFAULT_POOL_SLOTS as u64)] {
                 let group: std::sync::Arc<[PathBuf]> = slots.into();
                 let total_limit = self.cap.saturating_mul(count);

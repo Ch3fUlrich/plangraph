@@ -23,83 +23,87 @@ pub fn targets_in(
     container: &Path,
     depth: u8,
     exclusions: &[PathBuf],
-    mut permit: impl FnMut() -> bool,
-    mut unknown: impl FnMut(&Path),
+    permit: impl FnMut() -> bool,
+    keep: impl FnMut(&Path, &'static str),
 ) -> io::Result<(Vec<PathBuf>, bool)> {
     let mut found = vec![];
-    let complete = collect_targets(
-        container,
-        depth,
+    let complete = TargetScan {
         exclusions,
-        &mut permit,
-        &mut found,
-        &mut unknown,
-    )?;
+        permit,
+        keep,
+        found: &mut found,
+    }
+    .visit(container, depth, true)?;
     found.sort();
     Ok((found, complete))
 }
 
-fn collect_targets(
-    path: &Path,
-    depth: u8,
-    exclusions: &[PathBuf],
-    permit: &mut impl FnMut() -> bool,
-    found: &mut Vec<PathBuf>,
-    unknown: &mut impl FnMut(&Path),
-) -> io::Result<bool> {
-    if !permit() {
-        return Ok(false);
-    }
-    if exclusions.iter().any(|root| path.starts_with(root)) {
-        return Ok(true);
-    }
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(true),
-        Err(e) => return Err(e),
-    };
-    if !meta.is_dir() {
-        return Ok(true);
-    }
-    if cargo_target(path) {
-        found.push(path.to_path_buf());
-    } else if depth > 0 {
-        let before = found.len();
-        for entry in fs::read_dir(path)? {
-            if !collect_targets(
-                &entry?.path(),
-                depth - 1,
-                exclusions,
-                permit,
-                found,
-                unknown,
-            )? {
-                return Ok(false);
-            }
-        }
-        if depth == 1 && found.len() == before {
-            unknown(path);
-        }
-    }
-    Ok(true)
+struct TargetScan<'a, P, K> {
+    exclusions: &'a [PathBuf],
+    permit: P,
+    keep: K,
+    found: &'a mut Vec<PathBuf>,
 }
 
-/// Private and scratch discovery must leave every shared cache and its pool to the pool policy.
-pub fn hygiene_exclusions(shared: &[PathBuf], home: &Path) -> Vec<PathBuf> {
-    let fallback = shared
-        .first()
-        .and_then(|primary| crate::cargo_cache::review_fallback_primary(primary, home));
-    let mut exclusions = Vec::new();
-    for target in shared.iter().chain(fallback.iter()) {
-        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
-        for primary in [target, &canonical] {
-            if let Ok(pool) = crate::cargo_pool::pool_root(primary) {
-                exclusions.push(pool.canonicalize().unwrap_or(pool));
+impl<P: FnMut() -> bool, K: FnMut(&Path, &'static str)> TargetScan<'_, P, K> {
+    fn visit(&mut self, path: &Path, depth: u8, container: bool) -> io::Result<bool> {
+        if !(self.permit)() {
+            return Ok(false);
+        }
+        if self.exclusions.iter().any(|root| path.starts_with(root)) {
+            return Ok(true);
+        }
+        let Some(meta) = discovery_probe(path.symlink_metadata(), path, &mut self.keep)? else {
+            return Ok(true);
+        };
+        if !meta.is_dir() {
+            return Ok(true);
+        }
+        let Some(owner) = discovery_probe(owned(path), path, &mut self.keep)? else {
+            return Ok(true);
+        };
+        let owner = !cfg!(unix) || owner;
+        if !owner && !container {
+            (self.keep)(path, "unsafe");
+        } else if owner && cargo_target(path) {
+            self.found.push(path.to_path_buf());
+        } else if depth > 0 {
+            let before = self.found.len();
+            let Some(entries) = discovery_probe(path.read_dir(), path, &mut self.keep)? else {
+                return Ok(true);
+            };
+            for entry in entries {
+                let Some(entry) = discovery_probe(entry, path, &mut self.keep)? else {
+                    continue;
+                };
+                if !self.visit(&entry.path(), depth - 1, false)? {
+                    return Ok(false);
+                }
+            }
+            if depth == 1 && self.found.len() == before {
+                (self.keep)(path, "unrecognized");
             }
         }
-        exclusions.push(canonical);
+        Ok(true)
     }
-    exclusions
+}
+
+pub(crate) fn discovery_probe<T>(
+    result: io::Result<T>,
+    path: &Path,
+    keep: &mut impl FnMut(&Path, &'static str),
+) -> io::Result<Option<T>> {
+    let error = match result {
+        Ok(value) => return Ok(Some(value)),
+        Err(error) => error,
+    };
+    let reason = match error.kind() {
+        io::ErrorKind::NotFound => "vanished",
+        io::ErrorKind::PermissionDenied => "probe_unavailable",
+        _ => return Err(error),
+    };
+    keep(path, reason);
+    Ok(None)
 }
 
 /// Report each legacy target and, with `apply`, remove the ones idle for [`IDLE_AFTER`] while no
@@ -113,7 +117,12 @@ pub fn sweep(
     mut processes: impl FnMut() -> io::Result<(Vec<PathBuf>, bool)>,
 ) -> io::Result<()> {
     for container in containers {
-        for target in targets_in(container, 1, &[], || true, |_| {})?.0 {
+        let keep = |path: &Path, reason| {
+            if reason != "unrecognized" {
+                report.skipped.push(format!("{}: {reason}", path.display()));
+            }
+        };
+        for target in targets_in(container, 1, &[], || true, keep)?.0 {
             if !owned(&target)? {
                 report.skipped.push(format!(
                     "{}: legacy target owned by another user",

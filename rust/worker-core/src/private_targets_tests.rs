@@ -447,6 +447,7 @@ fn selector_scratch_uses_its_run_lease_for_final_proof() {
         &mut || true,
         now,
         crate::affected_scratch::is_run,
+        |_, _| {},
     )
     .unwrap();
     assert_eq!(discovered.len(), 1);
@@ -504,4 +505,40 @@ fn cap_scan_reports_an_incomplete_total_at_the_deadline() {
     };
     *limit = 64;
     assert_eq!(hygiene_cap_failure(&item, &projected, || true), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_discovery_accepts_only_direct_marked_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let named = root.join("preflight-cargo-old");
+    let unrelated = root.join("ordinary");
+    let nested = unrelated.join("preflight-cargo-nested");
+    let vanished = root.join("preflight-cargo-vanished");
+    for path in [&named, &unrelated, &nested, &vanished] {
+        fixture(path, true);
+    }
+    fs::create_dir(root.join("preflight-cargo-unmarked")).unwrap();
+    let mut kept = vec![];
+    let found = crate::affected_scratch::discover(
+        &root,
+        &[],
+        &mut || true,
+        SystemTime::now(),
+        |path| {
+            let marked = crate::private_targets::is_preflight_target(path);
+            if path == vanished {
+                fs::remove_dir_all(path).unwrap();
+            }
+            marked
+        },
+        |path, reason| kept.push((path.to_path_buf(), reason)),
+    )
+    .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, named);
+    assert!(!found[0].selector_scratch);
+    assert!(unrelated.exists() && nested.exists());
+    assert_eq!(kept, [(vanished, "vanished")]);
 }
