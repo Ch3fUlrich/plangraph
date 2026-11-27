@@ -26,7 +26,7 @@ def test_claude_written_diff_routes_gpt_first_in_codex():
     assert plan.legs[3].harness == "codex" and plan.legs[3].family == "gpt"
     assert "codex" in HARNESSES
     assert ids == ["opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-hydrogen-high",
-                   "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free", "agy-gemini-4-neon-medium",
+                   "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
                    "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b",
                    "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]   # argon last
 
@@ -45,8 +45,8 @@ def test_argon_is_the_end_of_the_whole_eligible_route():
 
 
 def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
-    """An account-scoped Argon booking leaves Codex and sibling models eligible."""
-    from plangraph.planner.legs import REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_NEON, REVIEW_SONNET
+    """An account-scoped Argon booking leaves Codex and Sonnet eligible."""
+    from plangraph.planner.legs import REVIEW_AGY_SONNET, REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_HYDROGEN, REVIEW_NEON
     from plangraph.planner.route_policy import RoutePolicy
     from plangraph.routing_support.leg_state import LegStateStore
 
@@ -62,8 +62,9 @@ def test_agy_account_limit_keeps_native_codex_review_leg_available(tmp_path):
     limited = route("A")
     codex = next(leg for leg in limited.legs if leg.id == REVIEW_GPT)
     assert (codex.id, codex.harness, codex.model) == (REVIEW_GPT, "codex", "gpt-6.2-sol-medium")
-    assert REVIEW_SONNET in {leg.id for leg in route("A", ["auth"]).legs}
-    assert REVIEW_NEON in {leg.id for leg in limited.legs}
-    skipped = next(row for row in limited.skipped if row["leg"] == REVIEW_ARGON_LOW)
-    assert skipped["evidence"]["status"] == 429
-    assert REVIEW_ARGON_LOW in {leg.id for leg in route("B").legs}
+    assert REVIEW_AGY_SONNET in {leg.id for leg in route("A", ["auth"]).legs}
+    skipped = {row["leg"]: row for row in limited.skipped}
+    assert skipped[REVIEW_NEON]["reason"] == "disabled: D-6957 operator cost hold"
+    for leg_id in (REVIEW_ARGON_LOW, REVIEW_HYDROGEN):
+        assert skipped[leg_id]["evidence"]["status"] == 429
+        assert leg_id in {leg.id for leg in route("B").legs}

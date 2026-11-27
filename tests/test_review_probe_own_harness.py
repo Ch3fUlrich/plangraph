@@ -35,6 +35,7 @@ def test_every_routed_review_leg_is_spawned_through_its_own_harness(tmp_path, mo
     refused = [row for row in reply['probes'] if 'SpawnRefused' in row.get('reason', '')]
     assert not refused, refused
     assert seen == {leg.id: leg.harness for leg in routed}
+    assert seen[legs.REVIEW_AGY_SONNET] == 'agy'
     assert seen[legs.REVIEW_SONNET] == 'claude'
 
 

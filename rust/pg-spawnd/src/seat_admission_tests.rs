@@ -173,8 +173,8 @@ fn a_limit_that_leaves_only_sibling_legs_of_the_harness_is_refused() {
     let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
         .okay()
         .1;
-    // Hydrogen booked a 429: the route now leads with a sibling agy leg, which is no fallback seat.
-    let sibling = json!({"first_leg": leg("agy-gemini-4-neon-medium"), "legs": [leg("agy-gemini-4-neon-medium")]});
+    // The reroute leads with a sibling agy leg, which is no fallback seat.
+    let sibling = json!({"first_leg": leg("agy-gemini-4-argon-low"), "legs": [leg("agy-gemini-4-argon-low")]});
     let mut waiting = Fake::new(vec![sibling], |_| {});
     match admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut waiting) {
         Err(ToolError::Refused { message, .. }) => {
@@ -190,10 +190,10 @@ fn the_agy_cli_selector_keeps_secondary_agy_legs_out_of_the_queue_fallback() {
     let _full = admit(state.path(), plan(&[HYDROGEN], 1, 600.0), &mut quiet())
         .okay()
         .1;
-    // `leg: agy-cli` filters the route to the four agy legs (cli_review::select) before admission.
+    // `leg: agy-cli` filters the route to the eligible agy legs before admission.
     let args: crate::placement::Args = serde_json::from_value(json!({"leg": "agy-cli"})).unwrap();
     let routed = json!({"first_leg": leg(HYDROGEN), "legs": [
-        leg(HYDROGEN), leg("agy-gemini-4-neon-medium"), leg("agy-gemini-4-argon-low"),
+        leg(HYDROGEN), leg("agy-gemini-4-argon-medium"), leg("agy-gemini-4-argon-low"),
         leg("opencode-go-deepseek-v4-flash")],
         "seat_admission": {"legs": {HYDROGEN: 1}, "queue_wait_seconds": 0.0}});
     let selected = crate::cli_review::select(&args, routed.to_string()).okay();

@@ -136,15 +136,15 @@ probe records serving evidence; this override applies only to probe failures.
 The probe result adds `state` only for serving failures (or `host-not-ready`);
 ordinary successes and failures omit the key, rather than returning null.
 
-D-5966 / D-6310 agy quotas use agy:<model>, shared across effort variants of that model.
-Hydrogen, Argon, Neon and Sonnet limits are independent. Gateway aggregate antigravity
-quota snapshots do not suppress these native CLI models.
-Legacy agy/<model>-<effort> events remain readable under the canonical key.
+D-5966 / D-6310 Antigravity quotas use `agy:<model>` across efforts. D-6952 pools
+Argon and Hydrogen under `agy:gemini-4-hydrogen`. Bookings under legacy Argon and
+Hydrogen keys with either separator and any effort remain readable. Neon and
+Antigravity Sonnet retain their own quotas. Native CLI models use this local
+evidence independently of the aggregate gateway snapshot.
 Explicit provider resets (including `agy` and `opencode-go`) survive the six-hour
 probe-failure TTL and the 24-hour flat `down_s` cap until their stated `reset_at`.
-The native Claude-harness Sonnet-high fallback reads and books its own
-claude-sonnet-5-5-high subscription key. It never shares agy:claude-sonnet-5-5
-quota evidence. CLI review quota results carry the serving harness, including
+The native Claude-harness Sonnet-high fallback reads and books the separate
+`claude-sonnet-5-5-high` subscription key. CLI review quota results carry the serving harness, including
 structured CLI limits and provider reset timestamps. Route
 JSON carries the planning reader/clock snapshot rather than rereading global state.
 Its agy Sonnet quota snapshot reads the agy key independently of the native leg.
@@ -156,12 +156,14 @@ Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `rev
 
 ## AGY quota scope
 
-An Antigravity 429, including `Individual quota reached`, applies to the model
-that made the call and its effort variants. The event retains its account and
-combo scope. Historical account-wide events cannot establish a model limit.
+An Antigravity 429, including `Individual quota reached`, applies to the quota
+of the model that made the call and retains its account and combo scope. A quota
+booking for either Argon or Hydrogen limits both. Probe failures apply only to
+the model probed. Historical account-wide events cannot establish a model limit.
 The scheduled review sweep re-probes limited AgY models at most once per hour
-with a one-word `OK` request. A successful reply clears the model's limit.
-Route quota states include the latest probe attempt as `last_probe_at`.
+with a one-word `OK` request. A successful reply clears the associated quota
+limit. Route quota states include the latest probe attempt as `last_probe_at`
+and show the same entry for Argon and Hydrogen.
 
 Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.
 

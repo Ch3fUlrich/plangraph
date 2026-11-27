@@ -1,0 +1,27 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-HAND-RESEARCH-RUNS-EXHAUSTED-ARGON-REVIEW-QUOTA": {
+      "outcome": "Share one Antigravity Gemini quota between Argon and Hydrogen and skip either model on review and research routes while the pool is limited.",
+      "read_set": [
+        "src/plangraph/planner/legs.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-HAND-RESEARCH-RUNS-EXHAUSTED-ARGON-REVIEW-QUOTA.md",
+        "docs/routing.md",
+        "docs/spawner-leg-state.md",
+        "src/plangraph/planner/routing.py",
+        "src/plangraph/routing_support/leg_state.py",
+        "tests/test_route_order_d6652.py",
+        "tests/test_spawner_exit_outcome.py",
+        "tests/test_spawner_leg_state.py",
+        "tests/test_spawner_quota_failfast.py"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_spawner_leg_state.py tests/test_route_order_d6652.py",
+      "risk_tags": [],
+      "estimate_tokens": 12000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_spawner_exit_outcome.py tests/test_spawner_quota_failfast.py"
+    }
+  }
+}

@@ -8,6 +8,6 @@ Environment=PYTHONPATH=%h/code/plangraph/src
 EnvironmentFile=-%h/.config/plangraph/watchdog.env
 NoNewPrivileges=yes
 ExecStartPre=-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json
-# Eleven sequential probes at 120s each plus 30s overhead need 1350s.
+# Allow twelve sequential 120s probes plus 30s overhead.
 ExecStart=/usr/bin/python3 -m plangraph.spawner.cli --state %S/plangraph probe --all-reviewers --timeout 120 --json
-TimeoutStartSec=23min
+TimeoutStartSec=25min

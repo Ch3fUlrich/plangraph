@@ -1,4 +1,5 @@
 //! Run a command against an isolated Temporal dev server on Linux or Windows.
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
@@ -16,6 +17,18 @@ fn free_port() -> io::Result<u16> {
     Ok(TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?
         .local_addr()?
         .port())
+}
+
+fn wrapped_command(args: &[OsString], cli: &OsStr, address: &str) -> Command {
+    let mut command = Command::new(&args[0]);
+    command
+        .args(&args[1..])
+        .env("TEMPORAL_CLI", cli)
+        .env("PG_TEMPORAL_ADDR", format!("http://{address}"))
+        .env("SPIKE_ADDR", format!("http://{address}"))
+        .env("TEMPORAL_TEST_ADDRESS", address)
+        .env("TEMPORAL_ADDRESS", address);
+    command
 }
 
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
@@ -83,15 +96,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         }
         let status = if ready {
             eprintln!("Temporal ready at {address}; log {}", log.display());
-            Some(
-                Command::new(&args[0])
-                    .args(&args[1..])
-                    .env("PG_TEMPORAL_ADDR", format!("http://{address}"))
-                    .env("SPIKE_ADDR", format!("http://{address}"))
-                    .env("TEMPORAL_TEST_ADDRESS", &address)
-                    .env("TEMPORAL_ADDRESS", &address)
-                    .status()?,
-            )
+            Some(wrapped_command(&args, &cli, &address).status()?)
         } else {
             None
         };
@@ -128,6 +133,35 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::wrapped_command;
+
+    #[test]
+    fn wrapped_command_receives_selected_temporal_cli() {
+        const EXPECTED: &str = "PG_CI_TEMPORAL_TEST_EXPECTED_CLI";
+        if let Some(expected) = std::env::var_os(EXPECTED) {
+            assert_eq!(std::env::var_os("TEMPORAL_CLI"), Some(expected));
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("temporal");
+        let args = [
+            std::env::current_exe().unwrap().into_os_string(),
+            "--exact".into(),
+            "tests::wrapped_command_receives_selected_temporal_cli".into(),
+        ];
+        let output = wrapped_command(&args, cli.as_os_str(), "fixture-address")
+            .env(EXPECTED, &cli)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
     #[test]
     fn workflows_refuse_shared_temporal_endpoints_and_logs() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");

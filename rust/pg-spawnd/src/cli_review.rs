@@ -11,6 +11,8 @@ use std::{path::Path, time::Duration};
 #[path = "cli_review_binding.rs"]
 mod binding;
 pub(crate) use binding::{completed as binding_completed, Dispatch};
+const NEON_MEDIUM: &str = "gemini-4-neon-medium";
+pub(crate) const SONNET_HIGH_MODEL: &str = "claude-sonnet-5-5-high";
 
 pub(crate) fn kind(args: &Args) -> Option<&str> {
     args.get("leg")
@@ -26,9 +28,9 @@ pub(crate) fn eligible(leg: &Value) -> bool {
                 "gemini-4-hydrogen-high"
                     | "gemini-4-argon-low"
                     | "gemini-4-argon-medium"
-                    | "gemini-4-neon-medium"
+                    | NEON_MEDIUM
             )
-        ) | (Some("claude"), Some("claude-sonnet-5-5-high"))
+        ) | (Some("agy" | "claude"), Some(SONNET_HIGH_MODEL))
     )
 }
 /// The refusal of `select` when the route has no leg of the selector's harness.
@@ -44,7 +46,8 @@ pub(crate) fn select(args: &Args, text: String) -> Result<String, ToolError> {
         .as_array()
         .ok_or_else(|| parameter("invalid review route"))?
         .iter()
-        .filter(|l| eligible(l) && l["harness"] == harness)
+        // D-6957 blocks selection even if a route still carries the held leg.
+        .filter(|l| eligible(l) && l["harness"] == harness && l["model"] != NEON_MEDIUM)
         .cloned()
         .collect();
     plan["first_leg"] = legs.first().cloned().ok_or_else(|| parameter(NO_LEG))?;
@@ -367,10 +370,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: 
     record.set("served_model", json!(model));
     record.set(
         "served_family",
-        json!(if leg["harness"] == "agy" {
-            "google"
-        } else {
+        json!(if leg["model"] == SONNET_HIGH_MODEL {
             "anthropic"
+        } else {
+            "google"
         }),
     );
     record.set("witness_kind", json!("cli_reported"));

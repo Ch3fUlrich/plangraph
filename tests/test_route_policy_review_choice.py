@@ -20,7 +20,7 @@ def test_qoder_off_for_review_even_with_old_active_leg():
 
 def test_disabled_leg_never_a_route_option():
     disabled = next(l for l in DEFAULT_LEGS if l.harness == 'qodercli')
-    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
+    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-medium')
     route = route_card({'estimate_tokens': 1000}, legs=(disabled, later), role='review')
     assert route.legs == (later,)
     assert 'excluded 1 legs: disabled' in route.reasons
@@ -28,7 +28,7 @@ def test_disabled_leg_never_a_route_option():
 
 def test_large_review_falls_through_small_window_with_reason():
     small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-deepseek-v4.1-flash-free')
-    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
+    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-medium')
     route = route_card({'estimate_tokens': 200000, 'window_class': '128k'},
                        legs=(small, large), role='review')
     assert route.legs == (large,)
@@ -67,7 +67,7 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
     assert all(not leg.claude_family for leg in writer.legs)
     assert [leg.id for leg in review.review_seats] == list(REVIEW_REQUIRED)
     assert all(not leg.claude_family for leg in review.legs)
-    assert sensitive.first_leg.id == "claude-sonnet-5-5-high"
+    assert (sensitive.first_leg.id, sensitive.first_leg.harness) == ("agy-claude-sonnet-5-5-high", "agy")
 
     def limited(model, **kwargs):
         state = available(model)
@@ -144,7 +144,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
     for role, base, head, expected in (
         ("implement", None, None, ("cx-gpt-6.2-sol-medium", "codex")),
         ("review", "HEAD~2", "HEAD~1", ("opencode-go-deepseek-v4-flash", "opencode")),
-        ("review", "HEAD~1", "HEAD", ("claude-sonnet-5-5-high", "claude")),
+        ("review", "HEAD~1", "HEAD", ("agy-claude-sonnet-5-5-high", "agy")),
     ):
         card = {"estimate_tokens": 1000}
         if base:
@@ -156,6 +156,12 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
         assert main(args) == 0
         selected = json.loads(capsys.readouterr().out)["chosen_leg"]
         assert (selected["id"], selected["harness"]) == expected
+        if role == "review" and head == "HEAD":
+            assert main([*args, "--seats"]) == 0
+            group = json.loads(capsys.readouterr().out)
+            seat = group["seats"][0]["chosen_leg"]
+            assert (seat["id"], seat["harness"]) == expected
+            assert group["seat_coverage"][0]["leg"] == seat["id"]
 
 
 def test_native_review_route_requires_repository_tools():
