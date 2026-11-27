@@ -1,0 +1,8 @@
+head 2a8dd61911fa731d19cdfb00196804aeacf88515
+result green
+check scrub rc=0 wall=31.593
+check file-size rc=0 wall=0.443
+check new-code-lang rc=0 wall=4.014
+check changelog-docs rc=0 wall=0.717
+check commit-gate rc=0 wall=0.472
+check diff-check rc=0 wall=0.010
