@@ -9,21 +9,17 @@
       "max_changed_lines": 16,
       "max_final_lines": 16
     },
-    "rust/pg-spawnd/Cargo.toml": {
-      "max_changed_lines": 2,
-      "max_final_lines": 56
-    },
     "rust/pg-spawnd/src/lane_guard.rs": {
       "max_changed_lines": 50,
       "max_final_lines": 410
     },
     "rust/pg-spawnd/src/lane_guard_tests.rs": {
-      "max_changed_lines": 110,
-      "max_final_lines": 628
+      "max_changed_lines": 150,
+      "max_final_lines": 668
     },
     "rust/pg-spawnd/src/record_file.rs": {
-      "max_changed_lines": 70,
-      "max_final_lines": 139
+      "max_changed_lines": 120,
+      "max_final_lines": 189
     },
     "src/plangraph/spawner/stall_watchdog.py": {
       "max_changed_lines": 10,
@@ -39,8 +35,10 @@
       "outcome": "A run record above the 8 MiB read bound is judged from a bounded field projection. A terminal one holds no key, a live or undecidable one holds only the keys it names, and the stall watchdog alerts routing once per oversized record.",
       "read_set": [
         "rust/Cargo.lock",
+        "rust/pg-spawnd/Cargo.toml",
         "rust/pg-spawnd/src/lane_admit.rs",
         "rust/pg-spawnd/src/lane_launch.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
         "rust/pg-spawnd/src/records.rs",
         "rust/worker-core/src/sweep_runs.rs",
         "src/plangraph/spawner/overflow.py",
@@ -50,7 +48,6 @@
       "write_set": [
         "changelog.d/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md",
         "docs/spawner/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md",
-        "rust/pg-spawnd/Cargo.toml",
         "rust/pg-spawnd/src/lane_guard.rs",
         "rust/pg-spawnd/src/lane_guard_tests.rs",
         "rust/pg-spawnd/src/record_file.rs",
