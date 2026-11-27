@@ -23,7 +23,9 @@ enforced.
 ## Every beat
 
 Measure each line from its source, never from memory or an earlier message. Report the
-number with its time.
+number with its time. Then run the detection checks of `references/detection.md`: run endings by
+layer, writers told to commit again, flaky tests on unrelated heads, build capacity, review seats,
+lapsing claims, quota runway, duplicate work, stale waits and changes on the same path.
 
 1. **Landing pace.** The objective is real work merged per time: items and batches merged
    on main per hour, today and over seven days, against the milestone in force (rule 3.74).
