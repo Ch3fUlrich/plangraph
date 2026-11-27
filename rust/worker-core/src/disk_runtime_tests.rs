@@ -613,3 +613,26 @@ fn shared_cache_profile_trim_preserves_nested_mount() {
         assert_eq!(report.actions.len(), 1, "{:?}", report.actions);
     }
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn failed_final_samples_are_reported_without_pressure_events() {
+    use crate::disk_hygiene::{Device, HygieneReport, Thresholds};
+    let fixture = tempfile::tempdir().unwrap();
+    let state = fixture.path();
+    let mut report = HygieneReport::new(std::time::Duration::ZERO, false);
+    let limits = Thresholds::default();
+    for id in [10, 12] {
+        let device = Device::new(id, state.join(id.to_string()), Some(7), limits);
+        report.devices.insert(id, device);
+        report.sample_end(id, Err(io::Error::other("fixture sample failed")), 120);
+    }
+    let (report, queued) = report.persist(state, || panic!("a failed sample cannot queue"));
+    queued.unwrap();
+    let row: serde_json::Value = serde_json::from_slice(&report.unwrap()).unwrap();
+    assert!(row["free_bytes"].is_null());
+    assert_eq!(row["alarm"], true);
+    let error = row["error"].as_str().unwrap();
+    assert!(error.contains("fixture sample failed"));
+    assert!(!state.join("watchdog/outbox").exists());
+}

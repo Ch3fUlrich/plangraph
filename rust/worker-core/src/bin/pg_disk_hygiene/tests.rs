@@ -1,105 +1,166 @@
 use pg_worker_core::{
-    disk_hygiene::{Device, HygieneReport, KeptPath, Thresholds},
+    cargo_cache::try_exclusive_lease,
+    disk_hygiene::{
+        rank_candidates, reclaim, refresh_ranking, Budget, Candidate, Device, FinalProof,
+        HygieneInventory, HygieneReport, KeptPath, ReclaimChecks, Thresholds,
+    },
     host_link::{DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS},
 };
 use serde_json::Value;
-use std::{ffi::OsString, fs, io, os::unix::ffi::OsStringExt, path::Path, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::OsString,
+    fs, io,
+    os::unix::{ffi::OsStringExt, fs::MetadataExt},
+    path::Path,
+    time::{Duration, Instant, SystemTime},
+};
 
-#[test]
-fn pressure_removes_largest_until_resampled_floor() {
-    use pg_worker_core::disk_hygiene::{
-        reclaim, Budget, Candidate, HygieneInventory, ReclaimChecks,
-    };
-    use std::{
-        cell::RefCell,
-        os::unix::fs::MetadataExt,
-        time::{Instant, SystemTime},
-    };
+fn artifact(root: &Path, name: &str, bytes: usize, copies: usize, cutoff: SystemTime) -> Candidate {
+    let path = root.join(name);
+    fs::create_dir(&path).unwrap();
+    for index in 0..copies {
+        let data = path.join(format!("data-{index}"));
+        fs::write(&data, vec![0u8; bytes]).unwrap();
+        age(&data, cutoff);
+    }
+    age(&path, cutoff);
+    Candidate::new(path, root.to_path_buf(), cutoff).unwrap()
+}
 
-    for initial in [150, 200] {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-        let dev = root.metadata().unwrap().dev();
-        let cutoff = SystemTime::now();
-        let paths = ["small", "large", "middle"].map(|name| root.join(name));
-        let mut candidates = Vec::new();
-        for (path, size) in paths.iter().zip([8192, 65536, 32768]) {
-            fs::create_dir(path).unwrap();
-            fs::write(path.join("data"), vec![0u8; size]).unwrap();
-            for file in [path, &path.join("data")] {
-                fs::File::open(file)
-                    .unwrap()
-                    .set_modified(cutoff - Duration::from_secs(3600))
-                    .unwrap();
-            }
-            candidates.push(Candidate::new(path.clone(), root.clone(), cutoff).unwrap());
+fn age(path: &Path, cutoff: SystemTime) {
+    fs::File::open(path)
+        .unwrap()
+        .set_modified(cutoff - Duration::from_secs(3600))
+        .unwrap();
+}
+
+fn pressured(root: &Path) -> HygieneReport {
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let id = root.metadata().unwrap().dev();
+    report.devices.insert(
+        id,
+        Device::new(id, root.to_path_buf(), Some(0), Thresholds::default()),
+    );
+    report
+}
+
+fn pressure_case(initial: u64, copies: usize, young: bool, expired: bool) -> HygieneReport {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let cutoff = SystemTime::now();
+    let candidates = [
+        ("small", 8192, 1),
+        ("large", 65536, copies),
+        ("middle", 32768, copies),
+    ]
+    .map(|(name, size, count)| artifact(&root, name, size, count, cutoff));
+    let paths = candidates.each_ref().map(|item| item.path.clone());
+    if young {
+        let entries = fs::read_dir(&paths[2]).unwrap();
+        let last = entries.last().unwrap().unwrap().path();
+        fs::File::open(last).unwrap().set_modified(cutoff).unwrap();
+    }
+    let samples = RefCell::new(Vec::new());
+    let space = |_: &Path| {
+        let present = paths.each_ref().map(|path| path.is_dir());
+        samples.borrow_mut().push(present);
+        Ok(if present[2] { 150 } else { 200 })
+    };
+    let mut report = pressured(&root);
+    let device = report.devices.values_mut().next().unwrap();
+    device.start_free_bytes = Some(initial);
+    device.cleanup_floor_bytes = 200;
+    let start = Instant::now();
+    let clock = || start;
+    let mut budget = Budget::new(start, &clock);
+    budget.candidate_entries = 3;
+    if expired {
+        budget.first_for = Duration::ZERO;
+        budget.pass_for = Duration::ZERO;
+    }
+    let probes = RefCell::new(vec![]);
+    let inventory = |deadline| {
+        assert!(!probes.borrow().is_empty() || paths.iter().all(|path| path.exists()));
+        probes.borrow_mut().push(deadline);
+        Ok(HygieneInventory::default())
+    };
+    assert!(reclaim(
+        &mut report,
+        candidates.into(),
+        &budget,
+        &ReclaimChecks {
+            inventory: &inventory,
+            protection: &|_, _| Ok(None),
+            space: &space
         }
-        let samples = RefCell::new(Vec::new());
-        let space = |_: &Path| {
-            let present = paths.each_ref().map(|path| path.is_dir());
-            samples.borrow_mut().push(present);
-            Ok(if present[2] { 150 } else { 200 })
-        };
-        let mut report = HygieneReport::new(Duration::from_secs(100), false);
-        let limits = Thresholds {
-            alarm_free_bytes: 100,
-            cleanup_free_bytes: 200,
-        };
-        report
-            .devices
-            .insert(dev, Device::new(dev, root, Some(initial), limits));
-        assert!(reclaim(
-            &mut report,
-            candidates,
-            &Budget::new(Instant::now(), &Instant::now),
-            &ReclaimChecks {
-                inventory: &|_| Ok(HygieneInventory::default()),
-                protection: &|_, _| Ok(None),
-                space: &space
-            }
-        ));
-        if initial == 150 {
-            assert_eq!(
-                *samples.borrow(),
-                [[true, false, true], [true, false, false]]
-            );
-            assert!(report.devices[&dev].freed_bytes > 0);
-        } else {
-            assert!(samples.borrow().is_empty());
-            assert_eq!(report.devices[&dev].freed_bytes, 0);
-        }
-        assert!(paths[0].is_dir());
+    ));
+    let total = report.devices.values().next().unwrap().freed_bytes;
+    if initial < 200 && !young && !expired {
+        assert_eq!(
+            *samples.borrow(),
+            [[true, false, true], [true, false, false]]
+        );
+        assert_eq!(
+            *probes.borrow(),
+            [
+                start + budget.rank_for,
+                start + budget.first_for,
+                start + budget.pass_for
+            ]
+        );
+        assert!(total > 0 && paths[0].is_dir());
         assert!(report
             .kept
             .iter()
             .any(|row| row.path == paths[0] && row.reason == "floor_met"));
+    } else if !young {
+        assert!(samples.borrow().is_empty());
+        assert_eq!(total, 0);
+        assert!(paths.iter().all(|path| path.exists()));
     }
+    report
+}
+
+#[test]
+fn pressure_removes_largest_until_resampled_floor() {
+    pressure_case(150, 1, false, false);
+    pressure_case(200, 1, false, false);
+}
+
+#[test]
+fn first_removal_fits_budget_before_diagnostics() {
+    let report = pressure_case(150, 3, false, false);
+    assert!(report.time_to_first_removal.unwrap() <= 60.0);
+    assert!(!report.first_removal_deadline_missed);
+    assert!(!report.stage_durations.contains_key("diagnostics"));
+}
+
+#[test]
+fn over_cap_idle_candidate_is_removed() {
+    let idle = pressure_case(150, 3, false, false);
+    assert_eq!(idle.summary.actions.len(), 2);
+    let young = pressure_case(150, 3, true, false);
+    assert!(young
+        .kept
+        .iter()
+        .any(|row| row.path.ends_with("middle") && row.reason == "young"));
+    let expired = pressure_case(150, 3, false, true);
+    assert!(expired.kept.iter().any(|row| row.reason == "run_budget"
+        && row.bytes_is_lower_bound
+        && row.bytes.unwrap_or(0) > 0));
 }
 
 #[test]
 fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
-    use pg_worker_core::{
-        cargo_cache::try_exclusive_lease,
-        disk_hygiene::{Candidate, FinalProof},
-    };
-    use std::{cell::Cell, time::SystemTime};
-
     for changed in [false, true] {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        let target = root.join("target");
-        let file = target.join("data");
         let now = SystemTime::now();
-        fs::create_dir(&target).unwrap();
-        fs::write(&file, [0u8; 8192]).unwrap();
-        for path in [&target, &file] {
-            fs::File::open(path)
-                .unwrap()
-                .set_modified(now - Duration::from_secs(3600))
-                .unwrap();
-        }
-        let mut proof =
-            FinalProof::begin(Candidate::new(target.clone(), root, now).unwrap()).unwrap();
+        let item = artifact(&root, "target", 8192, 1, now);
+        let target = item.path.clone();
+        let file = target.join("data-0");
+        let mut proof = FinalProof::begin(item).unwrap();
         let steps = Cell::new(2usize);
         assert!(!proof
             .advance(|| {
@@ -126,29 +187,11 @@ fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
 
 #[test]
 fn ranking_orders_allocated_bytes_and_releases_each_slice() {
-    use pg_worker_core::{
-        cargo_cache::try_exclusive_lease,
-        disk_hygiene::{rank_candidates, Budget, Candidate},
-    };
-    use std::{
-        cell::Cell,
-        time::{Instant, SystemTime},
-    };
-
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let now = SystemTime::now();
-    let old = now - Duration::from_secs(3600);
-    let mut candidates = Vec::new();
-    for (name, bytes) in [("small", 8192), ("large", 65536), ("middle", 32768)] {
-        let path = root.join(name);
-        fs::create_dir(&path).unwrap();
-        fs::write(path.join("data"), vec![0; bytes]).unwrap();
-        for file in [path.join("data"), path.clone()] {
-            fs::File::open(file).unwrap().set_modified(old).unwrap();
-        }
-        candidates.push(Candidate::new(path, root.clone(), now).unwrap());
-    }
+    let candidates = [("small", 8192), ("large", 65536), ("middle", 32768)]
+        .map(|(name, bytes)| artifact(&root, name, bytes, 1, now));
     let start = Instant::now();
     let visits = Cell::new(0);
     let clock = || {
@@ -163,7 +206,7 @@ fn ranking_orders_allocated_bytes_and_releases_each_slice() {
     };
     let mut budget = Budget::new(start, &clock);
     budget.slice_entries = 1;
-    let rows = rank_candidates(candidates, &budget);
+    let rows = rank_candidates(candidates.into(), &budget);
     assert_eq!(
         rows.iter()
             .map(|(item, _)| item.path.clone())
@@ -178,28 +221,15 @@ fn ranking_orders_allocated_bytes_and_releases_each_slice() {
 
 #[test]
 fn truncated_ranking_refreshes_and_restarts_changed_metadata() {
-    use pg_worker_core::disk_hygiene::{rank_candidates, refresh_ranking, Budget, Candidate};
-    use std::time::{Instant, SystemTime};
-
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let now = SystemTime::now();
-    let old = now - Duration::from_secs(3600);
-    let mut candidates = vec![];
-    for name in ["stable", "changed"] {
-        let path = root.join(name);
-        fs::create_dir(&path).unwrap();
-        fs::write(path.join("data"), [0u8; 8192]).unwrap();
-        for entry in [&path, &path.join("data")] {
-            fs::File::open(entry).unwrap().set_modified(old).unwrap();
-        }
-        candidates.push(Candidate::new(path, root.clone(), now).unwrap());
-    }
+    let candidates = ["stable", "changed"].map(|name| artifact(&root, name, 8192, 1, now));
     let mut budget = Budget::new(Instant::now(), &Instant::now);
     budget.candidate_entries = 2;
-    let mut rows = rank_candidates(candidates, &budget);
+    let mut rows = rank_candidates(candidates.into(), &budget);
     assert!(rows.iter().all(|(_, row)| !row.complete()));
-    fs::File::open(root.join("changed/data"))
+    fs::File::open(root.join("changed/data-0"))
         .unwrap()
         .set_modified(now)
         .unwrap();
@@ -310,12 +340,8 @@ fn partial_progress_below_alarm_floor_enqueues_and_reports_end_sample() {
                 assert_eq!(event["end_free_bytes"], 7);
                 assert_eq!(event["floor_bytes"], 20);
                 let kept = event["kept"].as_array().unwrap();
-                assert_eq!(
-                    kept.iter()
-                        .map(|row| row["bytes"].as_u64().unwrap())
-                        .collect::<Vec<_>>(),
-                    [6, 5, 4, 3, 2]
-                );
+                let sizes = kept.iter().map(|row| row["bytes"].as_u64().unwrap());
+                assert!(sizes.eq([6, 5, 4, 3, 2]));
                 assert_eq!(kept[0]["bytes_is_lower_bound"], true);
                 assert!(kept[0]["path"]
                     .as_str()
@@ -345,26 +371,6 @@ fn partial_progress_below_alarm_floor_enqueues_and_reports_end_sample() {
         assert_eq!(row["error"], Value::Null);
         assert_eq!(events(control.path()).len(), expected);
     }
-}
-
-#[test]
-fn failed_final_samples_are_reported_without_pressure_events() {
-    let fixture = tempfile::tempdir().unwrap();
-    let state = fixture.path();
-    let mut report = sample(state, [7, 22], [0, 0], false);
-    for device in [10, 12] {
-        report.sample_end(device, Err(io::Error::other("fixture sample failed")), 120);
-    }
-    let (report, queued) = report.persist(state, host);
-    queued.unwrap();
-    let row: Value = serde_json::from_slice(&report.unwrap()).unwrap();
-    assert_eq!(row["free_bytes"], Value::Null);
-    assert_eq!(row["alarm"], true);
-    assert!(row["error"]
-        .as_str()
-        .unwrap()
-        .contains("fixture sample failed"));
-    assert!(events(state).is_empty());
 }
 
 #[test]

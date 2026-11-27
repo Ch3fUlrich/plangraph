@@ -112,11 +112,11 @@ fn execute_with(
             report.keep_boundary(root, "root_unavailable");
         }
     }
-    let fast_checks = pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(|error| {
-        Guards::load(&pins, state)
-            .err()
-            .unwrap_or_else(|| io::Error::other(error))
-    })?;
+    if !repo.is_dir() {
+        Guards::load(&pins, state)?;
+    }
+    let fast_checks =
+        pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(io::Error::other)?;
     roots.extend(
         [state.join("runs"), state.join("worktrees"), fast_checks]
             .into_iter()
@@ -202,9 +202,7 @@ fn execute_with(
                         && !inventory(end)?.blocks(tree))
                 },
             )?;
-            if maintenance.freed_bytes > 0 {
-                device.freed_bytes = device.freed_bytes.saturating_add(maintenance.freed_bytes);
-            }
+            device.freed_bytes = device.freed_bytes.saturating_add(maintenance.freed_bytes);
             report.summary.actions.extend(maintenance.actions);
             report.summary.skipped.extend(maintenance.skipped);
             if maintenance.freed_bytes > 0 {
@@ -216,13 +214,20 @@ fn execute_with(
             }
         }
     }
-    pg_worker_core::disk_watermark::record_configured(
-        state,
-        roots,
-        &shared,
-        &scratch,
-        &mut report.summary,
-    );
+    let diagnostic_start = (budget.clock)();
+    if diagnostic_start < end {
+        pg_worker_core::disk_watermark::record_configured(
+            state,
+            roots,
+            &shared,
+            &scratch,
+            &mut report.summary,
+        );
+    }
+    let elapsed = (budget.clock)().duration_since(diagnostic_start);
+    report
+        .stage_durations
+        .insert("diagnostics", elapsed.as_secs_f64());
     Ok(report)
 }
 #[cfg(target_os = "linux")]
