@@ -504,12 +504,12 @@ def test_review_probe_systemd_units():
     assert shlex.split(svc.get('Service', 'ExecStart')) == [
         '/usr/bin/python3', '-m', 'plangraph.spawner.cli', '--state', '%S/plangraph', 'probe', '--all-reviewers', '--timeout', '120', '--json',
     ]
-    from plangraph.planner.legs import routed_review_legs
+    from plangraph.planner.legs import REVIEW_ORDER
     exec_args = shlex.split(svc.get('Service', 'ExecStart'))
     per_leg = int(exec_args[exec_args.index('--timeout') + 1])
     start_timeout = svc.get('Service', 'TimeoutStartSec')
     assert start_timeout.endswith('min')
-    assert int(start_timeout[:-3]) * 60 >= len(routed_review_legs()) * per_leg + 30
+    assert int(start_timeout[:-3]) * 60 >= len(REVIEW_ORDER) * per_leg + 30
     tim = configparser.ConfigParser(strict=False, interpolation=None)
     tim.optionxform = str
     tim.read_string(tim_path.read_text(encoding='utf-8'))

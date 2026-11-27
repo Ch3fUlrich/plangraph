@@ -220,7 +220,8 @@ def test_retired_separator_variants_refused_before_target_resolution(separator):
 
 @pytest.mark.parametrize('role', ['review', 'implement'])
 @pytest.mark.parametrize('model', ['gemini-4-hydrogen-medium', 'Gemini-4-Hydrogen-medium',
-                                   'gemini-4-argon-low', 'agy/gemini-4-argon-medium'])
+                                   'gemini-4-argon-low', 'agy/gemini-4-argon-medium',
+                                   'claude-sonnet-5-5-high', 'agy/claude-sonnet-5-5-high'])
 def test_agy_tools_command_uses_plan_only_for_review(role, model):
     from plangraph.routing_support.clients import build_standalone_fallback_command
     cmd = build_standalone_fallback_command('agy', 'review', model,

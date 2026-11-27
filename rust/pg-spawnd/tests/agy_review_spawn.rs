@@ -35,25 +35,33 @@ fn payload(reply: &Value) -> Value {
 }
 #[test]
 fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
-    run_review(false, false, "on");
+    run_review(false, None, "on");
+}
+#[test]
+fn agy_cli_selects_and_binds_antigravity_sonnet() {
+    run_review(false, Some("agy"), "on");
+}
+#[test]
+fn claude_cli_selects_the_subscription_sonnet_from_the_same_route() {
+    run_review(false, Some("claude"), "on");
 }
 #[test]
 fn quota_retry_between_agy_models_keeps_stamped_cli_provenance() {
-    run_review(true, false, "on");
+    run_review(true, None, "on");
 }
 #[test]
 fn quota_retry_from_other_transport_prepares_sonnet_cli_review() {
-    run_review(true, true, "on");
+    run_review(true, Some("claude"), "on");
 }
 #[test]
 fn stamped_cli_reviews_keep_their_transport_with_inline_rollout_off_or_shadow() {
     for mode in ["off", "shadow"] {
-        run_review(false, false, mode);
-        run_review(true, false, mode);
-        run_review(true, true, mode);
+        run_review(false, None, mode);
+        run_review(true, None, mode);
+        run_review(true, Some("claude"), mode);
     }
 }
-fn run_review(retry: bool, sonnet: bool, mode: &str) {
+fn run_review(retry: bool, sonnet_harness: Option<&str>, mode: &str) {
     let state = TempDir::new();
     let repo = state.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -79,31 +87,48 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     git(&repo, &["add", "changed.txt"]);
     commit("fixture");
     let head = git(&repo, &["rev-parse", "HEAD"]);
-    let leg = json!({"id":"agy-gemini-4-hydrogen-high", "model":"gemini-4-hydrogen-high", "harness":"agy", "family":"gemini"});
-    let first = if sonnet {
-        json!({"id":"free", "model":"free", "harness":"free", "family":"deepseek"})
-    } else {
-        leg.clone()
+    let hydrogen = json!({"id":"agy-gemini-4-hydrogen-high", "model":"gemini-4-hydrogen-high", "harness":"agy", "family":"gemini"});
+    let agy_sonnet = json!({"id":"agy-claude-sonnet-5-5-high", "model":"claude-sonnet-5-5-high", "harness":"agy", "family":"claude"});
+    let claude_sonnet = json!({"id":"claude-sonnet-5-5-high", "model":"claude-sonnet-5-5-high", "harness":"claude", "family":"claude"});
+    let subscription = sonnet_harness == Some("claude");
+    let leg = match sonnet_harness {
+        Some("agy") => agy_sonnet.clone(),
+        Some("claude") => claude_sonnet.clone(),
+        None if retry => {
+            json!({"id":"agy-gemini-4-argon-low", "model":"gemini-4-argon-low", "harness":"agy", "family":"gemini"})
+        }
+        None => hydrogen.clone(),
+        Some(harness) => panic!("unexpected Sonnet harness {harness}"),
     };
-    let leg = if sonnet {
-        json!({"id":"sonnet", "model":"claude-sonnet-5-5-high", "harness":"claude", "family":"anthropic"})
+    let legs = if retry && subscription {
+        vec![
+            json!({"id":"free", "model":"free", "harness":"free", "family":"deepseek"}),
+            leg.clone(),
+        ]
     } else if retry {
-        json!({"id":"agy-gemini-4-argon-low", "model":"gemini-4-argon-low", "harness":"agy", "family":"gemini"})
+        vec![hydrogen, leg.clone()]
+    } else if sonnet_harness.is_some() {
+        vec![agy_sonnet, claude_sonnet]
     } else {
-        leg
+        vec![leg.clone()]
     };
-    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":format!("No findings in src/lib.rs:1.\nFILES READ: src/lib.rs\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")}});
-    let frame = if sonnet {
+    let tests = if sonnet_harness.is_some() {
+        "TESTS: cargo test -p fixture: ok\n"
+    } else {
+        ""
+    };
+    let response = format!("No findings in changed.txt:1.\nFILES READ: changed.txt\n{tests}HEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n");
+    let frame = if subscription {
         format!(
             "{}\n{}",
             json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
-            json!({"type":"result", "is_error":false, "result":format!("No findings in src/lib.rs:1.\nFILES READ: src/lib.rs\nTESTS: cargo test -p fixture: ok\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")})
+            json!({"type":"result", "is_error":false, "result":response})
         )
     } else {
-        frame.to_string()
+        json!({"event":"result", "result":{"status":"SUCCESS", "response":response}}).to_string()
     };
     let program = state.path().join("reviewer");
-    let isolation_checks = if sonnet {
+    let isolation_checks = if subscription {
         String::new()
     } else {
         format!("test \"$PWD\" != '{}' || exit 2\ntest \"$(git rev-parse HEAD)\" = '{head}' || exit 3\ntest -z \"$(git remote)\" || exit 4\ncase \"$*\" in *'command(*)'*) ;; *) exit 5;; esac\n", repo.display())
@@ -117,7 +142,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         &route,
         &format!(
             "#!/bin/sh\nprintf '%s' '{}'\n",
-            json!({"first_leg":first, "legs":if retry { vec![first, leg.clone()] } else { vec![leg.clone()] }})
+            json!({"first_leg":legs[0], "legs":legs})
         ),
     );
     let launch = state.path().join("launch");
@@ -152,7 +177,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         "role":"review", "writer_families":["openai"], "prompt":"review",
         "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD~1", "head":"HEAD"}}, "wait_seconds":20
     }});
-    if sonnet {
+    if subscription {
         request["arguments"]["card"]
             .as_object_mut()
             .unwrap()
@@ -160,7 +185,11 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         request["arguments"]["card"]["head_sha"] = json!(head);
     }
     if !retry {
-        request["arguments"]["leg"] = json!("agy-cli");
+        request["arguments"]["leg"] = json!(if subscription {
+            "claude-cli"
+        } else {
+            "agy-cli"
+        });
         let missing_stamp = client.request("tools/call", request.clone());
         assert!(
             missing_stamp["error"]["message"]
@@ -180,8 +209,17 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     assert_eq!(record["witness_kind"], "cli_reported");
     assert_eq!(record["verdict"], "pass");
     assert_eq!(record["served_model"], leg["model"]);
+    assert_eq!(record["chosen_leg"]["id"], leg["id"]);
+    if sonnet_harness == Some("agy") {
+        assert_eq!(record["served_family"], "anthropic");
+        assert_eq!(record["review_binding"]["head_sha"], head);
+        assert_eq!(
+            record["completion"]["review_binding"],
+            record["review_binding"]
+        );
+    }
     assert_eq!(record["cwd"], json!(repo));
-    if !sonnet {
+    if !subscription {
         let clone = Path::new(record["review_checkout"].as_str().unwrap());
         assert_ne!(clone, repo);
         assert!(!clone.exists(), "completed review must clean up its clone");
@@ -204,7 +242,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         assert!(text.contains(&format!("HEAD: {head}")), "{text}");
     }
     assert!(!prompt.contains("<!-- PLANGRAPH INLINE DIFF BEGIN -->"));
-    if sonnet {
+    if subscription {
         assert!(!prompt.contains("INLINE_REVIEW_DIFF"));
     }
     let record_file = state.path().join("finished.json");

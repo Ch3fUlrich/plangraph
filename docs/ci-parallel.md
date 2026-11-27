@@ -7,6 +7,9 @@ Normal invocations continue to use the per-user pipe.
 
 The `ci-temporal` Rust helper runs a command with `PG_TEMPORAL_ADDR`, `SPIKE_ADDR`,
 `TEMPORAL_TEST_ADDRESS`, and `TEMPORAL_ADDRESS` pointing to its own dev server.
+It exports the CLI it launched as `TEMPORAL_CLI`, including the `temporal` default
+resolved through `PATH`. A caller can still supply `PG_TEMPORAL_CLI` for tests
+that need a separate CLI.
 It takes an OS-selected port, disables the UI, leaves HTTP and metrics on random
 ports, and keeps logs in a private directory under `RUNNER_TEMP` (or the system
 temp directory). Startup retries cover a lost port-allocation race. The helper

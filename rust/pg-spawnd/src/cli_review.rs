@@ -12,6 +12,7 @@ use std::{path::Path, time::Duration};
 mod binding;
 pub(crate) use binding::{completed as binding_completed, Dispatch};
 const NEON_MEDIUM: &str = "gemini-4-neon-medium";
+pub(crate) const SONNET_HIGH_MODEL: &str = "claude-sonnet-5-5-high";
 
 pub(crate) fn kind(args: &Args) -> Option<&str> {
     args.get("leg")
@@ -29,7 +30,7 @@ pub(crate) fn eligible(leg: &Value) -> bool {
                     | "gemini-4-argon-medium"
                     | NEON_MEDIUM
             )
-        ) | (Some("claude"), Some("claude-sonnet-5-5-high"))
+        ) | (Some("agy" | "claude"), Some(SONNET_HIGH_MODEL))
     )
 }
 /// The refusal of `select` when the route has no leg of the selector's harness.
@@ -369,10 +370,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: 
     record.set("served_model", json!(model));
     record.set(
         "served_family",
-        json!(if leg["harness"] == "agy" {
-            "google"
-        } else {
+        json!(if leg["model"] == SONNET_HIGH_MODEL {
             "anthropic"
+        } else {
+            "google"
         }),
     );
     record.set("witness_kind", json!("cli_reported"));
