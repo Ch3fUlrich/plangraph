@@ -63,15 +63,15 @@ def test_resume_reuses_a_fresh_scan_that_another_caller_consumed(env, tmp_path, 
         doors.close()
 
 
-def _hold_lock_past_budget(server, seconds):
-    """Take the keeper lock on another thread, and return once it is held."""
+def _hold_lock_past_budget(lock, seconds):
+    """Take the publication mutex on another thread until the scan expires."""
     import threading
     import time
 
     held = threading.Event()
 
     def hold():
-        with server.lock:
+        with lock:
             held.set()
             time.sleep(seconds)
 
@@ -89,7 +89,7 @@ def test_a_scan_that_waits_for_the_lock_past_its_budget_is_not_published(env, tm
     try:
         monkeypatch.setattr(api_routes.MergeRefresh, "SCAN_BUDGET_SECONDS", 0.4)
         monkeypatch.setattr(type(env.store), "warm_merge_scan",
-                            lambda store, candidates: _hold_lock_past_budget(doors.server, 0.8))
+                            lambda store, candidates: _hold_lock_past_budget(doors.server.merge_refresh._lock, 0.8))
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
         assert _await_scan(doors, path) == (200, {"scan": "failed"})
         assert doors.http("system", "POST", path, {})[1]["error"] == "merge_index_failed"
@@ -106,23 +106,73 @@ def test_a_failed_scan_leaves_the_live_landing_cache_alone(env, tmp_path, monkey
     path = "/v1/close_merged_auto"
     try:
         live = doors.server.store.__dict__.setdefault("_landings", {})
+        named = doors.server.store._named_landings
+        landing = ("demo:C", "a" * 40)
 
         real = type(env.store).warm_merge_scan
 
         def warm(store, candidates):
             real(store, candidates)
             store._landings[("demo", "a" * 40)] = ({"pr": 1}, 0)
+            store._named_landings[landing] = "b" * 40
 
         monkeypatch.setattr(type(env.store), "warm_merge_scan", warm)
         monkeypatch.setattr(api_routes.MergeRefresh, "SCAN_BUDGET_SECONDS", 0)
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
         assert _await_scan(doors, path) == (200, {"scan": "failed"})
         assert ("demo", "a" * 40) not in live
+        assert landing not in named
         monkeypatch.setattr(api_routes.MergeRefresh, "SCAN_BUDGET_SECONDS", 180)
         assert doors.http("system", "POST", path, {"refresh": "start"}) == (200, {"scan": "running"})
         assert _await_scan(doors, path) == (200, {"scan": "ready"})
-        assert ("demo", "a" * 40) in doors.server.store.__dict__["_landings"]   # published with a good scan
+        assert ("demo", "a" * 40) not in doors.server.store.__dict__["_landings"]
+        assert landing not in doors.server.store._named_landings
+        assert doors.http("system", "POST", path, {"apply": False})[0] == 200
+        assert ("demo", "a" * 40) in doors.server.store.__dict__["_landings"]
+        assert doors.server.store._named_landings[landing] == "b" * 40
     finally:
+        doors.close()
+
+
+def test_refresh_candidate_read_and_warm_leave_request_lock_free(env, tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from threading import Event
+    from door_util import Doors
+
+    doors = Doors(env, tmp_path)
+    server, path = doors.server, "/v1/close_merged_auto"
+    entered, permit, closed = Event(), Event(), Event()
+    warming, warmed = Event(), Event()
+    read, warm = server.read_store, type(env.store).warm_merge_scan
+
+    @contextmanager
+    def read_view(**kwargs):
+        with read(**kwargs) as view:
+            entered.set()
+            assert permit.wait(3)
+            yield view
+        closed.set()
+
+    def scan(store, candidates):
+        assert closed.is_set() and store.conn is None
+        warming.set()
+        assert warmed.wait(3)
+        return warm(store, candidates)
+
+    monkeypatch.setattr(server, "read_store", read_view)
+    monkeypatch.setattr(type(env.store), "warm_merge_scan", scan)
+    try:
+        assert doors.http("system", "POST", path, {"refresh": "start"})[0] == 200
+        assert entered.wait(2)
+        assert doors.http("system", "GET", "/v1/whoami")[0] == 200
+        permit.set()
+        assert warming.wait(2)
+        assert doors.http("system", "GET", "/v1/whoami")[0] == 200
+        warmed.set()
+        assert _await_scan(doors, path) == (200, {"scan": "ready"})
+    finally:
+        permit.set()
+        warmed.set()
         doors.close()
 
 

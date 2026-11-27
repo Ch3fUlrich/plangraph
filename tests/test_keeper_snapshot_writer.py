@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +26,9 @@ import pytest  # noqa: E402
 from contract_world import make_plan, ok, snapshot  # noqa: E402
 
 from keeper_util import World, seed  # noqa: E402
-from plangraph.keeper import api, config, snapshot_io, snapshot_writer  # noqa: E402
+from plangraph.keeper import api, config, daemon as keeper_daemon, snapshot_io, snapshot_writer  # noqa: E402
+from plangraph.keeper.errors import ConnectionLost  # noqa: E402
+from test_keeper_api import call, make_cfg  # noqa: E402
 
 
 class FakeServer:
@@ -50,9 +55,11 @@ def fake(monkeypatch):
     return srv
 
 
-def _writer(srv, debounce=0.05, max_delay=0.4):
+def _writer(srv, debounce=0.05, max_delay=0.4, *, request=None):
     w = snapshot_writer.SnapshotWriter(srv, debounce, max_delay)
     w.start()
+    if request is not None:
+        request.addfinalizer(w.stop)
     return w
 
 
@@ -70,41 +77,32 @@ def _until(pred, timeout=5.0):
     return False
 
 
-def test_a_burst_of_writes_is_one_rebuild(fake):
-    w = _writer(fake)
-    try:
-        for _ in range(50):
-            _mark(w)
-        assert _until(lambda: fake.builds)
-        time.sleep(0.3)
-        assert len(fake.builds) == 1
-    finally:
-        w.stop()
-
-
-def test_a_steady_stream_cannot_starve_the_file(fake):
-    w = _writer(fake, debounce=0.2, max_delay=0.5)
-    try:
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < 1.6:      # a mark every 50 ms: never quiet for 200 ms
-            _mark(w)
-            time.sleep(0.05)
-        assert len(fake.builds) >= 2, fake.builds
-        assert fake.builds[0] - t0 < 0.5 + 0.3   # first rebuild by max_delay (+ scheduling slack)
-    finally:
-        w.stop()
-
-
-def test_flush_levels_the_file_before_returning(fake):
-    w = _writer(fake, debounce=30, max_delay=60)
-    try:
+def test_a_burst_of_writes_is_one_rebuild(fake, request):
+    w = _writer(fake, request=request)
+    for _ in range(50):
         _mark(w)
-        w.flush()
-        assert len(fake.builds) == 1
-        w.flush()                                # nothing pending: no rebuild
-        assert len(fake.builds) == 1
-    finally:
-        w.stop()
+    assert _until(lambda: fake.builds)
+    time.sleep(0.3)
+    assert len(fake.builds) == 1
+
+
+def test_a_steady_stream_cannot_starve_the_file(fake, request):
+    w = _writer(fake, debounce=0.2, max_delay=0.5, request=request)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 1.6:      # a mark every 50 ms: never quiet for 200 ms
+        _mark(w)
+        time.sleep(0.05)
+    assert len(fake.builds) >= 2, fake.builds
+    assert fake.builds[0] - t0 < 0.5 + 0.3   # first rebuild by max_delay (+ scheduling slack)
+
+
+def test_flush_levels_the_file_before_returning(fake, request):
+    w = _writer(fake, debounce=30, max_delay=60, request=request)
+    _mark(w)
+    w.flush()
+    assert len(fake.builds) == 1
+    w.flush()                                # nothing pending: no rebuild
+    assert len(fake.builds) == 1
 
 
 def test_stop_flushes_a_pending_change(fake):
@@ -114,18 +112,25 @@ def test_stop_flushes_a_pending_change(fake):
     assert len(fake.builds) == 1 and not w.is_alive()
 
 
-def test_build_failures_are_logged_and_a_streak_raises_one_alarm(fake, capsys):
+def test_build_failures_are_logged_and_a_streak_raises_one_alarm(fake, capsys, monkeypatch):
     fake.fail = 4
-    w = _writer(fake, debounce=0.02, max_delay=0.05)
-    try:
-        _mark(w)
-        assert _until(lambda: fake.builds, 5)
-        err = capsys.readouterr().err
-        assert err.count("snapshot build failed") == 4 and "OSError" in err
-        assert err.count("ALARM") == 1
-        assert "snapshot build recovered" in err and not w.alarm and w.failures == 0
-    finally:
-        w.stop()
+    fake.read_path = True
+    tick, build = [0], snapshot_writer.write_snapshot
+    monkeypatch.setattr(snapshot_writer, "time", SimpleNamespace(monotonic=lambda: tick[0]))
+    def slow_build(*args):
+        tick[0] += 2
+        build(*args)
+    monkeypatch.setattr(snapshot_writer, "write_snapshot", slow_build)
+    w = snapshot_writer.SnapshotWriter(fake, 1, 3)
+    _mark(w)
+    for attempt in range(5):
+        tick[0] = w._due()
+        w._attempt()
+        assert w._next == tick[0] + 2 and w._written == (attempt == 4)
+    err = capsys.readouterr().err
+    assert fake.builds and err.count("snapshot build failed") == 4 and "OSError" in err
+    assert err.count("ALARM") == 1 and err.count("outcome=error elapsed_ms=2000 lock_hold_ms=0") == 4
+    assert "snapshot build recovered" in err and not w.alarm and w.failures == 0
 
 
 def test_alarm_flag_is_up_while_the_streak_lasts(fake, capsys):
@@ -139,25 +144,18 @@ def test_alarm_flag_is_up_while_the_streak_lasts(fake, capsys):
         w.stop()
 
 
-def test_a_failed_build_is_retried_and_does_not_kill_the_thread(fake):
+def test_a_failed_build_is_retried_and_does_not_kill_the_thread(fake, request):
     fake.fail = 2
-    w = _writer(fake, debounce=0.05, max_delay=0.1)
-    try:
-        _mark(w)
-        assert _until(lambda: fake.builds, 5), "never retried after a failed build"
-        assert w.is_alive()
-    finally:
-        w.stop()
+    w = _writer(fake, debounce=0.05, max_delay=0.1, request=request)
+    _mark(w)
+    assert _until(lambda: fake.builds, 5), "never retried after a failed build"
+    assert w.is_alive()
 
 
 def _server(tmp_path, world, debounce):
-    path = tmp_path / "keeper.json"
-    path.write_text(json.dumps({
-        "db": str(world.path), "snapshot": str(tmp_path / "plan.snapshot.json"),
-        "bind": "127.0.0.1:0", "snapshot_debounce_s": debounce,
-        "snapshot_max_delay_s": 5}), encoding="utf-8")
-    os.chmod(path, 0o600)
-    server = api.make_server(world.store, config.load_config(path), port=0)
+    cfg = make_cfg(tmp_path, world)
+    cfg.snapshot_debounce_s, cfg.snapshot_max_delay_s = debounce, 5
+    server = api.make_server(world.store, cfg, port=0, log_timing=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     server.base_url = f"http://127.0.0.1:{server.server_address[1]}"
     return server
@@ -169,7 +167,6 @@ def test_server_close_flushes_the_last_committed_write(tmp_path):
     server = _server(tmp_path, world, debounce=30)   # the debounce alone would never fire
     snap = tmp_path / "plan.snapshot.json"
     try:
-        from test_keeper_api import call
         status = call(server, "/v1/claim", method="POST", body={"key": "demo:A"},
                       token=world.tok("l1main"))[0]
         assert status == 200 and not snap.exists(), "the response must not wait for the file"
@@ -188,13 +185,138 @@ def test_synchronous_mode_is_unchanged_when_debounce_is_zero(tmp_path):
     server = _server(tmp_path, world, debounce=0)
     try:
         assert server.snapshot_writer is None
-        from test_keeper_api import call
         call(server, "/v1/claim", method="POST", body={"key": "demo:A"}, token=world.tok("l1main"))
         assert (tmp_path / "plan.snapshot.json").exists()      # written before the response
     finally:
         server.shutdown()
         server.server_close()
         world.close()
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+def test_committed_capture_allows_write_and_readers_at_one_epoch(tmp_path, monkeypatch, backend):
+    if backend == "postgres" and not os.environ.get("PG_DSN"):
+        pytest.skip("PG_DSN not set")
+    _paused_capture(tmp_path, monkeypatch, backend)
+
+
+def test_pg_heldout_whoami_claim_during_paused_snapshot(tmp_path, monkeypatch):
+    if not os.environ.get("PG_DSN") and os.environ.get("PLANGRAPH_REQUIRE_PG_HELDOUT") != "1":
+        pytest.skip("PG_DSN not set")
+    assert os.environ.get("PG_DSN"), "the required PostgreSQL fixture needs PG_DSN"
+    _paused_capture(tmp_path, monkeypatch, "postgres")
+
+
+@pytest.mark.parametrize("failure", [None, "capture", "publish"])
+def test_pending_mark_and_flush_survive_capture_and_publish_failure(tmp_path, monkeypatch, failure):
+    _paused_capture(tmp_path, monkeypatch, "sqlite", pause=0, failure=failure)
+
+
+def _paused_capture(tmp_path, monkeypatch, backend, pause=10, failure=None):
+    world = World(tmp_path, backend=backend)
+    seed(world, [("A", []), ("B", [])])
+    server = _server(tmp_path, world, debounce=0.02)
+    entered, release, flushing = (threading.Event() for _ in range(3))
+    writer = server.snapshot_writer
+    real, publish, notify = type(world.store)._all_items, snapshot_io._publish, writer._cond.notify_all
+    captures, published, transitions = [], [], []
+    def items(view):
+        rows = real(view)
+        if threading.current_thread() is server.snapshot_writer and not captures:
+            captures.append(view.conn)
+            entered.set()
+            assert release.wait(15)
+            if failure == "capture":
+                raise OSError("capture failed")
+        return rows
+
+    def graph(snap):
+        return snap["head_seq"], snap["aliases"], {i["key"]: (i["state"], i["evidence"]) for i in snap["items"]}
+
+    def record(path, snap, key):
+        if failure == "publish" and threading.current_thread() is writer:
+            raise OSError("publish failed")
+        publish(path, snap, key)
+        published.append(graph(snap))
+
+    def record_pending():
+        transitions.append((writer._written, writer._first, writer._last))
+        notify()
+    monkeypatch.setattr(type(world.store), "_all_items", items)
+    monkeypatch.setattr(snapshot_io, "_publish", record)
+    monkeypatch.setattr(writer._cond, "notify_all", record_pending)
+    def live():
+        return json.loads(call(server, "/v1/snapshot", token=world.tok("reader"))[2])
+    def flush():
+        assert not server.lock._is_owned()
+        flushing.set()
+        writer.flush()
+    with closing(world), server, ExitStack() as shutdown:
+        shutdown.callback(server.shutdown)
+        before = live()
+        with ThreadPoolExecutor(max_workers=1) as pool, ExitStack() as unblock:
+            unblock.callback(release.set)
+            _mark(writer)
+            assert entered.wait(3)
+            start = time.monotonic()
+            for path in ("whoami", "show/demo:A?fmt=json", "ready?fmt=json", "snapshot"):
+                assert pool.submit(call, server, "/v1/" + path, token=world.tok("reader")).result(5)[0] == 200
+            claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"), body={"key": "demo:A"})
+            assert claim.result(5)[0] == 200 and time.monotonic() - start < 5
+            assert captures[0] is not world.conn and hasattr(captures[0], "schema") == (backend == "postgres")
+            with server.lock:
+                world.conn.execute("INSERT INTO aliases(old_key,new_key,ts,actor,reason) VALUES(?,?,?,?,?)",
+                                   ("demo:OLD", "demo:A", world.store._iso(world.clock()), "router", "fixture"))
+                world.store.add_evidence_router(world.p("router"), "demo:A", "decision", {"id": "D-1"})
+            assert not release.wait(max(0, pause - (time.monotonic() - start)))
+            with server.lock:
+                future = pool.submit(flush)
+                assert flushing.wait(1) and writer._build.locked()
+                release.set()
+                future.result(2)
+        (_, oldest, _), (_, _, newer), (written, pending, _), _ = transitions
+        assert (written, pending) == ((0, oldest) if failure else (1, newer))
+        after = live()
+        assert published == ([] if failure else [graph(before)]) + [graph(after)]
+        assert after["head_seq"] > before["head_seq"] and after["aliases"] == {"demo:OLD": "demo:A"}
+        assert graph(after)[2]["demo:A"][1]
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "shared", "wrong_source", "wrong_backend", "wrong_schema", "publish"])
+def test_synchronous_capture_failure_never_falls_back_to_shared_store(tmp_path, monkeypatch, failure):
+    from unittest.mock import Mock
+    if failure in ("wrong_backend", "wrong_schema") and not os.environ.get("PG_DSN"):
+        pytest.skip("PG_DSN not set")
+    world = World(tmp_path, backend="postgres" if failure == "wrong_schema" else "sqlite")
+    config = SimpleNamespace(db=world.path, snapshot=tmp_path / "snapshot.json")
+    server = api.KeeperHTTPServer(("127.0.0.1", 0), world.store, config)
+    real, closed = server.read_store, []
+
+    @contextmanager
+    def reader(**kwargs):
+        if failure == "unavailable":
+            raise RuntimeError("reader unavailable")
+        with real(**kwargs) as view:
+            closed.append(view.conn)
+            yield world.store if failure == "shared" else view
+
+    monkeypatch.setattr(server, "read_store", reader)
+    if failure.startswith("wrong"):
+        wrong = World(tmp_path / "wrong", backend="sqlite" if failure == "wrong_source" else "postgres")
+        server.read_path, server.read_schema = wrong.path, getattr(wrong.conn, "schema", None)
+        wrong.close()
+    if failure == "publish":
+        monkeypatch.setattr(snapshot_io, "_publish", Mock(side_effect=RuntimeError("publish failed")))
+    writer = snapshot_writer.SnapshotWriter(server, 1, 2)
+    writer.mark()
+    with closing(world), server:
+        with pytest.raises(RuntimeError):
+            writer.flush()
+        assert not config.snapshot.exists() and writer._written == 0 and writer._first is not None
+        assert server.snapshot_publication.requested > server.snapshot_publication.latest
+        for conn in closed:
+            with pytest.raises((sqlite3.ProgrammingError, ConnectionLost)):
+                conn.execute("SELECT 1")
 
 
 def test_snapshot_config_keys_are_validated(tmp_path):
@@ -286,26 +408,52 @@ def test_a_reader_never_sees_a_torn_or_unverifiable_snapshot(daemon):
 
 
 def test_startup_snapshot_is_written_under_the_server_lock(tmp_path, monkeypatch):
-    from plangraph.keeper import daemon
-    world = World(tmp_path)
+    _startup_snapshot(tmp_path, monkeypatch, "sqlite", legacy=True)
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "postgres"])
+def test_startup_snapshot_uses_committed_capture(tmp_path, monkeypatch, backend):
+    if backend == "postgres" and not os.environ.get("PG_DSN"):
+        pytest.skip("PG_DSN not set")
+    _startup_snapshot(tmp_path, monkeypatch, backend)
+
+
+def _startup_snapshot(tmp_path, monkeypatch, backend, legacy=False):
+    world = World(tmp_path, backend=backend)
     seed(world, [("A", [])])
-    path = tmp_path / "keeper.json"
-    path.write_text(json.dumps({"db": str(world.path), "snapshot": str(tmp_path / "s.json"),
-                                "bind": "127.0.0.1:0"}), encoding="utf-8")
-    os.chmod(path, 0o600)
-    owned = []
-    real = api.write_snapshot
-    monkeypatch.setattr(api, "write_snapshot",
-                        lambda srv, who: (owned.append(srv.lock._is_owned()), real(srv, who)))
+    cfg = make_cfg(tmp_path, world)
+    cfg.db_options["backend"] = backend
+    make, capture, publish = api.make_server, snapshot_io._capture, snapshot_io._write
+    seen = []
+
+    def server(*args, **kwargs):
+        assert kwargs.get("log_timing") is True
+        srv = make(*args, **kwargs)
+        srv.read_path = None if legacy else srv.read_path
+        return srv
+
+    def read(srv, view, who):
+        seen.append(view.conn)
+        assert srv.lock._is_owned() == legacy and (view.conn is srv.store.conn) == legacy
+        return capture(srv, view, who)
+
+    def write(*args):
+        error = sqlite3.ProgrammingError if backend == "sqlite" else ConnectionLost
+        with pytest.raises(error):
+            seen[0].execute("SELECT 1")
+        publish(*args)
+
+    monkeypatch.setattr(api, "make_server", server)
+    monkeypatch.setattr(snapshot_io, "_capture", read)
+    if not legacy:
+        monkeypatch.setattr(snapshot_io, "_write", write)
     world.close()
-    daemon.run(config.load_config(path), ready=lambda srv: signal.raise_signal(signal.SIGINT))
-    assert owned and owned[0] is True, "startup rebuild must hold server.lock"
+    keeper_daemon.run(cfg, ready=lambda srv: signal.raise_signal(signal.SIGINT))
+    assert seen and "demo:A" in {item["key"] for item in snapshot_io.read_snapshot(cfg.snapshot)["items"]}
 
 
 def test_show_answers_during_a_fleet_build_of_7000_records(tmp_path, monkeypatch, capsys):
-    from concurrent.futures import ThreadPoolExecutor
     from plangraph import fleet_snapshot
-    from test_keeper_api import call
 
     monkeypatch.setenv("PLANGRAPH_SPAWN_STATE", str(tmp_path))
     for n in range(7000):
@@ -353,9 +501,6 @@ def test_show_answers_during_a_fleet_build_of_7000_records(tmp_path, monkeypatch
 @pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=pytest.mark.skipif(
     not os.environ.get("PG_DSN"), reason="PG_DSN not set"))])
 def test_plan_reads_see_the_committed_state_while_a_close_write_is_paused(tmp_path, backend):
-    from concurrent.futures import ThreadPoolExecutor
-    from test_keeper_api import call
-
     world = World(tmp_path, backend=backend)
     seed(world, [("A", [])])
     server = _server(tmp_path, world, debounce=30)

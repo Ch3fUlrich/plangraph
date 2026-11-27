@@ -19,7 +19,7 @@ from pathlib import Path
 
 from plangraph._loaded_identity import CODE_TREE, LOADED_IDENTITY, code_identity
 
-from . import anchor, api, backup_retention, config as config_mod, db as kdb, outage
+from . import anchor, api, backup_retention, config as config_mod, db as kdb, outage, timing
 from .snapshot_io import _atomic_write
 from .errors import KeeperLocked
 from .store import Store
@@ -64,7 +64,7 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
 def _host_samples_loop(server, stop):
     while not stop.is_set():
         try:
-            with server.lock:
+            with timing.lock_scope(server.lock, "host_samples"):
                 server.store.maintain_host_samples()
         except Exception as exc:
             print(f"keeper: host samples maintenance failed: {type(exc).__name__}", file=sys.stderr)
@@ -121,7 +121,7 @@ def run(cfg, *, host=None, port=None, ready=None):
     try:
         loaded_state = write_loaded_state(cfg)
         store = _make_store(conn, cfg)
-        server = api.make_server(store, cfg, host=host, port=port)
+        server = api.make_server(store, cfg, host=host, port=port, log_timing=True)
         # M1: fail() may already have been recorded while the server was being
         # built (bus restore, a hook). Notice it before the writes below can
         # trip over a dead session and before serve_forever could accept one
@@ -134,8 +134,11 @@ def run(cfg, *, host=None, port=None, ready=None):
                 server.anchorer.record(conn, "start")
             server.start_reaper()
             try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
-                with server.lock:      # the reaper is already running: same lock as every other build
+                if getattr(server, "read_path", None):
                     api.write_snapshot(server, server.system)
+                else:
+                    with timing.lock_scope(server.lock, "snapshot"):
+                        api.write_snapshot(server, server.system)
             except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
                 print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
         stop = threading.Event()

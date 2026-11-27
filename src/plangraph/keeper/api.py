@@ -147,7 +147,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
             if not (token or "").startswith(auth.OVERSIGHT_PREFIX) and not server.fatal_reason:
                 return self._committed_read(name, extra, query, token)
         try:
-            with server.lock:
+            with timing.lock_scope(server.lock, "auth", phase="auth", waiter=name):
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())
                     revoked = None
@@ -163,12 +163,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
             except Refused:
                 if revoked is None:
                     raise
-                with server.lock:
+                with timing.lock_scope(server.lock, "auth", phase="auth", waiter=name):
                     self._auth_failure(name, method, revoked)
                 return
             if body is None:
                 return  # 413 already sent
-            with timing.RequestTimer(server.lock, "read" if method == "GET" else "write", verb=name):
+            if method == "GET" and name == "messages" and api_routes.committed_messages(server, principal):
+                return api_routes.send_messages(self, principal, query)
+            with timing.RequestTimer(server.lock, "read" if method == "GET" else "write", verb=name, label=api_routes.dispatch_label(name, body)):
                 if revoked is not None:
                     self._read_revoked_receipt(name, principal, body, revoked)
                     return
@@ -210,7 +212,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _committed_read(self, name, extra, query, token):
         server = self.server
         try:
-            with timing.RequestTimer(None, "read", verb=name), ExitStack() as stack:
+            with timing.RequestTimer(server.lock, "read", verb=name, unlocked=True), ExitStack() as stack:
                 try:
                     store = stack.enter_context(server.read_store())
                 except (RuntimeError, *db_errors.OPERATIONAL) as exc:
@@ -597,11 +599,11 @@ class KeeperHTTPServer(ThreadingHTTPServer):
     request_queue_size = 32
     allow_reuse_address = True
 
-    def __init__(self, address, store, config, system=None):
+    def __init__(self, address, store, config, system=None, *, log_timing=False):
         self.store = store
         self.config = config
-        self.lock = threading.RLock()
-        self.snapshot_publication = SnapshotPublication()
+        self.lock = timing.KeeperLock(log_timing=log_timing)
+        self.snapshot_publication = SnapshotPublication(getattr(config, "db", None), store.conn)
         self.merge_refresh = api_routes.MergeRefresh(self)
         self._audit_thread = None
         self.system = system or Principal("system", "system", [], None)
@@ -658,14 +660,14 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         super().__init__(address, KeeperHandler)
         self.read_path = getattr(config, "db", None)
         self.read_schema = getattr(store.conn, "schema", None)
-        self.read_dsn = getattr(config, "db_options", {}).get("dsn")
+        self.read_dsn = db._pg_dsn(getattr(config, "db_options", {}).get("dsn"))
         self._read_audits = SimpleQueue()
         self._audit_thread = threading.Thread(target=self._flush_read_audits, name="keeper-read-audit",
                                               daemon=True)
         self._audit_thread.start()
 
     @contextmanager
-    def read_store(self):
+    def read_store(self, *, defer_audit=False):
         """Run a read against committed rows and deliver its audits through the writer."""
         audits = []
         try:
@@ -683,7 +685,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
                 yield view
         finally:
             if audits:
-                if self.lock.acquire(blocking=False):
+                if not defer_audit and self.lock.acquire(blocking=False, label="read_audit"):
                     try:
                         self._apply_read_audits(audits)
                     finally:
@@ -703,7 +705,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
 
     def _flush_read_audits(self):
         while (audits := self._read_audits.get()) is not None:
-            with self.lock:
+            with timing.lock_scope(self.lock, "read_audit"):
                 self._apply_read_audits(audits)
 
     def fail(self, reason: str) -> None:
@@ -782,12 +784,12 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         super().server_close()
 
 
-def make_server(store, config, *, host=None, port=None) -> KeeperHTTPServer:
-    """Bind to ``config``'s address and start the reaper (not yet serving)."""
+def make_server(store, config, *, host=None, port=None, log_timing=False) -> KeeperHTTPServer:
+    """Bind and start the reaper; the daemon opts into timing on stderr."""
     bind_host = host or config.host
     bind_port = config.port if port is None else port
     if getattr(config, "batch_roots", None):
         store.batch_roots = list(config.batch_roots)  # X7-FIX-B: config wins
-    server = KeeperHTTPServer((bind_host, bind_port), store, config)
+    server = KeeperHTTPServer((bind_host, bind_port), store, config, log_timing=log_timing)
     server.start_reaper()
     return server
