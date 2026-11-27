@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 from test_preflight import preflight, repo  # noqa: F401
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
@@ -61,7 +62,9 @@ elif sys.argv[1] == 'run':
 """)
     monkeypatch.setenv("PREFLIGHT_TOOLS_DIR", str(tools))
     monkeypatch.setenv("PATH", f"{repo / 'bin'}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(shared_target(repo)))
+    target = str(shared_target(repo))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", target)
+    monkeypatch.setenv("CARGO_TARGET_DIR", target)
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "100")
     monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
     return repo, log, seen

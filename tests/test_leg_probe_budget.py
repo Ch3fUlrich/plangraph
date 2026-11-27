@@ -7,11 +7,13 @@ restores budget. Split from test_leg_probe_w1.py to stay under the file-size gat
 """
 import asyncio
 from dataclasses import replace
+import os
 import time
 from types import SimpleNamespace
 
 import pytest
 
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 from test_leg_probe_w1 import _child_runner, _events, _leg
 
 
@@ -25,7 +27,7 @@ def exercise_local_probe(tmp_path, monkeypatch, *, code, isolated=False, cancel=
     if seed:
         store.record_probe_pass(leg_probe.key(leg), caller='existing')
         before = _events(store)
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    assert os.environ.get('CARGO_TARGET_DIR') == str(host_ready.shared_cargo_target())
     cargo_lease = host_ready.cargo_lease
     try_lock = host_ready._try_cargo_lock
     calls = []
@@ -193,7 +195,6 @@ def test_local_lease_refusal_persists_the_terminal_attempt(tmp_path, monkeypatch
     monkeypatch.setattr(service, 'admit_spawn', lambda *args, **kwargs: None)
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *args, **kwargs: None)
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800' if path == 'probe' else '0')
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo'))
     lease = host_ready.cargo_lease
     with lease(exclusive=True):
         monkeypatch.setattr(host_ready, 'cargo_lease', lambda: lease(wait=0.025))

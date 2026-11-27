@@ -21,6 +21,7 @@ from plangraph.spawner import claude_env, host_ready
 from plangraph.spawner.runner import SpawnerRunner
 
 from registry_route_util import CARD, live_policy  # noqa: F401
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 
 #: The policy restated literally.  Widening claude_env.CLAUDE_ENV_ALLOW has to change this list too.
 POLICY = (
@@ -157,8 +158,6 @@ def test_writer_cargo_lease_lasts_until_verified_exit(monkeypatch, tmp_path, ren
     from plangraph.spawner.host_ready import cargo_lease
     from test_leg_probe_w1 import _child_runner
 
-    shared = tmp_path / 'cargo'
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(shared))
     if not render_target:
         def without_target(env, *, pin_configured, target=None):
             return {key: value for key, value in env.items() if key != 'CARGO_TARGET_DIR'}
@@ -191,7 +190,6 @@ def test_native_writer_keeps_local_lease_failure(monkeypatch, tmp_path):
     tools.communicate.return_value = (b'{"tool_path":"fixture","resolved_tools":{},"sandbox_ok":true}', b'')
     factory = AsyncMock(side_effect=[tools])
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', factory)
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo'))
     service = SpawnService(state=tmp_path / 'state')
     card = dict(run_kind='native-codex', repo=str(tmp_path), item='project:item')
     lease = host_ready.cargo_lease

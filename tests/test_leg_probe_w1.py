@@ -19,6 +19,7 @@ import pytest
 
 from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import LegStateStore
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def no_head_trailer_lookup(monkeypatch):
@@ -218,7 +219,6 @@ def test_probe_waits_for_unregistered_session(tmp_path):
 
 def test_timeout_mid_spawn_still_cancels_child(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo'))
     runner = _child_runner(tmp_path, monkeypatch, 'import time; time.sleep(60)', 'claude')
     factory = runner.process_factory
     children = []

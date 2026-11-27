@@ -4,3 +4,4 @@
 - Use the configured shared Cargo target when the child environment supplies no target.
 - Retain local lock identity when closing a Cargo lease delivered after its deadline.
 - Preserve the configured Cargo target path in child environments while resolving aliases for the sibling lock.
+- Isolate shared Cargo lease tests from inherited host targets.

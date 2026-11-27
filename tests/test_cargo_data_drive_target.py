@@ -15,6 +15,14 @@ import pytest
 from plangraph.spawner import host_ready as h
 
 
+@pytest.fixture(autouse=True)
+def isolated_cargo_lease_target(tmp_path, monkeypatch, isolated_build_cache):
+    """Keep the spawner lease and any child Cargo environment in this test's directory."""
+    target = str(tmp_path / 'cargo-target')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', target)
+    monkeypatch.setenv('CARGO_TARGET_DIR', target)
+
+
 def test_spawner_resolves_the_configured_target_and_never_creates_the_home_cache(tmp_path, monkeypatch):
     home, data = tmp_path / "home", tmp_path / "data" / "cargo-target"
     home.mkdir()
@@ -50,7 +58,7 @@ def test_home_expansion_and_absolute_values(tmp_path, monkeypatch, value):
 ])
 def test_cross_process_cargo_lease_deadline(tmp_path, args, minimum, maximum):
     target = tmp_path / 'target'
-    env = dict(os.environ, PLANGRAPH_CARGO_TARGET_DIR=str(target),
+    env = dict(os.environ, PLANGRAPH_CARGO_TARGET_DIR=str(target), CARGO_TARGET_DIR=str(target),
                PYTHONPATH=str(Path(h.__file__).resolve().parents[2]))
     holder = 'from plangraph.spawner.host_ready import cargo_lease\n'
     holder += 'with cargo_lease(exclusive=True):\n print("ready", flush=True)\n input()'
