@@ -1,12 +1,50 @@
+use super::super::tests::{REQUEST_TIMEOUT, WATCHDOG};
 use super::*;
 use crate::io::Transport;
 use std::{
-    io::{Read, Write},
+    io::{ErrorKind::WouldBlock, Read, Write},
     net::TcpListener,
     os::unix::fs::OpenOptionsExt,
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+pub(in crate::http) struct Exchanges {
+    listener: TcpListener,
+    complete: Receiver<()>,
+}
+impl Exchanges {
+    pub(in crate::http) fn accept(&self) -> std::net::TcpStream {
+        let deadline = Instant::now() + WATCHDOG;
+        loop {
+            match self.listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_read_timeout(Some(WATCHDOG)).unwrap();
+                    stream.set_write_timeout(Some(WATCHDOG)).unwrap();
+                    return stream;
+                }
+                Err(e) if e.kind() == WouldBlock => {
+                    assert!(Instant::now() < deadline, "missing fixture request");
+                    let complete = self.complete.recv_timeout(Duration::from_millis(5));
+                    assert_eq!(complete, Err(RecvTimeoutError::Timeout));
+                }
+                Err(e) => panic!("fixture accept: {e}"),
+            }
+        }
+    }
+    pub(in crate::http) fn finish(&self) {
+        self.complete.recv_timeout(WATCHDOG).unwrap();
+        assert_eq!(self.listener.accept().unwrap_err().kind(), WouldBlock);
+    }
+}
+impl Http {
+    #[rustfmt::skip]
+    pub(in crate::http) fn fixture_exchanges(listener: TcpListener, complete: Receiver<()>) -> Exchanges {
+        listener.set_nonblocking(true).unwrap();
+        Exchanges { listener, complete }
+    }
+}
 
 fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -25,19 +63,29 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
     let mut client = Http::new(
         &format!("http://{}/graphs/local", listener.local_addr().unwrap()),
         &path,
-        Duration::from_millis(100),
+        if fault.ends_with("timeout") {
+            REQUEST_TIMEOUT
+        } else {
+            WATCHDOG
+        },
     )
     .unwrap();
     std::fs::remove_file(path).unwrap();
     let fault = fault.to_owned();
+    let (done, complete) = mpsc::channel();
     let server = thread::spawn(move || {
+        let fixture = Http::fixture_exchanges(listener, complete);
         let mut record = Value::Null;
         let mut state = Value::Null;
-        for step in 0..5 {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
+        let requests = match fault.as_str() {
+            "conflict" | "timeout" => 1,
+            "changed-value" => 2,
+            "state-conflict" | "state-timeout" => 3,
+            "snapshot" => 4,
+            _ => 5,
+        };
+        for step in 0..requests {
+            let mut stream = fixture.accept();
             let mut bytes = Vec::new();
             while !bytes.ends_with(b"\r\n\r\n") {
                 let mut byte = [0];
@@ -58,14 +106,6 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 json!({"commit":{"graph_commit_id":id,"created_at":1,
                 "graph_manifest_version":1,"graph_branch":"local"}})
             };
-            if (step == 0 && fault == "conflict") || (step == 2 && fault == "state-conflict") {
-                write!(stream, "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
-                return;
-            }
-            if (step == 0 && fault == "timeout") || (step == 2 && fault == "state-timeout") {
-                thread::sleep(Duration::from_millis(200));
-                return;
-            }
             let mut response = match step {
                 0 => {
                     let expected = if updated { "updated-base" } else { "before" };
@@ -115,6 +155,14 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                         "rows":[if step == 3 {&record} else {&state}]})
                 }
             };
+            if (step == 0 && fault == "conflict") || (step == 2 && fault == "state-conflict") {
+                write!(stream, "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+                break;
+            }
+            if (step == 0 && fault == "timeout") || (step == 2 && fault == "state-timeout") {
+                fixture.finish();
+                return;
+            }
             if step == 3 && fault == "snapshot" {
                 response["graph_commit_id"] = json!("different");
             }
@@ -130,10 +178,8 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
                 response
             )
             .unwrap();
-            if (step == 3 && fault == "snapshot") || (step == 1 && fault == "changed-value") {
-                return;
-            }
         }
+        fixture.finish();
     });
     let mut e = crate::tests::fact();
     e.content = if updated {
@@ -148,6 +194,7 @@ fn publish(updated: bool, fault: &str) -> Result<Receipt, Error> {
         &crate::validate(&e, &caps).unwrap(),
         if updated { "updated-base" } else { "before" },
     );
+    let _ = done.send(());
     server.join().unwrap();
     result
 }

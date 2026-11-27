@@ -240,15 +240,31 @@ pub(crate) fn head_writers_with_timeout(
     diff: &DiffRef,
     timeout: Duration,
 ) -> Result<Vec<String>, InlineDiffError> {
-    validate(diff)?;
-    let deadline = Instant::now() + timeout;
-    workspace_resolver::ensure_commit_until(
+    head_writers_with(
         repo,
-        &diff.head_sha,
-        Duration::from_secs(10),
-        deadline,
+        diff,
+        timeout,
+        Instant::now,
+        workspace_resolver::ensure_commit_until,
     )
-    .map_err(|_| InlineDiffError::Git)?;
+}
+
+pub(crate) fn head_writers_with(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+    timeout: Duration,
+    now: impl Fn() -> Instant,
+    ensure: impl FnOnce(
+        &RepoEntry,
+        &str,
+        Duration,
+        Instant,
+    ) -> Result<(), workspace_resolver::ResolveError>,
+) -> Result<Vec<String>, InlineDiffError> {
+    validate(diff)?;
+    let deadline = now() + timeout;
+    ensure(repo, &diff.head_sha, Duration::from_secs(10), deadline)
+        .map_err(|_| InlineDiffError::Git)?;
     let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
     cmd.args([
         "-c",
@@ -260,7 +276,7 @@ pub(crate) fn head_writers_with_timeout(
         &diff.head_sha,
         "--",
     ]);
-    let log_deadline = deadline.min(Instant::now() + Duration::from_secs(10));
+    let log_deadline = deadline.min(now() + Duration::from_secs(10));
     let (status, stdout) = workspace_resolver::git_output_until(&mut cmd, log_deadline, 64 * 1024)
         .map_err(|_| InlineDiffError::Git)?;
     if !status.success() {

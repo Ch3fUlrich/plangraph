@@ -298,7 +298,7 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
     let ssh = dir.join("stall-ssh");
     pg_worker_core::executable_test_support::write_private_executable(
         &ssh,
-        "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids\nexec sleep 8\n",
+        "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids.tmp\n/bin/mv fetch-pids.tmp fetch-pids\nexec /bin/sleep 35\n",
     );
     for args in [
         ["remote", "add", "origin", repo.remote.as_str()].as_slice(),
@@ -313,10 +313,36 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
     }
     request["card"]["diff_ref"]["head_sha"] = json!("0".repeat(40));
     let diff = serde_json::from_value(request["card"]["diff_ref"].clone()).unwrap();
-    let timeout = Duration::from_secs(1);
+    use pg_worker_core::{stall::status_until_with, workspace_resolver::ensure_commit_until_with};
+    let timeout = Duration::from_secs(30);
     let start = Instant::now();
-    let result = crate::prompt_git::head_writers_with_timeout(repo, &diff, timeout);
-    let elapsed = start.elapsed();
+    let tick = std::cell::Cell::new(start);
+    let status = |cmd: &mut std::process::Command, deadline| {
+        if !cmd.get_args().any(|arg| arg == "fetch") {
+            return status_until_with(cmd, deadline, Instant::now, std::thread::sleep);
+        }
+        status_until_with(
+            cmd,
+            deadline,
+            || tick.get(),
+            |remaining| {
+                if tick.get() == start {
+                    while !dir.join("fetch-pids").is_file() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    tick.set(deadline - Duration::from_millis(1));
+                } else {
+                    assert_eq!(remaining, Duration::from_millis(1), "fetch still pending");
+                    tick.set(deadline);
+                }
+            },
+        )
+    };
+    let resolve = |repo: &_, sha: &_, wait, deadline| {
+        ensure_commit_until_with(repo, sha, wait, deadline, &status)
+    };
+    let result = crate::prompt_git::head_writers_with(repo, &diff, timeout, || start, resolve);
+    assert_eq!(tick.get(), start + timeout);
     let pids = std::fs::read_to_string(dir.join("fetch-pids")).expect("fetch reached the stub");
     let (git_pid, stub_pid) = pids.trim().split_once(' ').unwrap();
     let git_pid: libc::pid_t = git_pid.parse().unwrap();
@@ -329,10 +355,6 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
         unsafe { libc::kill(stub_pid, libc::SIGKILL) };
     }
     assert_eq!(result, Err(crate::prompt::InlineDiffError::Git));
-    assert!(
-        (timeout..Duration::from_secs(3)).contains(&elapsed),
-        "fetch took {elapsed:?}"
-    );
     assert!(lock.is_some(), "fetch lock survived the refusal");
     assert_eq!(
         (git_status, git_error.raw_os_error()),
@@ -344,17 +366,25 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
 #[test]
 fn native_codex_review_client_missing_has_a_distinct_exit() {
     let (dir, _) = fixture();
-    let python = which_python();
-    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let sentinel = dir.join("installed-nvm/versions/node/v99.0.0/bin/codex");
+    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &sentinel,
+        "#!/bin/sh\nprintf touched > sentinel-ran\n",
+    );
     pg_worker_core::executable_test_support::write_private_executable(
         dir.join("installed-codex"),
         "#!/bin/sh\nprintf configured-codex",
     );
     let code = r#"
-import io, json, pathlib, subprocess, sys
+import io, json, os, pathlib, sys
 from plangraph.spawner.launch_spec import main
+from plangraph.spawner.host_ready import harness_path
 from plangraph.routing_support.clients import resolve_codex_client
 root = pathlib.Path(sys.argv[1])
+old = dict(os.environ, PATH='', NVM_DIR=str(root / 'installed-nvm'))
+assert resolve_codex_client(dict(old, PATH=harness_path(old)))[0] == str(
+    root / 'installed-nvm/versions/node/v99.0.0/bin/codex')
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=False,
     leg={'id':'gpt-6.2-sol-medium'}, card={}, cwd=str(root), state=str(root), prompt='review')
 out, err = io.StringIO(), io.StringIO()

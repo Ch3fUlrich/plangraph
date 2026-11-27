@@ -20,6 +20,7 @@ mod stall_capture;
 
 mod deadline;
 pub(crate) use deadline::status_until;
+pub use deadline::status_until_with;
 
 #[cfg(unix)]
 mod unix;
@@ -214,16 +215,31 @@ const SPAWN_TRIES: u32 = 6;
 /// supervised child and the pg-spawnd adapters, so user scripts need no retry
 /// of their own.
 pub fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
+    spawn_retrying_with(|| cmd.spawn(), thread::sleep)
+}
+
+/// Retry a spawn only when the executable is temporarily open for writing.
+pub fn spawn_retrying_with(
+    mut spawn: impl FnMut() -> io::Result<std::process::Child>,
+    mut sleep: impl FnMut(Duration),
+) -> io::Result<std::process::Child> {
     let mut tries = 1;
     loop {
-        match cmd.spawn() {
+        match spawn() {
             Err(e) if is_text_busy(&e) && tries < SPAWN_TRIES => {
-                thread::sleep(Duration::from_millis(20 * u64::from(tries)));
+                sleep(Duration::from_millis(20 * u64::from(tries)));
                 tries += 1;
             }
             other => return other,
         }
     }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+/// Close the fixture's writer on the busy retry and allow inherited descriptors to clear.
+pub fn release_busy_fixture(writer: &mut Option<std::fs::File>, pause: Duration) {
+    drop(writer.take());
+    thread::sleep(pause);
 }
 
 #[cfg(test)]
@@ -246,15 +262,18 @@ mod tests {
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(b"#!/bin/sh\necho up\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Closes the write fd after a moment; until then exec gives ETXTBSY.
-        let closer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(70));
-            drop(f);
-        });
-        let r = supervise(Command::new(&p), &quick()).unwrap();
-        closer.join().unwrap();
-        assert_eq!(r.code, Some(0));
-        assert!(String::from_utf8_lossy(&r.output).contains("up"));
+        let mut writer = Some(f);
+        let mut command = Command::new(&p);
+        command.stdout(Stdio::piped());
+        let child = spawn_retrying_with(
+            || command.spawn(),
+            |pause| release_busy_fixture(&mut writer, pause),
+        )
+        .unwrap();
+        assert!(writer.is_none(), "the busy retry must run");
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"up\n");
     }
 
     fn sh(script: &str) -> Command {

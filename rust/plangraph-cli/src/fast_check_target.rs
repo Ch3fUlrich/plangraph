@@ -33,6 +33,15 @@ pub(super) fn run_step(
     program: &str,
     lease: &cargo_pool::SlotLease,
 ) -> std::io::Result<std::process::ExitStatus> {
+    run_step_with_state(command, program, lease, state_dir().as_deref())
+}
+
+fn run_step_with_state(
+    command: &mut Command,
+    program: &str,
+    lease: &cargo_pool::SlotLease,
+    state: Option<&Path>,
+) -> std::io::Result<std::process::ExitStatus> {
     if Path::new(program).file_name().and_then(|n| n.to_str()) != Some("cargo") {
         return spawn_retrying(command)?.wait();
     }
@@ -40,18 +49,9 @@ pub(super) fn run_step(
     let mut child = spawn_retrying(command.stderr(Stdio::piped()))?;
     let stderr = child.stderr.take().expect("piped stderr");
     let reader = std::thread::spawn(move || {
-        let mut tracker = LockWaitTracker::default();
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 {
-            let _ = std::io::stderr().write_all(&line);
-            tracker.observe(
-                &String::from_utf8_lossy(&line),
-                started.elapsed().as_millis() as u64,
-            );
-            line.clear();
-        }
-        tracker
+        observe_stderr(std::io::BufReader::new(stderr), || {
+            started.elapsed().as_millis() as u64
+        })
     });
     let status = child.wait()?;
     let build_ms = (started.elapsed().as_millis() as u64).max(1);
@@ -59,9 +59,9 @@ pub(super) fn run_step(
         .join()
         .map(|t| t.finish(build_ms))
         .unwrap_or_default();
-    if let Some(state) = state_dir() {
+    if let Some(state) = state {
         let _ = cargo_pool::record_lock_wait(
-            &state,
+            state,
             &LockWaitSample {
                 host: cargo_pool::host_name(),
                 run_id: lease.run_id.clone(),
@@ -76,6 +76,17 @@ pub(super) fn run_step(
         );
     }
     Ok(status)
+}
+
+fn observe_stderr(mut reader: impl BufRead, mut now_ms: impl FnMut() -> u64) -> LockWaitTracker {
+    let mut tracker = LockWaitTracker::default();
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 {
+        let _ = std::io::stderr().write_all(&line);
+        tracker.observe(&String::from_utf8_lossy(&line), now_ms());
+        line.clear();
+    }
+    tracker
 }
 
 pub(super) fn resolve_cargo_target(
@@ -238,27 +249,33 @@ fn run_step_records_lock_wait_sample_only_for_cargo_steps() {
     let lease =
         resolve_cargo_target(&worktree, &tmp.path().join("c/cargo-target"), "fc-rec").unwrap();
     let state = tmp.path().join("state");
-    // SAFETY-free: the variable is read only by `state_dir` inside this test process.
-    std::env::set_var("PLANGRAPH_STATE_DIR", &state);
+    let stderr = b"Blocking waiting for file lock on build directory\n   Compiling x\n";
+    let mut timestamps = [20, 180].into_iter();
+    let elapsed = observe_stderr(stderr.as_slice(), || timestamps.next().unwrap());
+    let (events, waited) = elapsed.finish(200);
+    assert_eq!(events, 1);
+    assert!(waited >= 150);
 
     let bin = tmp.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = executable_test_support::write_script(
         &bin,
         "cargo",
-        "#!/bin/sh\necho 'Blocking waiting for file lock on build directory' >&2\nsleep 0.2\necho '   Compiling x' >&2\n",
+        "#!/bin/sh\necho 'Blocking waiting for file lock on build directory' >&2\necho '   Compiling x' >&2\n",
     );
     let mut command = Command::new(&fake);
-    let status = run_step(&mut command, fake.to_str().unwrap(), &lease).unwrap();
+    let status =
+        run_step_with_state(&mut command, fake.to_str().unwrap(), &lease, Some(&state)).unwrap();
     assert!(status.success());
     let summary = cargo_pool::summarize_lock_waits(&state).unwrap();
+    assert_eq!(summary.len(), 1);
     let row = summary.values().next().expect("one host row");
     assert_eq!((row.builds, row.blocking_events), (1, 1));
-    assert!(row.lock_wait_ms >= 150, "{row:?}");
 
     let mut other = Command::new("true");
-    run_step(&mut other, "true", &lease).unwrap();
+    run_step_with_state(&mut other, "true", &lease, Some(&state)).unwrap();
     let after = cargo_pool::summarize_lock_waits(&state).unwrap();
+    assert_eq!(after.len(), 1);
     assert_eq!(after.values().next().unwrap().builds, 1);
 }
 
@@ -325,12 +342,12 @@ fn executable_fixture_retries_when_its_write_descriptor_is_open() {
         &command.spawn().unwrap_err()
     ));
 
-    let closer = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(70));
-        drop(writer);
-    });
-    let child = executable_test_support::spawn(&mut command);
-    closer.join().unwrap();
-
-    assert!(child.unwrap().wait().unwrap().success());
+    let mut writer = Some(writer);
+    let mut child = pg_worker_core::stall::spawn_retrying_with(
+        || command.spawn(),
+        |pause| pg_worker_core::stall::release_busy_fixture(&mut writer, pause),
+    )
+    .unwrap();
+    assert!(writer.is_none());
+    assert!(child.wait().unwrap().success());
 }

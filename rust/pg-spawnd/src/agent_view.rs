@@ -220,8 +220,24 @@ fn gather(
     timeout: Duration,
     run: impl Fn(&str, &Value, Duration) -> Value + Send + Sync + 'static,
 ) -> Vec<Value> {
+    gather_with(entries, timeout, run, Instant::now, |_, rx, remaining| {
+        rx.recv_timeout(remaining)
+    })
+}
+
+fn gather_with(
+    entries: &serde_json::Map<String, Value>,
+    timeout: Duration,
+    run: impl Fn(&str, &Value, Duration) -> Value + Send + Sync + 'static,
+    now: impl Fn() -> Instant,
+    mut receive: impl FnMut(
+        &str,
+        mpsc::Receiver<Value>,
+        Duration,
+    ) -> Result<Value, mpsc::RecvTimeoutError>,
+) -> Vec<Value> {
     let run = std::sync::Arc::new(run);
-    let deadline = Instant::now() + timeout + Duration::from_millis(250);
+    let deadline = now() + timeout + Duration::from_millis(250);
     let receivers: Vec<_> = entries
         .iter()
         .map(|(host, cfg)| {
@@ -236,7 +252,7 @@ fn gather(
     receivers
         .into_iter()
         .map(|(host, rx)| {
-            rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            receive(host, rx, deadline.saturating_duration_since(now()))
                 .unwrap_or_else(|_| unavailable(host, "timeout"))
         })
         .collect()

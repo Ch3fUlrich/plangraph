@@ -182,12 +182,24 @@ fn a_process_that_survives_sigterm_is_a_failed_stop() {
         log_file: dir.path().join("log"),
         log_failed: false,
     };
-    let mut child = sh("trap '' TERM; while :; do sleep 1; done");
-    std::thread::sleep(std::time::Duration::from_millis(300)); // the trap is installed
-    let err = h.terminate(child.id(), start_of(child.id())).unwrap_err();
-    assert!(err.contains("still running"), "{err}");
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "trap '' TERM; : > ready; exec /bin/sleep 30"])
+        .current_dir(dir.path())
+        .spawn()
+        .unwrap();
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let ready = dir.path().join("ready");
+    while !ready.is_file() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let result = ready
+        .is_file()
+        .then(|| h.terminate(child.id(), start_of(child.id())));
     child.kill().unwrap();
     child.wait().unwrap();
+    let err = result.expect("fixture trap was not installed").unwrap_err();
+    assert!(err.contains("still running"), "{err}");
 }
 
 #[test]
