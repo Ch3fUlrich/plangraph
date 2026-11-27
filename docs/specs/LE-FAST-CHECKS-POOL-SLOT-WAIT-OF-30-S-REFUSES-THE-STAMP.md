@@ -24,7 +24,7 @@ Outcome. A fast-checks run waits for a Cargo pool slot as long as its caller set
 - D3. A timeout returns an error that starts with the constant `POOL_BUSY = "cargo pool busy"`, followed by the existing busy text, the wait and the holders. `fast_checks::run` maps an error with that prefix to exit code `pg_worker_core::fast_check_stamp::BUSY_EXIT = 75` (EX_TEMPFAIL). Every other error stays exit 1.
 - D4. Owned parent: a child exit of 75 that listed no check row publishes no receipt and returns `cargo pool busy: nothing checked; no receipt for HEAD`. The parent also exits 75. Any other non-zero exit keeps today's red receipt.
 - D5. Native writer: `Host::fast_checks` maps exit 75 to an error that starts with `FAST_CHECKS_BUSY = "fast_checks_busy"`. The driver loop reruns the fast checks on the same head while they report busy, up to `FAST_CHECK_BUSY_TRIES = 3` runs. Each busy run records `fast_checks = {head, status: "busy", output}` and saves. A busy run never resumes the writer and never counts against `FAST_CHECK_FIXES`. After the third busy run the run ends with exit 7 and reason `fast_checks_busy: <output>`.
-- D6. The slot count stays disk-derived. Raising the ceiling of 3 by RAM or cores would only add slots on hosts with spare disk. coding.vm is disk-bound and under the operator order of 2026-11-27 no builds run there. This spec does not implement How point 3. No keeper approval of dropping it exists yet; the planner decides (see Open points).
+- D6. The slot count stays disk-derived. Raising the ceiling of 3 by RAM or cores would only add slots on hosts with spare disk. coding.vm is disk-bound and under the operator order of 2026-11-27 no builds run there. This spec does not implement How point 3. The planner dropped it on the keeper item (see Open points).
 
 ## Entry points
 
@@ -90,4 +90,4 @@ Write X1-X7 and X9 first. On the base they fail to compile (new symbols) or show
 
 ## Open points for design approval
 
-None for the writer. The planner must either approve dropping How point 3 (slot count from RAM and cores) on the item, or split it into its own item. This spec does not implement it (D6).
+None. The planner dropped How point 3 (slot count from RAM and cores) on the keeper item on 2026-11-27 18:40Z (plan-roadmap-0969): slot counts are disk-bound on all three hosts, per-host counts belong to HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION (D6).
