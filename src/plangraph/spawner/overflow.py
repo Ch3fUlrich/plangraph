@@ -605,7 +605,8 @@ async def native_spawn(self, card, options):
     repo, effort = native_launch_checks(card, options)
     binary = _projection_binary()
     card = await asyncio.to_thread(lane_admit, self, card, options.get('prompt', ''))
-    from .host_ready import harness_path
+    from .host_ready import cargo_child_env, harness_path
+    from .probe_cleanup import acquire_cargo_lease
     tool_env = dict(os.environ)
     tool_env['PATH'] = harness_path(tool_env, native_writer=True)
     # Resolve on the placed host before creating a run or acknowledging admission.
@@ -628,7 +629,7 @@ async def native_spawn(self, card, options):
         base_ref=card.get('base_ref'), repo=str(repo),
         plan=dict(effort=effort, p_source='override'))
     record.update(tool_environment)
-    from .exit_outcome import native_harness_fields
+    from .exit_outcome import native_harness_fields, native_launch_failure
     record.update(native_harness_fields(record['host']))
     if placement:
         record['placement'] = placement
@@ -640,17 +641,17 @@ async def native_spawn(self, card, options):
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
     atomic_write_private(directory / 'native-request.json', json.dumps(request))
-    from .host_ready import cargo_lease, cargo_child_env
     lease = None
     try:
-        lease = await asyncio.to_thread(cargo_lease)
+        env = cargo_child_env(os.environ)
+        lease = await acquire_cargo_lease(env['CARGO_TARGET_DIR'])
         process = await asyncio.create_subprocess_exec(binary, 'native-writer',
             str(directory / 'native-request.json'), stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE, start_new_session=True,
-            env=cargo_child_env(os.environ))
-    except (OSError, RuntimeError):
+            env=env)
+    except (OSError, RuntimeError) as exc:
         if lease: lease.close()
-        record.update(status='failed', exit_code=6, reason='native worker launch failed', ended=time.time())
+        native_launch_failure(record, exc)
         self._save(record)
         return record
     except BaseException:

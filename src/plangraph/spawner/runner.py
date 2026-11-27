@@ -38,7 +38,7 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, origin_refusal, refusal_record, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, origin_refusal, refusal_record, release_attempts, stop_on_probe_fault, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
@@ -476,12 +476,17 @@ class SpawnerRunner:
                     self._git_guards[job_id] = guard
                 from .opencode_isolation import record_baseline
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
-            from .host_ready import cargo_lease
-            self._cargo_leases = getattr(self, '_cargo_leases', {})
-            self._cargo_leases[job_id] = None if review_target else await asyncio.to_thread(cargo_lease)
+            from .probe_cleanup import LocalLaunchFault, acquire_cargo_lease, fail_local_job, gate_dispatch
             try:
                 from .service import claim_first_dispatch
+                gate_dispatch()
+                if not review_target:
+                    self._cargo_leases = getattr(self, '_cargo_leases', {})
+                    self._cargo_leases[job_id] = await acquire_cargo_lease(child_env.get('CARGO_TARGET_DIR'))
+                gate_dispatch()
                 claim_first_dispatch(prompt_record)
+                process_options = background_process_options(new_session=True, platform='nt' if self._nt() else 'posix')
+                gate_dispatch(enter=True)
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -490,8 +495,11 @@ class SpawnerRunner:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     stdin=asyncio.subprocess.PIPE if payload is not None else asyncio.subprocess.DEVNULL,
-                    **background_process_options(new_session=True, platform='nt' if self._nt() else 'posix'),
+                    **process_options,
                 )
+            except LocalLaunchFault as exc:
+                self._adapter_tokens.pop(job_id, None)
+                return fail_local_job(job, exc)
             except Exception as exc:
                 self._adapter_tokens.pop(job_id, None)
                 job.status = 'failed'
@@ -1011,6 +1019,8 @@ def spawn_service(*args, **kwargs):
                             break
                         tried.add(chosen.id)
                         probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget, **route_probe_scope(current, chosen))
+                        if stop_on_probe_fault(record, chosen, probe_skip):
+                            return
                         if probe_skip:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
                             self._save(record)
@@ -1057,7 +1067,8 @@ def spawn_service(*args, **kwargs):
                             return
                         if refusal_record(record, job):   # no booking, reroute, or writer continuation
                             record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason=record['reason'],
-                                stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
+                                stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop,
+                                **({'local_fault': record['local_fault']} if 'local_fault' in record else {})))
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record, card=card)
