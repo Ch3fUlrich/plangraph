@@ -420,3 +420,46 @@ fn hygiene_generic_cache_probe_refuses_committed_artifacts() {
         Some("unsafe")
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn selector_scratch_uses_its_run_lease_for_final_proof() {
+    use crate::{cargo_cache::CacheLease, disk_hygiene::FinalProof};
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("pg-affected-fixture");
+    fs::create_dir(&target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+    let marker = target.join(".lease");
+    fs::write(&marker, b"plangraph-affected-pytest-v1\n").unwrap();
+    let now = SystemTime::now();
+    for path in [&target, &marker] {
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(3600))
+            .unwrap();
+    }
+    let mut discovered =
+        crate::affected_scratch::discover(tmp.path(), &[], &mut || true, now).unwrap();
+    assert_eq!(discovered.len(), 1);
+    let item = discovered.pop().unwrap();
+    assert_eq!(item.path, target);
+    let held = CacheLease::try_exclusive_file(fs::File::open(&marker).unwrap()).unwrap();
+    assert!(held.is_some());
+    assert_eq!(FinalProof::begin(item.clone()).err(), Some("leased"));
+    drop(held);
+    let mut proof = FinalProof::begin(item).unwrap();
+    assert!(proof.advance(|| true).unwrap());
+    assert!(
+        CacheLease::try_exclusive_file(fs::File::open(&marker).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(!tmp
+        .path()
+        .join("pg-affected-fixture.plangraph-lock")
+        .exists());
+    assert!(proof.remove(true, || Ok(true), || true).unwrap().is_some());
+    assert!(!target.exists());
+}

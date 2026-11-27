@@ -19,13 +19,11 @@ pub(crate) fn is_run(path: &Path) -> bool {
         .is_some_and(|name| name.starts_with("pg-affected-"))
 }
 
-pub(crate) fn reclaim(
+pub(crate) fn acquire(
     root: &Path,
     guards: &Guards,
-    now: SystemTime,
-    apply: bool,
     report: &mut Report,
-) -> io::Result<()> {
+) -> io::Result<Result<(CacheLease, fs::Metadata), &'static str>> {
     let meta = fs::symlink_metadata(root)?;
     if !meta.is_dir()
         || meta.mode() & 0o777 != 0o700
@@ -33,7 +31,7 @@ pub(crate) fn reclaim(
         || root.canonicalize()? != root
         || guards.protects(root)
     {
-        return Ok(());
+        return Ok(Err("unsafe"));
     }
     let path = root.join(".lease");
     let opened = OpenOptions::new()
@@ -43,19 +41,19 @@ pub(crate) fn reclaim(
     let lease = match opened {
         Ok(file) => file,
         Err(error) if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOENT)) => {
-            return Ok(())
+            return Ok(Err("unrecognized"))
         }
         Err(error) => return Err(error),
     };
     let lease_meta = lease.metadata()?;
     if !lease_meta.is_file() || lease_meta.uid() != meta.uid() || lease_meta.nlink() != 1 {
-        return Ok(());
+        return Ok(Err("unrecognized"));
     }
     let Some(lease) = CacheLease::try_exclusive_file(lease)? else {
         report
             .skipped
             .push(format!("{}: pytest lease held", root.display()));
-        return Ok(());
+        return Ok(Err("leased"));
     };
     let mut marker = Vec::new();
     lease
@@ -63,8 +61,41 @@ pub(crate) fn reclaim(
         .take(MARKER.len() as u64 + 1)
         .read_to_end(&mut marker)?;
     if marker != MARKER || crate::reap_journal::check_mounts(root).is_err() {
-        return Ok(());
+        return Ok(Err("unrecognized"));
     }
+    Ok(Ok((lease, meta)))
+}
+
+pub(crate) fn discover(
+    root: &Path,
+    excluded: &[std::path::PathBuf],
+    permit: &mut impl FnMut() -> bool,
+    cutoff: SystemTime,
+) -> io::Result<Vec<crate::disk_hygiene::Candidate>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(root)?.take_while(|_| permit()) {
+        let path = entry?.path();
+        if is_run(&path) && !excluded.iter().any(|other| path.starts_with(other)) {
+            let mut item = crate::disk_hygiene::Candidate::new(path, root.to_path_buf(), cutoff)?;
+            item.selector_scratch = true;
+            found.push(item);
+        }
+    }
+    Ok(found)
+}
+
+pub(crate) fn reclaim(
+    root: &Path,
+    guards: &Guards,
+    now: SystemTime,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<()> {
+    let Ok((lease, meta)) = acquire(root, guards, report)? else {
+        return Ok(());
+    };
+    let path = root.join(".lease");
+    let lease_meta = lease.file().metadata()?;
     let (bytes, newest) = scan(root)?;
     if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800) {
         return Ok(());

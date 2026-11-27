@@ -55,7 +55,6 @@ pub(super) fn rank_candidate(
     row.reason = result.err();
     row.spent += (budget.clock)().saturating_duration_since(tick);
 }
-
 pub struct Layout<'a> {
     pub repo: &'a Path,
     pub roots: &'a [PathBuf],
@@ -153,15 +152,18 @@ impl Layout<'_> {
             .filter(|p| p.is_absolute())
             .unwrap_or_else(|| self.home.join(".cache"));
         let legacy_roots = crate::idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
-        for root in self
-            .scratch
-            .iter()
-            .chain([&cache])
-            .chain(legacy_roots.iter())
-        {
+        for root in self.scratch.iter().chain([&cache]).chain(&legacy_roots) {
             let Ok(boundary) = root.canonicalize() else {
                 continue;
             };
+            if self.scratch.contains(root) {
+                found.extend(crate::affected_scratch::discover(
+                    &boundary,
+                    &excluded,
+                    &mut permit,
+                    idle,
+                )?);
+            }
             let (targets, complete) =
                 crate::idle_targets::targets_in(&boundary, 2, &excluded, &mut permit)?;
             if !complete {
@@ -275,9 +277,9 @@ impl Layout<'_> {
         permit: &mut impl FnMut() -> bool,
     ) -> io::Result<()> {
         use crate::{
-            cargo_pool::{pool_slot_sets, DEFAULT_POOL_SLOTS},
+            cargo_pool::{pool_slot_sets, PoolCap, DEFAULT_POOL_SLOTS},
             cargo_pool_trim::trusted_slot,
-            shared_target::{debug_artifacts, PoolCap, STALE_AFTER},
+            shared_target::{debug_artifacts, STALE_AFTER},
         };
         let fallback = self
             .shared

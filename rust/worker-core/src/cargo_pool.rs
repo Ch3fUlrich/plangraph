@@ -192,12 +192,16 @@ pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool>
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
+
+#[cfg(target_os = "linux")]
 pub(crate) fn hygiene_cap_failure(
     item: &crate::shared_target::Candidate,
     projected: &crate::disk_hygiene::Projection,
     room: impl Fn() -> bool,
 ) -> Option<&'static str> {
-    let crate::shared_target::PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
+    let PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
     let mut total = 0u64;
     let mut complete = true;
     for slot in slots.iter().filter(|slot| slot.is_dir()) {

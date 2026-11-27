@@ -338,7 +338,8 @@ pub fn reclaim(
                         return Ok(false);
                     };
                     let mut lease = item.lease_root.as_os_str().to_os_string();
-                    lease.push(".plangraph-lock");
+                    let suffix = [".plangraph-lock", "/.lease"];
+                    lease.push(suffix[usize::from(item.selector_scratch)]);
                     if inventory.blocks_except(&item.scope, Path::new(&lease)) {
                         row.reason = Some("busy");
                         return Ok(false);

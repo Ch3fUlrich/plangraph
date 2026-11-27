@@ -187,12 +187,9 @@ pub struct Candidate {
     pub(crate) cutoff: SystemTime,
     pub(crate) identity: (u64, u64),
     pub(crate) maintenance: bool,
-    pub(crate) cap: Option<PoolCap>,
+    pub(crate) selector_scratch: bool,
+    pub(crate) cap: Option<crate::cargo_pool::PoolCap>,
 }
-
-#[cfg(target_os = "linux")]
-#[derive(Clone)]
-pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
 
 #[cfg(target_os = "linux")]
 impl Candidate {
@@ -207,6 +204,7 @@ impl Candidate {
             cutoff,
             identity,
             maintenance: false,
+            selector_scratch: false,
             cap: None,
         })
     }
@@ -231,6 +229,12 @@ impl Candidate {
     }
 
     pub(crate) fn lease(&self) -> Result<crate::cargo_cache::ExclusiveLease, &'static str> {
+        if self.selector_scratch {
+            use crate::affected_scratch::acquire;
+            return acquire(&self.path, &Default::default(), &mut Default::default())
+                .map_err(|_| "probe_unavailable")?
+                .map(|(lease, _)| lease);
+        }
         crate::cargo_cache::try_exclusive_lease(&self.lease_root)
             .map_err(|_| "probe_unavailable")?
             .ok_or("leased")
