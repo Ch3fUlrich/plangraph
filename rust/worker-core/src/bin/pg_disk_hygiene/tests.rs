@@ -323,12 +323,17 @@ fn rebuildable_classes_keep_only_protected_paths() {
         (".cache/foreign", "unsafe"),
         (".cache/source", "unsafe"),
         (".cache/late", "busy"),
+        (".cache/cargo-target/recent", "young"),
         ("scratch/unknown", "unrecognized"),
     ];
     let old = SystemTime::now() - Duration::from_secs(86400);
     let protected = kept.iter().map(|(name, _)| *name);
     for name in removed.into_iter().chain(protected) {
-        let modified = old - Duration::from_secs(3600);
+        let modified = if name.ends_with("/recent") {
+            SystemTime::now() - Duration::from_secs(7200)
+        } else {
+            old - Duration::from_secs(3600)
+        };
         let marked = !name.ends_with("unknown");
         seed_cargo_fixture(&path(name), modified, marked).unwrap();
     }
@@ -358,12 +363,14 @@ fn rebuildable_classes_keep_only_protected_paths() {
     }
     let scratch = [path("scratch")];
     let cache = path(".cache");
+    let home_link = path("home-link");
+    std::os::unix::fs::symlink(home, &home_link).unwrap();
     let layout = Layout {
         repo: &repo,
         roots: &[trees],
         scratch: &scratch,
         shared: &shared,
-        home,
+        home: &home_link,
         cache: Some(&cache),
         cap: 1024,
     };

@@ -145,8 +145,15 @@ impl Layout<'_> {
             .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| self.home.join(".cache"));
-        let legacy_roots = idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
-        for root in self.scratch.iter().chain([&cache]).chain(&legacy_roots) {
+        let legacy_roots =
+            idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path).canonicalize().ok());
+        let legacy_roots = legacy_roots.iter().flatten();
+        for root in self
+            .scratch
+            .iter()
+            .chain([&cache])
+            .chain(legacy_roots.clone())
+        {
             let Ok(boundary) = root.canonicalize() else {
                 continue;
             };
@@ -190,7 +197,7 @@ impl Layout<'_> {
                 report.keep_boundary(boundary.clone(), "discovery_budget");
             }
             for target in targets {
-                let historical = legacy_roots.iter().any(|root| target.starts_with(root));
+                let historical = legacy_roots.clone().any(|root| target.starts_with(root));
                 let age = if historical { legacy } else { idle };
                 let parent = boundary
                     .parent()
