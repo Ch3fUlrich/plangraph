@@ -338,6 +338,50 @@ The timer and land job use `plangraph merge-close`. The client starts a backgrou
 
 When more than one scanned repository carries the item's full trailer, automatic close reports `merge_repo_ambiguous`. A `Merge-Repo:` hint selects the repository. Router GO close uses the item's repository by default. `plangraph merge-close --deploy-status` previews active merged items that await deployment evidence, with their age in hours and a `merged-not-live` total. Every close path decides with one function, `live_evidence_status` (D-6790): automatic close, router GO close, a passing review verdict, a close on decision, a decision close and an answer. An item closes only with a verified `deploy` evidence row of its current epoch recorded at or after the latest landing of its work, or a `no deploy needed: <reason>` line in its description or note (`no_deploy_reason_empty` names a line with no reason; the line never excuses an explicit `Live:` clause). The landing time is read once outside the write lock, from the latest of the tagged commits (merge date, or the forge record of a squash), the named merge, the partial deliveries, the commit evidence and the GO head; it is carried into the transaction, which re-reads the evidence rows against it before it writes. Verified commit evidence in a different registered repository uses that repository's configured ref to find its landing date. Evidence in the item's merge repository uses the pinned ref when available. Work whose landing date cannot be read counts no deploy row; an item with no landed work has no floor. Automatic close and router GO close list a held item as `deploy_pending: live_evidence_missing`; the other paths refuse with `evidence_unverified: live_evidence_missing`. A `deploy` row of a oneshot service (`type: oneshot`) counts only beside an active row of its timer on the same host (the rule of the shipped-unit gate, one shared match), and that timer row is not proof of its own beside the oneshot. The authenticated router can add the reason in place to a claimed or in-review item with a note edit that adds only the `no deploy needed:` line; the epoch, the evidence and earlier verdicts stay, and a granted L1 acting as router cannot. The markdown importer reports a close this gate would refuse as `held` and imports the rest. Shipped units still require their matching deployment evidence.
 
+Each completed background refresh generation writes one `merge_index_refresh`
+record after releasing the publication mutex. Records include `generation`,
+`elapsed_ms`, and `outcome` (`ready`, `budget_exceeded`, `scan_error`, or
+`superseded`), along with the existing `seconds` field. A scan that assembled
+a snapshot also reports successful repositories as `repos` and repository
+errors as `failed`. Ready and superseded records use INFO or the Keeper
+diagnostic stream when INFO is disabled. Scan failures use WARNING or the
+diagnostic stream when WARNING is disabled.
+
+Each of `candidate_snapshot`, `decision_snapshot`, `default_ref`, `work_index`,
+`delivery_lookup`, `landing_warm`, `open_lanes`, `deploy_snapshot` and
+`publish_wait` has a `_ms` duration and an `_attempts` count. Attempts include
+calls that raise, and unvisited stages show zero. The `merged_pr_for` and
+`check_runs` durations and attempts, along with `landing_cache_hits`, describe
+work inside `landing_warm`. The `residual_ms` field is elapsed time minus the
+nine top-level durations, calculated before rounding to integer milliseconds.
+It includes project enumeration and work inside the publication mutex.
+
+For a production readback, save the queries and their exact UTC bounds.
+Collect the preceding six hours of unit receipts before the approved restart.
+After restart, collect six hours of Keeper records and unit receipts during
+normal work. Run the unit query with each window's bounds.
+
+```sh
+journalctl --user --utc -o json --since "$FROM_UTC" --until "$UNTIL_UTC" \
+  -u pg-merge-close.service -u pg-merge-close-continue.service
+journalctl --user --utc -o json --since "$FROM_UTC" --until "$UNTIL_UTC" \
+  -u plangraph-keeper.service --grep '^(keeper: )?merge_index_refresh '
+```
+
+Keep timestamps, output receipts, sample counts, workload, concurrent
+rollouts and omissions. Deduplicate by Keeper invocation ID and generation.
+Match unit waits to generation intervals using the terminal timestamp minus
+`elapsed_ms` for the start. Treat ambiguous or missing matches as
+unclassified. Compare terminal passes, pending streaks and service failures by
+reason with the baseline. Report separate sample counts, stage shares and
+attempt counts for successful generations and slow generations
+(`budget_exceeded` or confidently matched to a pending unit pass). Report the
+nested forge counters separately and leave the residual unclassified. Name a
+dominant stage only when a single top-level stage accounts for at least half
+the total measured elapsed time across the slow group. With no slow samples,
+incomplete coverage, a tie or no dominant stage, report the readback as
+inconclusive.
+
 Computed [train delta admission](landing-train.md) reads the keeper mirror and requires an authenticated serving attempt bound to the reviewed artifact and a completed response.
 
 A landed batch closes its part items and its batch item in one step: the batch merge commit carries one `Plan-Item` trailer per part item and the batch item, and one `Review-Run: <project:ID> <run-id> <part head>` line per keeper-bound part review. `close_merged` and the automatic merge close read those lines of the merge that landed the item's head: a part head counts as the seat head when it is reachable from that merge's second parent (outside its first-parent history) and a commit of its range carries the item's `Plan-Item` trailer; a merged head without a citation, or one the cited parts do not cover (another commit of the item in the same batch), keeps needing its own seat, and the cited record is still verified by the witness adapter (served model, exact part head, passing verdict, binds this item), so a part without a recorded seat run still refuses `NO-WITNESS`. A merge commit on the first-parent chain that carries the trailer itself is its own introducing merge (its head is its second parent), also after later merges.

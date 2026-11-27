@@ -625,6 +625,7 @@ class ContextMixin:
             checks = record["checks"] if record else None
             unreadable = bool(checks) and checks["detail"] == "check_runs_unavailable"
             if frozen or (checks and checks["verified"]) or (now - at < self._LANDING_MISS_S and not unreadable):
+                timing.merge_landing_cache_hit()
                 return record
         ci, git = self._adapter("ci"), self._adapter("git")
         if (frozen or not valid_commit_ref(sha)
