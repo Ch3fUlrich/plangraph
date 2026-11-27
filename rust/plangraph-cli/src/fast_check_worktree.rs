@@ -1,14 +1,17 @@
 use super::{output, Result};
 use pg_worker_core::{fast_check_stamp as receipt, git::git, worktree};
+use std::process::ExitStatus;
 use std::{fs, path::Path, process::Command};
 
 /// The child writes one `check` line per executed step into the file this variable names.
 pub(super) const RESULTS_ENV: &str = "PG_FAST_CHECK_RESULTS";
 
-/// Read the child's `check` lines back into checks; a missing file is no check.
-fn read_checks(path: &Path) -> Vec<receipt::Check> {
+/// Read and remove the child's results; a missing file is no check.
+fn read_checks(path: &Path) -> Result<(Vec<receipt::Check>, Option<receipt::BudgetOverrun>)> {
     let text = fs::read_to_string(path).unwrap_or_default();
-    text.lines()
+    let _ = fs::remove_file(path);
+    let checks = text
+        .lines()
         .filter_map(|line| {
             let mut words = line.strip_prefix("check ")?.split_whitespace();
             let label = words.next()?.to_string();
@@ -16,7 +19,8 @@ fn read_checks(path: &Path) -> Vec<receipt::Check> {
             let seconds = words.next()?.strip_prefix("wall=")?.parse().ok()?;
             Some(receipt::Check { label, rc, seconds })
         })
-        .collect()
+        .collect();
+    Ok((checks, receipt::read_budget(&text)?))
 }
 
 /// Run committed checks in a disposable checkout and publish the stamp only after cleanup.
@@ -63,8 +67,11 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         return Err(format!("owned worktree cleanup: {error}"));
     }
     let status = checked.map_err(|error| error.to_string())?;
-    let mut checks = read_checks(&results);
-    let _ = fs::remove_file(&results);
+    settle(root, &head, &results, status)
+}
+
+pub(super) fn settle(root: &Path, head: &str, results: &Path, status: ExitStatus) -> Result<()> {
+    let (mut checks, budget) = read_checks(results)?;
     if !status.success() && checks.iter().all(|check| check.rc == 0) {
         // A child that died before it listed a failure still leaves a red receipt.
         checks.push(receipt::Check {
@@ -74,11 +81,17 @@ pub(super) fn run(root: &Path, args: &[String]) -> Result<()> {
         });
     }
     // The receipt is written for every outcome: a red one makes the push and review refuse this head.
-    receipt::publish(root, &head, &checks)?;
+    receipt::publish_with_budget(root, head, &checks, budget)?;
     if !status.success() {
         return Err(format!("owned worktree checks failed ({status})"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn fixture_status(passed: bool) -> ExitStatus {
+    let arg = if passed { "--version" } else { "--bad" };
+    Command::new("git").arg(arg).output().unwrap().status
 }
 
 /// Include local edits for interactive validation; an owned checkout has no such edits.
