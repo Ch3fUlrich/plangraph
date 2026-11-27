@@ -413,7 +413,10 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     assert_eq!(p.max_writers["workstation"], 8);
     // The self-stop and pacing keys are top-level policy, not host names.
     assert_eq!(p.max_writers.len(), 3);
-    assert_eq!((p.no_commit_stop, p.no_commit_window, p.pace_by_commit), (3, 5, true));
+    assert_eq!(
+        (p.no_commit_stop, p.no_commit_window, p.pace_by_commit),
+        (3, 5, true)
+    );
     assert_eq!(writer_limit("workstation", &p), Some(8));
     assert_eq!(writer_limit("workstation.example", &p), Some(8));
     assert_eq!(
