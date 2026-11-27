@@ -19,6 +19,7 @@ from plangraph.routing_errors import ParameterRefused
 from .host_ready import harness_path
 from .env_redact import harness_limit_line, sandbox_denial
 from .exit_outcome import quota_models
+from .probe_cleanup import LocalLaunchFault, OWNED, ProbeLaunch
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
 REVIEW_PROMPT = 'Reply with the single word OK. Do not create a plan or any other file.'
@@ -180,16 +181,17 @@ def _store_for(runner):
 
 async def _await_completion(runner, job, deadline):
     """Wait out the session even when its task is not registered yet (Q10)."""
-    while True:
+    while time.monotonic() < deadline:
         task = (getattr(runner, '_tasks', None) or {}).get(job.job_id)
         if task is not None:
             await asyncio.wait_for(asyncio.shield(task), max(deadline - time.monotonic(), 0))
-            return
+            if time.monotonic() < deadline:
+                return
+            break
         if getattr(job, 'exit_code', None) is not None or getattr(job, 'status', 'running') != 'running':
             return
-        if time.monotonic() >= deadline:
-            raise asyncio.TimeoutError
         await asyncio.sleep(0.02)
+    raise asyncio.TimeoutError
 
 
 def probe_quota_line(leg, review_mode, exit_code, stdout, stderr, refusal=None):
@@ -219,6 +221,11 @@ def _missing_harness(harness, seconds_elapsed=0.0):
                 infra=True, seconds=seconds_elapsed)
 
 
+def _local_fault_result(fault, start):
+    return dict(ok=False, infra=True, state='host-not-ready', reason=fault.code,
+                local_fault=fault.public(), seconds=time.monotonic() - start, stderr_excerpt='')
+
+
 async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_reprobe=False):
     """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
@@ -237,12 +244,13 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
     if shutil.which(leg.harness, path=harness_path(os.environ)) is None:
         return _missing_harness(leg.harness, time.monotonic() - start)
     deadline = start + timeout
+    launch_state = ProbeLaunch(start, deadline)
     previous = await asyncio.to_thread(_run_logs, runner)
     root = tempfile.mkdtemp(prefix='plangraph-leg-probe-')
     job = None
     stderr = ''
     spawn_task = None
-    owned_ids = set()
+    owned_ids = launch_state.ids
 
     def git(*args):
         return subprocess.check_output(['git', '-C', root, *args], env=probe_env(),
@@ -269,8 +277,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
             async def launch():
-                from .probe_cleanup import OWNED
-                OWNED.set(owned_ids)
+                OWNED.set(launch_state)
                 # A Codex writer commits only where its sandbox may write the git dir (as pg-spawnd grants it).
                 return await runner.spawn(
                     prompt=REVIEW_PROMPT if review_mode else PROMPT,
@@ -283,14 +290,26 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
             spawn_task = asyncio.ensure_future(launch())
             try:
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
-            except asyncio.TimeoutError:
-                ok, reason = False, 'timeout'
+            except LocalLaunchFault as exc:
+                return _local_fault_result(exc, start)
             except (ValueError, RuntimeError, OSError) as exc:
-                cause = redact_output(redact_env_values(str(exc), os.environ))
-                cause = ' '.join(leg_state._redact(cause, limit=400).splitlines())
-                ok, reason, infra = False, f'probe infra: spawn: {type(exc).__name__}', True
-                if cause:
-                    reason += ': ' + cause
+                expired = isinstance(exc, asyncio.TimeoutError) and (
+                    not spawn_task.done() or spawn_task.cancelled() or spawn_task.exception() is not exc)
+                if expired:
+                    if not launch_state.dispatched:
+                        return _local_fault_result(launch_state.expire(), start)
+                    ok, reason = False, 'timeout'
+                else:
+                    cause = redact_output(redact_env_values(str(exc), os.environ))
+                    cause = ' '.join(leg_state._redact(cause, limit=400).splitlines())
+                    ok, reason, infra = False, f'probe infra: spawn: {type(exc).__name__}', True
+                    if cause:
+                        reason += ': ' + cause
+            fault = getattr(job, '_local_launch_fault', None)
+            if isinstance(fault, LocalLaunchFault):
+                return _local_fault_result(fault, start)
+            if job is not None and not launch_state.dispatched and time.monotonic() >= deadline:
+                return _local_fault_result(launch_state.expire(), start)
         if ok is None:
             try:
                 await _await_completion(runner, job, deadline)
@@ -354,36 +373,46 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
                 ok, reason, infra, excerpt = False, 'probe infra: sandbox denied a write', True, ''
             elif not quota:
                 serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
-        if not infra:
-            caller = 'review-probe' if review_mode else 'leg-probe'
-            if ok:
-                state.record_probe_pass(key(leg), caller=caller)
-            elif quota:
-                for model in quota_models(key(leg), leg.harness):
-                    state.record_harness_limit(model, quota, caller, harness=leg.harness,
-                                               down_s=_booking_seconds())
-                status = state.leg_status(key(leg))
-                if status['state'] == 'limited':
-                    return dict(ok=False, reason='limited', skipped='limited', infra=False,
-                                seconds=time.monotonic() - start, stderr_excerpt=excerpt,
-                                reset_at=status['evidence']['reset_at'])
-            else:
-                state.record_probe_fail(key(leg), reason, caller=caller, serving=serving, stderr_excerpt=excerpt)
-        reason += ': ' + excerpt if excerpt and not leaked else ''
-        result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
-        if serving:
-            result['state'] = 'probe_failed_leg_serving'
-        return result
+    except asyncio.CancelledError:
+        launch_state.cancel()
+        raise
     finally:
         from .probe_cleanup import cleanup
-        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids))
+        cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids, fault=launch_state.fault))
         # A second caller cancellation must not interrupt tree cleanup.
         while not cleanup_task.done():
             try:
-                await asyncio.shield(cleanup_task)
+                await asyncio.wait([cleanup_task])
             except asyncio.CancelledError:
-                continue
-        cleanup_task.result()
+                launch_state.cancel()
+        try:
+            cleanup_task.result()
+        except Exception as exc:
+            if launch_state.cancelled:
+                raise asyncio.CancelledError from exc
+            raise
+        if launch_state.cancelled:
+            raise asyncio.CancelledError
+    if not infra:
+        caller = 'review-probe' if review_mode else 'leg-probe'
+        if ok:
+            state.record_probe_pass(key(leg), caller=caller)
+        elif quota:
+            for model in quota_models(key(leg), leg.harness):
+                state.record_harness_limit(model, quota, caller, harness=leg.harness,
+                                           down_s=_booking_seconds())
+            status = state.leg_status(key(leg))
+            if status['state'] == 'limited':
+                return dict(ok=False, reason='limited', skipped='limited', infra=False,
+                            seconds=time.monotonic() - start, stderr_excerpt=excerpt,
+                            reset_at=status['evidence']['reset_at'])
+        else:
+            state.record_probe_fail(key(leg), reason, caller=caller, serving=serving, stderr_excerpt=excerpt)
+    reason += ': ' + excerpt if excerpt and not leaked else ''
+    result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
+    if serving:
+        result['state'] = 'probe_failed_leg_serving'
+    return result
 
 _INFLIGHT = {}
 
@@ -393,7 +422,7 @@ class ProbeBudget:
     The pre-launch probe runs inside the spawn's base admission wait (ADMISSION_TIMEOUT). One
     probe gets at most a third of the window and all probes of a spawn at most half, so serial
     hung probes fail over leg by leg and still leave time to prepare the worktree and launch.
-    A probe that exceeds its share is killed and booked as a probe failure.
+    A dispatched probe that exceeds its share is cleaned up and booked as a probe failure.
     """
     def __init__(self, window=None, started=None):
         from .base_fresh import ADMISSION_TIMEOUT
@@ -500,6 +529,8 @@ async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_
         return 'probe_budget_exhausted'
     finally:
         budget.spend(started)
+    if fault := result.get('local_fault'):
+        return limit() or LocalLaunchFault(**fault)
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'
