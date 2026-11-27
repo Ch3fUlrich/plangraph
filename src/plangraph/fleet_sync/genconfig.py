@@ -64,6 +64,9 @@ def generate(registry):
             raise ValueError('invalid WSL distribution')
         src = root.rstrip('/\\') + '/src'
         hop = {'wsl_distro': distro} if distro else {}
+        env = host.get('env', {})
+        if distro and 'PATH' in env:
+            hop['env'] = {'PATH': env['PATH']}
         state = host.get('state_dir')  # `ps` reads the spawner state the host's runs are written to
         # A malformed value is carried on so the consumer rejects the host, not the default store.
         ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src},
@@ -75,7 +78,7 @@ def generate(registry):
                 overflow[name].update(roles=host['roles'], state_dir=host['state_dir'],
                     placement_fallback=host.get('placement_fallback', False),
                     repos={key: entry['root'] for key, entry in repos.items() if key in public_ids},
-                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True,
+                    session_unit=env.get('PG_SESSION_UNIT'), registry=True,
                     remote_placement=host.get('remote_placement') is True)
             if mounts := work_mounts(host):
                 overflow[name]['work_mounts'] = mounts

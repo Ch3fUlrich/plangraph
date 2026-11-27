@@ -1,0 +1,8 @@
+path	disposition	required	row IDs	label
+changelog.d/HOSTS-REGISTRY-WSL-LINUX-WORKER.md	write	yes	E1 E2	predicted
+docs/placement-rules.md	write	yes	E1 E2	predicted
+rust/worker-core/src/hosts.rs	read	yes	E1 E2	predicted
+rust/worker-core/src/hosts/validate.rs	read	yes	E1 E2	predicted
+src/plangraph/fleet_sync/genconfig.py	write	yes	E1 E2	predicted
+src/plangraph/spawner/overflow.py	read	yes	E1 E2	predicted
+tests/test_fleet_sync.py	write	yes	E1 E2	predicted
