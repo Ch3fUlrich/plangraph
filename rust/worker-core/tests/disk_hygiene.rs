@@ -43,8 +43,7 @@ fn active_build_in_a_keeps_only_a() {
         "open_paths": [fd.as_os_str().as_encoded_bytes()],
         "cargo_targets": [deep.as_os_str().as_encoded_bytes()]});
     let legacy = serde_json::json!([[cwd], true]);
-    let reader = tmp.path().join("reader");
-    pg_worker_core::executable_test_support::write_executable(&reader, format!(
+    let reader = pg_worker_core::executable_test_support::write_script(tmp.path(), "reader", &format!(
         "#!/bin/sh\nif [ \"$1\" = --hygiene-references ]; then echo '{inventory}'; else echo '{legacy}'; fi\n"));
     let applied = run_pressure_cli(tmp.path(), &repo, &root, &reader, "state", "--apply");
     assert!(child.try_wait().unwrap().is_none());
@@ -136,7 +135,6 @@ fn stalled_pressure_exits_one_reports_and_enqueues() {
         ("dry", "--dry-run", false),
         ("old", "--apply", true),
     ] {
-        let reader = tmp.path().join(format!("reader-{state}"));
         let script = if old {
             "#!/bin/sh\necho '[[],false]'\n".to_owned()
         } else {
@@ -146,7 +144,11 @@ if [ -e "$0.seen" ]; then echo '{busy}'; else touch "$0.seen"; echo '{empty}'; f
 "#
             )
         };
-        pg_worker_core::executable_test_support::write_executable(&reader, script);
+        let reader = pg_worker_core::executable_test_support::write_script(
+            tmp.path(),
+            &format!("reader-{state}"),
+            &script,
+        );
         let output = run_pressure_cli(tmp.path(), &repo, &root, &reader, state, mode);
         assert_eq!(output.status.code(), Some(i32::from(mode == "--apply")));
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
