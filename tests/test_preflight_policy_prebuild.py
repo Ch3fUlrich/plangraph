@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 from test_preflight import preflight, repo  # noqa: F401
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
@@ -61,7 +62,9 @@ elif sys.argv[1] == 'run':
 """)
     monkeypatch.setenv("PREFLIGHT_TOOLS_DIR", str(tools))
     monkeypatch.setenv("PATH", f"{repo / 'bin'}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(shared_target(repo)))
+    target = str(shared_target(repo))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", target)
+    monkeypatch.setenv("CARGO_TARGET_DIR", target)
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "100")
     monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
     return repo, log, seen
@@ -278,6 +281,28 @@ def test_lane_reuses_current_policy_binary_over_cap(rig, monkeypatch, capsys):
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0")
     assert preflight.main(["--base", "HEAD", "--lane"], repo) == 0
     assert log.read_text().count("build ") == 1
+
+
+def test_busy_policy_reuse_is_immediate_and_fallback_never_builds_unleased(rig, monkeypatch):
+    from plangraph.spawner import host_ready
+
+    repo, log, _ = rig
+    executable = preflight.policy_target(repo) / 'debug/pg-policy'
+    script(executable, '')
+    lease = host_ready.cargo_lease
+    calls = []
+
+    def bounded(*args, **kwargs):
+        calls.append((args, kwargs))
+        return lease(wait=kwargs.get('wait', 0.025))
+
+    with lease(exclusive=True):
+        monkeypatch.setattr(preflight, 'cargo_lease', bounded)
+        assert preflight.reuse_policy(repo, []) is None
+        code, output, staged = preflight.build_policy(repo, os.environ, [])
+    assert calls == [((), {'wait': 0.0}), ((), {})]
+    assert code == 1 and 'cargo_lease_timeout' in output and staged is None
+    assert not log.exists()
 
 
 def test_fast_gate_uses_source_keyed_policy_instead_of_unkeyed_cargo_run(rig, monkeypatch):

@@ -12,8 +12,8 @@ that shared case they build into `<shared target>/cli-tests/<checkout path hash>
 so another checkout cannot replace their CLI and extra output stays under the shared cap.
 Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
 `~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
-shared cleanup lease. It checks the host cache cap before and after each Cargo
-command; never override this with a private target. See [disk limits and
+shared cleanup lease. Cached policy reuse tries once. Builds wait up to five
+seconds for the lease and check the cache cap before and after Cargo. Keep the configured shared target. See [disk limits and
 cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty. md-sync screens closes using verified deploy evidence from the snapshot's current item epoch. Moving an open item into review advances its epoch, so the importer holds its close until the next import if it needs deploy proof. Keeper checks the latest landing when it applies a close.
 
 On Linux, preflight calls `pg-spawnd host post-run-cargo` after all checks
