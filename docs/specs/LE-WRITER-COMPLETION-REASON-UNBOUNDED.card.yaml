@@ -22,25 +22,25 @@
       "max_final_lines": 60
     },
     "rust/pg-spawnd/src/reason_bound.rs": {
-      "max_changed_lines": 90,
-      "max_final_lines": 90
+      "max_changed_lines": 115,
+      "max_final_lines": 115
     },
     "src/plangraph/spawner/service.py": {
       "max_changed_lines": 4,
       "max_final_lines": 638
     },
     "src/plangraph/spawner/stderr_capture.py": {
-      "max_changed_lines": 30,
-      "max_final_lines": 63
+      "max_changed_lines": 42,
+      "max_final_lines": 75
     },
     "tests/test_spawner_reason_bound.py": {
-      "max_changed_lines": 70,
-      "max_final_lines": 70
+      "max_changed_lines": 90,
+      "max_final_lines": 90
     }
   },
   "cards": {
     "LE-WRITER-COMPLETION-REASON-UNBOUNDED": {
-      "outcome": "A terminal run record keeps reason and completion.reason within 4096 bytes plus a marker that names reason.log, which holds the full text in the run directory.",
+      "outcome": "A terminal run record keeps reason and completion.reason within 4096 bytes plus a marker that names reason.log, which keeps at most the first and last 512 KiB of the failure text in the run directory.",
       "read_set": [
         "rust/pg-spawnd/src/native_writer.rs",
         "rust/pg-spawnd/src/native_writer_host_tests.rs",

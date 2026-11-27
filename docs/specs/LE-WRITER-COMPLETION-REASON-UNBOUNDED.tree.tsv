@@ -6,7 +6,7 @@ rust/pg-spawnd/src/native_writer.rs	read	yes	E1	observed
 rust/pg-spawnd/src/native_writer_host.rs	write	yes	E1	predicted (<= 8 changed lines; <= 558 final lines)
 rust/pg-spawnd/src/native_writer_host_reason_tests.rs	write	yes	E1	predicted (<= 60 changed lines; <= 60 final lines)
 rust/pg-spawnd/src/native_writer_host_tests.rs	read	yes	E1	observed
-rust/pg-spawnd/src/reason_bound.rs	write	yes	E1	predicted (<= 90 changed lines; <= 90 final lines)
+rust/pg-spawnd/src/reason_bound.rs	write	yes	E1	predicted (<= 115 changed lines; <= 115 final lines)
 rust/pg-spawnd/src/record_file.rs	read	yes	E1	observed
 rust/worker-core/src/run/lifecycle.rs	read	yes	E1	observed
 rust/worker-core/src/run/record_io.rs	read	yes	E1	observed
@@ -16,6 +16,6 @@ src/plangraph/spawner/notify.py	read	yes	E2	observed
 src/plangraph/spawner/output_keep.py	read	yes	E2	observed
 src/plangraph/spawner/runner.py	read	yes	E2	observed
 src/plangraph/spawner/service.py	write	yes	E2	predicted (<= 4 changed lines; <= 638 final lines)
-src/plangraph/spawner/stderr_capture.py	write	yes	E2	predicted (<= 30 changed lines; <= 63 final lines)
+src/plangraph/spawner/stderr_capture.py	write	yes	E2	predicted (<= 42 changed lines; <= 75 final lines)
 tests/test_spawner_exit_stderr_capture.py	read	yes	E2	observed
-tests/test_spawner_reason_bound.py	write	yes	E2	predicted (<= 70 changed lines; <= 70 final lines)
+tests/test_spawner_reason_bound.py	write	yes	E2	predicted (<= 90 changed lines; <= 90 final lines)
