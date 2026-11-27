@@ -1,13 +1,15 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN.md	write	yes	E1 E2 E3	new (<= 2 changed lines; <= 2 final lines)
-docs/KEEPER.md	write	yes	E1 E2 E3	predicted (<= 6 changed lines; <= 714 final lines)
-src/plangraph/keeper/api_routes.py	write	yes	E3	predicted (<= 6 changed lines; <= 518 final lines)
+docs/KEEPER.md	write	yes	E1 E2 E3	predicted (<= 6 changed lines; <= 734 final lines)
+src/plangraph/keeper/api_routes.py	write	yes	E3	predicted (<= 6 changed lines; <= 534 final lines)
 src/plangraph/keeper/context_sources.py	write	yes	E2	predicted (<= 6 changed lines; <= 796 final lines)
 src/plangraph/keeper/errors.py	write	yes	E3	predicted (<= 14 changed lines; <= 49 final lines)
-src/plangraph/keeper/store_input.py	write	yes	E1	predicted (<= 14 changed lines; <= 281 final lines)
+src/plangraph/keeper/store_input.py	write	yes	E1	predicted (<= 18 changed lines; <= 285 final lines)
 src/plangraph/keeper/store_runs.py	write	yes	E3	predicted (<= 3 changed lines; <= 796 final lines)
-src/plangraph/keeper/store_waiver.py	write	yes	E2	predicted (<= 4 changed lines; <= 775 final lines)
-tests/test_keeper_malformed_key.py	write	yes	E1 E2 E3	new (<= 140 changed lines; <= 140 final lines)
+src/plangraph/keeper/store_waiver.py	write	yes	E2	predicted (<= 4 changed lines; <= 799 final lines)
+tests/test_keeper_malformed_key.py	write	yes	E1 E2 E3	new (<= 180 changed lines; <= 180 final lines)
 src/plangraph/keeper/store_close.py	read	yes	E2	observed
 tests/keeper_util.py	read	yes	E1 E2 E3	observed
+tests/test_keeper_close_merged_scan.py	read	yes	E3	observed
+tests/test_keeper_guard_key.py	read	yes	E1	observed
 tests/test_keeper_merge_close_auto.py	read	yes	E2 E3	observed

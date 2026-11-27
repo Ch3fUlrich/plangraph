@@ -7,11 +7,11 @@
     },
     "docs/KEEPER.md": {
       "max_changed_lines": 6,
-      "max_final_lines": 714
+      "max_final_lines": 734
     },
     "src/plangraph/keeper/api_routes.py": {
       "max_changed_lines": 6,
-      "max_final_lines": 518
+      "max_final_lines": 534
     },
     "src/plangraph/keeper/context_sources.py": {
       "max_changed_lines": 6,
@@ -22,8 +22,8 @@
       "max_final_lines": 49
     },
     "src/plangraph/keeper/store_input.py": {
-      "max_changed_lines": 14,
-      "max_final_lines": 281
+      "max_changed_lines": 18,
+      "max_final_lines": 285
     },
     "src/plangraph/keeper/store_runs.py": {
       "max_changed_lines": 3,
@@ -31,11 +31,11 @@
     },
     "src/plangraph/keeper/store_waiver.py": {
       "max_changed_lines": 4,
-      "max_final_lines": 775
+      "max_final_lines": 799
     },
     "tests/test_keeper_malformed_key.py": {
-      "max_changed_lines": 140,
-      "max_final_lines": 140
+      "max_changed_lines": 180,
+      "max_final_lines": 180
     }
   },
   "cards": {
@@ -44,6 +44,8 @@
       "read_set": [
         "src/plangraph/keeper/store_close.py",
         "tests/keeper_util.py",
+        "tests/test_keeper_close_merged_scan.py",
+        "tests/test_keeper_guard_key.py",
         "tests/test_keeper_merge_close_auto.py"
       ],
       "write_set": [
@@ -61,7 +63,7 @@
       "risk_tags": [],
       "estimate_tokens": 45000,
       "window_class": "128k",
-      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_merge_close_auto.py tests/test_keeper_create_fold.py"
+      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_merge_close_auto.py tests/test_keeper_guard_key.py tests/test_keeper_create_fold.py"
     }
   }
 }
