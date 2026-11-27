@@ -4,8 +4,8 @@ Outcome. Reclaim idle rebuildable caches while unrelated builds run and alert on
 
 - plan_source. Keeper brief for plangraph:LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS, priority 10, review tier high, with the supplied 2026-11-26 incident measurements.
 - base commit. d948affa1da9565f12c58fb981bbf2dbc04974ad
-- card SHA-256. df6fadd0f4413d9a7bd3252fdb04837ea9d0bb0608d8187de072a790f69c3867
-- tree SHA-256. de3b769eb1a0709e7377304d9dcfd52282af5d25426d9662aebee16f06a0d47c
+- card SHA-256. ec6c580dbc805517403281d2473f359f5e52df8e0460608a40b4ced323510b7b
+- tree SHA-256. be78aee3abf534075282286ead129be635ca32401a3577da6b3f9f611cc5f983
 - evidence_after_deploy. Collect a 24-hour workstation series after approved deployment in the order specified under Process inventory and rollout. Apply S1 to a pressured timer invocation overlapping an observed Cargo or rustc process. Retain the overlapping invocation's NDJSON row, timestamps, deployed head and any matching Keeper alert ID, together with the root usage samples. The 85% outcome depends on N1.
 
 ## Decisions
@@ -62,6 +62,7 @@ The tree caps added plus deleted lines. Move the old binary dispatch at lines 15
 | Write path | Maximum final lines |
 | --- | ---: |
 | `changelog.d/LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS.md` | 0 + 12 = 12 |
+| `deploy/manifest.toml` | 780 |
 | `deploy/systemd/disk-hygiene.env.example` | 17 + 10 = 27 |
 | `deploy/systemd/pg-disk-hygiene.service` | 9 + 5 = 14 |
 | `docs/host-tools.md` | 291 + 75 = 366 |
@@ -69,27 +70,28 @@ The tree caps added plus deleted lines. Move the old binary dispatch at lines 15
 | `docs/operations/worker-disks.md` | 110 + 34 = 144 |
 | `rust/plangraph-cli/src/host_link_bridge.rs` | 171 + 65 = 236 |
 | `rust/plangraph-cli/tests/host_link_bridge.rs` | 218 + 105 = 323 |
-| `rust/worker-core/src/affected_scratch.rs` | 89 + 55 = 144 |
+| `rust/worker-core/src/affected_scratch.rs` | 780 |
 | `rust/worker-core/src/bin/pg-disk-hygiene.rs` | 602 + (360 − 110) − 110 = 742 |
 | `rust/worker-core/src/bin/pg-process-cwds.rs` | 29 + 23 = 52 |
-| `rust/worker-core/src/bin/pg_disk_hygiene/tests.rs` | 0 + 395 = 395 |
-| `rust/worker-core/src/cargo_pool.rs` | 341 + 52 = 393 |
+| `rust/worker-core/src/bin/pg_disk_hygiene/tests.rs` | 780 |
+| `rust/worker-core/src/cargo_pool.rs` | 780 |
 | `rust/worker-core/src/cargo_pool_trim.rs` | 301 + 125 = 426 |
-| `rust/worker-core/src/cargo_pool_trim_tests.rs` | 270 + 90 = 360 |
+| `rust/worker-core/src/cargo_pool_trim_tests.rs` | 780 |
 | `rust/worker-core/src/disk_fast_worktrees.rs` | 61 + 35 = 96 |
 | `rust/worker-core/src/disk_hygiene.rs` | 424 + 220 = 644 |
 | `rust/worker-core/src/disk_hygiene_plan.rs` | 0 + 440 = 440 |
+| `rust/worker-core/src/disk_hygiene_plan_discovery.rs` | 480 |
 | `rust/worker-core/src/disk_runtime.rs` | 414 + 210 = 624 |
 | `rust/worker-core/src/disk_runtime_tests.rs` | 501 + 145 = 646 |
 | `rust/worker-core/src/disk_watermark.rs` | 344 + 75 = 419 |
 | `rust/worker-core/src/host_link.rs` | 261 + 50 = 311 |
-| `rust/worker-core/src/idle_targets.rs` | 119 + 70 = 189 |
+| `rust/worker-core/src/idle_targets.rs` | 780 |
 | `rust/worker-core/src/idle_targets_tests.rs` | 246 + 80 = 326 |
 | `rust/worker-core/src/main_target.rs` | 594 + 90 = 684 |
 | `rust/worker-core/src/private_targets.rs` | 194 + 140 = 334 |
-| `rust/worker-core/src/private_targets_tests.rs` | 372 + 135 = 507 |
+| `rust/worker-core/src/private_targets_tests.rs` | 780 |
 | `rust/worker-core/src/shared_target.rs` | 373 + 90 = 463 |
-| `rust/worker-core/tests/disk_hygiene.rs` | 556 + 180 = 736 |
+| `rust/worker-core/tests/disk_hygiene.rs` | 780 |
 | `rust/worker-core/tests/main_target_cli.rs` | 256 + 60 = 316 |
 
 Routing uses a 60,000-token estimate in the 128k window for the single bounded write set. Budget roughly 18,000 for source and fixture reading, 32,000 for implementation, and 10,000 for verification and fixes.

@@ -1,7 +1,7 @@
 path	disposition	required	row IDs	label
 .filesize-baseline	read	yes	E1	observed
 changelog.d/LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS.md	write	yes	E1 E2 E3	predicted (<= 32 changed lines; <= 780 final lines)
-deploy/manifest.toml	read	yes	E1 E3	observed
+deploy/manifest.toml	write	yes	E1 E3	predicted (<= 6 changed lines; <= 780 final lines)
 deploy/systemd/README.md	read	yes	E3 E4	observed
 deploy/systemd/disk-hygiene.env.example	write	yes	E3 E4	predicted (<= 30 changed lines; <= 780 final lines)
 deploy/systemd/pg-disk-hygiene.service	write	yes	E3 E4	predicted (<= 25 changed lines; <= 780 final lines)
@@ -23,30 +23,30 @@ rust/plangraph-cli/Cargo.toml	read	yes	E3	observed
 rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E3	predicted (<= 85 changed lines; <= 780 final lines)
 rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E3	predicted (<= 125 changed lines; <= 780 final lines)
 rust/worker-core/Cargo.toml	read	yes	E1 E2	observed
-rust/worker-core/src/affected_scratch.rs	write	yes	E1 E2	predicted (<= 75 changed lines; <= 780 final lines)
+rust/worker-core/src/affected_scratch.rs	write	yes	E1 E2	predicted (<= 80 changed lines; <= 780 final lines)
 rust/worker-core/src/bin/flow_watchdog_hosts/disks.rs	read	yes	E3	observed
 rust/worker-core/src/bin/flow_watchdog_hosts/local.rs	read	yes	E3	observed
 rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E1 E2 E3 E4	predicted (<= 480 changed lines; <= 780 final lines)
 rust/worker-core/src/bin/pg-process-cwds.rs	write	yes	E2	predicted (<= 43 changed lines; <= 780 final lines)
-rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E1 E2 E3	predicted (<= 415 changed lines; <= 780 final lines)
+rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E1 E2 E3	predicted (<= 430 changed lines; <= 780 final lines)
 rust/worker-core/src/cargo_cache.rs	read	yes	E1 E2	observed
-rust/worker-core/src/cargo_pool.rs	write	yes	E1 E2	predicted (<= 72 changed lines; <= 780 final lines)
+rust/worker-core/src/cargo_pool.rs	write	yes	E1 E2	predicted (<= 90 changed lines; <= 780 final lines)
 rust/worker-core/src/cargo_pool_trim.rs	write	yes	E1 E2	predicted (<= 145 changed lines; <= 780 final lines)
-rust/worker-core/src/cargo_pool_trim_tests.rs	write	yes	E1 E2	predicted (<= 110 changed lines; <= 780 final lines)
+rust/worker-core/src/cargo_pool_trim_tests.rs	write	yes	E1 E2	predicted (<= 135 changed lines; <= 780 final lines)
 rust/worker-core/src/disk_fast_worktrees.rs	write	yes	E1 E2	predicted (<= 55 changed lines; <= 780 final lines)
 rust/worker-core/src/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 240 changed lines; <= 780 final lines)
 rust/worker-core/src/disk_hygiene_plan.rs	write	yes	E1 E2 E3	predicted (<= 460 changed lines; <= 460 final lines)
-rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E1 E2 E3	predicted (<= 460 changed lines; <= 460 final lines)
+rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E1 E2 E3	predicted (<= 480 changed lines; <= 480 final lines)
 rust/worker-core/src/disk_runtime.rs	write	yes	E1 E2 E3	predicted (<= 230 changed lines; <= 780 final lines)
 rust/worker-core/src/disk_runtime_tests.rs	write	yes	E1 E2	predicted (<= 165 changed lines; <= 780 final lines)
 rust/worker-core/src/disk_watermark.rs	write	yes	E1 E3	predicted (<= 105 changed lines; <= 780 final lines)
 rust/worker-core/src/host_command.rs	read	yes	E1 E2	observed
 rust/worker-core/src/host_link.rs	write	yes	E3	predicted (<= 70 changed lines; <= 780 final lines)
-rust/worker-core/src/idle_targets.rs	write	yes	E1 E2	predicted (<= 90 changed lines; <= 780 final lines)
+rust/worker-core/src/idle_targets.rs	write	yes	E1 E2	predicted (<= 110 changed lines; <= 780 final lines)
 rust/worker-core/src/idle_targets_tests.rs	write	yes	E1 E2	predicted (<= 100 changed lines; <= 780 final lines)
 rust/worker-core/src/main_target.rs	write	yes	E1 E2	predicted (<= 110 changed lines; <= 780 final lines)
 rust/worker-core/src/private_targets.rs	write	yes	E1 E2	predicted (<= 160 changed lines; <= 780 final lines)
-rust/worker-core/src/private_targets_tests.rs	write	yes	E1 E2	predicted (<= 155 changed lines; <= 780 final lines)
+rust/worker-core/src/private_targets_tests.rs	write	yes	E1 E2	predicted (<= 175 changed lines; <= 780 final lines)
 rust/worker-core/src/reap_journal.rs	read	yes	E1 E2	observed
 rust/worker-core/src/reaper.rs	read	yes	E2	observed
 rust/worker-core/src/run/record_io.rs	read	yes	E3	observed
@@ -55,7 +55,7 @@ rust/worker-core/src/sweep_facts.rs	read	yes	E1 E2	observed
 rust/worker-core/src/sweep_runs.rs	read	yes	E1 E2	observed
 rust/worker-core/src/unit_refs/mod.rs	read	yes	E1 E2	observed
 rust/worker-core/src/work_disks.rs	read	yes	E1	observed
-rust/worker-core/tests/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 200 changed lines; <= 780 final lines)
+rust/worker-core/tests/disk_hygiene.rs	write	yes	E1 E2 E3	predicted (<= 215 changed lines; <= 780 final lines)
 rust/worker-core/tests/disk_thresholds.rs	read	yes	E3	observed
 rust/worker-core/tests/main_target_cli.rs	write	yes	E1 E2	predicted (<= 80 changed lines; <= 780 final lines)
 rust/worker-core/tests/support/disk_hygiene.rs	read	yes	E1 E2	observed
