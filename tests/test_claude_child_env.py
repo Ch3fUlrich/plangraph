@@ -152,12 +152,17 @@ def test_cargo_target_and_shared_lease_at_spawn(monkeypatch, tmp_path, role):
         assert 'CARGO_BUILD_BUILD_DIR' not in env
 
 
-def test_writer_cargo_lease_lasts_until_verified_exit(monkeypatch, tmp_path):
+@pytest.mark.parametrize('render_target', [True, False], ids=['rendered-target', 'configured-target'])
+def test_writer_cargo_lease_lasts_until_verified_exit(monkeypatch, tmp_path, render_target):
     from plangraph.spawner.host_ready import cargo_lease
     from test_leg_probe_w1 import _child_runner
 
     shared = tmp_path / 'cargo'
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(shared))
+    if not render_target:
+        def without_target(env, *, pin_configured, target=None):
+            return {key: value for key, value in env.items() if key != 'CARGO_TARGET_DIR'}
+        monkeypatch.setattr(host_ready, 'cargo_child_env', without_target)
     runner = _child_runner(tmp_path, monkeypatch, 'import time; time.sleep(60)', 'claude')
 
     async def exercise():

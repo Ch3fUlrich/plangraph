@@ -482,7 +482,7 @@ class SpawnerRunner:
                 gate_dispatch()
                 if not review_target:
                     self._cargo_leases = getattr(self, '_cargo_leases', {})
-                    self._cargo_leases[job_id] = await acquire_cargo_lease(child_env['CARGO_TARGET_DIR'])
+                    self._cargo_leases[job_id] = await acquire_cargo_lease(child_env.get('CARGO_TARGET_DIR'))
                 gate_dispatch()
                 claim_first_dispatch(prompt_record)
                 process_options = background_process_options(new_session=True, platform='nt' if self._nt() else 'posix')
