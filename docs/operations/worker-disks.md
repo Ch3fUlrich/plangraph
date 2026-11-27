@@ -93,9 +93,11 @@ pressured overlapping invocation is measured.
 The timer emits an alert when a monitored filesystem is used strictly above 85%. The alert
 lists up to five configured directories by allocated bytes.
 `disk-watermarks.json` keeps one row per crossed device, keyed by device, with the time it was
-measured. When the timer reaches diagnostics, measuring a crossed filesystem
-updates its row. A sample at or below 85% drops the row. The flow watchdog reads these rows locally (see
-`docs/flow-watchdog.md`).
+measured. Diagnostics start after reclamation and share the pass deadline.
+A completed measurement can be reused for the same root when it has no nested
+diagnostic roots. If the deadline interrupts the scan, the previous rows stay
+available. A sample at or below 85% drops its row on a completed pass. The flow
+watchdog reads these rows locally (see `docs/flow-watchdog.md`).
 
 ## Build caches
 

@@ -90,6 +90,11 @@ process references, foreign ownership, leases and mount boundaries protect
 individual candidates. Admission and post-run trimming retain their existing
 host-wide build checks.
 
+Pool trimming can keep a shared debug profile and evict a stale build unit
+within it. The timer rechecks the newest unit before removal. A slot total
+cut short by the deadline is treated as incomplete unless the bytes already
+observed exceed the cap.
+
 ## Dell data-drive handoff (D-5122)
 
 `SKIPPED plangraph:DELL-DATA-DRIVE` in batch84-disk. The fleet host policy and

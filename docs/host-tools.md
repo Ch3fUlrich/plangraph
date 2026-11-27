@@ -66,6 +66,10 @@ The cap triggers reclamation. Protected artifacts may keep usage above it.
 The timer checks each candidate's owning path against process references and
 rechecks protection under its lease immediately before removal. A live build
 protects its own target while unrelated idle candidates can be reclaimed.
+Discovery checks marked `preflight-cargo-*` targets beside the configured
+shared target and marked `pg-affected-*` directories under scratch. Selector
+scratch uses the run's in-directory `.lease`. An active Cargo allocation can
+appear in the keep report even when it sits beyond the shallow cache scan.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
 `cap_sys_ptrace=ep` (operator installation: `install -o root -g root -m 0755`
