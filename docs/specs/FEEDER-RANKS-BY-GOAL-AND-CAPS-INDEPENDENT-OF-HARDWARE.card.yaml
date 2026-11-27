@@ -1,0 +1,95 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/FEEDER-RANKS-BY-GOAL-AND-CAPS-INDEPENDENT-OF-HARDWARE.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 6
+    },
+    "deploy/feeder/policy.toml": {
+      "max_changed_lines": 12,
+      "max_final_lines": 29
+    },
+    "docs/writer-feeder.md": {
+      "max_changed_lines": 26,
+      "max_final_lines": 302
+    },
+    "rust/plangraph-cli/src/feeder/attempts.rs": {
+      "max_changed_lines": 90,
+      "max_final_lines": 290
+    },
+    "rust/plangraph-cli/src/feeder/capacity.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 228
+    },
+    "rust/plangraph-cli/src/feeder/mod.rs": {
+      "max_changed_lines": 53,
+      "max_final_lines": 435
+    },
+    "rust/plangraph-cli/src/feeder/runtime.rs": {
+      "max_changed_lines": 33,
+      "max_final_lines": 449
+    },
+    "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 519
+    },
+    "rust/plangraph-cli/src/feeder/selection.rs": {
+      "max_changed_lines": 6,
+      "max_final_lines": 266
+    },
+    "rust/plangraph-cli/src/feeder/sources.rs": {
+      "max_changed_lines": 8,
+      "max_final_lines": 764
+    },
+    "rust/plangraph-cli/src/feeder/workflow.rs": {
+      "max_changed_lines": 40,
+      "max_final_lines": 371
+    },
+    "rust/plangraph-cli/tests/feeder.rs": {
+      "max_changed_lines": 66,
+      "max_final_lines": 538
+    },
+    "rust/plangraph-cli/tests/feeder_slots.rs": {
+      "max_changed_lines": 120,
+      "max_final_lines": 216
+    },
+    "rust/plangraph-cli/tests/feeder_support/mod.rs": {
+      "max_changed_lines": 14,
+      "max_final_lines": 221
+    }
+  },
+  "cards": {
+    "FEEDER-RANKS-BY-GOAL-AND-CAPS-INDEPENDENT-OF-HARDWARE": {
+      "outcome": "Feeder admission is bounded by configured caps that do not depend on hardware: the per-host policy cap binds below the RAM slots, and there are a fleet-wide writer cap, an hourly token budget and a landing backlog bound. An item family whose last three runs on any host were barren is skipped. Every decision reports category, caps, budget and backlog.",
+      "read_set": [
+        "docs/specs/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md",
+        "rust/plangraph-cli/src/feeder/quota.rs",
+        "src/plangraph/keeper/store_card_updates.py"
+      ],
+      "write_set": [
+        "changelog.d/FEEDER-RANKS-BY-GOAL-AND-CAPS-INDEPENDENT-OF-HARDWARE.md",
+        "deploy/feeder/policy.toml",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/attempts.rs",
+        "rust/plangraph-cli/src/feeder/capacity.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
+        "rust/plangraph-cli/src/feeder/selection.rs",
+        "rust/plangraph-cli/src/feeder/sources.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/plangraph-cli/tests/feeder.rs",
+        "rust/plangraph-cli/tests/feeder_slots.rs",
+        "rust/plangraph-cli/tests/feeder_support/mod.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "risk_tags": [
+        "live-step",
+        "config"
+      ],
+      "estimate_tokens": 140000,
+      "window_class": "1m",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder --test feeder_batches --test feeder_contracts"
+    }
+  }
+}
