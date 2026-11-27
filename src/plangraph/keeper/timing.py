@@ -1,25 +1,130 @@
 """Best-effort, payload-free keeper timings; clocks are replaceable in tests."""
 from contextvars import ContextVar
 from contextlib import contextmanager
+from collections import deque
 from functools import wraps
 from concurrent.futures import Future, wait
-from threading import Lock
+from itertools import takewhile
+from threading import Lock, RLock
 
 from .errors import Refused
 import sys
 import time
 
 clock = time.monotonic
+ns_clock = time.monotonic_ns
 THRESHOLD_MS = 250
 DEFAULT_CLAIM_PREFLIGHT_S = 30
-_LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "close_merged", "close_merged_auto",
+_LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "messages", "close_merged", "close_merged_auto",
                             "claim", "claim_batch", "heartbeat", "heartbeat_batch", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
 _io_deadline = ContextVar("keeper_io_deadline", default=None)
+_MS_NS = 1_000_000
+_LONG_NS = 2_000 * _MS_NS
+_RELEVANT = {"writer", "snapshot", "messages", "merge_refresh"}
+_MAINTENANCE = {"writer_timing": "writer", "snapshot_timing": "snapshot",
+                "reaper_timing": "reaper", "changelog_timing": "changelog"}
+_RAW_LABELS = _RELEVANT | set(_MAINTENANCE.values()) | {"auth", "host_samples", "read_audit"}
+_PHASES = {"auth", "dispatch", "reacquire", "maintenance"}
 
 _inflight = {}
 _inflight_lock = Lock()
+
+
+def _lock_label(label):
+    if not isinstance(label, str):
+        return "unclassified"
+    if label in _RAW_LABELS:
+        return label
+    # The route tables enumerate the only request labels, including the inbox verbs.
+    from .api_routes import READ_VERBS, WRITE_VERBS
+    return label if label in READ_VERBS or label in WRITE_VERBS else "unclassified"
+
+
+def _lock_wait_line(phase, waiter, start, end, spans, evicted):
+    totals = {}
+    # Outermost ownership of one RLock makes these intervals disjoint.
+    for left, right, label in spans:
+        overlap = min(end, right) - max(start, left)
+        if overlap > 0 and label != "unclassified":
+            totals[label] = totals.get(label, 0) + overlap
+    waited = (end - start) // _MS_NS
+    covered = min(waited, sum(totals.values()) // _MS_NS)
+    coverage = 10_000 * covered // waited if waited else 10_000
+    reported = {label: total // _MS_NS for label, total in sorted(totals.items())}
+    highest = max(reported.values(), default=0)
+    primary = [label for label, total in reported.items() if total == highest and total > 0]
+    holder = ("tie" if len(primary) > 1 else primary[0]) if primary else "none"
+    overlaps = ",".join(f"{label}:{total}" for label, total in reported.items()) or "-"
+    return (f"keeper: lock_wait phase={phase} waiter={waiter} wait_ms={waited} covered_ms={covered} "
+            f"coverage_bp={coverage} overflow={int(evicted > start)} holder={holder} overlaps={overlaps}")
+
+
+class KeeperLock:
+    """Track outer RLock holds. Timing defaults on for direct use and off for HTTP servers."""
+
+    def __init__(self, *, log_timing=True):
+        self._lock = RLock()
+        self._spans = deque(maxlen=512)
+        self._evicted = 0
+        self.log_timing = log_timing
+
+    def depth(self):
+        return self._lock._recursion_count()
+
+    def _is_owned(self):
+        return self._lock._is_owned()
+
+    def acquire(self, blocking=True, timeout=-1, *, label=None, phase="maintenance", waiter=None):
+        start = ns_clock()
+        if not self._lock.acquire(blocking, timeout):
+            return False
+        if self.depth() == 1:
+            end = ns_clock()
+            self._holder = _lock_label(label)
+            self._start = end
+            self._wait = None
+            # Sample every shared-DB auth attempt, including refusals and zero waits.
+            if self.log_timing and (phase == "auth" or end - start > _LONG_NS):
+                phase = phase if phase in _PHASES else "maintenance"
+                spans = tuple(takewhile(lambda span: span[1] > start, reversed(self._spans)))
+                self._wait = phase, _lock_label(waiter or label), start, end, spans, self._evicted
+        return True
+
+    def release(self):
+        if self.depth() != 1:
+            return self._lock.release()
+        holder, start, end, waiting = self._holder, self._start, ns_clock(), self._wait
+        if len(self._spans) == self._spans.maxlen:
+            self._evicted = self._spans[0][1]
+        self._spans.append((start, end, holder))
+        self._lock.release()
+        if self.log_timing and (holder in _RELEVANT or end - start > _LONG_NS):
+            _output(f"keeper: lock_hold holder={holder} hold_ms={(end - start) // _MS_NS}")
+        if waiting is not None:
+            _output(_lock_wait_line(*waiting))
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+@contextmanager
+def lock_scope(lock, label, *, phase="maintenance", waiter=None):
+    """Time a labelled raw hold without changing the encompassing request totals."""
+    if isinstance(lock, KeeperLock):
+        lock.acquire(label=label, phase=phase, waiter=waiter)
+        try:
+            yield
+        finally:
+            lock.release()
+    else:
+        with lock:
+            yield
 
 
 def share_inflight(key, fetch, *, step="authority refresh"):
@@ -86,10 +191,10 @@ def check_io_deadline(step):
 
 
 @contextmanager
-def outside_request_lock():
+def outside_request_lock(lock=None):
     """Suspend the HTTP request lock for IO that never accesses the store."""
     timer = _request_timer.get()
-    if timer is None:
+    if timer is None or timer.lock is None or (lock is not None and timer.lock is not lock):
         yield
         return
     token = _request_timer.set(None)
@@ -98,7 +203,7 @@ def outside_request_lock():
         yield
     finally:
         try:
-            timer.acquire()
+            timer.acquire(phase="reacquire")
         finally:
             _request_timer.reset(token)
 
@@ -177,17 +282,23 @@ def _emit(event, kind, wait, hold, parts):
 
 
 class RequestTimer:
-    """Own the lock: wait starts at acquire, hold ends before release."""
+    """Time a lock hold or an unlocked operation using the same logging setting."""
 
-    def __init__(self, lock, kind="other", event="request_timing", *, verb=None):
-        self.lock, self.kind, self.event = lock, kind, event
+    def __init__(self, lock, kind="other", event="request_timing", *, verb=None, label=None, unlocked=False):
+        self.lock, self.kind, self.event = None if unlocked else lock, kind, event
+        self.log_timing = getattr(lock, "log_timing", True)
         self.verb = verb
+        self.label = label or verb or _MAINTENANCE.get(event)
 
-    def acquire(self):
+    def acquire(self, *, phase=None):
         if self.lock is None:
             return
         start = _sample()
-        self.lock.acquire()
+        if isinstance(self.lock, KeeperLock):
+            phase = phase or ("dispatch" if self.event == "request_timing" else "maintenance")
+            self.lock.acquire(label=self.label, phase=phase)
+        else:
+            self.lock.acquire()
         self.held = _sample()
         elapsed = _ms(start, self.held)
         self.wait_ms = None if elapsed is None or self.wait_ms is None else self.wait_ms + elapsed
@@ -219,8 +330,8 @@ class RequestTimer:
             self.parts.total_ms = _ms(self.start, end)
         finally:
             try:
-                if self.token is not None and None not in (self.wait_ms, self.hold_ms,
-                                                           getattr(self.parts, "total_ms", None)):
+                totals = self.wait_ms, self.hold_ms, getattr(self.parts, "total_ms", None)
+                if self.log_timing and self.token is not None and None not in totals:
                     _emit(self.event, self.kind, self.wait_ms, self.hold_ms, self.parts)
                 else:
                     self.parts.pending.clear()

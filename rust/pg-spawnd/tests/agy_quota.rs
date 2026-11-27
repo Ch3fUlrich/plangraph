@@ -6,7 +6,7 @@ mod test_python;
 use serde_json::Value;
 
 #[test]
-fn hydrogen_and_argon_limits_are_independent_and_exposed() {
+fn hydrogen_and_argon_share_one_exposed_limit() {
     let state = tempfile::tempdir().unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = test_python::command()
@@ -41,13 +41,13 @@ store.record_harness_limit('agy/claude-sonnet-5-5-high',
 legacy = LegStateStore(store.path.with_name('legacy.sqlite'))
 with legacy._connect() as db:
     db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
-               ('agy/gemini-4-hydrogen-high', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
+               ('agy/gemini-4-argon-low', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
 legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
 snapshot = plan_spawn(card, role='review', writer_families=['openai'], now=42, catalog_rows=[],
     leg_reader=lambda model, **kw: dict(state='limited' if 'gemini-4-argon' in model else 'ok', evidence=dict(ts=kw['now']))).to_dict()
-sonnet_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='ok' if 'gemini-4-argon' in model else 'limited', evidence=None)).to_dict()
-print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
+gemini_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
+    leg_reader=lambda model, **kw: dict(state='ok' if any(name in model for name in ('gemini-4-hydrogen', 'gemini-4-argon')) else 'limited', evidence=None)).to_dict()
+print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, gemini_only=gemini_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
         .output()
@@ -81,23 +81,26 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
             "opencode-go/glm-5.3-flash",
             "gemini-4-hydrogen-high",
             "opencode/deepseek-v4.1-flash-free",
-            "gemini-4-neon-medium",
             "gemini-4-argon-low",
             "gemini-4-argon-medium"
         ]
     );
-    // The Hydrogen limit removes only its seat. The Argon limit then
-    // removes both Argon efforts while keeping the existing Hydrogen limit.
-    let without_hydrogen: Vec<&str> = initial
+    let without_pool: Vec<&str> = initial
         .iter()
         .copied()
-        .filter(|model| *model != "gemini-4-hydrogen-high")
+        .filter(|model| {
+            !model.starts_with("gemini-4-hydrogen") && !model.starts_with("gemini-4-argon")
+        })
         .collect();
-    assert_eq!(models_of("hydrogen"), without_hydrogen);
-    assert_eq!(
-        models_of("argon"),
-        without_hydrogen[..without_hydrogen.len() - 2]
-    );
+    for stage in ["hydrogen", "argon", "snapshot"] {
+        assert_eq!(models_of(stage), without_pool);
+        let states = &result[stage]["agy_quota_states"];
+        assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");
+        assert_eq!(
+            states["agy:gemini-4-argon"],
+            states["agy:gemini-4-hydrogen"]
+        );
+    }
     let argon_states = &result["argon"]["agy_quota_states"];
     assert_eq!(argon_states["agy:gemini-4-hydrogen"]["state"], "limited");
     assert_eq!(argon_states["agy:gemini-4-argon"]["state"], "limited");
@@ -117,17 +120,16 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         .any(|l| l["model"] == "claude-sonnet-5-5-high"));
     assert_eq!(result["legacy"]["state"], "limited");
     assert_eq!(
-        result["sonnet_only"]["first_leg"]["model"],
-        "gemini-4-argon-low"
+        result["gemini_only"]["first_leg"]["model"],
+        "gemini-4-hydrogen-high"
     );
-    // D-6652: every head needs two seats; Argon alone (one family) cannot seat a review.
+    // D-6652: every head needs two seats from distinct families.
     assert_eq!(
-        result["sonnet_only"]["error"],
+        result["gemini_only"]["error"],
         "two distinct review families unavailable"
     );
     let states = &result["hydrogen"]["agy_quota_states"];
     assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");
-    assert_eq!(states["agy:gemini-4-argon"]["state"], "ok");
     assert_eq!(states["agy:claude-sonnet-5-5"]["state"], "ok");
     assert_eq!(states.as_object().unwrap().len(), 3);
     for state in result["final"]["agy_quota_states"]

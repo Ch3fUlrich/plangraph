@@ -44,7 +44,7 @@ def test_review_spawn_skips_edit_baseline_and_hides_console(monkeypatch, tmp_pat
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
         job = await runner.spawn('review a tiny fixture', role='review',
-            model_or_combo='agy/gemini-4-neon-medium', client='agy', wait_seconds=1)
+            model_or_combo='agy/gemini-4-hydrogen-medium', client='agy', wait_seconds=1)
         assert job.status == 'completed'
         assert job._watchdog_baseline is None
         assert factory.await_count == 1

@@ -17,6 +17,9 @@ def test_missing_legs_roles_and_probe_evidence(leg_id, store):
     if leg_id == 'opencode-glm-5.3-flash-free':
         assert not leg_active(leg)
         assert leg.disabled.startswith('D-6310:')
+    elif leg_id == 'agy-gemini-4-neon-medium':
+        assert not leg_active(leg)
+        assert leg.disabled == 'D-6957 operator cost hold'
     else:
         assert leg_active(leg)
     expected = {'review'} if leg_id == 'agy-gemini-4-neon-medium' else {'review', 'implement'}
@@ -493,7 +496,7 @@ def test_provider_resets_are_uncapped_while_flat_down_s_stays_capped(store, monk
 def test_argon_efforts_share_one_agy_quota_key(tmp_path):
     """D-5966 / rule 3.58: a limit on argon-low is the argon-medium limit too."""
     from plangraph.routing_support.leg_state import LegAdapter, LegStateStore, quota_key
-    assert quota_key('agy/gemini-4-argon-low') == quota_key('agy:gemini-4-argon-medium') == 'agy:gemini-4-argon'
+    assert quota_key('agy/gemini-4-argon-low') == quota_key('agy:gemini-4-argon-medium')
     store = LegStateStore(tmp_path / 'legs.sqlite')
     store.record_harness_limit('agy/gemini-4-argon-low', 'Individual quota reached. Resets in 2h.', 'fixture')
     assert store.leg_status('agy/gemini-4-argon-medium')['state'] == 'limited'
@@ -503,12 +506,65 @@ def test_argon_efforts_share_one_agy_quota_key(tmp_path):
     assert adapter.leg_status('gemini-4-argon-medium') == store.leg_status('gemini-4-argon-medium')  # store, not the gateway
 
 
-def test_agy_429_applies_only_to_the_model_that_was_called(store):
+@pytest.mark.parametrize('effort', ['', '-low', '-medium', '-high', '-xhigh', '-max'])
+@pytest.mark.parametrize('separator', ['/', ':'])
+def test_quota_key_gemini_pool(effort, separator):
+    for model in ('gemini-4-argon', 'gemini-4-hydrogen', 'gemini-4-neon', 'claude-sonnet-5-5'):
+        expected = 'gemini-4-hydrogen' if model == 'gemini-4-argon' else model
+        assert ls.quota_key(f'agy{separator}{model}{effort}') == f'agy:{expected}'
+        assert ls.quota_key(model + effort) == model + effort
+
+
+def test_argon_429_limits_hydrogen(store):
+    store.record_provider_response('agy/gemini-4-argon-low', 429, 'quota',
+                                   {'Retry-After': '60'}, 'fixture', now=100)
+    assert store.leg_status('agy/gemini-4-hydrogen-high', now=159)['state'] == 'limited'
+    assert store.leg_status('agy/gemini-4-hydrogen-high', now=160)['state'] == 'ok'
+
+
+def test_hydrogen_429_limits_argon(store):
     store.record_harness_limit('agy/gemini-4-hydrogen-high',
                                'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 2h.',
                                'fixture', now=100, harness='agy')
     assert store.leg_status('agy/gemini-4-hydrogen-medium', now=101)['state'] == 'limited'
-    assert store.leg_status('agy/gemini-4-argon-low', now=101)['state'] == 'ok'
+    assert store.leg_status('agy/gemini-4-argon-low', now=101)['state'] == 'limited'
+    assert store.leg_status('agy/gemini-4-argon-low', now=7300)['state'] == 'ok'
+    for model in ('agy/gemini-4-neon-medium', 'agy/claude-sonnet-5-5-high'):
+        assert store.leg_status(model, now=101)['state'] == 'ok'
+
+
+@pytest.mark.parametrize('model,sibling', [('gemini-4-neon', 'claude-sonnet-5-5'),
+                                          ('claude-sonnet-5-5', 'gemini-4-neon')])
+def test_agy_429_applies_only_to_the_model_that_was_called(store, model, sibling):
+    store.record_harness_limit(f'agy/{model}-medium', 'HTTP 429: quota reached',
+                               'fixture', now=100, harness='agy')
+    assert store.leg_status(f'agy/{model}-medium', now=101)['state'] == 'limited'
+    for other in (sibling, 'gemini-4-hydrogen', 'gemini-4-argon'):
+        assert store.leg_status(f'agy:{other}', now=101)['state'] == 'ok'
+
+
+@pytest.mark.parametrize('older_key', ['agy:gemini-4-argon', 'agy/gemini-4-argon-low',
+                                      'agy:gemini-4-argon-medium', 'agy/gemini-4-hydrogen-max'])
+def test_pre_pool_argon_booking_counts(store, older_key):
+    store.record_provider_response('agy:gemini-4-hydrogen', 429, 'quota',
+                                   {'Retry-After': '60'}, 'fixture', now=100, account='A')
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET leg_key=?', (older_key,))
+    assert store.leg_status('agy:gemini-4-hydrogen', now=101, account='A')['state'] == 'limited'
+    assert store.leg_status('agy:gemini-4-hydrogen', now=101, account='B')['state'] == 'ok'
+    assert store.agy_probe_status('agy:gemini-4-hydrogen', now=101)['state'] == 'limited'
+
+
+def test_overlapping_pre_pool_bookings_hold_until_both_reset(store):
+    argon, hydrogen = 'agy:gemini-4-argon', 'agy:gemini-4-hydrogen'
+    store.record_provider_response(argon, 429, 'quota', {'Retry-After': '60'}, 'fixture', now=100)
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET leg_key=?', (argon,))
+    store.record_provider_response(hydrogen, 429, 'quota', {'Retry-After': '10'}, 'fixture', now=101)
+    for model in (argon, hydrogen):
+        status = store.leg_status(model, now=111)
+        assert status['state'] == 'limited' and status['evidence']['reset_at'] == 160
+        assert store.leg_status(model, now=160)['state'] == 'ok'
 
 
 def test_failed_agy_reprobe_preserves_a_recent_429_without_reset(store):
@@ -516,3 +572,18 @@ def test_failed_agy_reprobe_preserves_a_recent_429_without_reset(store):
     store.record_provider_response(model, 429, 'quota', {}, 'fixture', now=100)
     store.record_probe_fail(model, 'review probe failed', 'review-probe', now=101)
     assert store.leg_status(model, now=102)['state'] == 'limited'
+
+
+def test_gemini_probe_failure_stays_local_but_recovery_clears_the_pool(store):
+    argon, hydrogen = 'agy/gemini-4-argon-low', 'agy/gemini-4-hydrogen-high'
+    store.record_probe_fail(argon, 'timeout', 'review-probe', now=100, down_s=60)
+    assert store.leg_status(argon, now=101)['state'] == 'down'
+    assert store.leg_status(hydrogen, now=101)['state'] == 'ok'
+    assert store.last_probe_attempt_ts(argon, now=101) == 100
+    assert store.last_probe_attempt_ts(hydrogen, now=101) is None
+
+    store.record_provider_response(hydrogen, 429, 'quota', {'Retry-After': '60'}, 'fixture', now=101)
+    assert store.leg_status(argon, now=102)['state'] == 'limited'
+    store.record_probe_pass(argon, 'review-probe', now=103)
+    assert store.leg_status(argon, now=104)['state'] == 'ok'
+    assert store.leg_status(hydrogen, now=104)['state'] == 'ok'

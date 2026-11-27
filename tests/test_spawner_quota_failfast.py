@@ -415,7 +415,7 @@ def test_silent_agy_is_not_a_gateway_leg_and_its_printed_refusal_ends_the_run_at
 
 
 def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path):
-    """An AgY booking is scoped to its account and model."""
+    """An Antigravity booking limits both pool members for the booked account."""
     from dataclasses import replace
     from plangraph.planner.legs import DEFAULT_LEGS
     from plangraph.planner.routing import plan_spawn
@@ -441,18 +441,20 @@ def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path
                           **kwargs)
 
     plan = route("A", 102)
-    assert {leg.id for leg in plan.legs} == {agy.id, codex.id}, plan.skipped
+    assert {leg.id for leg in plan.legs} == {codex.id}, plan.skipped
     skipped = {row["leg"]: row for row in plan.skipped}
     assert skipped[claude.id]["reason"] == "limited"
+    assert skipped[agy.id]["evidence"]["status"] == 429
     assert store.leg_status("agy:gemini-4-argon", now=102, account="A")["state"] == "limited"
     assert store.leg_status("agy:gemini-4-argon", now=102, account="B")["state"] == "ok"
 
     assert {leg.id for leg in route("B", 102).legs} == {leg.id for leg in legs}
-    assert {leg.id for leg in route("A", 402).legs} == {leg.id for leg in legs}
+    assert {leg.id for leg in route("A", 402).legs} == {codex.id, claude.id}
+    assert {leg.id for leg in route("A", 7300).legs} == {leg.id for leg in legs}
 
     store.record_provider_response(codex.model, 429, "Codex rate limit", {"retry-after": "60"},
                                    "fixture", now=500, account="A")
     plan = route("A", 501)
     codex_evidence = next(row["evidence"] for row in plan.skipped if row["leg"] == codex.id)
     assert codex_evidence["body_excerpt"] == "Codex rate limit"
-    assert {leg.id for leg in plan.legs} == {agy.id, claude.id}
+    assert {leg.id for leg in plan.legs} == {claude.id}

@@ -1,0 +1,11 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-HAND-RESEARCH-RUNS-EXHAUSTED-ARGON-REVIEW-QUOTA.md	write	yes	E1 E2	predicted
+docs/routing.md	write	yes	E2	predicted
+docs/spawner-leg-state.md	write	yes	E1 E2	predicted
+src/plangraph/planner/legs.py	read	yes	E2	predicted
+src/plangraph/planner/routing.py	write	yes	E2	predicted
+src/plangraph/routing_support/leg_state.py	write	yes	E1	predicted
+tests/test_route_order_d6652.py	write	yes	E2	predicted
+tests/test_spawner_exit_outcome.py	write	yes	E1 E2	predicted
+tests/test_spawner_leg_state.py	write	yes	E1	predicted
+tests/test_spawner_quota_failfast.py	write	yes	E1 E2	predicted
