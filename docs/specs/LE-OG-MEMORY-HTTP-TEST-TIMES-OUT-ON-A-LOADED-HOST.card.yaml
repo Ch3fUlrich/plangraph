@@ -1,0 +1,25 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "rust/og-memory/src/http_tests.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 385
+    }
+  },
+  "cards": {
+    "LE-OG-MEMORY-HTTP-TEST-TIMES-OUT-ON-A-LOADED-HOST": {
+      "outcome": "The og-memory HTTP tests give a short client timeout only to the cases that test a timeout, so a loaded host cannot fail a success or status case.",
+      "read_set": [
+        "rust/og-memory/src/http.rs"
+      ],
+      "write_set": [
+        "rust/og-memory/src/http_tests.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p og-memory --lib http::tests",
+      "risk_tags": [],
+      "estimate_tokens": 30000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p og-memory"
+    }
+  }
+}
