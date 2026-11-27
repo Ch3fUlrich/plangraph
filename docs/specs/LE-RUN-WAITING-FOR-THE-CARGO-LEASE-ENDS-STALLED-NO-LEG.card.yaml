@@ -6,42 +6,61 @@
       "max_final_lines": 3
     },
     "docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md": {
-      "max_changed_lines": 16,
-      "max_final_lines": 16
+      "max_changed_lines": 20,
+      "max_final_lines": 20
+    },
+    "src/plangraph/spawner/leg_probe.py": {
+      "max_changed_lines": 12,
+      "max_final_lines": 648
+    },
+    "src/plangraph/spawner/notify.py": {
+      "max_changed_lines": 1,
+      "max_final_lines": 456
     },
     "src/plangraph/spawner/probe_cleanup.py": {
-      "max_changed_lines": 60,
-      "max_final_lines": 275
+      "max_changed_lines": 90,
+      "max_final_lines": 300
     },
     "src/plangraph/spawner/runner.py": {
       "max_changed_lines": 2,
       "max_final_lines": 1157
     },
+    "src/plangraph/spawner/service.py": {
+      "max_changed_lines": 1,
+      "max_final_lines": 635
+    },
     "src/plangraph/spawner/stall_watchdog.py": {
-      "max_changed_lines": 2,
-      "max_final_lines": 548
+      "max_changed_lines": 8,
+      "max_final_lines": 552
     },
     "tests/test_cargo_lease_queue.py": {
-      "max_changed_lines": 140,
-      "max_final_lines": 140
+      "max_changed_lines": 260,
+      "max_final_lines": 260
     }
   },
   "cards": {
     "LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG": {
-      "outcome": "A spawned run whose launch finds the shared Cargo lease held records queued_on with the lock path and holder PID, keeps waiting up to a queue bound, starts when the lease frees and is never ended stalled_no_leg while it waits.",
+      "outcome": "A spawned run whose plain launch finds the shared Cargo lease held by another holder records queued_on with the lock path, holder PID, deadline and owner, waits up to a queue bound, starts when the lease frees, honours cancels from other processes, and is never ended stalled_no_leg while its wait is live.",
       "read_set": [
         ".filesize-baseline",
+        "src/plangraph/spawner/base_fresh.py",
+        "src/plangraph/spawner/cancel_recorded.py",
         "src/plangraph/spawner/exit_outcome.py",
         "src/plangraph/spawner/host_ready.py",
-        "src/plangraph/spawner/service.py",
+        "src/plangraph/spawner/overflow.py",
+        "src/plangraph/spawner/proc_kill.py",
         "tests/test_cargo_data_drive_target.py",
+        "tests/test_leg_probe_budget.py",
         "tests/test_stall_watchdog.py"
       ],
       "write_set": [
         "changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md",
         "docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md",
+        "src/plangraph/spawner/leg_probe.py",
+        "src/plangraph/spawner/notify.py",
         "src/plangraph/spawner/probe_cleanup.py",
         "src/plangraph/spawner/runner.py",
+        "src/plangraph/spawner/service.py",
         "src/plangraph/spawner/stall_watchdog.py",
         "tests/test_cargo_lease_queue.py"
       ],
@@ -49,7 +68,7 @@
       "risk_tags": [
         "live-step"
       ],
-      "estimate_tokens": 45000,
+      "estimate_tokens": 60000,
       "window_class": "128k",
       "heldout_check": "python3 -m pytest -q tests/test_cargo_data_drive_target.py tests/test_leg_probe_budget.py tests/test_stall_watchdog.py"
     }

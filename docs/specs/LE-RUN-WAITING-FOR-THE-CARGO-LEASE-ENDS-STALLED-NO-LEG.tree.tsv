@@ -1,13 +1,20 @@
 path	disposition	required	row IDs	label
-.filesize-baseline	read	yes	E1 E2	observed
-changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2	predicted (<= 3 changed lines; <= 3 final lines)
-docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2	predicted (<= 16 changed lines; <= 16 final lines)
+.filesize-baseline	read	yes	E1	observed
+changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2 E3 E4	predicted (<= 3 changed lines; <= 3 final lines)
+docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2 E3 E4	predicted (<= 20 changed lines; <= 20 final lines)
+src/plangraph/spawner/base_fresh.py	read	yes	E2	observed
+src/plangraph/spawner/cancel_recorded.py	read	yes	E1	observed
 src/plangraph/spawner/exit_outcome.py	read	yes	E1	observed
 src/plangraph/spawner/host_ready.py	read	yes	E1	observed
-src/plangraph/spawner/probe_cleanup.py	write	yes	E1	predicted (<= 60 changed lines; <= 275 final lines)
+src/plangraph/spawner/leg_probe.py	write	yes	E2	predicted (<= 12 changed lines; <= 648 final lines)
+src/plangraph/spawner/notify.py	write	yes	E4	predicted (<= 1 changed lines; <= 456 final lines)
+src/plangraph/spawner/overflow.py	read	yes	E1	observed
+src/plangraph/spawner/probe_cleanup.py	write	yes	E1	predicted (<= 90 changed lines; <= 300 final lines)
+src/plangraph/spawner/proc_kill.py	read	yes	E1	observed
 src/plangraph/spawner/runner.py	write	yes	E1	predicted (<= 2 changed lines; <= 1157 final lines)
-src/plangraph/spawner/service.py	read	yes	E1	observed
-src/plangraph/spawner/stall_watchdog.py	write	yes	E2	predicted (<= 2 changed lines; <= 548 final lines)
+src/plangraph/spawner/service.py	write	yes	E1	predicted (<= 1 changed lines; <= 635 final lines)
+src/plangraph/spawner/stall_watchdog.py	write	yes	E3	predicted (<= 8 changed lines; <= 552 final lines)
 tests/test_cargo_data_drive_target.py	read	yes	E1	observed
-tests/test_cargo_lease_queue.py	write	yes	E1 E2	predicted (<= 140 changed lines; <= 140 final lines)
-tests/test_stall_watchdog.py	read	yes	E2	observed
+tests/test_cargo_lease_queue.py	write	yes	E1 E2 E3 E4	predicted (<= 260 changed lines; <= 260 final lines)
+tests/test_leg_probe_budget.py	read	yes	E2	observed
+tests/test_stall_watchdog.py	read	yes	E3	observed
