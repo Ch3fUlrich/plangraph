@@ -1,0 +1,29 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1 E2 E3	predicted
+rust/pg-spawnd/src/cli_review.rs	read	yes	E2 E4	predicted
+rust/pg-spawnd/src/review_test_evidence.rs	read	yes	E4	predicted
+src/plangraph/routing_support/clients.py	read	yes	E2	predicted
+src/plangraph/routing_support/leg_state.py	read	yes	E1	predicted
+src/plangraph/spawner/gateway_witness.py	read	yes	E4	predicted
+src/plangraph/spawner/inline_diff.py	read	yes	E1 E2	predicted
+src/plangraph/spawner/seat_spawn.py	read	yes	E2 E4	predicted
+src/plangraph/spawner/service.py	read	yes	E2 E4	predicted
+tools/check_file_size.py	read	yes	E1 E2	predicted
+changelog.d/MIMO-BATCH-CAPACITY-D6357.md	write	yes	E1 E2 E3 E4	predicted
+docs/SPAWNER.md	write	yes	E2 E3 E4	predicted
+docs/routing.md	write	yes	E1	predicted
+rust/Cargo.lock	write	yes	E3	predicted
+rust/pg-jail/Cargo.toml	write	yes	E3	predicted
+rust/pg-jail/README.md	write	yes	E3	predicted
+rust/pg-jail/src/lib.rs	write	yes	E3	predicted
+rust/pg-jail/src/main.rs	write	yes	E3	predicted
+rust/pg-jail/tests/escape.rs	write	yes	E3	predicted
+rust/pg-spawnd/src/launch_tests.rs	write	yes	E1	predicted
+src/plangraph/planner/legs.py	write	yes	E1	predicted
+src/plangraph/planner/route_policy.json	write	yes	E1	predicted
+src/plangraph/planner/route_policy.py	write	yes	E1 E2	predicted
+src/plangraph/planner/routing.py	write	yes	E1	predicted
+src/plangraph/spawner/opencode_isolation.py	write	yes	E2 E3	predicted
+src/plangraph/spawner/runner.py	write	yes	E2 E3 E4	predicted
+tests/test_opencode_isolation_go.py	write	yes	E2 E3 E4	predicted
+tests/test_route_policy_review_choice.py	write	yes	E1	predicted
