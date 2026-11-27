@@ -1,0 +1,67 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md": {
+      "max_changed_lines": 3,
+      "max_final_lines": 3
+    },
+    "docs/spawner/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md": {
+      "max_changed_lines": 16,
+      "max_final_lines": 16
+    },
+    "rust/pg-spawnd/Cargo.toml": {
+      "max_changed_lines": 2,
+      "max_final_lines": 56
+    },
+    "rust/pg-spawnd/src/lane_guard.rs": {
+      "max_changed_lines": 50,
+      "max_final_lines": 410
+    },
+    "rust/pg-spawnd/src/lane_guard_tests.rs": {
+      "max_changed_lines": 110,
+      "max_final_lines": 628
+    },
+    "rust/pg-spawnd/src/record_file.rs": {
+      "max_changed_lines": 70,
+      "max_final_lines": 139
+    },
+    "src/plangraph/spawner/stall_watchdog.py": {
+      "max_changed_lines": 10,
+      "max_final_lines": 557
+    },
+    "tests/test_stall_watchdog_oversize.py": {
+      "max_changed_lines": 50,
+      "max_final_lines": 50
+    }
+  },
+  "cards": {
+    "LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE": {
+      "outcome": "A run record above the 8 MiB read bound is judged from a bounded field projection. A terminal one holds no key, a live or undecidable one holds only the keys it names, and the stall watchdog alerts routing once per oversized record.",
+      "read_set": [
+        "rust/Cargo.lock",
+        "rust/pg-spawnd/src/lane_admit.rs",
+        "rust/pg-spawnd/src/lane_launch.rs",
+        "rust/pg-spawnd/src/records.rs",
+        "rust/worker-core/src/sweep_runs.rs",
+        "src/plangraph/spawner/overflow.py",
+        "tests/conftest_watchdog.py",
+        "tests/test_stall_watchdog.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md",
+        "docs/spawner/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md",
+        "rust/pg-spawnd/Cargo.toml",
+        "rust/pg-spawnd/src/lane_guard.rs",
+        "rust/pg-spawnd/src/lane_guard_tests.rs",
+        "rust/pg-spawnd/src/record_file.rs",
+        "src/plangraph/spawner/stall_watchdog.py",
+        "tests/test_stall_watchdog_oversize.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --lib lane_guard::tests && python3 -m pytest -q tests/test_stall_watchdog_oversize.py",
+      "risk_tags": [],
+      "estimate_tokens": 50000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --test record_limits --test lane_admit && python3 -m pytest -q tests/test_stall_watchdog.py"
+    }
+  }
+}

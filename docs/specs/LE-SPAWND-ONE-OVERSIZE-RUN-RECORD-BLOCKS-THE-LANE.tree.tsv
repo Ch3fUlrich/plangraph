@@ -1,0 +1,17 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md	write	yes	E1 E2	predicted (<= 3 changed lines; <= 3 final lines)
+docs/spawner/LE-SPAWND-ONE-OVERSIZE-RUN-RECORD-BLOCKS-THE-LANE.md	write	yes	E1 E2	predicted (<= 16 changed lines; <= 16 final lines)
+rust/Cargo.lock	read	yes	E1	observed
+rust/pg-spawnd/Cargo.toml	write	yes	E1	predicted (<= 2 changed lines; <= 56 final lines)
+rust/pg-spawnd/src/lane_admit.rs	read	yes	E1	observed
+rust/pg-spawnd/src/lane_guard.rs	write	yes	E1	predicted (<= 50 changed lines; <= 410 final lines)
+rust/pg-spawnd/src/lane_guard_tests.rs	write	yes	E1	predicted (<= 110 changed lines; <= 628 final lines)
+rust/pg-spawnd/src/lane_launch.rs	read	yes	E1	observed
+rust/pg-spawnd/src/record_file.rs	write	yes	E1	predicted (<= 70 changed lines; <= 139 final lines)
+rust/pg-spawnd/src/records.rs	read	yes	E1	observed
+rust/worker-core/src/sweep_runs.rs	read	yes	E1	observed
+src/plangraph/spawner/overflow.py	read	yes	E1	observed
+src/plangraph/spawner/stall_watchdog.py	write	yes	E2	predicted (<= 10 changed lines; <= 557 final lines)
+tests/conftest_watchdog.py	read	yes	E2	observed
+tests/test_stall_watchdog.py	read	yes	E2	observed
+tests/test_stall_watchdog_oversize.py	write	yes	E2	predicted (<= 50 changed lines; <= 50 final lines)
