@@ -26,6 +26,7 @@ fn active_build_in_a_keeps_only_a() {
     }
     let (tmp, repo, root) = fixture();
     let [a, b] = ["clean", "dirty"].map(|name| aged_rust_target(&root.join(name), 8192));
+    let deep = aged_rust_target(&tmp.path().join(".cache/session/nested"), 8192);
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "active_build_in_a_keeps_only_a"])
         .env("TEST_CARGO_CHILD", "1")
@@ -39,7 +40,8 @@ fn active_build_in_a_keeps_only_a() {
     let cwd = fs::read_link(proc.join("cwd")).unwrap();
     let fd = fs::read_link(proc.join("fd/2")).unwrap();
     let inventory = serde_json::json!({"version": 1, "cwds": [cwd.as_os_str().as_encoded_bytes()],
-        "open_paths": [fd.as_os_str().as_encoded_bytes()], "cargo_targets": []});
+        "open_paths": [fd.as_os_str().as_encoded_bytes()],
+        "cargo_targets": [deep.as_os_str().as_encoded_bytes()]});
     let legacy = serde_json::json!([[cwd], true]);
     let reader = tmp.path().join("reader");
     pg_worker_core::executable_test_support::write_executable(&reader, format!(
@@ -51,11 +53,14 @@ fn active_build_in_a_keeps_only_a() {
     assert!(a.is_dir());
     assert!(!b.exists(), "{}", String::from_utf8_lossy(&applied.stdout));
     let row: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
-    assert!(row["kept"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["path"] == a.to_str().unwrap() && row["reason"] == "busy"));
+    for path in [&a, &deep] {
+        assert!(path.is_dir());
+        assert!(row["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["path"] == path.to_str().unwrap() && row["reason"] == "busy"));
+    }
 }
 
 fn aged_rust_target(tree: &Path, size: usize) -> PathBuf {
@@ -96,6 +101,7 @@ fn run_pressure_cli(
         .arg("--state")
         .arg(home.join(state))
         .env("HOME", home)
+        .env_remove("XDG_CACHE_HOME")
         .env("PLANGRAPH_CARGO_TARGET_DIR", home.join("shared"))
         .env_remove("PLANGRAPH_WORKTREE_MOUNTS")
         .env("PG_PROCESS_INVENTORY", "reader")

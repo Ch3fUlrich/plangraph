@@ -86,6 +86,7 @@ impl Layout<'_> {
         budget: &Budget<'_>,
         thresholds: crate::disk_hygiene::Thresholds,
         sample: impl Fn(&Path) -> io::Result<crate::disk_runtime::DiskSpace>,
+        initial: Option<&super::super::HygieneInventory>,
     ) -> io::Result<Vec<Candidate>> {
         let clock = budget.clock;
         let tick = clock();
@@ -161,8 +162,22 @@ impl Layout<'_> {
                     crate::affected_scratch::is_run,
                 )?);
             }
-            let (targets, complete) =
+            let (mut targets, complete) =
                 crate::idle_targets::targets_in(&boundary, 2, &excluded, &mut permit)?;
+            for target in initial
+                .into_iter()
+                .flat_map(|inventory| inventory.cargo_targets())
+                .take_while(|_| permit())
+            {
+                if target.starts_with(&boundary)
+                    && !excluded.iter().any(|root| target.starts_with(root))
+                    && target.canonicalize().ok().as_deref() == Some(target)
+                    && crate::private_targets::owned(target).unwrap_or(false)
+                    && crate::private_targets::cargo_target(target)
+                {
+                    targets.push(target.to_path_buf());
+                }
+            }
             if !complete {
                 report.keep_boundary(boundary.clone(), "discovery_budget");
             }

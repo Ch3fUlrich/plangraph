@@ -143,7 +143,23 @@ fn execute_with(
         home: &home,
         cap,
     };
-    let candidates = layout.discover(&mut report, budget, thresholds, &sample)?;
+    let tick = (budget.clock)();
+    let initial = inventory(budget.start + budget.rank_for);
+    let inventory_seconds = (budget.clock)().duration_since(tick).as_secs_f64();
+    let candidates = layout.discover(
+        &mut report,
+        budget,
+        thresholds,
+        &sample,
+        initial.as_ref().ok(),
+    )?;
+    let initial = std::cell::RefCell::new(Some(initial));
+    let inventory = |end| {
+        initial
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| inventory(end))
+    };
     let protection = |item: &Candidate, end| {
         let mut guards = Guards::load(&pins, state)?;
         guards.pinned.extend(
@@ -172,6 +188,9 @@ fn execute_with(
         budget,
         &checks,
     ));
+    report
+        .stage_durations
+        .insert("inventory", inventory_seconds);
     report.sample_devices(free);
     let end = budget.start + budget.pass_for;
     if usable.get() {
