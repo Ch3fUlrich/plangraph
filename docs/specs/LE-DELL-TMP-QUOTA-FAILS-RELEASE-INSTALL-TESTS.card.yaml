@@ -1,0 +1,62 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md": {
+      "max_changed_lines": 2,
+      "max_final_lines": 2
+    },
+    "docs/fleet-sync.md": {
+      "max_changed_lines": 4,
+      "max_final_lines": 208
+    },
+    "docs/placement-rules.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 352
+    },
+    "docs/spawner/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md": {
+      "max_changed_lines": 12,
+      "max_final_lines": 12
+    },
+    "rust/plangraph-cli/src/host_sync_release.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 406
+    },
+    "src/plangraph/spawner/host_ready_source.py": {
+      "max_changed_lines": 30,
+      "max_final_lines": 521
+    },
+    "tests/test_host_ready.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 745
+    },
+    "tests/test_host_ready_tmp.py": {
+      "max_changed_lines": 110,
+      "max_final_lines": 110
+    }
+  },
+  "cards": {
+    "LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS": {
+      "outcome": "host-ready reports tmp_low when the TMPDIR of a host's launch environment is on tmpfs or has less free space than the floor, and a release install that fails on a disk quota or full disk says it is a host fault.",
+      "read_set": [
+        "rust/plangraph-cli/tests/host_sync_release.rs",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/spawner/remote_ps.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md",
+        "docs/fleet-sync.md",
+        "docs/placement-rules.md",
+        "docs/spawner/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md",
+        "rust/plangraph-cli/src/host_sync_release.rs",
+        "src/plangraph/spawner/host_ready_source.py",
+        "tests/test_host_ready.py",
+        "tests/test_host_ready_tmp.py"
+      ],
+      "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_host_ready_tmp.py tests/test_host_ready.py && cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib host_sync_release",
+      "risk_tags": [],
+      "estimate_tokens": 40000,
+      "window_class": "128k",
+      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_host_ready_path.py tests/test_spawner_doctor.py"
+    }
+  }
+}

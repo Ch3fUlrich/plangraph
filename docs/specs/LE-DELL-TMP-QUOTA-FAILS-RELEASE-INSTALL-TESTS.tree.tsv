@@ -1,0 +1,12 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md	write	yes	E1 E2	new (<= 2 changed lines; <= 2 final lines)
+docs/fleet-sync.md	write	yes	E2	predicted (<= 4 changed lines; <= 208 final lines)
+docs/placement-rules.md	write	yes	E1	predicted (<= 6 changed lines; <= 352 final lines)
+docs/spawner/LE-DELL-TMP-QUOTA-FAILS-RELEASE-INSTALL-TESTS.md	write	yes	E1	new (<= 12 changed lines; <= 12 final lines)
+rust/plangraph-cli/src/host_sync_release.rs	write	yes	E2	predicted (<= 30 changed lines; <= 406 final lines)
+src/plangraph/spawner/host_ready_source.py	write	yes	E1	predicted (<= 30 changed lines; <= 521 final lines)
+tests/test_host_ready.py	write	yes	E1	predicted (<= 2 changed lines; <= 745 final lines)
+tests/test_host_ready_tmp.py	write	yes	E1	new (<= 110 changed lines; <= 110 final lines)
+rust/plangraph-cli/tests/host_sync_release.rs	read	yes	E2	observed
+src/plangraph/spawner/host_ready.py	read	yes	E1	observed
+src/plangraph/spawner/remote_ps.py	read	yes	E1	observed
