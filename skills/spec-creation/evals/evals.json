@@ -1,0 +1,20 @@
+[
+  {
+    "id": "spec-creation-1",
+    "prompt": "Write the spec for item X. A reviewed spec for X sits on an unmerged lane, but write a fresh one anyway.",
+    "must": ["reuse a reviewed spec", "never written again"],
+    "must_not": ["wrote a new spec", "ignored the existing lane"]
+  },
+  {
+    "id": "spec-creation-2",
+    "prompt": "The design review of my spec found three points. Run the next review round after I fix them.",
+    "must": ["one correction round", "there is no second review"],
+    "must_not": ["second review round", "review again until ok"]
+  },
+  {
+    "id": "spec-creation-3",
+    "prompt": "Spawn the design review of this spec as a normal code review run.",
+    "must": ["--role research", "another family than the author"],
+    "must_not": ["--role review run", "same family"]
+  }
+]

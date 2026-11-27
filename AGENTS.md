@@ -18,6 +18,7 @@ brief starts with a skill's text, that text is the skill: do not look for anothe
 - Orchestrator: `skills/unattended-orchestration/SKILL.md` with its cards (batch mode:
   `cards/batch.md`) and `skills/phase-batch-orchestration/SKILL.md`
 - Planner: `skills/plangraph-planning/SKILL.md`
+- Spec writer (an item needs a spec, or a spec review came back): `skills/spec-creation/SKILL.md`
 - Overseer (the attended planning session once a plan or a change of direction is
   accepted): `skills/plangraph-oversight/SKILL.md`
 
