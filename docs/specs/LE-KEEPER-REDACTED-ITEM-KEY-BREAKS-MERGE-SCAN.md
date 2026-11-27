@@ -4,7 +4,7 @@ Outcome. Define refuses a malformed or redacted item id, one malformed stored ke
 
 - plan_source. Keeper item plangraph:LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN, 2026-11-25 01:26Z, priority 10, D-6868, D-6874.
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
-- card SHA-256. c2ae36652ecfea3834a05b537f90d5e96e79c99c2120d748c7745e646440fc5e
+- card SHA-256. a8670f03507e670249b3e0a31c4f2567048a62a06e1cd2f86aecfd708d862eef
 - tree SHA-256. 5b1fef21e4eb42b8ab334abfdad367e1d9eacea303677ad509e64036f404dd3a
 - evidence_after_deploy. After the keeper restart onto the merged head: `plangraph merge-close` (dry run) on coding.vm ends with an empty `scan_errors` or only non-`merge_scan_failed` reasons, and any stored malformed key appears once in `listed` with `evidence_unverified: malformed_key`. Record the run line in the item evidence.
 
