@@ -38,6 +38,15 @@ pub(crate) fn mount_guard(boundary: &Path, path: &Path) -> io::Result<()> {
 /// lie on the way or inside it. Without `apply` it only runs those checks, so a dry run names the
 /// same refusals as the real run. The resolved path is the one removed, never the one asked for.
 pub(crate) fn remove_guarded(boundary: &Path, path: &Path, apply: bool) -> io::Result<()> {
+    remove_guarded_if(boundary, path, apply, |_| true).map(drop)
+}
+
+pub(crate) fn remove_guarded_if(
+    boundary: &Path,
+    path: &Path,
+    apply: bool,
+    confirm: impl FnOnce(&Path) -> bool,
+) -> io::Result<bool> {
     let boundary = boundary.canonicalize()?;
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(io::Error::other("candidate has no parent"));
@@ -47,10 +56,134 @@ pub(crate) fn remove_guarded(boundary: &Path, path: &Path, apply: bool) -> io::R
         return Err(io::Error::other("candidate outside the trusted slot"));
     }
     mount_guard(&boundary, &resolved)?;
+    if !confirm(&resolved) {
+        return Ok(false);
+    }
     if apply {
         remove_path(&resolved)?;
     }
-    Ok(())
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) use artifact_walk::{stamp, ArtifactWalk};
+
+#[cfg(target_os = "linux")]
+mod artifact_walk {
+    use super::*;
+    use crate::main_target::GitMarkers;
+    use std::{collections::HashMap, os::unix::fs::MetadataExt};
+
+    type Stamp = (u64, u64, i64, i64);
+    pub(crate) fn stamp(meta: &fs::Metadata) -> Stamp {
+        (meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec())
+    }
+
+    #[derive(Default)]
+    pub(crate) struct ArtifactWalk {
+        dirs: Vec<(fs::ReadDir, GitMarkers)>,
+        seen: Vec<(PathBuf, Stamp)>,
+        links: HashMap<u64, u64>,
+        pub(crate) bytes: u64,
+        pub(crate) credit: u64,
+        pub(crate) complete: bool,
+    }
+
+    impl ArtifactWalk {
+        pub(crate) fn close_streams(&mut self) {
+            self.dirs.clear();
+            self.seen.clear();
+        }
+        pub(crate) fn root_stamp(&self) -> Option<Stamp> {
+            self.seen.first().map(|(_, stamp)| *stamp)
+        }
+
+        pub(crate) fn unchanged(&self, room: impl Fn() -> bool) -> Option<bool> {
+            for (path, observed) in &self.seen {
+                if !room() {
+                    return None;
+                }
+                if !fs::symlink_metadata(path).is_ok_and(|meta| stamp(&meta) == *observed) {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        }
+
+        pub(crate) fn step(
+            &mut self,
+            root: &Path,
+            cutoff: SystemTime,
+            dev: u64,
+            uid: u32,
+        ) -> Result<(), &'static str> {
+            let path = if self.seen.is_empty() {
+                root.to_path_buf()
+            } else {
+                loop {
+                    let Some((entries, _)) = self.dirs.last_mut() else {
+                        self.complete = true;
+                        return Ok(());
+                    };
+                    match entries.next() {
+                        Some(Ok(entry)) => break entry.path(),
+                        Some(Err(_)) => return Err("probe_unavailable"),
+                        None => {
+                            self.dirs.pop();
+                        }
+                    }
+                }
+            };
+            let meta = fs::symlink_metadata(&path).map_err(|error| match error.kind() {
+                io::ErrorKind::NotFound => "vanished",
+                _ => "probe_unavailable",
+            })?;
+            let kind = meta.file_type();
+            if meta.dev() != dev
+                || meta.uid() != uid
+                || !(kind.is_dir() || kind.is_file() || kind.is_symlink())
+            {
+                return Err("unsafe");
+            }
+            if let Some((_, git)) = self.dirs.last_mut() {
+                git.observe(path.file_name().unwrap(), kind);
+                if git.is_repository() {
+                    return Err("unsafe");
+                }
+            }
+            if meta.modified().map_err(|_| "probe_unavailable")? >= cutoff {
+                return Err("young");
+            }
+            let bytes = meta.blocks().saturating_mul(512);
+            let (first, last) = if !kind.is_dir() && meta.nlink() > 1 {
+                let link = self.links.entry(meta.ino()).or_default();
+                *link += 1;
+                (*link == 1, *link == meta.nlink())
+            } else {
+                (true, true)
+            };
+            self.bytes = self.bytes.saturating_add(if first { bytes } else { 0 });
+            self.credit = self.credit.saturating_add(if last { bytes } else { 0 });
+            self.seen.push((path.clone(), stamp(&meta)));
+            if kind.is_dir() {
+                let entries = fs::read_dir(path).map_err(|_| "probe_unavailable")?;
+                self.dirs.push((entries, GitMarkers::default()));
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool> {
+    use crate::cargo_pool::{lease_file_path, stale_reason, SlotLeaseRecord};
+    let bytes = match fs::read(lease_file_path(slot)?) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let row = serde_json::from_slice::<SlotLeaseRecord>(&bytes).ok();
+    Ok(!stale_reason(row.as_ref(), Some(state)))
 }
 
 /// A size that cannot be measured is skipped and the run alarms: the totals it feeds are a lower
@@ -86,7 +219,7 @@ fn retained(slot: &Path, report: &mut Report) -> Option<u64> {
 
 /// Real directory `slot` of the pool of `primary`: the primary, or a direct `slot-*` child of its
 /// pool root, neither a symlink (ancestors may be). `None` when it does not exist.
-fn trusted_slot(primary: &Path, slot: &Path) -> io::Result<Option<PathBuf>> {
+pub(crate) fn trusted_slot(primary: &Path, slot: &Path) -> io::Result<Option<PathBuf>> {
     let meta = match fs::symlink_metadata(slot) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),

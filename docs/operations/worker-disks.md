@@ -73,12 +73,32 @@ claims, run state and root paths. Inspect the dry run and record a real cleanup
 with freed bytes. Give the heartbeat collector the newest `disk-hygiene.json`
 report for that host and surface its `alarm` or failure.
 
+The hygiene report's `free_bytes` is the lowest final free-space sample. The
+`devices` rows show start and end samples and reclaimed or projected bytes for
+each filesystem. The `kept` rows give the paths and reasons for retained caches.
+In apply mode, zero bytes reclaimed below a device's cleanup floor queues a
+Keeper routing alert and makes the run fail. Positive reclamation that leaves
+a device below its alarm floor queues an alert and allows the run to succeed
+if no other failure occurred. Each alert lists up to five kept paths with their
+reasons. The stall watchdog retries delivery from the private outbox until
+Keeper acknowledges the event ID. Dry runs publish the report without queuing
+pressure alerts.
+
+The timer records `started_at`, `time_to_first_removal`, and
+`first_removal_deadline_missed` alongside the device report. The first-removal
+timestamp covers a cache unlink or Git worktree removal attempt. Use the matching
+invocation's NDJSON row to assess the 60-second first-removal deadline during
+an observed overlapping build. Keep the live evidence gate open until a
+pressured overlapping invocation is measured.
+
 The timer emits an alert when a monitored filesystem is used strictly above 85%. The alert
 lists up to five configured directories by allocated bytes.
 `disk-watermarks.json` keeps one row per crossed device, keyed by device, with the time it was
-measured. The timer measures a crossed filesystem again on every pass and drops the row once usage
-is at or below 85%. The flow watchdog reads these rows for the local host (see
-`docs/flow-watchdog.md`).
+measured. Diagnostics start after reclamation and share the pass deadline.
+A completed measurement can be reused for the same root when it has no nested
+diagnostic roots. If the deadline interrupts the scan, the previous rows stay
+available. A sample at or below 85% drops its row on a completed pass. The flow
+watchdog reads these rows locally (see `docs/flow-watchdog.md`).
 
 ## Build caches
 
