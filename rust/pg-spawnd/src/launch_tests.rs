@@ -393,14 +393,20 @@ assert status == 10, (status, err.getvalue())
 assert err.getvalue().startswith('REVIEW ' + request['run_id'] + ' FAIL client_missing ')
 client = root / 'installed-codex'
 resolved, _ = resolve_codex_client({'PATH':'', 'PLANGRAPH_CODEX_BIN':str(client)})
-assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-codex'
+print(resolved)
 "#;
-    let output = std::process::Command::new(python)
+    std::fs::create_dir(dir.join("bin")).unwrap();
+    std::fs::create_dir(dir.join("home")).unwrap();
+    let output = crate::test_python::command()
         .args(["-c", code])
         .arg(&dir.0)
-        .env("PYTHONPATH", sources)
-        .env("PATH", "")
-        .env("HOME", &dir.0)
+        .current_dir(&dir.0)
+        .env("PATH", dir.join("bin"))
+        .env("HOME", dir.join("home"))
+        .env("USERPROFILE", dir.join("home"))
+        .env("XDG_CONFIG_HOME", dir.join("home/.config"))
+        .env("NVM_DIR", dir.join("home/.nvm"))
+        .env_remove("INVOCATION_ID")
         .env_remove("PLANGRAPH_CODEX_BIN")
         .output()
         .unwrap();
@@ -409,6 +415,18 @@ assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-code
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!dir.join("sentinel-ran").exists());
+    let resolved = String::from_utf8(output.stdout).unwrap();
+    let mut command = std::process::Command::new(resolved.trim());
+    command
+        .env("PATH", dir.join("bin"))
+        .stdout(std::process::Stdio::piped());
+    let output = pg_worker_core::executable_test_support::spawn(&mut command)
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"configured-codex");
 }
 
 fn which_python() -> std::path::PathBuf {

@@ -7,9 +7,8 @@ fn workspace_write_commit_uses_fixture_sandbox_and_cleans_up() {
     const CHILD: &str = "PG_READINESS_SANDBOX_FIXTURE";
     if let Some(root) = std::env::var_os(CHILD).map(PathBuf::from) {
         let parent = root.join("checkout");
-        let repo = parent.join("repo");
         let host = Host {
-            repo: repo.clone(),
+            repo: parent.join("repo"),
             mode: "workspace-write".into(),
         };
         assert!(host.commit().is_ok());
@@ -20,20 +19,8 @@ fn workspace_write_commit_uses_fixture_sandbox_and_cleans_up() {
         let cwd = Path::new(lines.next().unwrap());
         assert_eq!(cwd.parent(), Some(parent.as_path()));
         assert_eq!(
-            lines.collect::<Vec<_>>(),
-            [
-                "sandbox",
-                "-c",
-                "sandbox_mode=\"workspace-write\"",
-                "--",
-                "git",
-                "-C",
-                cwd.join("work").to_str().unwrap(),
-                "commit",
-                "--allow-empty",
-                "-m",
-                "readiness probe",
-            ]
+            lines.collect::<Vec<_>>().join("\n"),
+            format!("sandbox\n-c\nsandbox_mode=\"workspace-write\"\n--\ngit\n-C\n{}/work\ncommit\n--allow-empty\n-m\nreadiness probe", cwd.display())
         );
         assert!(!cwd.exists());
         std::fs::write(root.join("refuse"), "").unwrap();
@@ -51,6 +38,7 @@ fn workspace_write_commit_uses_fixture_sandbox_and_cleans_up() {
         root.path().join("bin/codex"),
         r#"#!/bin/sh
 test "$#" -eq 11 && test "$1:$2:$3:$4:$5" = 'sandbox:-c:sandbox_mode="workspace-write":--:git' || exit 2
+test "$6:$7:$8:$9:${10}:${11}" = "-C:$PWD/work:commit:--allow-empty:-m:readiness probe" || exit 2
 printf '%s\n' "$PWD" "$@" > "$PG_READINESS_SANDBOX_FIXTURE/argv"
 test ! -f "$PG_READINESS_SANDBOX_FIXTURE/refuse" || exit 1
 shift 4
@@ -228,10 +216,31 @@ fn placeholder_git_identities_are_not_ready() {
 }
 #[test]
 fn identity_point_reads_the_hosts_git_config() {
-    let dir = tempfile::tempdir().unwrap();
+    const CHILD: &str = "PG_READINESS_IDENTITY_FIXTURE";
+    if std::env::var_os(CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child.env("GIT_AUTHOR_EMAIL", "override@example.invalid");
+        pg_worker_core::git_test_support::configure(&mut child, dir.path());
+        assert!(child
+            .env_remove("GIT_AUTHOR_NAME")
+            .env_remove("GIT_AUTHOR_EMAIL")
+            .env_remove("GIT_COMMITTER_NAME")
+            .env_remove("GIT_COMMITTER_EMAIL")
+            .env(CHILD, "1")
+            .args([
+                "--exact",
+                "codex_readiness::tests::identity_point_reads_the_hosts_git_config"
+            ])
+            .status()
+            .unwrap()
+            .success());
+        return;
+    }
+    let dir = std::env::current_dir().unwrap();
     let run = |args: &[&str]| {
         assert!(git()
-            .current_dir(dir.path())
+            .current_dir(&dir)
             .args(args)
             .status()
             .unwrap()
@@ -239,7 +248,7 @@ fn identity_point_reads_the_hosts_git_config() {
     };
     run(&["init", "--quiet"]);
     let mut host = Host {
-        repo: dir.path().to_path_buf(),
+        repo: dir.clone(),
         mode: "workspace-write".into(),
     };
     run(&["config", "user.name", "x"]);
