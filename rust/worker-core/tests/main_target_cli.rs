@@ -111,6 +111,13 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let home = tmp.path().join("home");
     let container = home.join(".cache/cargo-target");
     let old = SystemTime::now() - Duration::from_secs(3 * 86400);
+    let nested = root.join("clean/src/__pycache__");
+    let unknown = root.join("clean/target/not-cache");
+    pg_worker_core::private_targets::seed_cargo_fixture(&unknown, old, true).unwrap();
+    git(&root.join("clean"), &["add", "-f", "target/cache"]);
+    git(&root.join("clean"), &["commit", "-qm", "tracked fixture"]);
+    fs::write(repo.join(".git/info/exclude"), "__pycache__/\n").unwrap();
+    pg_worker_core::private_targets::seed_cargo_fixture(&nested, old, false).unwrap();
     for name in ["shared", "batch23", "holds-repository"] {
         let dir = container.join(name);
         fs::create_dir_all(dir.join("debug")).unwrap();
@@ -148,6 +155,7 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--repo"])
         .arg(&repo)
+        .args(["--cleanup-free-bytes", &u64::MAX.to_string()])
         .arg("--root")
         .arg(&root)
         .arg("--pins")
@@ -157,6 +165,8 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
         .arg("--state")
         .arg(&state)
         .env("HOME", &home)
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env_remove("PLANGRAPH_WORKTREE_MOUNTS")
         .env_remove("XDG_CONFIG_HOME")
         .env("PG_PROCESS_CWD_READER", &reader)
         .env("PG_PROCESS_INVENTORY", "reader")
@@ -168,7 +178,8 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     assert!(output.status.success(), "{row}");
     assert!(container.join("shared/debug/blob").exists(), "{row}");
     assert!(!container.join("batch23").exists(), "{row}");
-    assert!(mirror.join("HEAD").exists(), "{row}");
+    assert!(mirror.join("HEAD").exists() && unknown.exists(), "{row}");
+    assert!(!nested.exists(), "{row}");
 }
 
 /// An aged cargo-marked target that also holds a bare repository with a commit is source: the CLI

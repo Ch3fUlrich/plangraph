@@ -64,7 +64,8 @@ absolute-path rules as `host_ready.shared_cargo_target`, defaulting to
 `~/.cache/plangraph/cargo-target`; it also checks `~/.cache/pg-target-po`.
 Its alarm triggers at 75% used or under 5 GiB free. Cleanup starts at 80% used
 or under 10 GB (decimal) free.
-`pg-disk-hygiene` checks ignored build caches in eligible idle worktrees.
+`pg-disk-hygiene` checks ignored `target` and `node_modules` roots and nested
+`__pycache__` and `.pytest_cache` directories in eligible idle worktrees.
 Tracked cache files and protection records
 prevent reclaim. Hygiene also removes detached `*-fast` worktrees after
 two hours without writes, including on disks above the cleanup threshold.

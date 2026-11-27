@@ -92,19 +92,25 @@ pub(super) fn remove_old_fast_tree(
 }
 
 #[cfg(target_os = "linux")]
-impl super::HygieneReport {
-    pub fn keep_boundary(&mut self, path: std::path::PathBuf, reason: &'static str) {
-        self.summary.alarm |= reason == "root_unavailable";
-        let device = path
-            .metadata()
-            .ok()
-            .map(|meta| super::file_identity(&meta).0);
-        self.kept.push(super::KeptPath {
-            device,
-            path,
-            bytes: None,
-            bytes_is_lower_bound: false,
-            reason,
-        });
-    }
+pub(super) fn ignored_caches(
+    tree: &Path,
+    remaining: Duration,
+) -> io::Result<Vec<std::path::PathBuf>> {
+    let specs = "ls-files --others --ignored --exclude-standard --directory -z -- target node_modules :(glob)**/__pycache__ :(glob)**/.pytest_cache";
+    let args: Vec<_> = specs.split_ascii_whitespace().collect();
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    let raw = crate::main_target::git_until(tree, &args, std::time::Instant::now() + remaining)?;
+    let entries = raw
+        .split(|&b| b == 0)
+        .filter_map(|name| name.strip_suffix(b"/"));
+    Ok(entries
+        .filter_map(|name| {
+            let path = Path::new(OsStr::from_bytes(name));
+            let python = matches!(
+                path.file_name().and_then(OsStr::to_str),
+                Some("__pycache__" | ".pytest_cache")
+            );
+            (python || matches!(name, b"target" | b"node_modules")).then(|| tree.join(path))
+        })
+        .collect())
 }

@@ -85,7 +85,8 @@ Keeper acknowledges the event ID. Dry runs publish the report without queuing
 pressure alerts.
 
 The timer records `started_at`, `time_to_first_removal`, and
-`first_removal_deadline_missed` alongside the device report. Use the matching
+`first_removal_deadline_missed` alongside the device report. The first-removal
+timestamp covers a cache unlink or Git worktree removal attempt. Use the matching
 invocation's NDJSON row to assess the 60-second first-removal deadline during
 an observed overlapping build. Keep the live evidence gate open until a
 pressured overlapping invocation is measured.

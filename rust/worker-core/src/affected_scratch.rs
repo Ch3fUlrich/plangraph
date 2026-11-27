@@ -119,3 +119,21 @@ pub(crate) fn reclaim(
     ));
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+impl crate::disk_hygiene::HygieneReport {
+    pub fn keep_boundary(&mut self, path: std::path::PathBuf, reason: &'static str) {
+        self.summary.alarm |= reason == "root_unavailable";
+        let device = path
+            .metadata()
+            .ok()
+            .map(|meta| crate::disk_hygiene::file_identity(&meta).0);
+        self.kept.push(crate::disk_hygiene::KeptPath {
+            device,
+            path,
+            bytes: None,
+            bytes_is_lower_bound: false,
+            reason,
+        });
+    }
+}

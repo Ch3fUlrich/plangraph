@@ -120,24 +120,28 @@ impl Layout<'_> {
                 }
             }
             if !main && !locked && !(detached && tree.to_string_lossy().ends_with("-fast")) {
-                for name in ["target", "node_modules"] {
-                    let target = tree.join(name);
-                    if target.symlink_metadata().is_ok() {
-                        let mut item = Candidate::new(target, boundary.clone(), legacy)?;
-                        item.scope = tree.clone();
-                        found.push(item);
+                let room = end.saturating_duration_since(clock());
+                let Ok(listing) = super::super::fast_worktrees::ignored_caches(&tree, room) else {
+                    report.keep_boundary(tree, "probe_unavailable");
+                    continue;
+                };
+                for target in listing {
+                    if !permit() {
+                        report.keep_boundary(tree.clone(), "discovery_budget");
+                        break;
                     }
+                    let mut item = Candidate::new(target, boundary.clone(), legacy)?;
+                    item.scope = tree.clone();
+                    found.push(item);
                 }
             }
         }
         let excluded = crate::cargo_pool::hygiene_exclusions(self.shared, self.home);
-        let configured = std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute());
         let cache = self
             .cache
             .map(Path::to_path_buf)
-            .or(configured)
+            .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
+            .filter(|path| path.is_absolute())
             .unwrap_or_else(|| self.home.join(".cache"));
         let legacy_roots = crate::idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
         for root in self.scratch.iter().chain([&cache]).chain(&legacy_roots) {
