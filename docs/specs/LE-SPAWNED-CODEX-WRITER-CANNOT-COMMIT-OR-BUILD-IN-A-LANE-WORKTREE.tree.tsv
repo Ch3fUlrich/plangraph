@@ -1,0 +1,13 @@
+path	disposition	required	row IDs	label
+.filesize-baseline	read	yes	E1	observed
+changelog.d/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md	write	yes	E1	predicted (<= 3 changed lines; <= 3 final lines)
+docs/spawner/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md	write	yes	E1	predicted (<= 16 changed lines; <= 16 final lines)
+rust/pg-spawnd/src/native_writer_host.rs	read	yes	E1	observed
+rust/pg-spawnd/src/native_writer_sandbox.rs	read	yes	E1	observed
+src/plangraph/routing_support/clients.py	read	yes	E1	observed
+src/plangraph/spawner/git_guard.py	write	yes	E1	predicted (<= 50 changed lines; <= 443 final lines)
+src/plangraph/spawner/host_ready.py	read	yes	E1	observed
+src/plangraph/spawner/leg_probe.py	read	yes	E1	observed
+src/plangraph/spawner/runner.py	write	yes	E1	predicted (<= 4 changed lines; <= 1157 final lines)
+tests/test_claude_child_env.py	read	yes	E1	observed
+tests/test_writer_sandbox_roots.py	write	yes	E1	predicted (<= 150 changed lines; <= 150 final lines)

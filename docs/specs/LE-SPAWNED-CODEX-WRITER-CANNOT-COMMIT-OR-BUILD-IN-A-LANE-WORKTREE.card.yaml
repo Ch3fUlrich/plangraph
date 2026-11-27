@@ -1,0 +1,53 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md": {
+      "max_changed_lines": 3,
+      "max_final_lines": 3
+    },
+    "docs/spawner/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md": {
+      "max_changed_lines": 16,
+      "max_final_lines": 16
+    },
+    "src/plangraph/spawner/git_guard.py": {
+      "max_changed_lines": 50,
+      "max_final_lines": 443
+    },
+    "src/plangraph/spawner/runner.py": {
+      "max_changed_lines": 4,
+      "max_final_lines": 1157
+    },
+    "tests/test_writer_sandbox_roots.py": {
+      "max_changed_lines": 150,
+      "max_final_lines": 150
+    }
+  },
+  "cards": {
+    "LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE": {
+      "outcome": "A plain Codex implement or fix spawn runs workspace-write with its worktree git dir, the git common dir, the shared Cargo target and its run directory as added writable roots, and is refused before launch when those roots cannot be resolved or written.",
+      "read_set": [
+        ".filesize-baseline",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/pg-spawnd/src/native_writer_sandbox.rs",
+        "src/plangraph/routing_support/clients.py",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/spawner/leg_probe.py",
+        "tests/test_claude_child_env.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md",
+        "docs/spawner/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md",
+        "src/plangraph/spawner/git_guard.py",
+        "src/plangraph/spawner/runner.py",
+        "tests/test_writer_sandbox_roots.py"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_writer_sandbox_roots.py",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 40000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_claude_child_env.py tests/test_leg_probe_w1.py"
+    }
+  }
+}
