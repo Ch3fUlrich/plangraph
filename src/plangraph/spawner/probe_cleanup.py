@@ -73,7 +73,7 @@ class LeaseWait:
 
 async def acquire_cargo_lease(target=None):
     """Transfer the worker's handle once, or close it when delivery is abandoned."""
-    from .host_ready import CargoLeaseTimeout, cargo_lease
+    from .host_ready import CargoLeaseTimeout, _lock_identity, cargo_lease
     launch = OWNED.get()
     request = LeaseWait(SHARED_WAIT_S, launch.deadline if launch else None,
                         launch.stop if launch else None, target)
@@ -96,11 +96,15 @@ async def acquire_cargo_lease(target=None):
         worker.result()
         if request.expired(immediate=request.immediate):
             raise CargoLeaseTimeout(request)
-    except (asyncio.CancelledError, CargoLeaseTimeout):
+    except (asyncio.CancelledError, CargoLeaseTimeout) as failure:
         request.stop.set()
-        if (lease := request.take()) is not None:
-            lease.close()
         worker.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        if (lease := request.take()) is not None:
+            try:
+                if isinstance(failure, CargoLeaseTimeout):
+                    failure.evidence.update(request.evidence(_lock_identity(lease.fileno())))
+            finally:
+                lease.close()
         raise
     request.finished = time.monotonic()
     if launch:

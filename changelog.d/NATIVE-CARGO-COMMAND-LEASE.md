@@ -2,3 +2,4 @@
 - Record probe expiry before process creation as a local failure without changing provider liveness or quota.
 - Preserve probe cancellation through cleanup failures and defer liveness writes until cleanup finishes.
 - Use the configured shared Cargo target when the child environment supplies no target.
+- Retain local lock identity when closing a Cargo lease delivered after its deadline.

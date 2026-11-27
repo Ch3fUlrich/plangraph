@@ -255,3 +255,32 @@ def test_async_lease_deadline_includes_executor_queueing(tmp_path, monkeypatch):
 
     asyncio.run(exercise())
     assert not (tmp_path / 'target.plangraph-lock').exists()
+
+
+def test_late_async_lease_delivery_retains_lock_identity(tmp_path, monkeypatch):
+    from plangraph.spawner import probe_cleanup
+
+    target = tmp_path / 'target'
+    lock = target.with_suffix('.plangraph-lock')
+    wait = asyncio.wait
+    now = 100.0
+
+    async def deliver_late(tasks, **kwargs):
+        nonlocal now
+        result = await wait(tasks, **kwargs)
+        now += probe_cleanup.SHARED_WAIT_S + 0.1
+        return result
+
+    monkeypatch.setattr(probe_cleanup, 'time', SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(asyncio, 'wait', deliver_late)
+    with pytest.raises(h.CargoLeaseTimeout) as failure:
+        asyncio.run(probe_cleanup.acquire_cargo_lease(target))
+    evidence = failure.value.evidence
+    assert not evidence['contention_observed']
+    assert Path(evidence['lock_path']) == lock.resolve()
+    if os.name == 'posix':
+        stat = lock.stat()
+        assert evidence['lock_identity'] == dict(device=stat.st_dev, inode=stat.st_ino)
+    assert {'lock_identity', 'lock_path'}.isdisjoint(failure.value.public())
+    with h._cargo_lease_for(target, exclusive=True):
+        pass
