@@ -1,0 +1,37 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1 E2	predicted
+.github/workflows/tests.yml	read	yes	E2	predicted
+AGENTS.md	read	yes	E1 E2	predicted
+CONTRIBUTING.md	write	yes	E1 E2	predicted (≤4 changed lines)
+changelog.d/LE-FAST-CHECKS-WALL-BUDGET-REFUSES-A-GREEN-HEAD-ON-A-LOADED-HOST.md	write	yes	E1 E2	predicted (≤2 changed lines)
+deploy/systemd/README.md	read	yes	E2	predicted
+docs/native-codex-writer.md	write	yes	E1 E2	predicted (≤6 changed lines)
+rust/Cargo.toml	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/cli_review.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/main.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/native_writer.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/native_writer_commands.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/native_writer_host.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/native_writer_review.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/native_writer_stage.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/step_runner_shell.rs	read	yes	E2	predicted
+rust/plangraph-cli/Cargo.toml	read	yes	E2	predicted
+rust/plangraph-cli/src/fast_check_packages.rs	read	yes	E1	predicted
+rust/plangraph-cli/src/fast_check_target.rs	read	yes	E1	predicted
+rust/plangraph-cli/src/fast_check_worktree.rs	write	yes	E1	predicted (≤27 changed lines)
+rust/plangraph-cli/src/fast_checks.rs	write	yes	E1 E2	predicted (≤97 changed lines)
+rust/plangraph-cli/src/host_sync_release.rs	read	yes	E2	predicted
+rust/plangraph-cli/src/landing_hosts.rs	read	yes	E2	predicted
+rust/plangraph-cli/src/main.rs	read	yes	E1 E2	predicted
+rust/plangraph-cli/tests/fast_checks.rs	read	yes	E1 E2	predicted
+rust/worker-core/src/bin/pg-disk-hygiene.rs	read	yes	E2	predicted
+rust/worker-core/src/cargo_pool_telemetry.rs	read	yes	E2	predicted
+rust/worker-core/src/fast_check_stamp.rs	write	yes	E1 E2	predicted (≤53 changed lines)
+rust/worker-core/src/host_link.rs	read	yes	E2	predicted
+rust/worker-core/src/worktree.rs	read	yes	E1 E2	predicted
+src/plangraph/spawner/base_fresh.py	read	yes	E2	predicted
+src/plangraph/spawner/remote_ps.py	read	yes	E2	predicted
+src/plangraph/spawner/stall_watchdog.py	read	yes	E2	predicted
+tools/ci_select.py	read	yes	E1 E2	predicted
+tools/hooks/pre-push	read	yes	E2	predicted
+tools/merge_batch_build.py	read	yes	E2	predicted

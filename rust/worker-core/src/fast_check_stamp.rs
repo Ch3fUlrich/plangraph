@@ -27,6 +27,37 @@ impl Check {
     }
 }
 
+/// The measured wall time and whole-second limit of a budget overrun.
+pub struct BudgetOverrun(u128, u64);
+impl BudgetOverrun {
+    /// Record an overrun only for a positive limit and a strictly greater duration.
+    pub fn new(ns: u128, limit: u64) -> Option<Self> {
+        (limit > 0 && ns > u128::from(limit) * 1_000_000_000).then_some(Self(ns, limit))
+    }
+    /// Encode the final metadata row without its trailing newline.
+    pub fn line(&self) -> String {
+        format!("budget overrun wall_ns={} limit_s={}", self.0, self.1)
+    }
+}
+fn is_budget(line: &str) -> bool {
+    line.split_whitespace().next() == Some("budget")
+}
+/// Read the optional final overrun row and reject malformed, misplaced or duplicate rows.
+pub fn read_budget(text: &str) -> Result<Option<BudgetOverrun>, String> {
+    let mut lines = text.lines();
+    let last = lines.next_back().filter(|line| is_budget(line));
+    let budget = last.and_then(|line| {
+        let (wall, limit) = line.split_once(" limit_s=")?;
+        let ns = wall.strip_prefix("budget overrun wall_ns=")?.parse().ok()?;
+        let budget = BudgetOverrun::new(ns, limit.parse().ok()?)?;
+        (budget.line() == line).then_some(budget)
+    });
+    if lines.any(is_budget) || (last.is_some() && budget.is_none()) {
+        return Err("malformed, repeated or misplaced budget record".into());
+    }
+    Ok(budget)
+}
+
 /// The receipt text: red when any check failed or none ran.
 pub fn render(head: &str, checks: &[Check]) -> String {
     let verdict = if !checks.is_empty() && checks.iter().all(|c| c.rc == 0) {
@@ -64,7 +95,7 @@ pub fn text_is_green(text: &str, head: &str) -> bool {
     if heads.is_empty() && verdicts.is_empty() && checks == 0 {
         return matches!(text.trim(), "green") || (!head.is_empty() && text.trim() == head);
     }
-    heads == [head] && verdicts == ["green"] && checks > 0
+    heads == [head] && verdicts == ["green"] && checks > 0 && read_budget(text).is_ok()
 }
 
 /// `check <label> rc=0 wall=<seconds>`: a green check line with every field present.
@@ -150,10 +181,20 @@ pub fn push_argv(head: &str, target: &str) -> Vec<String> {
 /// a parentless commit whose tree holds only that receipt (what a push publishes, so nothing but
 /// this receipt is ever reachable from the pushed ref). Returns the state file.
 pub fn publish(repo: &Path, head: &str, checks: &[Check]) -> Result<PathBuf, String> {
+    publish_with_budget(repo, head, checks, None)
+}
+
+/// Settle both receipt destinations under the common Git lock.
+#[rustfmt::skip]
+pub fn publish_with_budget(
+    repo: &Path, head: &str, checks: &[Check], budget: Option<BudgetOverrun>,
+) -> Result<PathBuf, String> {
     let stamp = fast_check_stamp(repo, head).map_err(|e| e.to_string())?;
+    let _lock = crate::worktree::mutation_lock(repo).map_err(|e| e.to_string())?;
     let state = stamp.parent().ok_or("stamp directory missing")?;
     std::fs::create_dir_all(state).map_err(|e| e.to_string())?;
     let text = render(head, checks);
+    let text = text + &budget.map_or_else(String::new, |b| b.line() + "\n");
     let mut file = tempfile::NamedTempFile::new_in(state).map_err(|e| e.to_string())?;
     std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|e| e.to_string())?;
     file.persist(&stamp).map_err(|e| e.to_string())?;
@@ -199,7 +240,7 @@ fn well_formed(text: &str, name: &str) -> bool {
                 return false;
             }
             checks += 1;
-        } else {
+        } else if !is_budget(line) {
             return false;
         }
     }
@@ -318,17 +359,19 @@ pub fn notes_commit_green(repo: &Path, commit: &str, head: Option<&str>) -> Resu
     {
         return Err(format!("not a receipt note: {name}"));
     }
-    let text = git(
+    let text = crate::git::git_bytes(
         repo,
         &["cat-file", "blob", sha.ok_or("malformed tree entry")?],
     )
     .map_err(|e| e.to_string())?;
-    if !well_formed(&text, name) {
+    let raw = String::from_utf8_lossy(&text);
+    let text = raw.trim();
+    if read_budget(&raw).is_err() || !well_formed(text, name) {
         return Err(format!("malformed receipt for {name}"));
     }
     match head {
         Some(head) if head != name => Err(format!("no receipt of {head} in {commit}")),
-        Some(head) if !text_is_green(&text, head) => Err(format!("receipt of {head} is not green")),
+        Some(head) if !text_is_green(text, head) => Err(format!("receipt of {head} is not green")),
         _ => Ok(()),
     }
 }
