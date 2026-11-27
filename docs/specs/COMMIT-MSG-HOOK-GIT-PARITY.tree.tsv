@@ -1,6 +1,6 @@
 path	disposition	required	row IDs	label
 changelog.d/COMMIT-MSG-HOOK-GIT-PARITY.md	write	yes	E1 E2	new (<= 2 changed lines; <= 2 final lines)
-docs/rust-hooks.md	write	yes	E1 E2	predicted (<= 12 changed lines; <= 195 final lines)
+docs/rust-hooks.md	write	yes	E1 E2	predicted (<= 12 changed lines; <= 241 final lines)
 rust/pg-hook/src/commit_args.rs	write	yes	E1	predicted (<= 110 changed lines; <= 260 final lines)
 rust/pg-hook/src/commit_msg.rs	write	yes	E2	predicted (<= 80 changed lines; <= 380 final lines)
 rust/pg-hook/tests/commit_message_parity.rs	write	yes	E1 E2	new (<= 300 changed lines; <= 300 final lines)

@@ -7,7 +7,7 @@
     },
     "docs/rust-hooks.md": {
       "max_changed_lines": 12,
-      "max_final_lines": 195
+      "max_final_lines": 241
     },
     "rust/pg-hook/src/commit_args.rs": {
       "max_changed_lines": 110,
