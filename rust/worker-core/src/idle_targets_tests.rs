@@ -48,17 +48,23 @@ fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
     )
     .unwrap();
     let excluded = crate::cargo_pool::hygiene_exclusions(&shared, &home);
-    let (found, complete) = targets_in(&cache, 2, &excluded, || true).unwrap();
+    let (found, complete) = targets_in(&cache, 2, &excluded, || true, |_| {}).unwrap();
     assert!(complete);
     assert_eq!(found, [nested.as_path()]);
     assert!(deep.is_dir() && pools.iter().all(|pool| pool.join("slot-1").is_dir()));
 
     let mut budget = 2usize;
-    let (_, complete) = targets_in(&cache, 2, &excluded, || {
-        let room = budget != 0;
-        budget = budget.saturating_sub(1);
-        room
-    })
+    let (_, complete) = targets_in(
+        &cache,
+        2,
+        &excluded,
+        || {
+            let room = budget != 0;
+            budget = budget.saturating_sub(1);
+            room
+        },
+        |_| {},
+    )
     .unwrap();
     assert!(!complete);
     assert!(nested.is_dir());
@@ -312,4 +318,29 @@ fn preflight_discovery_accepts_only_direct_marked_siblings() {
     assert_eq!(found[0].path, named);
     assert!(!found[0].selector_scratch);
     assert!(unrelated.exists() && nested.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn truncated_ranking_refreshes_and_restarts_changed_metadata() {
+    use crate::disk_hygiene::{rank_candidates, refresh_ranking, Budget, Candidate};
+    use std::time::Instant;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let now = SystemTime::now();
+    let candidates = ["stable", "changed"].map(|name| {
+        let path = target(&root, name, Duration::from_secs(3600));
+        Candidate::new(path, root.clone(), now).unwrap()
+    });
+    let mut budget = Budget::new(Instant::now(), &Instant::now);
+    budget.candidate_entries = 4;
+    let mut rows = rank_candidates(candidates.into(), &budget);
+    assert!(rows.iter().all(|(_, row)| !row.complete()));
+    fs::File::open(root.join("changed/debug/blob"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+    refresh_ranking(&mut rows, &budget);
+    assert!(rows[0].1.complete());
+    assert_eq!(rows[1].1.reason, Some("young"));
 }

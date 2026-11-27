@@ -141,6 +141,7 @@ fn execute_with(
         scratch: &scratch,
         shared: &shared,
         home: &home,
+        cache: None,
         cap,
     };
     let tick = (budget.clock)();
@@ -182,12 +183,8 @@ fn execute_with(
         inventory: &inventory,
         space: &free,
     };
-    let usable = std::cell::Cell::new(disk_hygiene::reclaim(
-        &mut report,
-        candidates,
-        budget,
-        &checks,
-    ));
+    let usable = disk_hygiene::reclaim(&mut report, candidates, budget, &checks);
+    let usable = std::cell::Cell::new(usable);
     report
         .stage_durations
         .insert("inventory", inventory_seconds);
@@ -420,7 +417,7 @@ mod tests {
         assert!(!listing.contains("check-stranded-fast"), "{listing}");
     }
     /// A cargo target slot of 802 bytes: a stale build unit and a newer one that stays.
-    fn slot(path: &Path) {
+    pub(super) fn slot(path: &Path) {
         let old = SystemTime::now() - Duration::from_secs(2 * 86_400);
         fs::create_dir_all(path).unwrap();
         fs::write(path.join(".rustc_info.json"), r#"{"rustc_fingerprint":0}"#).unwrap();

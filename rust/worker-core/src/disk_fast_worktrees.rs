@@ -90,3 +90,21 @@ pub(super) fn remove_old_fast_tree(
     ));
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+impl super::HygieneReport {
+    pub fn keep_boundary(&mut self, path: std::path::PathBuf, reason: &'static str) {
+        self.summary.alarm |= reason == "root_unavailable";
+        let device = path
+            .metadata()
+            .ok()
+            .map(|meta| super::file_identity(&meta).0);
+        self.kept.push(super::KeptPath {
+            device,
+            path,
+            bytes: None,
+            bytes_is_lower_bound: false,
+            reason,
+        });
+    }
+}

@@ -22,6 +22,28 @@ pub(crate) fn is_preflight_target(path: &Path) -> bool {
         && cargo_target(path)
 }
 
+#[cfg(feature = "test-support")]
+pub fn seed_cargo_fixture(path: &Path, modified: SystemTime, marked: bool) -> io::Result<()> {
+    fs::create_dir_all(path.join("debug"))?;
+    if marked {
+        fs::write(path.join(".rustc_info.json"), "{}")?;
+    }
+    for entry in fs::read_dir(path)? {
+        fs::File::open(entry?.path())?.set_modified(modified)?;
+    }
+    fs::File::open(path)?.set_modified(modified)
+}
+#[cfg(feature = "test-support")]
+pub fn fixture_stopped_guard(state: &Path, checkout: &Path) -> io::Result<Guards> {
+    let run = state.join("runs/ended");
+    fs::create_dir_all(&run)?;
+    let record = serde_json::json!({"status":"succeeded","checkout":checkout});
+    fs::write(run.join("record.json"), record.to_string())?;
+    let pins = state.join("pins.json");
+    fs::write(&pins, "[]")?;
+    Guards::load(&pins, state)
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) use process_paths::{process_cargo_path, resolve_deleted_path};
 

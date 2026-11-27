@@ -24,9 +24,17 @@ pub fn targets_in(
     depth: u8,
     exclusions: &[PathBuf],
     mut permit: impl FnMut() -> bool,
+    mut unknown: impl FnMut(&Path),
 ) -> io::Result<(Vec<PathBuf>, bool)> {
     let mut found = vec![];
-    let complete = collect_targets(container, depth, exclusions, &mut permit, &mut found)?;
+    let complete = collect_targets(
+        container,
+        depth,
+        exclusions,
+        &mut permit,
+        &mut found,
+        &mut unknown,
+    )?;
     found.sort();
     Ok((found, complete))
 }
@@ -37,6 +45,7 @@ fn collect_targets(
     exclusions: &[PathBuf],
     permit: &mut impl FnMut() -> bool,
     found: &mut Vec<PathBuf>,
+    unknown: &mut impl FnMut(&Path),
 ) -> io::Result<bool> {
     if !permit() {
         return Ok(false);
@@ -55,10 +64,21 @@ fn collect_targets(
     if cargo_target(path) {
         found.push(path.to_path_buf());
     } else if depth > 0 {
+        let before = found.len();
         for entry in fs::read_dir(path)? {
-            if !collect_targets(&entry?.path(), depth - 1, exclusions, permit, found)? {
+            if !collect_targets(
+                &entry?.path(),
+                depth - 1,
+                exclusions,
+                permit,
+                found,
+                unknown,
+            )? {
                 return Ok(false);
             }
+        }
+        if depth == 1 && found.len() == before {
+            unknown(path);
         }
     }
     Ok(true)
@@ -93,7 +113,7 @@ pub fn sweep(
     mut processes: impl FnMut() -> io::Result<(Vec<PathBuf>, bool)>,
 ) -> io::Result<()> {
     for container in containers {
-        for target in targets_in(container, 1, &[], || true)?.0 {
+        for target in targets_in(container, 1, &[], || true, |_| {})?.0 {
             if !owned(&target)? {
                 report.skipped.push(format!(
                     "{}: legacy target owned by another user",

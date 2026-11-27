@@ -62,21 +62,8 @@ pub struct Layout<'a> {
     pub scratch: &'a [PathBuf],
     pub shared: &'a [PathBuf],
     pub home: &'a Path,
+    pub cache: Option<&'a Path>,
     pub cap: u64,
-}
-
-impl HygieneReport {
-    pub fn keep_boundary(&mut self, path: PathBuf, reason: &'static str) {
-        self.summary.alarm |= reason == "root_unavailable";
-        let device = path.metadata().ok().map(|meta| meta.dev());
-        self.kept.push(KeptPath {
-            device,
-            path,
-            bytes: None,
-            bytes_is_lower_bound: false,
-            reason,
-        });
-    }
 }
 
 impl Layout<'_> {
@@ -144,16 +131,21 @@ impl Layout<'_> {
             }
         }
         let excluded = crate::cargo_pool::hygiene_exclusions(self.shared, self.home);
-        let cache = std::env::var_os("XDG_CACHE_HOME")
+        let configured = std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
+            .filter(|p| p.is_absolute());
+        let cache = self
+            .cache
+            .map(Path::to_path_buf)
+            .or(configured)
             .unwrap_or_else(|| self.home.join(".cache"));
         let legacy_roots = crate::idle_targets::LEGACY_CONTAINERS.map(|path| self.home.join(path));
         for root in self.scratch.iter().chain([&cache]).chain(&legacy_roots) {
             let Ok(boundary) = root.canonicalize() else {
                 continue;
             };
-            if self.scratch.contains(root) {
+            let scratch = self.scratch.contains(root);
+            if scratch {
                 found.extend(crate::affected_scratch::discover(
                     &boundary,
                     &excluded,
@@ -162,8 +154,13 @@ impl Layout<'_> {
                     crate::affected_scratch::is_run,
                 )?);
             }
-            let (mut targets, complete) =
-                crate::idle_targets::targets_in(&boundary, 2, &excluded, &mut permit)?;
+            let unknown = |path: &Path| {
+                if scratch && !crate::affected_scratch::is_run(path) {
+                    report.keep_boundary(path.to_path_buf(), "unrecognized");
+                }
+            };
+            let scan = crate::idle_targets::targets_in;
+            let (mut targets, complete) = scan(&boundary, 2, &excluded, &mut permit, unknown)?;
             for target in initial
                 .into_iter()
                 .flat_map(|inventory| inventory.cargo_targets())

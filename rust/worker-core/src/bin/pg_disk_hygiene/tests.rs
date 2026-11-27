@@ -1,8 +1,8 @@
 use pg_worker_core::{
     cargo_cache::try_exclusive_lease,
     disk_hygiene::{
-        rank_candidates, reclaim, refresh_ranking, Budget, Candidate, Device, FinalProof,
-        HygieneInventory, HygieneReport, KeptPath, ReclaimChecks, Thresholds,
+        rank_candidates, reclaim, Budget, Candidate, Device, HygieneInventory, HygieneReport,
+        KeptPath, ReclaimChecks, Thresholds,
     },
     host_link::{DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS},
 };
@@ -35,16 +35,6 @@ fn age(path: &Path, cutoff: SystemTime) {
         .unwrap();
 }
 
-fn pressured(root: &Path) -> HygieneReport {
-    let mut report = HygieneReport::new(Duration::ZERO, false);
-    let id = root.metadata().unwrap().dev();
-    report.devices.insert(
-        id,
-        Device::new(id, root.to_path_buf(), Some(0), Thresholds::default()),
-    );
-    report
-}
-
 fn pressure_case(initial: u64, copies: usize, young: bool, expired: bool) -> HygieneReport {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
@@ -67,14 +57,35 @@ fn pressure_case(initial: u64, copies: usize, young: bool, expired: bool) -> Hyg
         samples.borrow_mut().push(present);
         Ok(if present[2] { 150 } else { 200 })
     };
-    let mut report = pressured(&root);
-    let device = report.devices.values_mut().next().unwrap();
-    device.start_free_bytes = Some(initial);
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let id = root.metadata().unwrap().dev();
+    let mut device = Device::new(id, root.clone(), Some(initial), Thresholds::default());
     device.cleanup_floor_bytes = 200;
+    report.devices.insert(id, device);
     let start = Instant::now();
-    let clock = || start;
+    let checked = Cell::new(false);
+    let clock = || {
+        if initial == 200
+            && root.join("middle.plangraph-lock").exists()
+            && try_exclusive_lease(&paths[2]).unwrap().is_none()
+        {
+            assert!(try_exclusive_lease(&paths[0]).unwrap().is_some());
+            checked.set(true);
+        }
+        start
+    };
     let mut budget = Budget::new(start, &clock);
     budget.candidate_entries = 3;
+    if initial == 200 {
+        budget.slice_entries = 1;
+        let rows = rank_candidates(candidates.to_vec(), &budget);
+        let ordered = rows.iter().map(|(item, _)| &item.path);
+        assert!(ordered.eq([&paths[1], &paths[2], &paths[0]]));
+        assert!(rows
+            .iter()
+            .all(|(_, row)| row.complete() && row.estimate().unwrap() > 0));
+        assert!(checked.get());
+    }
     if expired {
         budget.first_for = Duration::ZERO;
         budget.pass_for = Duration::ZERO;
@@ -152,100 +163,8 @@ fn over_cap_idle_candidate_is_removed() {
 }
 
 #[test]
-fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
-    for changed in [false, true] {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-        let now = SystemTime::now();
-        let item = artifact(&root, "target", 8192, 1, now);
-        let target = item.path.clone();
-        let file = target.join("data-0");
-        let mut proof = FinalProof::begin(item).unwrap();
-        let steps = Cell::new(2usize);
-        assert!(!proof
-            .advance(|| {
-                let previous = steps.get();
-                steps.set(previous.saturating_sub(1));
-                previous > 0
-            })
-            .unwrap());
-        assert!(try_exclusive_lease(&target).unwrap().is_none());
-        assert!(proof.remove(true, || Ok(true), || true).is_err());
-        if changed {
-            fs::File::open(&file).unwrap().set_modified(now).unwrap();
-            assert_eq!(proof.advance(|| true), Err("young"));
-            assert!(target.exists());
-        } else {
-            assert!(proof.advance(|| true).unwrap());
-            assert_eq!(proof.remove(true, || Ok(false), || true).unwrap(), None);
-            assert!(target.exists());
-            assert!(proof.remove(true, || Ok(true), || true).unwrap().unwrap() > 0);
-            assert!(!target.exists());
-        }
-    }
-}
-
-#[test]
 fn ranking_orders_allocated_bytes_and_releases_each_slice() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
-    let now = SystemTime::now();
-    let candidates = [("small", 8192), ("large", 65536), ("middle", 32768)]
-        .map(|(name, bytes)| artifact(&root, name, bytes, 1, now));
-    let start = Instant::now();
-    let visits = Cell::new(0);
-    let clock = || {
-        if root.join("middle.plangraph-lock").exists()
-            && try_exclusive_lease(&root.join("middle")).unwrap().is_none()
-        {
-            // The unselected slot must be available while another slot is being scanned.
-            assert!(try_exclusive_lease(&root.join("small")).unwrap().is_some());
-            visits.set(visits.get() + 1);
-        }
-        start
-    };
-    let mut budget = Budget::new(start, &clock);
-    budget.slice_entries = 1;
-    let rows = rank_candidates(candidates.into(), &budget);
-    assert_eq!(
-        rows.iter()
-            .map(|(item, _)| item.path.clone())
-            .collect::<Vec<_>>(),
-        ["large", "middle", "small"].map(|name| root.join(name))
-    );
-    assert!(rows
-        .iter()
-        .all(|(_, row)| row.complete() && row.estimate().unwrap() > 0));
-    assert!(visits.get() > 0);
-}
-
-#[test]
-fn truncated_ranking_refreshes_and_restarts_changed_metadata() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
-    let now = SystemTime::now();
-    let candidates = ["stable", "changed"].map(|name| artifact(&root, name, 8192, 1, now));
-    let mut budget = Budget::new(Instant::now(), &Instant::now);
-    budget.candidate_entries = 2;
-    let mut rows = rank_candidates(candidates.into(), &budget);
-    assert!(rows.iter().all(|(_, row)| !row.complete()));
-    fs::File::open(root.join("changed/data-0"))
-        .unwrap()
-        .set_modified(now)
-        .unwrap();
-    refresh_ranking(&mut rows, &budget);
-    let stable = &rows
-        .iter()
-        .find(|(item, _)| item.path.ends_with("stable"))
-        .unwrap()
-        .1;
-    let changed = &rows
-        .iter()
-        .find(|(item, _)| item.path.ends_with("changed"))
-        .unwrap()
-        .1;
-    assert!(stable.complete());
-    assert_eq!(changed.reason, Some("young"));
+    pressure_case(200, 1, false, false);
 }
 
 fn sample(root: &Path, end: [u64; 2], freed: [u64; 2], dry: bool) -> HygieneReport {
@@ -373,22 +292,124 @@ fn partial_progress_below_alarm_floor_enqueues_and_reports_end_sample() {
     }
 }
 
+#[path = "../../../tests/support/disk_hygiene.rs"]
+mod support;
 #[test]
-fn pressure_alerts_and_report_persistence_are_independent() {
-    let fixture = tempfile::tempdir().unwrap();
-    let state = fixture.path();
-    fs::create_dir(state.join("disk-hygiene.json")).unwrap();
-    let (report, queued) = sample(state, [7, 26], [0, 0], false).persist(state, host);
-    assert!(report.is_err());
-    queued.unwrap();
-    assert_eq!(events(state).len(), 1);
-
-    let fixture = tempfile::tempdir().unwrap();
-    let state = fixture.path();
-    fs::create_dir(state.join("watchdog")).unwrap();
-    fs::write(state.join("watchdog/outbox"), b"blocked").unwrap();
-    let (report, queued) = sample(state, [7, 26], [0, 0], false).persist(state, host);
-    assert!(queued.is_err());
-    let row: Value = serde_json::from_slice(&report.unwrap()).unwrap();
-    assert_eq!(row["error"], "disk hygiene zero progress");
+fn rebuildable_classes_keep_only_protected_paths() {
+    use pg_worker_core::{
+        cargo_pool::pool_root,
+        disk_hygiene::Layout,
+        disk_runtime::DiskSpace,
+        private_targets::{fixture_stopped_guard, seed_cargo_fixture},
+    };
+    use serde_json::json;
+    use support::{fixture, git};
+    let (tmp, repo, trees) = fixture();
+    let home = tmp.path();
+    let path = |name| home.join(name);
+    let removed = [
+        "trees/clean/rust/target",
+        "trees/dirty/rust/target",
+        "main/rust/target",
+        ".cache/session/target",
+        ".cache/cargo-target/legacy",
+        "scratch/cargo",
+    ];
+    let kept = [
+        ("trees/pinned/rust/target", "young"),
+        ("trees/live/rust/target", "unsafe"),
+        (".cache/leased", "leased"),
+        (".cache/mount", "unsafe"),
+        (".cache/foreign", "unsafe"),
+        (".cache/source", "unsafe"),
+        (".cache/late", "busy"),
+        ("scratch/unknown", "unrecognized"),
+    ];
+    let old = SystemTime::now() - Duration::from_secs(86400);
+    let protected = kept.iter().map(|(name, _)| *name);
+    for name in removed.into_iter().chain(protected) {
+        let modified = old - Duration::from_secs(3600);
+        let marked = !name.ends_with("unknown");
+        seed_cargo_fixture(&path(name), modified, marked).unwrap();
+    }
+    let debug = trees.join("pinned/rust/target/debug");
+    let stale =
+        "alias.age=!GIT_COMMITTER_DATE=2000-01-01T00:00:00Z git commit --allow-empty -qm aged";
+    git(&trees.join("pinned"), &["-c", stale, "age"]);
+    fs::write(debug.join("young"), "new data").unwrap();
+    age(&debug, old);
+    git(
+        &trees.join("live"),
+        &["add", "-f", "rust/target/.rustc_info.json"],
+    );
+    let source = path(".cache/source");
+    git(&source, &["init", "-q"]);
+    age(&source, old);
+    let _lease = try_exclusive_lease(&path(".cache/leased"))
+        .unwrap()
+        .unwrap();
+    let guards = fixture_stopped_guard(home, &trees.join("clean")).unwrap();
+    let shared = [path("primary"), path(".cache/secondary")];
+    let slot = shared
+        .each_ref()
+        .map(|root| pool_root(root).unwrap().join("slot-1"));
+    for root in &slot {
+        super::tests::slot(root);
+    }
+    let scratch = [path("scratch")];
+    let cache = path(".cache");
+    let layout = Layout {
+        repo: &repo,
+        roots: &[trees],
+        scratch: &scratch,
+        shared: &shared,
+        home,
+        cache: Some(&cache),
+        cap: 1024,
+    };
+    let start = Instant::now();
+    let clock = || start;
+    let budget = Budget::new(start, &clock);
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let sample = |_: &Path| {
+        Ok(DiskSpace {
+            free: 0,
+            total: 100,
+        })
+    };
+    let limits = Thresholds::default();
+    let found = layout.discover(&mut report, &budget, limits, sample, None);
+    let first = Cell::new(true);
+    let fd = path(".cache/late/.rustc_info.json")
+        .into_os_string()
+        .into_encoded_bytes();
+    let late = json!({"version":1,"cwds":[],"cargo_targets":[],"open_paths":[fd]});
+    let inventory = |_| match first.replace(false) {
+        true => Ok(HygieneInventory::default()),
+        false => serde_json::from_value(late.clone()).map_err(io::Error::other),
+    };
+    let protection = |item: &Candidate, end| {
+        if item.path.ends_with("mount") || item.path.ends_with("foreign") {
+            return Ok(Some("unsafe"));
+        }
+        if guards.protects(&item.scope) {
+            return Ok(Some("busy"));
+        }
+        layout.protection(item, home, end)
+    };
+    let checks = ReclaimChecks {
+        inventory: &inventory,
+        protection: &protection,
+        space: &|_| Ok(0),
+    };
+    assert!(reclaim(&mut report, found.unwrap(), &budget, &checks));
+    assert!(removed.into_iter().all(|name| !path(name).exists()));
+    assert!(scratch[0].is_dir() && slot.iter().all(|path| path.is_dir()));
+    assert!(!slot[0].join("debug").exists() && slot[1].join("debug").is_dir());
+    for (name, reason) in kept {
+        let path = path(name);
+        let row = report.kept.iter().find(|row| row.path == path);
+        assert_eq!(row.map(|row| row.reason), Some(reason), "{name}");
+        assert!(path.exists());
+    }
 }

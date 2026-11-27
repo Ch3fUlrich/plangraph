@@ -736,3 +736,19 @@ fn old_fast_worktrees_are_swept_only_when_idle_and_disposable() {
     assert!(live.join("target/build").is_file());
     assert!(root.join("private-fast/.env").is_file());
 }
+
+#[test]
+fn outbox_failure_keeps_the_pressure_report() {
+    use pg_worker_core::disk_hygiene::{Device, HygieneReport};
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    fs::write(state.join("watchdog"), b"blocked").unwrap();
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let device = Device::new(1, state.to_path_buf(), Some(7), Thresholds::default());
+    report.devices.insert(1, device);
+    report.sample_end(1, Ok(7), 1);
+    let (saved, queued) = report.persist(state, || Ok("fixture-worker".into()));
+    assert!(queued.is_err());
+    let row: serde_json::Value = serde_json::from_slice(&saved.unwrap()).unwrap();
+    assert_eq!(row["error"], "disk hygiene zero progress");
+}

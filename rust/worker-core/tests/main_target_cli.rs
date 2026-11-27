@@ -267,3 +267,51 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
         }
     }
 }
+
+#[test]
+fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
+    use pg_worker_core::{
+        cargo_cache::try_exclusive_lease,
+        disk_hygiene::{Candidate, FinalProof},
+    };
+    use std::cell::Cell;
+    for changed in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let now = SystemTime::now();
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("data-0"), [0u8; 8192]).unwrap();
+        for path in [&target, &target.join("data-0")] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(3600))
+                .unwrap();
+        }
+        let item = Candidate::new(target, root, now).unwrap();
+        let target = item.path.clone();
+        let file = target.join("data-0");
+        let mut proof = FinalProof::begin(item).unwrap();
+        let steps = Cell::new(2usize);
+        assert!(!proof
+            .advance(|| {
+                let previous = steps.get();
+                steps.set(previous.saturating_sub(1));
+                previous > 0
+            })
+            .unwrap());
+        assert!(try_exclusive_lease(&target).unwrap().is_none());
+        assert!(proof.remove(true, || Ok(true), || true).is_err());
+        if changed {
+            fs::File::open(&file).unwrap().set_modified(now).unwrap();
+            assert_eq!(proof.advance(|| true), Err("young"));
+            assert!(target.exists());
+        } else {
+            assert!(proof.advance(|| true).unwrap());
+            assert_eq!(proof.remove(true, || Ok(false), || true).unwrap(), None);
+            assert!(target.exists());
+            assert!(proof.remove(true, || Ok(true), || true).unwrap().unwrap() > 0);
+            assert!(!target.exists());
+        }
+    }
+}

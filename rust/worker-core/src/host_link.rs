@@ -307,3 +307,23 @@ pub fn ssh_down_since(root: &Path, destination: &str) -> io::Result<Option<u64>>
     let state = ssh_link(root, destination)?.state;
     Ok(state.down_since.filter(|_| state.alerted))
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn report_failure_still_queues_pressure_alert() {
+    use crate::disk_hygiene::{Device, HygieneReport, Thresholds};
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    fs::create_dir(state.join("disk-hygiene.json")).unwrap();
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let device = Device::new(1, state.to_path_buf(), Some(7), Thresholds::default());
+    report.devices.insert(1, device);
+    report.sample_end(1, Ok(7), 1);
+    let (saved, queued) = report.persist(state, || Ok("fixture-worker".into()));
+    assert!(saved.is_err());
+    queued.unwrap();
+    assert_eq!(
+        fs::read_dir(state.join("watchdog/outbox")).unwrap().count(),
+        1
+    );
+}
