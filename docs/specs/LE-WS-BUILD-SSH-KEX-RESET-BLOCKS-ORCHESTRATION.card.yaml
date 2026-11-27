@@ -1,0 +1,59 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-WS-BUILD-SSH-KEX-RESET-BLOCKS-ORCHESTRATION.md": {
+      "max_changed_lines": 2,
+      "max_final_lines": 2
+    },
+    "docs/host-link.md": {
+      "max_changed_lines": 10,
+      "max_final_lines": 56
+    },
+    "rust/plangraph-cli/src/host_link_bridge.rs": {
+      "max_changed_lines": 14,
+      "max_final_lines": 245
+    },
+    "rust/plangraph-cli/tests/host_link_bridge.rs": {
+      "max_changed_lines": 45,
+      "max_final_lines": 316
+    },
+    "rust/worker-core/src/bin/pg-host-link.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 199
+    },
+    "rust/worker-core/src/host_link.rs": {
+      "max_changed_lines": 90,
+      "max_final_lines": 419
+    },
+    "rust/worker-core/tests/host_link.rs": {
+      "max_changed_lines": 110,
+      "max_final_lines": 444
+    }
+  },
+  "cards": {
+    "LE-WS-BUILD-SSH-KEX-RESET-BLOCKS-ORCHESTRATION": {
+      "outcome": "The coordinator's per-minute SSH link check tells a pre-banner kex reset from an outage, retries it once, and raises one routing alert per episode naming the server-side cause when resets repeat.",
+      "read_set": [
+        "deploy/systemd/pg-host-ssh-link@.service",
+        "deploy/systemd/pg-host-ssh-link@.timer",
+        "rust/worker-core/src/host_command.rs"
+      ],
+      "write_set": [
+        "changelog.d/LE-WS-BUILD-SSH-KEX-RESET-BLOCKS-ORCHESTRATION.md",
+        "docs/host-link.md",
+        "rust/plangraph-cli/src/host_link_bridge.rs",
+        "rust/plangraph-cli/tests/host_link_bridge.rs",
+        "rust/worker-core/src/bin/pg-host-link.rs",
+        "rust/worker-core/src/host_link.rs",
+        "rust/worker-core/tests/host_link.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --test host_link && cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test host_link_bridge",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 45000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --test host_launch"
+    }
+  }
+}
