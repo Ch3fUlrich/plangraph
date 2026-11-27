@@ -7,11 +7,10 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
-import logging
 import os
 import re
 import threading
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from copy import copy, deepcopy
 from time import monotonic
 import urllib.parse
@@ -448,32 +447,37 @@ class MergeRefresh:
 
     def _build(self, generation, started):
         deadline = started + self.SCAN_BUDGET_SECONDS
-        with timing.io_budget(max(0, deadline - monotonic())):
-            try:
-                candidates, scan = self._read_candidates()
-                # Warm reuses these inputs. Take owned copies so a failed scan cannot leak changes.
-                for field in self._FIELDS:
-                    value = scan.__dict__.get(field)
-                    if isinstance(value, dict):
-                        scan.__dict__[field] = deepcopy(value.copy())
-                scan.warm_merge_scan(candidates)
-                published = {field: scan.__dict__[field] for field in self._FIELDS}
-            except Exception:
-                published = None
-            with self._lock:
-                if generation != self._generation:
-                    return
-                over = monotonic() >= deadline or timing.io_timeout(1) <= 0
-                self._bundle = None if over else published
-                self.state = "ready" if self._bundle is not None else "failed"
-        log = logging.getLogger("plangraph.keeper")
-        seconds = monotonic() - started
-        if over or published is None:
-            log.warning("merge_index_refresh failed %s seconds=%.1f",
-                        "budget_exceeded" if over else "scan_error", seconds)
-        else:
-            log.info("merge_index_refresh repos=%d failed=%d seconds=%.1f",
-                     len(published["_warmed"]), len(published["_merge_scan_errors"]), seconds)
+        counters = timing.MergeRefreshTiming(started, monotonic)
+        outcome, published = "scan_error", None
+        try:
+            with counters.active(), timing.io_budget(max(0, deadline - monotonic())):
+                try:
+                    with counters.stage("candidate_snapshot"):
+                        candidates, scan = self._read_candidates()
+                        # Warm reuses these inputs. Take owned copies so a failed scan cannot leak changes.
+                        for field in self._FIELDS:
+                            value = scan.__dict__.get(field)
+                            if isinstance(value, dict):
+                                scan.__dict__[field] = deepcopy(value.copy())
+                    scan.warm_merge_scan(candidates)
+                    published = {field: scan.__dict__[field] for field in self._FIELDS}
+                except Exception:
+                    published = None
+                with ExitStack() as publication:
+                    with counters.stage("publish_wait"):
+                        publication.enter_context(self._lock)
+                    if generation != self._generation:
+                        outcome = "superseded"
+                        return
+                    over = monotonic() >= deadline or timing.io_timeout(1) <= 0
+                    self._bundle = None if over else published
+                    self.state = "ready" if self._bundle is not None else "failed"
+                    if over:
+                        outcome = "budget_exceeded"
+                    elif published is not None:
+                        outcome = "ready"
+        finally:
+            counters.emit(generation, outcome, published)
 
 
 def _close_merged_auto(store, principal, body, need):
