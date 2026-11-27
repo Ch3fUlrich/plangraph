@@ -18,12 +18,12 @@
       "max_final_lines": 130
     },
     "rust/pg-spawnd/src/reconcile_serve.rs": {
-      "max_changed_lines": 110,
-      "max_final_lines": 460
+      "max_changed_lines": 130,
+      "max_final_lines": 480
     },
     "rust/pg-spawnd/src/reconcile_serve_tests.rs": {
-      "max_changed_lines": 195,
-      "max_final_lines": 285
+      "max_changed_lines": 230,
+      "max_final_lines": 318
     },
     "rust/pg-spawnd/src/runs.rs": {
       "max_changed_lines": 5,
@@ -39,7 +39,7 @@
     },
     "rust/worker-core/src/run/mod.rs": {
       "max_changed_lines": 3,
-      "max_final_lines": 47
+      "max_final_lines": 44
     },
     "rust/worker-core/src/run/monitor.rs": {
       "max_changed_lines": 21,
@@ -50,8 +50,8 @@
       "max_final_lines": 450
     },
     "rust/worker-core/src/run/slot_bind_tests.rs": {
-      "max_changed_lines": 770,
-      "max_final_lines": 770
+      "max_changed_lines": 790,
+      "max_final_lines": 790
     },
     "rust/worker-core/src/run/supervise.rs": {
       "max_changed_lines": 72,
@@ -60,6 +60,10 @@
     "rust/worker-core/src/run/supervisor.rs": {
       "max_changed_lines": 100,
       "max_final_lines": 320
+    },
+    "rust/worker-core/src/slots.rs": {
+      "max_changed_lines": 2,
+      "max_final_lines": 142
     },
     "rust/worker-core/src/slots/liveness.rs": {
       "max_changed_lines": 26,
@@ -89,7 +93,7 @@
         "rust/worker-core/src/run/group_unix.rs",
         "rust/worker-core/src/run/record.rs",
         "rust/worker-core/src/run/supervisor_tests.rs",
-        "rust/worker-core/src/slots.rs",
+        "rust/worker-core/src/slots/io.rs",
         "rust/worker-core/src/slots/reclaim/tests.rs",
         "rust/worker-core/src/sweep_runs.rs"
       ],
@@ -109,6 +113,7 @@
         "rust/worker-core/src/run/slot_bind_tests.rs",
         "rust/worker-core/src/run/supervise.rs",
         "rust/worker-core/src/run/supervisor.rs",
+        "rust/worker-core/src/slots.rs",
         "rust/worker-core/src/slots/liveness.rs",
         "rust/worker-core/src/slots/liveness/linux.rs",
         "rust/worker-core/src/slots/liveness/tests.rs",

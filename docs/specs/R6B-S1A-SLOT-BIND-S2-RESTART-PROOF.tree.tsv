@@ -3,8 +3,8 @@ changelog.d/R6B-S1A-DAEMON-SLOT-BIND.md	write	yes	E1 E2 E3	predicted (<= 11 chan
 changelog.d/R6B-S1A-SLOT-BIND-S2-RESTART-PROOF.md	write	yes	E1 E2 E3	predicted (<= 6 changed lines; <= 6 final lines)
 rust/pg-spawnd/src/main.rs	write	yes	E1 E2 E3	predicted (<= 4 changed lines; <= 136 final lines)
 rust/pg-spawnd/src/reconcile_scope_proof.rs	write	yes	E1 E2 E3	predicted (<= 130 changed lines; <= 130 final lines)
-rust/pg-spawnd/src/reconcile_serve.rs	write	yes	E1 E2 E3	predicted (<= 110 changed lines; <= 460 final lines)
-rust/pg-spawnd/src/reconcile_serve_tests.rs	write	yes	E1 E2 E3	predicted (<= 195 changed lines; <= 285 final lines)
+rust/pg-spawnd/src/reconcile_serve.rs	write	yes	E1 E2 E3	predicted (<= 130 changed lines; <= 480 final lines)
+rust/pg-spawnd/src/reconcile_serve_tests.rs	write	yes	E1 E2 E3	predicted (<= 230 changed lines; <= 318 final lines)
 rust/pg-spawnd/src/reconcile_store.rs	read	yes	E1 E2 E3	observed
 rust/pg-spawnd/src/runs.rs	write	yes	E1 E2 E3	predicted (<= 5 changed lines; <= 678 final lines)
 rust/pg-spawnd/src/serve.rs	write	yes	E1 E2 E3	predicted (<= 75 changed lines; <= 270 final lines)
@@ -13,15 +13,16 @@ rust/pg-spawnd/tests/reconcile_startup_tests.rs	read	yes	E1 E2 E3	observed
 rust/worker-core/src/run/group.rs	read	yes	E1 E2 E3	observed
 rust/worker-core/src/run/group_unix.rs	read	yes	E1 E2 E3	observed
 rust/worker-core/src/run/group_windows.rs	write	yes	E1 E2 E3	predicted (<= 2 changed lines; <= 316 final lines)
-rust/worker-core/src/run/mod.rs	write	yes	E1 E2 E3	predicted (<= 3 changed lines; <= 47 final lines)
+rust/worker-core/src/run/mod.rs	write	yes	E1 E2 E3	predicted (<= 3 changed lines; <= 44 final lines)
 rust/worker-core/src/run/monitor.rs	write	yes	E1 E2 E3	predicted (<= 21 changed lines; <= 301 final lines)
 rust/worker-core/src/run/record.rs	read	yes	E1 E2 E3	observed
 rust/worker-core/src/run/slot_bind.rs	write	yes	E1 E2 E3	predicted (<= 450 changed lines; <= 450 final lines)
-rust/worker-core/src/run/slot_bind_tests.rs	write	yes	E1 E2 E3	predicted (<= 770 changed lines; <= 770 final lines)
+rust/worker-core/src/run/slot_bind_tests.rs	write	yes	E1 E2 E3	predicted (<= 790 changed lines; <= 790 final lines)
 rust/worker-core/src/run/supervise.rs	write	yes	E1 E2 E3	predicted (<= 72 changed lines; <= 306 final lines)
 rust/worker-core/src/run/supervisor.rs	write	yes	E1 E2 E3	predicted (<= 100 changed lines; <= 320 final lines)
 rust/worker-core/src/run/supervisor_tests.rs	read	yes	E1 E2 E3	observed
-rust/worker-core/src/slots.rs	read	yes	E1 E2 E3	observed
+rust/worker-core/src/slots.rs	write	yes	E1 E2 E3	predicted (<= 2 changed lines; <= 142 final lines)
+rust/worker-core/src/slots/io.rs	read	yes	E1 E2 E3	observed
 rust/worker-core/src/slots/liveness.rs	write	yes	E1 E2 E3	predicted (<= 26 changed lines; <= 122 final lines)
 rust/worker-core/src/slots/liveness/linux.rs	write	yes	E1 E2 E3	predicted (<= 30 changed lines; <= 278 final lines)
 rust/worker-core/src/slots/liveness/tests.rs	write	yes	E1 E2 E3	predicted (<= 50 changed lines; <= 244 final lines)
