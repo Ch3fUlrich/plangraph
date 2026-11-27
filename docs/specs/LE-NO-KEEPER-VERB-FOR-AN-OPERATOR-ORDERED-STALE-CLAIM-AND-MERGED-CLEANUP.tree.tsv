@@ -1,0 +1,19 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-NO-KEEPER-VERB-FOR-AN-OPERATOR-ORDERED-STALE-CLAIM-AND-MERGED-CLEANUP.md	write	yes	E1 E2 E3	new (<= 2 changed lines; <= 2 final lines)
+docs/KEEPER.md	write	yes	E1 E2 E3	predicted (<= 14 changed lines; <= 722 final lines)
+src/plangraph/keeper/api_routes.py	write	yes	E1 E2	predicted (<= 16 changed lines; <= 528 final lines)
+src/plangraph/keeper/cli.py	write	yes	E3	predicted (<= 14 changed lines; <= 388 final lines)
+src/plangraph/keeper/cli_output_verbs.py	write	yes	E3	predicted (<= 90 changed lines; <= 277 final lines)
+src/plangraph/keeper/store_verbs.py	write	yes	E1	predicted (<= 80 changed lines; <= 706 final lines)
+src/plangraph/keeper/store_waiver.py	write	yes	E2	predicted (<= 26 changed lines; <= 797 final lines)
+tests/test_keeper_close_merged_named_sha.py	write	yes	E2 E3	new (<= 170 changed lines; <= 170 final lines)
+tests/test_keeper_release_review.py	write	yes	E1 E3	new (<= 200 changed lines; <= 200 final lines)
+src/plangraph/keeper/api.py	read	yes	E1 E2	observed
+src/plangraph/keeper/context_sources.py	read	yes	E2	observed
+src/plangraph/keeper/store.py	read	yes	E1	observed
+src/plangraph/keeper/store_close.py	read	yes	E2	observed
+src/plangraph/keeper/store_runs.py	read	yes	E2	observed
+tests/keeper_util.py	read	yes	E1 E2 E3	observed
+tests/test_keeper_close_merged.py	read	yes	E2	observed
+tests/test_keeper_close_merged_scan.py	read	yes	E2 E3	observed
+tests/test_keeper_merge_close_auto.py	read	yes	E1	observed
