@@ -19,6 +19,74 @@ fn target(container: &Path, name: &str, age: Duration) -> PathBuf {
     path
 }
 
+#[test]
+fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let cache = home.join(".cache");
+    let age = Duration::from_secs(3600);
+    let nested = target(&cache, "session/target", age);
+    let deep = target(&cache, "other/level/target", age);
+    let shared = [
+        target(&cache, "shared-a", age),
+        target(&cache, "shared-b", age),
+    ];
+    let pools = shared
+        .each_ref()
+        .map(|root| crate::cargo_pool::pool_root(root).unwrap());
+    for pool in &pools {
+        target(pool, "slot-1", age);
+    }
+    symlink(&pools[1], cache.join("alias-of-pool")).unwrap();
+    let lookalike = cache.join("not-a-cache");
+    fs::create_dir_all(lookalike.join("debug")).unwrap();
+    let unreadable = cache.join("unreadable");
+    fs::create_dir(&unreadable).unwrap();
+    let permissions = unreadable.metadata().unwrap().permissions();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+    let denied = unreadable.read_dir().is_err();
+    symlink(
+        nested.join(".rustc_info.json"),
+        lookalike.join(".rustc_info.json"),
+    )
+    .unwrap();
+    let excluded = crate::cargo_pool::hygiene_exclusions(&shared, &home);
+    let mut kept = vec![];
+    let result = targets_in(
+        &cache,
+        2,
+        &excluded,
+        || true,
+        |p, why| kept.push((p.to_path_buf(), why)),
+    );
+    fs::set_permissions(&unreadable, permissions).unwrap();
+    let (found, complete) = result.unwrap();
+    if denied {
+        assert!(kept.contains(&(unreadable, "probe_unavailable")));
+    }
+    assert!(complete);
+    assert_eq!(found, [nested.as_path()]);
+    assert!(deep.is_dir() && pools.iter().all(|pool| pool.join("slot-1").is_dir()));
+
+    let mut budget = 2usize;
+    let (_, complete) = targets_in(
+        &cache,
+        2,
+        &excluded,
+        || {
+            let room = budget != 0;
+            budget = budget.saturating_sub(1);
+            room
+        },
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(!complete);
+    assert!(nested.is_dir());
+}
+
 fn run(containers: &[PathBuf], guards: &Guards, apply: bool, building: bool) -> Report {
     let mut report = Report::default();
     sweep(
@@ -243,4 +311,29 @@ fn a_leased_target_with_an_unreadable_child_does_not_stop_the_sweep_of_its_sibli
         .skipped
         .iter()
         .any(|s| s.contains("cache lease held")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn truncated_ranking_refreshes_and_restarts_changed_metadata() {
+    use crate::disk_hygiene::{rank_candidates, refresh_ranking, Budget, Candidate};
+    use std::time::Instant;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let now = SystemTime::now();
+    let candidates = ["stable", "changed"].map(|name| {
+        let path = target(&root, name, Duration::from_secs(3600));
+        Candidate::new(path, root.clone(), now).unwrap()
+    });
+    let mut budget = Budget::new(Instant::now(), &Instant::now);
+    budget.candidate_entries = 4;
+    let mut rows = rank_candidates(candidates.into(), &budget);
+    assert!(rows.iter().all(|(_, row)| !row.complete()));
+    fs::File::open(root.join("changed/debug/blob"))
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+    refresh_ranking(&mut rows, &budget);
+    assert!(rows[0].1.complete());
+    assert_eq!(rows[1].1.reason, Some("young"));
 }

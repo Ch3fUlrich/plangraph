@@ -12,6 +12,8 @@ use std::{
 
 /// File delivery reports this exit code for a permanent Keeper payload refusal.
 pub const WORKER_ALERT_REFUSED_EXIT: i32 = 3;
+pub const DISK_HYGIENE_ZERO_PROGRESS: &str = "disk-hygiene-zero-progress";
+pub const DISK_HYGIENE_BELOW_ALARM: &str = "disk-hygiene-below-alarm-floor";
 
 pub fn probe_peer(peer: &str) -> io::Result<bool> {
     if peer.is_empty()
@@ -56,6 +58,52 @@ fn write_outbox(root: &Path, filename: &str, event: &Value) -> io::Result<()> {
         &root.join("watchdog/outbox").join(filename),
         &serde_json::to_vec(event)?,
     )
+}
+
+/// Resolve disk hygiene's local host label using the host-link configuration.
+#[cfg(target_os = "linux")]
+pub fn disk_hygiene_alert_host() -> io::Result<String> {
+    if let Some(host) = std::env::var("HOST_LINK_ID")
+        .ok()
+        .filter(|host| crate::fleet_series::valid_host(host))
+    {
+        return Ok(host);
+    }
+    let hostname = fs::read_to_string("/proc/sys/kernel/hostname")?;
+    let hostname = hostname.trim_end_matches('\n');
+    if hostname.is_empty() {
+        return Err(io::Error::other("kernel hostname unavailable"));
+    }
+    Ok(hostname.to_owned())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn enqueue_disk_hygiene(
+    root: &Path,
+    started: Duration,
+    host: &str,
+    mut event: Value,
+) -> io::Result<()> {
+    let rule = event["rule"]
+        .as_str()
+        .ok_or_else(|| io::Error::other("disk hygiene rule unavailable"))?;
+    let device = event["device"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("disk hygiene device unavailable"))?;
+    let nanos = started.as_nanos();
+    let since = started.as_secs();
+    let id = format!(
+        "{:x}",
+        Sha256::digest(format!("disk-hygiene:{rule}:{nanos}:{device}:{host}"))
+    );
+    let filename = format!("{since:020}-{rule}-{id}.json");
+    event["kind"] = json!("alert");
+    event["recipient"] = json!("routing");
+    event["item_key"] = json!("plangraph:LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS");
+    event["host"] = json!(host);
+    event["down_since"] = json!(since);
+    event["event_id"] = json!(id);
+    write_outbox(root, &filename, &event)
 }
 
 pub(crate) fn enqueue_worker_alert(root: &Path, event: &Value) -> io::Result<()> {
@@ -258,4 +306,24 @@ pub fn observe_ssh(
 pub fn ssh_down_since(root: &Path, destination: &str) -> io::Result<Option<u64>> {
     let state = ssh_link(root, destination)?.state;
     Ok(state.down_since.filter(|_| state.alerted))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn report_failure_still_queues_pressure_alert() {
+    use crate::disk_hygiene::{Device, HygieneReport, Thresholds};
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    fs::create_dir(state.join("disk-hygiene.json")).unwrap();
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let device = Device::new(1, state.to_path_buf(), Some(7), Thresholds::default());
+    report.devices.insert(1, device);
+    report.sample_end(1, Ok(7), 1);
+    let (saved, queued) = report.persist(state, || Ok("fixture-worker".into()));
+    assert!(saved.is_err());
+    queued.unwrap();
+    assert_eq!(
+        fs::read_dir(state.join("watchdog/outbox")).unwrap().count(),
+        1
+    );
 }

@@ -38,6 +38,7 @@ fn disk_hygiene_environment_matches_unit_and_preserves_existing_configuration() 
     assert_eq!(
         env_paths,
         [
+            "-%h/.config/plangraph/host-link.env",
             "-%h/.config/plangraph/disk-hygiene.env",
             "-%h/.config/plangraph/disk-hygiene-service.env",
         ]

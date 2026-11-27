@@ -1,5 +1,6 @@
 //! Sample configured build, worktree and scratch directories at each disk crossing above 85% used.
-use crate::disk_hygiene::Report;
+use crate::disk_hygiene::{display_path, HygieneReport, KeptPath};
+use crate::host_link::enqueue_disk_hygiene;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -77,11 +78,16 @@ fn observe(
     crossed
 }
 
-fn allocated(path: &Path, device: u64, roots: &BTreeMap<PathBuf, u64>) -> u64 {
+fn allocated(
+    path: &Path,
+    device: u64,
+    roots: &BTreeMap<PathBuf, u64>,
+    room: &impl Fn() -> bool,
+) -> u64 {
     let mut seen = HashSet::new();
     let mut pending = vec![path.to_path_buf()];
     let mut bytes = 0u64;
-    while let Some(candidate) = pending.pop() {
+    while let Some(candidate) = pending.pop().filter(|_| room()) {
         let Ok(meta) = fs::symlink_metadata(&candidate) else {
             continue;
         };
@@ -98,6 +104,7 @@ fn allocated(path: &Path, device: u64, roots: &BTreeMap<PathBuf, u64>) -> u64 {
                     .into_iter()
                     .flatten()
                     .flatten()
+                    .take_while(|_| room())
                     .map(|entry| entry.path()),
             );
         }
@@ -109,24 +116,28 @@ fn allocated(path: &Path, device: u64, roots: &BTreeMap<PathBuf, u64>) -> u64 {
 fn record_crossings<'a>(
     state: &Path,
     paths: impl IntoIterator<Item = &'a Path>,
+    room: &impl Fn() -> bool,
+    kept: &[KeptPath],
 ) -> io::Result<Vec<String>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    record_sampled(state, paths, now, |path| {
-        crate::disk_runtime::disk_space(path).map(|space| (space.free, space.total))
-    })
+    let sample =
+        |path: &Path| crate::disk_runtime::disk_space(path).map(|space| (space.free, space.total));
+    record_sampled(state, paths, now, sample, room, kept)
 }
 
-fn record_sampled<'a>(
+pub(crate) fn record_sampled<'a>(
     state: &Path,
     paths: impl IntoIterator<Item = &'a Path>,
     now: u64,
     sample: impl Fn(&Path) -> io::Result<(u64, u64)>,
+    room: &impl Fn() -> bool,
+    kept: &[KeptPath],
 ) -> io::Result<Vec<String>> {
     let mut roots = BTreeMap::new();
     let mut seen = HashSet::new();
-    for path in paths {
+    for path in paths.into_iter().take_while(|_| room()) {
         let Ok(path) = path.canonicalize() else {
             continue;
         };
@@ -150,8 +161,20 @@ fn record_sampled<'a>(
         None => BTreeMap::new(),
     };
     let crossed = observe(&mut active, &roots, now, sample, |path, device| {
-        allocated(path, device, &roots)
+        let overlaps = roots
+            .keys()
+            .any(|other| other != path && other.starts_with(path));
+        let cached = kept.iter().find(|row| {
+            row.path == path && row.device == Some(device) && !row.bytes_is_lower_bound
+        });
+        cached
+            .filter(|_| !overlaps)
+            .and_then(|row| row.bytes)
+            .unwrap_or_else(|| allocated(path, device, &roots, room))
     });
+    if !room() {
+        return Ok(vec![]);
+    }
     let updated = serde_json::to_vec(&active)?;
     if stored
         .as_deref()
@@ -176,7 +199,8 @@ pub fn record_configured(
     worktrees: impl IntoIterator<Item = PathBuf>,
     shared: &[PathBuf],
     scratch: &[PathBuf],
-    report: &mut Report,
+    report: &mut HygieneReport,
+    room: impl Fn() -> bool,
 ) {
     let builds = shared
         .iter()
@@ -186,17 +210,59 @@ pub fn record_configured(
         .chain(builds)
         .chain(scratch.iter().cloned())
         .collect();
-    match record_crossings(state, roots.iter().map(PathBuf::as_path)) {
+    let paths = roots.iter().map(PathBuf::as_path);
+    match record_crossings(state, paths, &room, &report.kept) {
         Ok(events) => {
-            report.alarm |= !events.is_empty();
+            report.summary.alarm |= !events.is_empty();
             for event in events {
                 eprintln!("ALERT {event}");
-                report.actions.push(event);
+                report.summary.actions.push(event);
             }
         }
         Err(error) => report
+            .summary
             .skipped
             .push(format!("disk watermark unavailable: {error}")),
+    }
+}
+
+impl HygieneReport {
+    /// Finalize the report once. Report writes and alert enqueues have independent results.
+    pub fn persist(
+        &mut self,
+        state: &Path,
+        host: impl FnOnce() -> io::Result<String>,
+    ) -> (io::Result<Vec<u8>>, io::Result<()>) {
+        let alerts = self.pressure_events();
+        self.summary.alarm |= self.summary.error.is_some();
+        self.summary.freed_bytes = self
+            .devices
+            .values()
+            .map(|row| row.freed_bytes)
+            .fold(0, u64::saturating_add);
+        self.summary.skipped.extend(
+            self.kept
+                .iter()
+                .map(|row| format!("{}: {}", display_path(&row.path), row.reason)),
+        );
+        let report = self
+            .report_json()
+            .and_then(|row| crate::disk_runtime::write_hygiene_report(state, &row));
+        let queued = if alerts.is_empty() {
+            Ok(())
+        } else {
+            host().and_then(|host| {
+                let mut queued = Ok(());
+                for event in alerts {
+                    let device = event["device"].as_u64().unwrap();
+                    let result = enqueue_disk_hygiene(state, self.started_at, &host, event)
+                        .map_err(|error| io::Error::other(format!("device {device}: {error}")));
+                    queued = queued.and(result);
+                }
+                queued
+            })
+        };
+        (report, queued)
     }
 }
 
@@ -325,20 +391,22 @@ mod tests {
         let device = root.path().metadata().unwrap().dev().to_string();
         let hot = |_: &Path| Ok((10, 100));
         let paths = [root.path()];
-        let events = record_sampled(state.path(), paths, 100, hot).unwrap();
+        let events = record_sampled(state.path(), paths, 100, hot, &|| true, &[]).unwrap();
         assert_eq!(events.len(), 1);
         let file = state.path().join("disk-watermarks.json");
         let read =
             || -> serde_json::Value { serde_json::from_slice(&fs::read(&file).unwrap()).unwrap() };
         assert_eq!(read()[&device]["measured_at"], 100);
-        assert!(record_sampled(state.path(), paths, 200, hot)
+        assert!(record_sampled(state.path(), paths, 200, hot, &|| true, &[])
             .unwrap()
             .is_empty());
         assert_eq!(read()[&device]["measured_at"], 200);
         let cool = |_: &Path| Ok((15, 100));
-        assert!(record_sampled(state.path(), paths, 300, cool)
-            .unwrap()
-            .is_empty());
+        assert!(
+            record_sampled(state.path(), paths, 300, cool, &|| true, &[])
+                .unwrap()
+                .is_empty()
+        );
         assert!(read().as_object().unwrap().is_empty());
     }
 }
