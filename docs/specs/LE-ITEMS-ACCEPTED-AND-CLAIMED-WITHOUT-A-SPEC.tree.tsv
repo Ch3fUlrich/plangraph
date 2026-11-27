@@ -1,0 +1,56 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1 E2 E3 E4	observed
+.filesize-baseline	read	yes	E1 E2 E3 E4	observed
+changelog.d/LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC.md	write	yes	E1 E2 E3 E4	predicted (<= 15 changed lines; <= 15 final lines)
+deploy/systemd/plangraph-keeper.service	read	yes	E1 E2 E3 E4	observed
+docs/KEEPER.md	write	yes	E1 E2 E3 E4	predicted (<= 8 changed lines; <= 716 final lines)
+docs/PLANNER-KIT.md	read	yes	E1 E3 E4	observed
+docs/contract/keeper-contract-v1-routes.md	write	yes	E1 E2 E3 E4	predicted (<= 48 changed lines; <= 365 final lines)
+docs/contract/keeper-contract-v1.json	write	yes	E1 E2 E3 E4	predicted (<= 36 changed lines; <= 158 final lines)
+docs/operations/keeper-spec-admission.md	write	yes	E1 E2 E3 E4	predicted (<= 100 changed lines; <= 100 final lines)
+docs/routing.md	write	yes	E3	predicted (<= 5 changed lines; <= 409 final lines)
+docs/writer-feeder.md	read	yes	E2 E3	observed
+rust/pg-spawnd/src/native_writer.rs	read	yes	E2 E3	observed
+rust/plangraph-cli/Cargo.toml	read	yes	E1 E2 E3 E4	observed
+rust/plangraph-cli/src/feeder/runtime.rs	read	yes	E2 E3	observed
+rust/plangraph-cli/src/feeder/selection.rs	read	yes	E2 E3	observed
+rust/plangraph-cli/tests/feeder_contracts.rs	read	yes	E2 E3	observed
+rust/plangraph-cli/tests/keeper_priority_range.rs	read	yes	E1 E2 E3 E4	observed
+rust/plangraph-cli/tests/keeper_spec_admission.rs	write	yes	E1 E2 E3 E4	predicted (<= 380 changed lines; <= 380 final lines)
+rust/plangraph-cli/tests/keeper_spec_admission/fixture.rs	write	yes	E1 E2 E3 E4	predicted (<= 210 changed lines; <= 210 final lines)
+rust/plangraph-cli/tests/keeper_spec_admission_edges.rs	write	yes	E1 E2 E3 E4	predicted (<= 180 changed lines; <= 180 final lines)
+rust/test_support/python.rs	read	yes	E1 E2 E3 E4	observed
+src/plangraph/keeper/api.py	write	yes	E1 E3 E4	predicted (<= 34 changed lines; <= 780 final lines)
+src/plangraph/keeper/api_routes.py	write	yes	E1 E3 E4	predicted (<= 66 changed lines; <= 575 final lines)
+src/plangraph/keeper/auth.py	read	yes	E3 E4	observed
+src/plangraph/keeper/cli.py	write	yes	E4	predicted (<= 6 changed lines; <= 380 final lines)
+src/plangraph/keeper/cli_output_verbs.py	read	yes	E1	observed
+src/plangraph/keeper/cli_verbs.py	write	yes	E2 E4	predicted (<= 18 changed lines; <= 639 final lines)
+src/plangraph/keeper/config.py	write	yes	E1 E2 E3 E4	predicted (<= 30 changed lines; <= 316 final lines)
+src/plangraph/keeper/context_sources.py	read	yes	E1 E2 E3	observed
+src/plangraph/keeper/daemon.py	write	yes	E1 E2 E3 E4	predicted (<= 5 changed lines; <= 267 final lines)
+src/plangraph/keeper/errors.py	read	yes	E1 E3 E4	observed
+src/plangraph/keeper/evidence.py	read	yes	E1 E2 E3 E4	observed
+src/plangraph/keeper/evidence_git.py	read	yes	E1 E2 E3 E4	observed
+src/plangraph/keeper/fmt.py	write	yes	E2 E4	predicted (<= 24 changed lines; <= 462 final lines)
+src/plangraph/keeper/item_fields.py	read	yes	E1 E2 E3	observed
+src/plangraph/keeper/oversight_policy.py	write	yes	E1	predicted (<= 8 changed lines; <= 487 final lines)
+src/plangraph/keeper/schema.py	read	yes	E3 E4	observed
+src/plangraph/keeper/store.py	write	yes	E1 E2 E3 E4	predicted (<= 84 changed lines; <= 547 final lines)
+src/plangraph/keeper/store_cards.py	read	yes	E3	observed
+src/plangraph/keeper/store_context.py	write	yes	E2 E3	predicted (<= 55 changed lines; <= 780 final lines)
+src/plangraph/keeper/store_create.py	read	yes	E1	observed
+src/plangraph/keeper/store_input.py	read	yes	E1	observed
+src/plangraph/keeper/store_ops.py	read	yes	E1	observed
+src/plangraph/keeper/store_read.py	write	yes	E2 E4	predicted (<= 112 changed lines; <= 531 final lines)
+src/plangraph/keeper/store_rehome.py	read	yes	E2 E3 E4	observed
+src/plangraph/keeper/store_support.py	write	yes	E1 E2 E3 E4	predicted (<= 89 changed lines; <= 780 final lines)
+src/plangraph/keeper/store_verbs.py	write	yes	E3 E4	predicted (<= 89 changed lines; <= 715 final lines)
+src/plangraph/keeper/timing.py	read	yes	E1 E2 E3	observed
+src/plangraph/keeper/worker_policy.py	read	yes	E3 E4	observed
+src/plangraph/planner/worker_claim.py	write	yes	E3	predicted (<= 15 changed lines; <= 129 final lines)
+src/plangraph/views.py	read	yes	E2	observed
+tests/test_keeper_api.py	read	yes	E1 E2 E3 E4	observed
+tests/test_keeper_claim_guard_fail_closed.py	read	yes	E3	observed
+tools/check_changelog_docs.py	read	yes	E1 E2 E3 E4	observed
+tools/check_file_size.py	read	yes	E1 E2 E3 E4	observed

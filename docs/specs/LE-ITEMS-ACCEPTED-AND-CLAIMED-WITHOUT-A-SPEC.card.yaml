@@ -1,0 +1,169 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC.md": {
+      "max_changed_lines": 15,
+      "max_final_lines": 15
+    },
+    "docs/KEEPER.md": {
+      "max_changed_lines": 8,
+      "max_final_lines": 716
+    },
+    "docs/contract/keeper-contract-v1-routes.md": {
+      "max_changed_lines": 48,
+      "max_final_lines": 365
+    },
+    "docs/contract/keeper-contract-v1.json": {
+      "max_changed_lines": 36,
+      "max_final_lines": 158
+    },
+    "docs/operations/keeper-spec-admission.md": {
+      "max_changed_lines": 100,
+      "max_final_lines": 100
+    },
+    "docs/routing.md": {
+      "max_changed_lines": 5,
+      "max_final_lines": 409
+    },
+    "rust/plangraph-cli/tests/keeper_spec_admission.rs": {
+      "max_changed_lines": 380,
+      "max_final_lines": 380
+    },
+    "rust/plangraph-cli/tests/keeper_spec_admission/fixture.rs": {
+      "max_changed_lines": 210,
+      "max_final_lines": 210
+    },
+    "rust/plangraph-cli/tests/keeper_spec_admission_edges.rs": {
+      "max_changed_lines": 180,
+      "max_final_lines": 180
+    },
+    "src/plangraph/keeper/api.py": {
+      "max_changed_lines": 34,
+      "max_final_lines": 780
+    },
+    "src/plangraph/keeper/api_routes.py": {
+      "max_changed_lines": 66,
+      "max_final_lines": 575
+    },
+    "src/plangraph/keeper/cli.py": {
+      "max_changed_lines": 6,
+      "max_final_lines": 380
+    },
+    "src/plangraph/keeper/cli_verbs.py": {
+      "max_changed_lines": 18,
+      "max_final_lines": 639
+    },
+    "src/plangraph/keeper/config.py": {
+      "max_changed_lines": 30,
+      "max_final_lines": 316
+    },
+    "src/plangraph/keeper/daemon.py": {
+      "max_changed_lines": 5,
+      "max_final_lines": 267
+    },
+    "src/plangraph/keeper/fmt.py": {
+      "max_changed_lines": 24,
+      "max_final_lines": 462
+    },
+    "src/plangraph/keeper/oversight_policy.py": {
+      "max_changed_lines": 8,
+      "max_final_lines": 487
+    },
+    "src/plangraph/keeper/store.py": {
+      "max_changed_lines": 84,
+      "max_final_lines": 547
+    },
+    "src/plangraph/keeper/store_context.py": {
+      "max_changed_lines": 55,
+      "max_final_lines": 780
+    },
+    "src/plangraph/keeper/store_read.py": {
+      "max_changed_lines": 112,
+      "max_final_lines": 531
+    },
+    "src/plangraph/keeper/store_support.py": {
+      "max_changed_lines": 89,
+      "max_final_lines": 780
+    },
+    "src/plangraph/keeper/store_verbs.py": {
+      "max_changed_lines": 89,
+      "max_final_lines": 715
+    },
+    "src/plangraph/planner/worker_claim.py": {
+      "max_changed_lines": 15,
+      "max_final_lines": 129
+    }
+  },
+  "cards": {
+    "LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC": {
+      "outcome": "Admit implementation work only with a complete spec on main and give each plan a queue of items that need a spec.",
+      "read_set": [
+        ".docs-map",
+        ".filesize-baseline",
+        "deploy/systemd/plangraph-keeper.service",
+        "docs/PLANNER-KIT.md",
+        "docs/writer-feeder.md",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/plangraph-cli/Cargo.toml",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/selection.rs",
+        "rust/plangraph-cli/tests/feeder_contracts.rs",
+        "rust/plangraph-cli/tests/keeper_priority_range.rs",
+        "rust/test_support/python.rs",
+        "src/plangraph/keeper/auth.py",
+        "src/plangraph/keeper/cli_output_verbs.py",
+        "src/plangraph/keeper/context_sources.py",
+        "src/plangraph/keeper/errors.py",
+        "src/plangraph/keeper/evidence.py",
+        "src/plangraph/keeper/evidence_git.py",
+        "src/plangraph/keeper/item_fields.py",
+        "src/plangraph/keeper/schema.py",
+        "src/plangraph/keeper/store_cards.py",
+        "src/plangraph/keeper/store_create.py",
+        "src/plangraph/keeper/store_input.py",
+        "src/plangraph/keeper/store_ops.py",
+        "src/plangraph/keeper/store_rehome.py",
+        "src/plangraph/keeper/timing.py",
+        "src/plangraph/keeper/worker_policy.py",
+        "src/plangraph/views.py",
+        "tests/test_keeper_api.py",
+        "tests/test_keeper_claim_guard_fail_closed.py",
+        "tools/check_changelog_docs.py",
+        "tools/check_file_size.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC.md",
+        "docs/KEEPER.md",
+        "docs/contract/keeper-contract-v1-routes.md",
+        "docs/contract/keeper-contract-v1.json",
+        "docs/operations/keeper-spec-admission.md",
+        "docs/routing.md",
+        "rust/plangraph-cli/tests/keeper_spec_admission.rs",
+        "rust/plangraph-cli/tests/keeper_spec_admission/fixture.rs",
+        "rust/plangraph-cli/tests/keeper_spec_admission_edges.rs",
+        "src/plangraph/keeper/api.py",
+        "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/cli.py",
+        "src/plangraph/keeper/cli_verbs.py",
+        "src/plangraph/keeper/config.py",
+        "src/plangraph/keeper/daemon.py",
+        "src/plangraph/keeper/fmt.py",
+        "src/plangraph/keeper/oversight_policy.py",
+        "src/plangraph/keeper/store.py",
+        "src/plangraph/keeper/store_context.py",
+        "src/plangraph/keeper/store_read.py",
+        "src/plangraph/keeper/store_support.py",
+        "src/plangraph/keeper/store_verbs.py",
+        "src/plangraph/planner/worker_claim.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test keeper_spec_admission --test keeper_spec_admission_edges",
+      "risk_tags": [
+        "auth",
+        "public-contract"
+      ],
+      "estimate_tokens": 47000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test feeder_contracts --test keeper_priority_range"
+    }
+  }
+}
