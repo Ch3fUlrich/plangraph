@@ -197,7 +197,8 @@ The shipped provider config and the pending benchmark inventory use the same `om
 
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
 the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
-flash and Beam free legs, then native Claude Sonnet high. Each agy model has an independent quota reset; the native Sonnet subscription uses its own quota key.
+flash and Beam free legs, then native Claude Sonnet high. See the D-6652 review order
+and D-6952 quota rules below for the current route.
 
 D-6054: the OmniRoute Muse leg uses `omniroute/spark-1.3-contributor`, declared in the
 shipped provider config. The Rust `opencode_catalog` integration tests check enabled
@@ -245,11 +246,10 @@ For native Codex, routing and launch admission check quota and availability inde
 of the OpenCode model listing.
 Missing models and inactive or unreachable providers keep their own skip reasons
 and cannot satisfy the quota fallback.
-AgY quota evidence applies to the model that made the call. When that evidence is
-account-scoped, the limit applies to that account's use of that model. Route quota
-states show the last probe time, including a successful recovery probe before reset.
-Credential, authentication and secrets changes prefer the Claude Sonnet high review
-seat, subject to availability and cross-family review.
+D-6952 pools the Antigravity Argon and Hydrogen quota across effort variants in
+review and research routes. Account-scoped bookings limit that account's use of
+both models. Neon and Antigravity Sonnet each have their own quota. The Argon and
+Hydrogen route quota entries show the same status and latest probe time.
 D-6652 (rule 3.66 (f), corrected 2026-11-23) changes the review order above and the Claude writer
 rule. Implement keeps the Codex lead first; `claude-sonnet-5-5-high` (`claude-sonnet-5-5-xhigh`
 for a card with `hard: true`) is routed only while the Codex lead is limited (429 or quota),
@@ -259,6 +259,12 @@ required OpenCode seats (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-f
 mode with checkout reads) ahead of every other leg, each outside the diff's writer families,
 and plans two seats on every head. The Claude review seat serves only for credential,
 authentication and secrets diffs or when both required seats are out of the route.
+D-6952 selects `agy-claude-sonnet-5-5-high` for that seat. The Claude subscription
+`claude-sonnet-5-5-high` follows it in the order and serves when the Antigravity
+Sonnet quota is limited or the Antigravity client is missing on the selected host.
+Both Sonnet seats bind their review to the checked head and require test evidence
+for a passing verdict. Antigravity Sonnet runs in plan mode in a disposable
+checkout and records the served model as Anthropic.
 `plangraph router go-row` accepts a part only with two seats that each ACCEPT its head with a
 `FILES READ` line naming files, and the keeper reads a required-seat record without
 `FILES READ` as no seat.
@@ -275,8 +281,8 @@ passes the bound to the daemon for diff assembly and final prompt admission.
 Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
 After the required OpenCode seats, the standard review order prefers
-`agy-gemini-4-hydrogen-high` and then `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
-available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
+`agy-gemini-4-hydrogen-high` and then `gpt-6.2-sol-medium` in Codex. The Mimo and OpenCode legs remain
+available in their configured order, and the Argon review legs stay last. Neon medium is on operator cost hold (D-6957). Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
 A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`

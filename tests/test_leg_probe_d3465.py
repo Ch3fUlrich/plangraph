@@ -57,7 +57,7 @@ def _caller_repo(tmp_path):
 
 
 def _leg():
-    return SimpleNamespace(model='gemini-4-neon-medium', harness='agy')
+    return SimpleNamespace(model='gemini-4-hydrogen-medium', harness='agy')
 
 
 def test_codex_review_probe_starts_in_disposable_git_directory(tmp_path, monkeypatch):
@@ -180,7 +180,7 @@ def test_probe_reports_leak_when_the_writer_commits_into_the_caller_repo(tmp_pat
 
 @pytest.mark.parametrize('client, binary, model', [
     ('opencode', 'opencode', 'omniroute/cx-gpt-6-luna'),
-    ('agy', 'agy', 'gemini-4-neon-medium'),
+    ('agy', 'agy', 'gemini-4-hydrogen-medium'),
     ('qodercli', 'qodercli', 'fixture-qoder-model'),
 ])
 def test_every_harness_client_is_launched_with_the_explicit_cwd(

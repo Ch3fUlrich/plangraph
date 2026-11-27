@@ -119,7 +119,7 @@ def test_agy_does_not_receive_overlay(tmp_path, monkeypatch):
     (tmp_path / 'providers.json').write_text('{"providers":{"fixture":{}}}')
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path))
-        job = await runner.spawn('x', 'gemini-4-neon-medium', client='agy')
+        job = await runner.spawn('x', 'gemini-4-hydrogen-medium', client='agy')
         await runner._tasks[job.job_id]
         return job
     job = asyncio.run(run())

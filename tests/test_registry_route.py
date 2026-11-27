@@ -187,10 +187,10 @@ def test_route_skips_paused_harness_per_role():
     review = plan_spawn(CARD, role="review", writer_families=("mimo",))
     ids = [leg.id for leg in review.legs]
     assert "qodercli-qwen3.8-flash" not in ids
-    assert "agy-gemini-4-neon-medium" in ids
+    assert "agy-gemini-4-hydrogen-high" in ids
     pause = RoutePolicy(paused_harnesses={"agy": ("implement",)})
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
-    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-neon-medium"] == "paused_harness"
+    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-hydrogen-high"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
     assert writer.first_leg.id == "cx-gpt-6.2-sol-medium"
     # The pause removes OpenCode writers while the native GPT legs stay eligible.

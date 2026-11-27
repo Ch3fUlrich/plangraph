@@ -61,13 +61,14 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
+        ('agy-claude-sonnet-5-5-high', 'high'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
         ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
     ]
     assert ordered(result, 'review', writer_families=('claude',),
-                   diff_tokens=99999) == result[:6] + result[7:]
+                   diff_tokens=99999) == result[:6] + result[8:]
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
@@ -77,7 +78,8 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
         'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
         'agy-gemini-4-hydrogen-high', 'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
         'agy-gemini-4-neon-medium',
-        'claude-sonnet-5-5-high', 'mimo-v2.6-flash', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
+        'agy-claude-sonnet-5-5-high', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash',
+        'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
     assert signature(result) == [
@@ -87,6 +89,7 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
         ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('agy-gemini-4-neon-medium', 'medium'),
+        ('agy-claude-sonnet-5-5-high', 'high'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
         ('agy-gemini-4-argon-low', 'low'),
@@ -139,7 +142,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             omniroute-deepseek-flash omniroute-muse-spark agy-opus
             opencode-go-qwen3.8-max omniroute-grok-4.7 opencode-go-muse-spark
             opencode-console-muse-spark claude-haiku-5.5 agy-claude-sonnet-5-5-low
-            agy-claude-sonnet-5-5-medium agy-claude-sonnet-5-5-high agy-claude-opus-5-5-low
+            agy-claude-sonnet-5-5-medium agy-claude-opus-5-5-low
             agy-claude-opus-5-5-medium agy-claude-opus-5-5-high cx-gpt-6-luna-low
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
         'writer_family': 'agy-gemini-4-hydrogen-high agy-gemini-4-neon-medium agy-gemini-4-argon-low agy-gemini-4-argon-medium'}
@@ -149,6 +152,7 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
                                  ('gpt-6.2-sol-medium', 'medium'),
                                  ('mimo-v2.6-pro', None),
                                  ('opencode-deepseek-v4.1-flash-free', None),
+                                 ('agy-claude-sonnet-5-5-high', 'high'),
                                  ('claude-sonnet-5-5-high', 'high'),
                                  ('mimo-v2.6-flash', None)]
     assert catalog.keys() - {leg.id for leg in result} == dropped.keys()
