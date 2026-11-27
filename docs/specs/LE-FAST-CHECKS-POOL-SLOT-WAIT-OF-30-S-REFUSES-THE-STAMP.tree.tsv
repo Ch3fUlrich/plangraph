@@ -1,6 +1,6 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md	write	yes	E1 E2 E3 E4	new (<= 5 final lines)
-docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md	write	yes	E1 E2 E3 E4	new (<= 10 final lines)
+docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-REFUSES-THE-STAMP.md	write	yes	E1 E2 E3 E4	new (<= 10 final lines)
 rust/pg-spawnd/src/native_writer.rs	write	yes	E4	observed (<= 35 changed lines; <= 652 final lines)
 rust/pg-spawnd/src/native_writer_host.rs	write	yes	E4	observed (<= 25 changed lines; <= 565 final lines)
 rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E4	observed (<= 25 changed lines; <= 474 final lines)

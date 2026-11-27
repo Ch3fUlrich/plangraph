@@ -52,7 +52,7 @@
       ],
       "write_set": [
         "changelog.d/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md",
-        "docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md",
+        "docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-REFUSES-THE-STAMP.md",
         "rust/pg-spawnd/src/native_writer.rs",
         "rust/pg-spawnd/src/native_writer_host.rs",
         "rust/pg-spawnd/src/native_writer_host_review_tests.rs",

@@ -4,8 +4,8 @@ Outcome. A fast-checks run waits for a Cargo pool slot as long as its caller set
 
 - plan_source. Keeper item plangraph:LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP, 2026-11-25 (incident 2026-11-27 12:40Z), priority 10, D-7052.
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
-- card SHA-256. bc4cd19c1513ee7a314b43b125b5dd9d98701237c23a1e3214e954c5aa424d99
-- tree SHA-256. 54b2403534bdc9da27c140a9dd4a24773be29a0d5a1865c239aafff12d3b8cfa
+- card SHA-256. 58b1bebb4019e8366a4d9dba1451a3fbfd2b6e8a72d70c5395ffbdc3b2495533
+- tree SHA-256. b4ba54c1677e4624fd29d3e3fb1ed48742c89a92ef1fdd5e61d766345933b74d
 - evidence_after_deploy. After the CLI and pg-spawnd deploy, record one lane push or native writer log on the workstation or coding.vm that shows `waiting up to 900s for a slot` with the holder lines. If a wait runs out, record exit 75, no receipt for that head and the driver's `fast_checks.status` `busy` without a writer fix turn.
 
 ## Checked against base
@@ -75,7 +75,7 @@ Write X1-X7 first. On the base they fail to compile (new symbols) or show exit 1
 - `rust/pg-spawnd/src/native_writer_host.rs`: 550 lines, at most 15 lines added.
 - `rust/pg-spawnd/src/native_writer_host_review_tests.rs`: 449 lines, at most 25 lines added.
 - `rust/pg-spawnd/src/native_writer_stop_tests.rs`: 46 lines, at most 90 lines added.
-- `docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md`: new, at most 10 lines: the setting, the default, exit 75 and what callers do with it.
+- `docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-REFUSES-THE-STAMP.md`: new, at most 10 lines: the setting, the default, exit 75 and what callers do with it.
 - `changelog.d/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md`: new, at most 5 lines.
 
 ### Implementation
