@@ -354,3 +354,19 @@ fn pressure_keeps_leases_mounts_source_and_late_references() {
             .any(|row| row.path == path && row.reason == reason));
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn variant_fallback_keeps_the_newest_and_obeys_its_deadline() {
+    use crate::{cargo_pool::hygiene_variants, disk_hygiene::Candidate};
+    let tmp = tempfile::tempdir().unwrap();
+    let (slot, old) = review_slot(&primary(tmp.path()), "test");
+    let mut profile = Candidate::new(slot.join("debug"), slot.clone(), SystemTime::now()).unwrap();
+    profile.scope = slot.clone();
+    profile.lease_root = slot;
+    let found = hygiene_variants(&profile, || true);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, old);
+    assert!(found[0].variant);
+    assert!(hygiene_variants(&profile, || false).is_empty());
+}

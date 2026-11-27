@@ -13,6 +13,26 @@ pub(crate) fn file_identity(meta: &fs::Metadata) -> (u64, u64) {
     (meta.dev(), meta.ino())
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_artifact(
+    item: &crate::shared_target::Candidate,
+    end: std::time::Instant,
+) -> io::Result<Option<&'static str>> {
+    use crate::shared_target;
+    if !item.variant {
+        let found = shared_target::debug_artifacts(&item.scope)?;
+        return Ok((!found.contains(&item.path)).then_some("unrecognized"));
+    }
+    match shared_target::candidates_until(&item.scope, SystemTime::now(), || {
+        std::time::Instant::now() < end
+    }) {
+        Ok(found) => {
+            Ok((!found.iter().any(|(path, _)| path == &item.path)).then_some("unrecognized"))
+        }
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(Some("run_budget")),
+        Err(error) => Err(error),
+    }
+}
 /// Cargo's own markers, never the directory name: its CACHEDIR.TAG or the `.rustc_info.json`
 /// beside a profile directory.
 pub fn identified(target: &Path) -> bool {

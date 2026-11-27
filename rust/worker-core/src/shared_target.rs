@@ -130,6 +130,15 @@ pub(crate) const STALE_AFTER: Duration = Duration::from_secs(3600);
 
 /// Includes target-triple/profile layouts; never follows directory symlinks.
 pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBuf, u64)>> {
+    candidates_until(root, now, || true)
+}
+
+pub(crate) fn candidates_until(
+    root: &Path,
+    now: SystemTime,
+    room: impl Fn() -> bool,
+) -> io::Result<Vec<(PathBuf, u64)>> {
+    let scan = |path: &Path| crate::disk_hygiene::scan_until(path, &mut |_| room());
     let mut profiles = directories(root)?;
     for child in profiles.clone() {
         profiles.extend(directories(&child)?.into_iter().filter(|p| {
@@ -149,12 +158,12 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
             let mut crates: BTreeMap<(String, bool), Vec<_>> = BTreeMap::new();
             if kind == "incremental" {
                 for path in directories(&parent)? {
-                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
+                    let (size, newest) = scan(&path)?;
                     candidates.push((newest, path, size));
                 }
             } else {
                 for (name, path, compile) in build_units(&parent)? {
-                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
+                    let (size, newest) = scan(&path)?;
                     crates
                         .entry((name, compile))
                         .or_default()
@@ -188,6 +197,7 @@ pub struct Candidate {
     pub(crate) identity: (u64, u64),
     pub(crate) maintenance: bool,
     pub(crate) selector_scratch: bool,
+    pub(crate) variant: bool,
     pub(crate) cap: Option<PoolCap>,
 }
 
@@ -208,6 +218,7 @@ impl Candidate {
             identity,
             maintenance: false,
             selector_scratch: false,
+            variant: false,
             cap: None,
         })
     }

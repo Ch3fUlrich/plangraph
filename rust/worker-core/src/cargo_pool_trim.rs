@@ -174,6 +174,18 @@ mod artifact_walk {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool> {
+    use crate::cargo_pool::{lease_file_path, stale_reason, SlotLeaseRecord};
+    let bytes = match fs::read(lease_file_path(slot)?) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let row = serde_json::from_slice::<SlotLeaseRecord>(&bytes).ok();
+    Ok(!stale_reason(row.as_ref(), Some(state)))
+}
+
 /// A size that cannot be measured is skipped and the run alarms: the totals it feeds are a lower
 /// bound, never a complete-looking number.
 pub(crate) fn note_incomplete(report: &mut Report, path: &Path, error: &io::Error) {

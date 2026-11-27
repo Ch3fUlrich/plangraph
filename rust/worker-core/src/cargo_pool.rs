@@ -181,17 +181,6 @@ pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec
 pub use crate::idle_targets::hygiene_exclusions;
 
 #[cfg(target_os = "linux")]
-pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool> {
-    let bytes = match fs::read(lease_file_path(slot)?) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error),
-    };
-    let row = serde_json::from_slice::<SlotLeaseRecord>(&bytes).ok();
-    Ok(!stale_reason(row.as_ref(), Some(state)))
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn hygiene_cap_failure(
     item: &crate::shared_target::Candidate,
     projected: &crate::disk_hygiene::Projection,
@@ -228,6 +217,34 @@ pub(crate) fn hygiene_cap_failure(
         total = total.saturating_add(size);
     }
     Some(if complete { "cap_met" } else { "run_budget" })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_variants(
+    item: &crate::shared_target::Candidate,
+    room: impl Fn() -> bool,
+) -> Vec<crate::shared_target::Candidate> {
+    let lease = room().then(|| item.lease().ok()).flatten();
+    let Some(_lease) = lease else {
+        return vec![];
+    };
+    let variants = crate::shared_target::candidates_until(&item.scope, SystemTime::now(), room)
+        .unwrap_or_default();
+    variants
+        .into_iter()
+        .filter_map(|(path, _)| {
+            if !path.starts_with(&item.path) {
+                return None;
+            }
+            let identity = crate::disk_hygiene::file_identity(&path.symlink_metadata().ok()?);
+            Some(crate::shared_target::Candidate {
+                path,
+                identity,
+                variant: true,
+                ..item.clone()
+            })
+        })
+        .collect()
 }
 
 /// Trim every idle slot of the pool at `primary` to `cap_bytes` each, ordinary slots together to
@@ -318,7 +335,7 @@ fn run_terminal_or_missing(state: &Path, run_id: &str) -> bool {
     sweep_runs::terminal(status) && !survivors
 }
 
-fn stale_reason(record: Option<&SlotLeaseRecord>, state: Option<&Path>) -> bool {
+pub(crate) fn stale_reason(record: Option<&SlotLeaseRecord>, state: Option<&Path>) -> bool {
     let Some(rec) = record else {
         return true;
     };

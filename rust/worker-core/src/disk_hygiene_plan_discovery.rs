@@ -244,12 +244,10 @@ impl Layout<'_> {
         end: Instant,
     ) -> io::Result<Option<&'static str>> {
         if item.cap.is_some() {
-            let leased = crate::cargo_pool::hygiene_slot_leased(&item.scope, state)?;
-            let recognized =
-                crate::shared_target::debug_artifacts(&item.scope)?.contains(&item.path);
-            return Ok(leased
-                .then_some("leased")
-                .or_else(|| (!recognized).then_some("unrecognized")));
+            if crate::cargo_pool_trim::hygiene_slot_leased(&item.scope, state)? {
+                return Ok(Some("leased"));
+            }
+            return crate::main_target::hygiene_artifact(item, end);
         }
         if item.path == item.boundary.join("rust/target") {
             if !crate::main_target::identified(&item.path) {
@@ -324,7 +322,14 @@ impl Layout<'_> {
                     let Some(root) = trusted_slot(primary, slot)? else {
                         continue;
                     };
-                    for path in debug_artifacts(&root)? {
+                    let mut paths = debug_artifacts(&root)?;
+                    for name in ["debug", "release"] {
+                        let path = root.join(name);
+                        if path.is_dir() && !paths.contains(&path) {
+                            paths.push(path);
+                        }
+                    }
+                    for path in paths {
                         if !permit() {
                             return Ok(());
                         }

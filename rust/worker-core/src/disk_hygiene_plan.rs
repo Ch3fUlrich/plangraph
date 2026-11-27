@@ -224,6 +224,24 @@ pub fn reclaim(
             break;
         }
         let tick = now();
+        if !first {
+            let end = (tick + budget.refresh_for).min(budget.start + budget.pass_for);
+            let variants: Vec<_> = rows
+                .iter()
+                .filter(|(item, row)| {
+                    item.cap.is_some()
+                        && !item.variant
+                        && matches!(row.reason, Some("young" | "unsafe" | "unrecognized"))
+                        && proof
+                            .as_ref()
+                            .is_none_or(|held| held.item.lease_root != item.lease_root)
+                })
+                .flat_map(|(item, _)| crate::cargo_pool::hygiene_variants(item, || now() < end))
+                .filter(|item| seen.insert(item.path.clone()))
+                .map(|item| (item, Ranked::default()))
+                .collect();
+            rows.extend(variants);
+        }
         if first {
             rank_slices(&mut rows, budget, ranking_end, false, None);
         } else if !maintenance {
