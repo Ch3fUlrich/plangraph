@@ -1,21 +1,26 @@
 path	disposition	required	row IDs	label
-changelog.d/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md	write	yes	E1 E2	predicted (<= 3 changed lines; <= 3 final lines)
-docs/native-codex-writer.md	write	yes	E1 E2	predicted (<= 12 changed lines; <= 270 final lines)
+changelog.d/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md	write	yes	E1 E2 E3	predicted (<= 3 changed lines; <= 3 final lines)
+docs/native-codex-writer.md	write	yes	E1 E2	predicted (<= 14 changed lines; <= 272 final lines)
 docs/spawner/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md	write	yes	E1 E2	predicted (<= 14 changed lines; <= 14 final lines)
 rust/pg-spawnd/src/batch_writer_brief.rs	read	yes	E1	observed
 rust/pg-spawnd/src/errors.rs	read	yes	E1	observed
 rust/pg-spawnd/src/lane_admit.rs	write	yes	E1	predicted (<= 24 changed lines; <= 140 final lines)
 rust/pg-spawnd/src/lane_guard.rs	read	yes	E1	observed
 rust/pg-spawnd/src/lane_launch.rs	read	yes	E1	observed
-rust/pg-spawnd/src/launch_admission.rs	write	yes	E1 E2	predicted (<= 120 changed lines; <= 120 final lines)
-rust/pg-spawnd/src/launch_admission_tests.rs	write	yes	E1 E2	predicted (<= 110 changed lines; <= 110 final lines)
+rust/pg-spawnd/src/launch_admission.rs	write	yes	E1 E2	predicted (<= 200 changed lines; <= 200 final lines)
+rust/pg-spawnd/src/launch_admission_tests.rs	write	yes	E1 E2	predicted (<= 190 changed lines; <= 190 final lines)
 rust/pg-spawnd/src/main.rs	write	yes	E1	predicted (<= 1 changed lines; <= 134 final lines)
-rust/pg-spawnd/src/native_writer_commands.rs	write	yes	E2	predicted (<= 6 changed lines; <= 402 final lines)
+rust/pg-spawnd/src/native_writer_commands.rs	write	yes	E2	predicted (<= 14 changed lines; <= 410 final lines)
 rust/pg-spawnd/src/native_writer_context.rs	read	yes	E2	observed
-rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E2	predicted (<= 30 changed lines; <= 479 final lines)
-rust/pg-spawnd/src/native_writer_review.rs	read	yes	E2	observed
+rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E2	predicted (<= 60 changed lines; <= 509 final lines)
+rust/pg-spawnd/src/native_writer_review.rs	write	yes	E2	predicted (<= 40 changed lines; <= 660 final lines)
 rust/pg-spawnd/src/placement.rs	read	yes	E1	observed
+rust/pg-spawnd/src/records.rs	read	yes	E2	observed
 rust/pg-spawnd/tests/lane_admit.rs	write	yes	E1	predicted (<= 90 changed lines; <= 560 final lines)
 rust/pg-spawnd/tests/native_tools.rs	write	yes	E1	predicted (<= 4 changed lines; <= 153 final lines)
+rust/pg-spawnd/tests/native_writer.rs	read	yes	E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	read	yes	E3	observed
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E3	predicted (<= 6 changed lines; <= 332 final lines)
+rust/plangraph-cli/tests/feeder_batches.rs	write	yes	E3	predicted (<= 40 changed lines; <= 613 final lines)
 src/plangraph/spawner/overflow.py	read	yes	E1	observed
 src/plangraph/spawner/run_refusal.py	write	yes	E1	predicted (<= 2 changed lines; <= 123 final lines)
