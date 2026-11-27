@@ -14,8 +14,8 @@
       "max_final_lines": 282
     },
     "rust/plangraph-cli/src/feeder/adapters.rs": {
-      "max_changed_lines": 60,
-      "max_final_lines": 609
+      "max_changed_lines": 120,
+      "max_final_lines": 654
     },
     "rust/plangraph-cli/src/feeder/attempts.rs": {
       "max_changed_lines": 220,
@@ -34,12 +34,12 @@
       "max_final_lines": 424
     },
     "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
-      "max_changed_lines": 120,
-      "max_final_lines": 474
+      "max_changed_lines": 173,
+      "max_final_lines": 514
     },
     "rust/plangraph-cli/src/feeder/sources.rs": {
-      "max_changed_lines": 8,
-      "max_final_lines": 760
+      "max_changed_lines": 10,
+      "max_final_lines": 762
     },
     "rust/plangraph-cli/src/feeder/workflow.rs": {
       "max_changed_lines": 20,
@@ -54,8 +54,8 @@
       "max_final_lines": 488
     },
     "rust/plangraph-cli/tests/feeder_slots.rs": {
-      "max_changed_lines": 33,
-      "max_final_lines": 126
+      "max_changed_lines": 80,
+      "max_final_lines": 161
     },
     "rust/plangraph-cli/tests/feeder_support/mod.rs": {
       "max_changed_lines": 13,
@@ -68,7 +68,7 @@
   },
   "cards": {
     "LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH": {
-      "outcome": "Every feeder decision lists all admission refusals in check order. A readback pass ignores feeder.off and runs every check short of claiming. A host with no recent successful run starts one canary writer at a time, a host whose recent runs end barren pauses itself, and a tick stops starting slots before the unit's start timeout.",
+      "outcome": "Every feeder decision lists all admission refusals in check order. A readback pass ignores `feeder.off` and runs every check short of claiming. A host with no recent successful run starts one canary writer at a time, a host whose recent runs end barren pauses itself, and a tick stops starting slots before the unit's start timeout.",
       "read_set": [
         "deploy/systemd/pg-feeder.service",
         "deploy/systemd/pg-feeder.timer",
@@ -96,13 +96,13 @@
         "rust/plangraph-cli/tests/feeder_support/mod.rs",
         "rust/plangraph-cli/tests/feeder_transport.rs"
       ],
-      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib --test feeder --test feeder_slots --test feeder_transport",
       "risk_tags": [
         "live-step"
       ],
-      "estimate_tokens": 160000,
+      "estimate_tokens": 190000,
       "window_class": "1m",
-      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder --test feeder_batches --test feeder_contracts --test merge_close"
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder_batches --test feeder_contracts --test merge_close"
     }
   }
 }
