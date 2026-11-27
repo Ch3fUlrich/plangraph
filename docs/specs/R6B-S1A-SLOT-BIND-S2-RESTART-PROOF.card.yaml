@@ -1,0 +1,126 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/R6B-S1A-DAEMON-SLOT-BIND.md": {
+      "max_changed_lines": 11,
+      "max_final_lines": 11
+    },
+    "changelog.d/R6B-S1A-SLOT-BIND-S2-RESTART-PROOF.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 6
+    },
+    "rust/pg-spawnd/src/main.rs": {
+      "max_changed_lines": 4,
+      "max_final_lines": 136
+    },
+    "rust/pg-spawnd/src/reconcile_scope_proof.rs": {
+      "max_changed_lines": 130,
+      "max_final_lines": 130
+    },
+    "rust/pg-spawnd/src/reconcile_serve.rs": {
+      "max_changed_lines": 110,
+      "max_final_lines": 460
+    },
+    "rust/pg-spawnd/src/reconcile_serve_tests.rs": {
+      "max_changed_lines": 195,
+      "max_final_lines": 285
+    },
+    "rust/pg-spawnd/src/runs.rs": {
+      "max_changed_lines": 5,
+      "max_final_lines": 678
+    },
+    "rust/pg-spawnd/src/serve.rs": {
+      "max_changed_lines": 75,
+      "max_final_lines": 270
+    },
+    "rust/worker-core/src/run/group_windows.rs": {
+      "max_changed_lines": 2,
+      "max_final_lines": 316
+    },
+    "rust/worker-core/src/run/mod.rs": {
+      "max_changed_lines": 3,
+      "max_final_lines": 47
+    },
+    "rust/worker-core/src/run/monitor.rs": {
+      "max_changed_lines": 21,
+      "max_final_lines": 301
+    },
+    "rust/worker-core/src/run/slot_bind.rs": {
+      "max_changed_lines": 450,
+      "max_final_lines": 450
+    },
+    "rust/worker-core/src/run/slot_bind_tests.rs": {
+      "max_changed_lines": 770,
+      "max_final_lines": 770
+    },
+    "rust/worker-core/src/run/supervise.rs": {
+      "max_changed_lines": 72,
+      "max_final_lines": 306
+    },
+    "rust/worker-core/src/run/supervisor.rs": {
+      "max_changed_lines": 100,
+      "max_final_lines": 320
+    },
+    "rust/worker-core/src/slots/liveness.rs": {
+      "max_changed_lines": 26,
+      "max_final_lines": 122
+    },
+    "rust/worker-core/src/slots/liveness/linux.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 278
+    },
+    "rust/worker-core/src/slots/liveness/tests.rs": {
+      "max_changed_lines": 50,
+      "max_final_lines": 244
+    },
+    "rust/worker-core/src/slots/liveness/windows.rs": {
+      "max_changed_lines": 35,
+      "max_final_lines": 210
+    }
+  },
+  "cards": {
+    "R6B-S1A-SLOT-BIND-S2-RESTART-PROOF": {
+      "outcome": "The daemon slot bind of lane batch167-feeder-s2-slot-bind-r6 lands on main with its five open review findings fixed: release only on proven owner death with a matching queued record, the real optional group persisted at launch, adopted runs release their slots also across restart, one durable ticket per run, and Windows serving binds and proves pre-exec rows.",
+      "read_set": [
+        "rust/pg-spawnd/src/reconcile_store.rs",
+        "rust/pg-spawnd/tests/reconcile_serve.rs",
+        "rust/pg-spawnd/tests/reconcile_startup_tests.rs",
+        "rust/worker-core/src/run/group.rs",
+        "rust/worker-core/src/run/group_unix.rs",
+        "rust/worker-core/src/run/record.rs",
+        "rust/worker-core/src/run/supervisor_tests.rs",
+        "rust/worker-core/src/slots.rs",
+        "rust/worker-core/src/slots/reclaim/tests.rs",
+        "rust/worker-core/src/sweep_runs.rs"
+      ],
+      "write_set": [
+        "changelog.d/R6B-S1A-DAEMON-SLOT-BIND.md",
+        "changelog.d/R6B-S1A-SLOT-BIND-S2-RESTART-PROOF.md",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/reconcile_scope_proof.rs",
+        "rust/pg-spawnd/src/reconcile_serve.rs",
+        "rust/pg-spawnd/src/reconcile_serve_tests.rs",
+        "rust/pg-spawnd/src/runs.rs",
+        "rust/pg-spawnd/src/serve.rs",
+        "rust/worker-core/src/run/group_windows.rs",
+        "rust/worker-core/src/run/mod.rs",
+        "rust/worker-core/src/run/monitor.rs",
+        "rust/worker-core/src/run/slot_bind.rs",
+        "rust/worker-core/src/run/slot_bind_tests.rs",
+        "rust/worker-core/src/run/supervise.rs",
+        "rust/worker-core/src/run/supervisor.rs",
+        "rust/worker-core/src/slots/liveness.rs",
+        "rust/worker-core/src/slots/liveness/linux.rs",
+        "rust/worker-core/src/slots/liveness/tests.rs",
+        "rust/worker-core/src/slots/liveness/windows.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --lib run::slot_bind_tests && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --lib slots::liveness && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --bin pg-spawnd reconcile_serve::tests && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --bin pg-spawnd serve::tests",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 70000,
+      "window_class": "256k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core -p pg-spawnd"
+    }
+  }
+}
