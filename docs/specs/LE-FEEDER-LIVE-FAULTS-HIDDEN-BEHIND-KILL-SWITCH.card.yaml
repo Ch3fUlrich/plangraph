@@ -1,0 +1,108 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 6
+    },
+    "deploy/feeder/policy.toml": {
+      "max_changed_lines": 4,
+      "max_final_lines": 21
+    },
+    "docs/writer-feeder.md": {
+      "max_changed_lines": 26,
+      "max_final_lines": 282
+    },
+    "rust/plangraph-cli/src/feeder/adapters.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 609
+    },
+    "rust/plangraph-cli/src/feeder/attempts.rs": {
+      "max_changed_lines": 220,
+      "max_final_lines": 220
+    },
+    "rust/plangraph-cli/src/feeder/capacity.rs": {
+      "max_changed_lines": 4,
+      "max_final_lines": 213
+    },
+    "rust/plangraph-cli/src/feeder/mod.rs": {
+      "max_changed_lines": 93,
+      "max_final_lines": 395
+    },
+    "rust/plangraph-cli/src/feeder/runtime.rs": {
+      "max_changed_lines": 80,
+      "max_final_lines": 424
+    },
+    "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
+      "max_changed_lines": 120,
+      "max_final_lines": 474
+    },
+    "rust/plangraph-cli/src/feeder/sources.rs": {
+      "max_changed_lines": 8,
+      "max_final_lines": 760
+    },
+    "rust/plangraph-cli/src/feeder/workflow.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 341
+    },
+    "rust/plangraph-cli/src/merge_close.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 745
+    },
+    "rust/plangraph-cli/tests/feeder.rs": {
+      "max_changed_lines": 46,
+      "max_final_lines": 488
+    },
+    "rust/plangraph-cli/tests/feeder_slots.rs": {
+      "max_changed_lines": 33,
+      "max_final_lines": 126
+    },
+    "rust/plangraph-cli/tests/feeder_support/mod.rs": {
+      "max_changed_lines": 13,
+      "max_final_lines": 211
+    },
+    "rust/plangraph-cli/tests/feeder_transport.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 143
+    }
+  },
+  "cards": {
+    "LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH": {
+      "outcome": "Every feeder decision lists all admission refusals in check order. A readback pass ignores feeder.off and runs every check short of claiming. A host with no recent successful run starts one canary writer at a time, a host whose recent runs end barren pauses itself, and a tick stops starting slots before the unit's start timeout.",
+      "read_set": [
+        "deploy/systemd/pg-feeder.service",
+        "deploy/systemd/pg-feeder.timer",
+        "rust/plangraph-cli/src/feeder/selection.rs",
+        "rust/plangraph-cli/src/feeder/windows_ram.rs",
+        "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/store_card_updates.py",
+        "src/plangraph/keeper/store_read.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md",
+        "deploy/feeder/policy.toml",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "rust/plangraph-cli/src/feeder/attempts.rs",
+        "rust/plangraph-cli/src/feeder/capacity.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
+        "rust/plangraph-cli/src/feeder/sources.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/plangraph-cli/src/merge_close.rs",
+        "rust/plangraph-cli/tests/feeder.rs",
+        "rust/plangraph-cli/tests/feeder_slots.rs",
+        "rust/plangraph-cli/tests/feeder_support/mod.rs",
+        "rust/plangraph-cli/tests/feeder_transport.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 160000,
+      "window_class": "1m",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder --test feeder_batches --test feeder_contracts --test merge_close"
+    }
+  }
+}

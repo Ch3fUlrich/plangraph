@@ -1,0 +1,24 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md	write	yes	E1 E2 E3 E4	new (<= 6 final lines)
+deploy/feeder/policy.toml	write	yes	E1 E3	observed (<= 3 added lines; <= 21 final lines)
+deploy/systemd/pg-feeder.service	read	yes	E4	observed
+deploy/systemd/pg-feeder.timer	read	yes	E4	observed
+docs/writer-feeder.md	write	yes	E1 E2 E3 E4	observed (<= 20 added lines; <= 282 final lines)
+rust/plangraph-cli/src/feeder/adapters.rs	write	yes	E4	observed (<= 45 added lines; <= 609 final lines)
+rust/plangraph-cli/src/feeder/attempts.rs	write	yes	E1 E3	new (<= 220 final lines)
+rust/plangraph-cli/src/feeder/capacity.rs	write	yes	E2	observed (<= 3 added lines; <= 213 final lines)
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E3	observed (<= 70 added lines; <= 395 final lines)
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E2	observed (<= 60 added lines; <= 424 final lines)
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E2	observed (<= 90 added lines; <= 474 final lines)
+rust/plangraph-cli/src/feeder/selection.rs	read	yes	E1 E2 E3 E4	observed
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E2	observed (<= 6 added lines; <= 760 final lines)
+rust/plangraph-cli/src/feeder/windows_ram.rs	read	yes	E2	observed
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E4	observed (<= 15 added lines; <= 341 final lines)
+rust/plangraph-cli/src/merge_close.rs	write	yes	E4	observed (<= 10 added lines; <= 745 final lines)
+rust/plangraph-cli/tests/feeder.rs	write	yes	E1 E2 E3 E4	observed (<= 35 added lines; <= 488 final lines)
+rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E4	observed (<= 25 added lines; <= 126 final lines)
+rust/plangraph-cli/tests/feeder_support/mod.rs	write	yes	E4	observed (<= 10 added lines; <= 211 final lines)
+rust/plangraph-cli/tests/feeder_transport.rs	write	yes	E4	observed (<= 15 added lines; <= 143 final lines)
+src/plangraph/keeper/api_routes.py	read	yes	E3	observed
+src/plangraph/keeper/store_card_updates.py	read	yes	E3	observed
+src/plangraph/keeper/store_read.py	read	yes	E2	observed
