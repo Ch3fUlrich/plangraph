@@ -1,0 +1,71 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1 E3	observed
+.filesize-baseline	read	yes	E1 E2 E3 E4	observed
+AGENTS.md	read	yes	E1 E2 E3 E4	observed
+changelog.d/WS-WORK-DRIVES-BUILD-POOL.md	write	yes	E1 E2 E3 E4	predicted (<= 12 changed lines; <= 12 final lines)
+deploy/host-ready/host-ready.service	read	yes	E3	observed
+deploy/systemd/README.md	write	yes	E3 E4	predicted (<= 45 changed lines; <= 283 final lines)
+deploy/systemd/disk-hygiene.env.example	write	yes	E4	predicted (<= 12 changed lines; <= 30 final lines)
+deploy/systemd/pg-disk-hygiene.service	write	yes	E4	predicted (<= 4 changed lines; <= 14 final lines)
+deploy/systemd/pg-feeder.service	read	yes	E1	observed
+docs/SPAWNER.md	write	yes	E1 E3	predicted (<= 24 changed lines; <= 692 final lines)
+docs/ci-gate.md	read	yes	E4	observed
+docs/host-tools.md	read	yes	E3 E4	observed
+docs/operations/spawner-disk-admission.md	write	yes	E1 E2 E3 E4	predicted (<= 80 changed lines; <= 191 final lines)
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E3	observed
+rust/pg-spawnd/src/cli.rs	read	yes	E3	observed
+rust/pg-spawnd/src/hand_run.rs	write	yes	E1	predicted (<= 70 changed lines; <= 319 final lines)
+rust/pg-spawnd/src/host_tools.rs	write	yes	E3 E4	predicted (<= 90 changed lines; <= 236 final lines)
+rust/pg-spawnd/src/native_writer_commands.rs	write	yes	E1	predicted (<= 80 changed lines; <= 478 final lines)
+rust/pg-spawnd/src/native_writer_host.rs	write	yes	E1 E2	predicted (<= 60 changed lines; <= 610 final lines)
+rust/pg-spawnd/src/native_writer_review.rs	write	yes	E1	predicted (<= 18 changed lines; <= 644 final lines)
+rust/pg-spawnd/src/native_writer_sandbox.rs	read	yes	E1	observed
+rust/pg-spawnd/src/native_writer_session.rs	write	yes	E1 E4	predicted (<= 35 changed lines; <= 203 final lines)
+rust/pg-spawnd/src/session/cargo_env.rs	write	yes	E1	predicted (<= 60 changed lines; <= 160 final lines)
+rust/pg-spawnd/src/session/mod.rs	write	yes	E1	predicted (<= 12 changed lines; <= 406 final lines)
+rust/pg-spawnd/tests/host_tools.rs	write	yes	E3	predicted (<= 95 changed lines; <= 165 final lines)
+rust/pg-spawnd/tests/native_writer.rs	write	yes	E1	predicted (<= 75 changed lines; <= 619 final lines)
+rust/plangraph-cli/Cargo.toml	read	yes	E2 E4	observed
+rust/plangraph-cli/src/bin/host-sync.rs	read	yes	E4	observed
+rust/plangraph-cli/src/fast_check_target.rs	write	yes	E2	predicted (<= 75 changed lines; <= 411 final lines)
+rust/plangraph-cli/src/fast_check_worktree.rs	write	yes	E2	predicted (<= 35 changed lines; <= 170 final lines)
+rust/plangraph-cli/src/fast_checks.rs	write	yes	E2	predicted (<= 35 changed lines; <= 535 final lines)
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E1	observed
+rust/plangraph-cli/src/feeder/sources.rs	read	yes	E1	observed
+rust/plangraph-cli/src/host_sync_release.rs	write	yes	E4	predicted (<= 45 changed lines; <= 421 final lines)
+rust/plangraph-cli/src/main.rs	read	yes	E2	observed
+rust/worker-core/Cargo.toml	read	yes	E1 E3 E4	observed
+rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E4	predicted (<= 45 changed lines; <= 603 final lines)
+rust/worker-core/src/bin/pg-host-readiness.rs	write	yes	E3	predicted (<= 16 changed lines; <= 133 final lines)
+rust/worker-core/src/cargo_build_target.rs	write	yes	E1 E2 E3 E4	predicted (<= 325 changed lines; <= 325 final lines)
+rust/worker-core/src/cargo_cache.rs	write	yes	E1 E3 E4	predicted (<= 100 changed lines; <= 413 final lines)
+rust/worker-core/src/cargo_pool.rs	write	yes	E2 E4	predicted (<= 30 changed lines; <= 440 final lines)
+rust/worker-core/src/cargo_pool_trim.rs	write	yes	E2 E4	predicted (<= 30 changed lines; <= 464 final lines)
+rust/worker-core/src/disk_hygiene.rs	read	yes	E4	observed
+rust/worker-core/src/disk_hygiene_plan.rs	read	yes	E4	observed
+rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E4	predicted (<= 60 changed lines; <= 520 final lines)
+rust/worker-core/src/disk_runtime.rs	write	yes	E4	predicted (<= 45 changed lines; <= 639 final lines)
+rust/worker-core/src/host_readiness.rs	write	yes	E3	predicted (<= 45 changed lines; <= 438 final lines)
+rust/worker-core/src/idle_targets.rs	read	yes	E4	observed
+rust/worker-core/src/lib.rs	write	yes	E1 E2 E3 E4	predicted (<= 4 changed lines; <= 153 final lines)
+rust/worker-core/src/private_targets.rs	read	yes	E4	observed
+rust/worker-core/src/reap_journal.rs	read	yes	E4	observed
+rust/worker-core/src/reaper.rs	read	yes	E4	observed
+rust/worker-core/src/shared_target.rs	read	yes	E4	observed
+rust/worker-core/src/work_disks.rs	write	yes	E1 E2 E3 E4	predicted (<= 55 changed lines; <= 184 final lines)
+rust/worker-core/tests/cargo_pool.rs	read	yes	E2	observed
+rust/worker-core/tests/push_shared_target.rs	read	yes	E3 E4	observed
+rust/worker-core/tests/work_disks.rs	write	yes	E1 E2 E3 E4	predicted (<= 170 changed lines; <= 228 final lines)
+src/plangraph/fleet_snapshot.py	read	yes	E3	observed
+src/plangraph/spawner/host_ready.py	write	yes	E1 E3 E4	predicted (<= 160 changed lines; <= 780 final lines)
+src/plangraph/spawner/host_ready_source.py	write	yes	E1 E3 E4	predicted (<= 185 changed lines; <= 676 final lines)
+src/plangraph/spawner/overflow.py	write	yes	E1	predicted (<= 95 changed lines; <= 780 final lines)
+src/plangraph/spawner/runner.py	read	yes	E1	observed
+src/plangraph/spawner/seat_spawn.py	write	yes	E1	predicted (<= 85 changed lines; <= 780 final lines)
+src/plangraph/spawner/service.py	read	yes	E1	observed
+tests/test_cargo_data_drive_target.py	write	yes	E3	predicted (<= 110 changed lines; <= 145 final lines)
+tests/test_host_ready.py	read	yes	E3	observed
+tests/test_preflight.py	read	yes	E2 E4	observed
+tools/check_changelog_docs.py	read	yes	E4	observed
+tools/check_file_size.py	read	yes	E4	observed
+tools/preflight.py	write	yes	E2 E4	predicted (<= 120 changed lines; <= 780 final lines)
