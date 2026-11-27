@@ -436,7 +436,7 @@ fn selector_scratch_uses_its_run_lease_for_final_proof() {
     let marker = target.join(".lease");
     fs::write(&marker, b"plangraph-affected-pytest-v1\n").unwrap();
     let now = SystemTime::now();
-    for path in [&target, &marker] {
+    for path in [target, marker.as_path()] {
         fs::File::open(path)
             .unwrap()
             .set_modified(now - Duration::from_secs(3600))
