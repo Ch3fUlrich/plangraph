@@ -1,18 +1,19 @@
 path	disposition	required	row IDs	label
 changelog.d/FEEDER-RANKS-BY-GOAL-AND-CAPS-INDEPENDENT-OF-HARDWARE.md	write	yes	E1 E2 E3 E4	new (<= 6 final lines)
-deploy/feeder/policy.toml	write	yes	E2	observed (<= 8 added lines; <= 29 final lines after the LIVE-FAULTS card)
+deploy/feeder/policy.toml	write	yes	E2	observed (<= 4 added lines; <= 25 final lines after the LIVE-FAULTS card)
 docs/specs/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md	read	yes	E1 E2 E3 E4	observed
-docs/writer-feeder.md	write	yes	E1 E2 E3 E4	observed (<= 20 added lines; <= 302 final lines after the LIVE-FAULTS card)
+docs/writer-feeder.md	write	yes	E1 E2 E3 E4	observed (<= 15 added lines; <= 297 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E4	observed
 rust/plangraph-cli/src/feeder/attempts.rs	write	yes	E2	predicted (created by LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH; <= 70 added lines; <= 290 final lines)
 rust/plangraph-cli/src/feeder/capacity.rs	write	yes	E1	observed (<= 15 added lines; <= 228 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/src/feeder/mod.rs	write	yes	E2	observed (<= 40 added lines; <= 435 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E2	observed (<= 25 added lines; <= 420 final lines after the LIVE-FAULTS card)
 rust/plangraph-cli/src/feeder/quota.rs	read	yes	E2	observed
-rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E4	observed (<= 25 added lines; <= 449 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E1	observed (<= 45 added lines; <= 519 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E4	observed (<= 20 added lines; <= 444 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E1 E4	observed (<= 80 added lines; <= 594 final lines after the LIVE-FAULTS card)
 rust/plangraph-cli/src/feeder/selection.rs	write	yes	E3	observed (<= 2 added lines; <= 266 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/src/feeder/sources.rs	write	yes	E4	observed (<= 4 added lines; <= 764 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E3	observed (<= 30 added lines; <= 371 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/tests/feeder.rs	write	yes	E2	observed (<= 50 added lines; <= 538 final lines after the LIVE-FAULTS card)
-rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E3	observed (<= 90 added lines; <= 216 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E4	observed (<= 4 added lines; <= 766 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E3	observed (<= 25 added lines; <= 366 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/tests/feeder.rs	write	yes	E2	observed (<= 30 added lines; <= 518 final lines after the LIVE-FAULTS card)
+rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E3	observed (<= 60 added lines; <= 221 final lines after the LIVE-FAULTS card)
 rust/plangraph-cli/tests/feeder_support/mod.rs	write	yes	E3	observed (<= 10 added lines; <= 221 final lines after the LIVE-FAULTS card)
 src/plangraph/keeper/store_card_updates.py	read	yes	E2	observed

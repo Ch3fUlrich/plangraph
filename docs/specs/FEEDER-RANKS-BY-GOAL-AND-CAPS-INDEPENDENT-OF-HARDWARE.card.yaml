@@ -6,12 +6,12 @@
       "max_final_lines": 6
     },
     "deploy/feeder/policy.toml": {
-      "max_changed_lines": 12,
-      "max_final_lines": 29
+      "max_changed_lines": 8,
+      "max_final_lines": 25
     },
     "docs/writer-feeder.md": {
-      "max_changed_lines": 26,
-      "max_final_lines": 302
+      "max_changed_lines": 20,
+      "max_final_lines": 297
     },
     "rust/plangraph-cli/src/feeder/attempts.rs": {
       "max_changed_lines": 90,
@@ -22,16 +22,16 @@
       "max_final_lines": 228
     },
     "rust/plangraph-cli/src/feeder/mod.rs": {
-      "max_changed_lines": 53,
-      "max_final_lines": 435
+      "max_changed_lines": 33,
+      "max_final_lines": 420
     },
     "rust/plangraph-cli/src/feeder/runtime.rs": {
-      "max_changed_lines": 33,
-      "max_final_lines": 449
+      "max_changed_lines": 26,
+      "max_final_lines": 444
     },
     "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
-      "max_changed_lines": 60,
-      "max_final_lines": 519
+      "max_changed_lines": 106,
+      "max_final_lines": 594
     },
     "rust/plangraph-cli/src/feeder/selection.rs": {
       "max_changed_lines": 6,
@@ -39,19 +39,19 @@
     },
     "rust/plangraph-cli/src/feeder/sources.rs": {
       "max_changed_lines": 8,
-      "max_final_lines": 764
+      "max_final_lines": 766
     },
     "rust/plangraph-cli/src/feeder/workflow.rs": {
-      "max_changed_lines": 40,
-      "max_final_lines": 371
+      "max_changed_lines": 33,
+      "max_final_lines": 366
     },
     "rust/plangraph-cli/tests/feeder.rs": {
-      "max_changed_lines": 66,
-      "max_final_lines": 538
+      "max_changed_lines": 40,
+      "max_final_lines": 518
     },
     "rust/plangraph-cli/tests/feeder_slots.rs": {
-      "max_changed_lines": 120,
-      "max_final_lines": 216
+      "max_changed_lines": 80,
+      "max_final_lines": 221
     },
     "rust/plangraph-cli/tests/feeder_support/mod.rs": {
       "max_changed_lines": 14,
@@ -60,9 +60,10 @@
   },
   "cards": {
     "FEEDER-RANKS-BY-GOAL-AND-CAPS-INDEPENDENT-OF-HARDWARE": {
-      "outcome": "Feeder admission is bounded by configured caps that do not depend on hardware: the per-host policy cap binds below the RAM slots, and there are a fleet-wide writer cap, an hourly token budget and a landing backlog bound. An item family whose last three runs on any host were barren is skipped. Every decision reports category, caps, budget and backlog.",
+      "outcome": "Feeder admission is bounded by configured limits that do not depend on hardware. The per-host policy cap binds below the RAM slots, and a landing backlog bound refuses new writers while too much work waits to land. An item family whose last three runs on any host were barren is skipped. Every decision reports category, cap and backlog. The fleet-wide writer cap and the hourly token budget need a shared reservation in the keeper and go to their own item (see Open points).",
       "read_set": [
         "docs/specs/LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.md",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
         "rust/plangraph-cli/src/feeder/quota.rs",
         "src/plangraph/keeper/store_card_updates.py"
       ],
@@ -82,14 +83,14 @@
         "rust/plangraph-cli/tests/feeder_slots.rs",
         "rust/plangraph-cli/tests/feeder_support/mod.rs"
       ],
-      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib --test feeder --test feeder_slots",
       "risk_tags": [
         "live-step",
         "config"
       ],
-      "estimate_tokens": 140000,
-      "window_class": "1m",
-      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder --test feeder_batches --test feeder_contracts"
+      "estimate_tokens": 110000,
+      "window_class": "256k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder_batches --test feeder_contracts"
     }
   }
 }
