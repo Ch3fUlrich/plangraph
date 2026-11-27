@@ -3,7 +3,7 @@
 Outcome. The daemon slot bind of lane `batch167-feeder-s2-slot-bind-r6` lands on main with its five open review findings fixed: release only on proven owner death with a matching queued record, the real optional group persisted at launch, adopted runs release their slots also across restart, one durable ticket per run, and Windows serving binds and proves pre-exec rows.
 
 - plan_source. Keeper item plangraph:R6B-S1A-SLOT-BIND-S2-RESTART-PROOF, 2026-11-25 (rule 3.35 stop of b167 at 00:35Z), priority 10. Parent slice plangraph:R6B-S1A-DAEMON-SLOT-BIND (open, priority 9), whose code exists only on that lane.
-- base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d (origin/main). Port source: `origin/lane/batch167-feeder-s2-slot-bind-r6` at df9e7fab0, merge base a3b7fb8fe.
+- base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d (origin/main). Port source: lane `batch167-feeder-s2-slot-bind-r6` on origin at df9e7fab0, merge base a3b7fb8fe.
 - card SHA-256. 46ae8a5717d5604765366695b6bb23732abb8d38d048901eab969dc2c0f4a7c5
 - tree SHA-256. 72443de1139a99a48df60ba5caa8b16f3ddfe397e78b53885872e8d8740a3ba7
 - evidence_after_deploy. On one host with `PLANGRAPH_RELIABILITY_RECONCILE=on` (the workstation guest first, rule 3.112 (1)), record `slots.json` while a daemon run waits and while it runs. Then kill the daemon between bind and launch with an operator-approved fault drill, restart it, and record the released row. Finally record one ended adopted run whose row is gone after the next restart. Windows serving with reconcile on is a separate host step with its own D-id.
