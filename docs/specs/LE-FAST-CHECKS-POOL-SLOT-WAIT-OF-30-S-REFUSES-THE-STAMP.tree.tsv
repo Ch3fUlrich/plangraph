@@ -11,6 +11,7 @@ rust/pg-spawnd/src/writer_control.rs	read	yes	E4	observed
 rust/plangraph-cli/src/fast_check_target.rs	write	yes	E1	observed (<= 70 changed lines; <= 396 final lines)
 rust/plangraph-cli/src/fast_check_worktree.rs	write	yes	E2	observed (<= 20 changed lines; <= 150 final lines)
 rust/plangraph-cli/src/fast_checks.rs	write	yes	E2	observed (<= 60 changed lines; <= 590 final lines)
+rust/plangraph-cli/tests/fast_checks.rs	write	yes	E1 E2	observed (<= 70 changed lines; <= 758 final lines)
 rust/worker-core/src/cargo_pool.rs	write	yes	E3	observed (<= 30 changed lines; <= 451 final lines)
 rust/worker-core/src/fast_check_stamp.rs	write	yes	E2	observed (<= 3 changed lines; <= 777 final lines)
 rust/worker-core/tests/cargo_pool.rs	write	yes	E3	observed (<= 30 changed lines; <= 313 final lines)
