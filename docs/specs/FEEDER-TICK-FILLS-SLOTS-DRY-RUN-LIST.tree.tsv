@@ -1,0 +1,11 @@
+path	disposition	required	row IDs	label
+changelog.d/FEEDER-TICK-FILLS-SLOTS-DRY-RUN-LIST.md	write	yes	E1 E2	observed
+docs/writer-feeder.md	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	read	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/selection.rs	read	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_batches.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_contracts.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_support/mod.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder_transport.rs	read	yes	E1 E2	observed

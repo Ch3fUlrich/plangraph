@@ -1,0 +1,14 @@
+path	disposition	required	row IDs	label
+changelog.d/FEEDER-HAND-LANES-COUNT-AND-HOLD.md	write	yes	E1 E2	observed
+docs/SPAWNER.md	write	yes	E1 E2	observed
+docs/writer-feeder.md	write	yes	E1 E2	observed
+rust/pg-spawnd/src/session/external_run.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/session/storage.rs	read	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/lanes.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/lanes/tests.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/selection.rs	read	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E1 E2	observed
+src/plangraph/spawner/remote_ps.py	write	yes	E1 E2	observed
+tests/test_spawner_remote_ps.py	write	yes	E1 E2	observed

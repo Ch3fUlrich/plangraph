@@ -1,0 +1,12 @@
+path	disposition	required	row IDs	label
+changelog.d/FEEDER-QUOTA-CENTER-SNAPSHOT-READ.md	write	yes	E1 E2	observed
+deploy/feeder/policy.toml	write	yes	E1 E2	observed
+docs/writer-feeder.md	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/quota.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/quota/tests.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E1 E2	observed
+src/plangraph/routing_support/quota_snapshots.py	read	yes	E1 E2	observed

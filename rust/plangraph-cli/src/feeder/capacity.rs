@@ -1,5 +1,6 @@
-use super::{writer_limit, Env, HostFacts, Policy};
+use super::{windows_ram, writer_limit, Env, HostFacts, Policy};
 use pg_worker_core::{disk_runtime, host_probe};
+use std::io::Read;
 use std::path::Path;
 
 /// What a live sample says about CPU, beside the host facts: the effective cpu count, the
@@ -15,7 +16,7 @@ pub(super) struct Cpu {
 /// Only a missing `pressure/cpu` means "no PSI": a present file that is malformed, or that
 /// cannot be opened (permission denied, a non-directory parent), still belongs to a PSI
 /// kernel, so load must not pace in its place.
-fn psi_present<T>(opened: std::io::Result<T>) -> bool {
+fn psi_present<T>(opened: &std::io::Result<T>) -> bool {
     !matches!(opened, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 /// Opens a file for the PSI check; tests replace it to inject an open error.
@@ -24,13 +25,35 @@ pub(super) fn open_psi(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct Measured {
+    pub cpu: Cpu,
+    pub wsl_free_ram_bytes: u64,
+    pub windows: Option<windows_ram::WindowsRam>,
+}
+
+/// Percent of the last five minutes during which at least one task waited for CPU.
+fn parse_cpu_pressure(text: &str) -> Option<f64> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("some "))?
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("avg300="))?
+        .parse()
+        .ok()
+        .filter(|pressure| (0.0..=100.0).contains(pressure))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sample(
     host: &str,
     disk_root: &Path,
     env: &Env,
     proc_root: &Path,
     open: OpenPsi,
-) -> Result<(HostFacts, Cpu), String> {
+    policy: &Policy,
+    state: &Path,
+    dry: bool,
+) -> Result<(HostFacts, Measured), String> {
     let metrics = host_probe::probe_load_optional(host, proc_root)
         .map_err(|e| format!("capacity probe: {e}"))?;
     let disk = |path: &Path| {
@@ -44,12 +67,38 @@ pub(super) fn sample(
     {
         free_disk_bytes = free_disk_bytes.min(disk(target)?);
     }
+    let observed_at = (metrics.ts_ms / 1000) as i64;
+    let wsl_free_ram_bytes = metrics.mem_available_mb.saturating_mul(1024 * 1024);
+    let version = std::fs::read_to_string(proc_root.join("version")).unwrap_or_default();
+    let windows = if windows_ram::is_wsl(&version, env.get("WSL_INTEROP").map(String::as_str)) {
+        Some(windows_ram::read_with_cache(
+            || windows_ram::read_powershell(env),
+            state,
+            observed_at,
+            policy.facts_max_age_seconds,
+            dry,
+        )?)
+    } else {
+        None
+    };
+    let psi = open(&proc_root.join("pressure/cpu"));
+    let has_psi = psi_present(&psi);
+    let cpu_pressure_avg300 = psi.ok().and_then(|mut file| {
+        let mut text = String::new();
+        file.read_to_string(&mut text).ok()?;
+        parse_cpu_pressure(&text)
+    });
     let facts = HostFacts {
         host: host.to_owned(),
-        free_ram_bytes: metrics.mem_available_mb.saturating_mul(1024 * 1024),
+        free_ram_bytes: windows_ram::effective_free(
+            wsl_free_ram_bytes,
+            windows,
+            policy.windows_ram_floor_bytes,
+        ),
         free_disk_bytes,
         quota_remaining_percent: None,
-        observed_at: (metrics.ts_ms / 1000) as i64,
+        cpu_pressure_avg300,
+        observed_at,
         running_writers: 0,
         kill_switch: false,
         now: 0,
@@ -57,9 +106,16 @@ pub(super) fn sample(
     let cpu = Cpu {
         cpus: metrics.cpus,
         load1: metrics.load1,
-        psi: psi_present(open(&proc_root.join("pressure/cpu"))),
+        psi: has_psi,
     };
-    Ok((facts, cpu))
+    Ok((
+        facts,
+        Measured {
+            cpu,
+            wsl_free_ram_bytes,
+            windows,
+        },
+    ))
 }
 
 /// The writer budget of one live sample: the slots free RAM allows, the pacing that load adds,
@@ -124,15 +180,31 @@ mod tests {
 
     #[test]
     fn only_a_missing_pressure_file_means_no_psi() {
-        assert!(!psi_present::<()>(Err(ErrorKind::NotFound.into())));
+        assert!(!psi_present::<()>(&Err(ErrorKind::NotFound.into())));
         for kind in [
             ErrorKind::PermissionDenied,
             ErrorKind::InvalidData,
             ErrorKind::NotADirectory,
             ErrorKind::Other,
         ] {
-            assert!(psi_present::<()>(Err(Error::from(kind))), "{kind:?}");
+            assert!(psi_present::<()>(&Err(Error::from(kind))), "{kind:?}");
         }
-        assert!(psi_present(Ok(())));
+        assert!(psi_present(&Ok(())));
+    }
+
+    #[test]
+    fn psi_text_gives_some_avg300_and_other_text_gives_none() {
+        let text =
+            "some avg10=63.12 avg60=65.26 avg300=70.15 total=21880727490\nfull avg300=0.00\n";
+        assert_eq!(parse_cpu_pressure(text), Some(70.15));
+        for bad in [
+            "",
+            "full avg300=3.0",
+            "some avg10=1.0",
+            "some avg300=NaN",
+            "some avg300=101",
+        ] {
+            assert_eq!(parse_cpu_pressure(bad), None);
+        }
     }
 }
