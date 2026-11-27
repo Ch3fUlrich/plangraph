@@ -1,0 +1,1 @@
+- **LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY:** `plangraph fast-checks` in a checkout without `tools/ci_select.py` (another project's repository) runs that repository's `.plangraph/fast-checks <base>`, or only `git diff --check` with a warning, instead of failing at the plangraph selector.

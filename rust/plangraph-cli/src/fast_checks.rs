@@ -35,6 +35,22 @@ mod tests {
         ];
         git_env(root, &args, &identity).unwrap()
     }
+    #[test]
+    fn a_checkout_without_the_plangraph_selector_runs_its_own_check_or_the_whitespace_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let (selection, steps) = foreign_plan(dir.path(), "origin/main").unwrap();
+        assert!(selection.contains("repository_check=false"), "{selection}");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].args, ["git", "diff", "--check", "origin/main...HEAD"]);
+        std::fs::create_dir_all(dir.path().join(".plangraph")).unwrap();
+        std::fs::write(dir.path().join(".plangraph/fast-checks"), "#!/bin/sh\n").unwrap();
+        let (selection, steps) = foreign_plan(dir.path(), "origin/main").unwrap();
+        assert!(selection.contains("repository_check=true"), "{selection}");
+        assert_eq!(steps[0].args, [".plangraph/fast-checks", "origin/main"]);
+        std::fs::create_dir_all(dir.path().join("tools")).unwrap();
+        std::fs::write(dir.path().join("tools/ci_select.py"), "").unwrap();
+        assert!(foreign_plan(dir.path(), "origin/main").is_none());
+    }
     fn repo() -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init"]).unwrap();
@@ -117,7 +133,28 @@ fn output(root: &Path, args: &[String]) -> Result<String> {
     }
     String::from_utf8(result.stdout).map_err(|e| e.to_string())
 }
+/// A checkout without plangraph's selector (another project's repository) runs its own
+/// declared check `.plangraph/fast-checks <base>` as the one step; without one only the
+/// whitespace guard runs and the selection says so, so a native writer there still reaches its
+/// review and the repository's own CI judges the pull request.
+fn foreign_plan(root: &Path, base: &str) -> Option<(String, Vec<Step>)> {
+    if root.join("tools/ci_select.py").is_file() {
+        return None;
+    }
+    if root.join(".plangraph/fast-checks").is_file() {
+        let steps = vec![step("repository-check", &[".plangraph/fast-checks", base])];
+        return Some(("foreign=true\nrepository_check=true\n".into(), steps));
+    }
+    let range = format!("{base}...HEAD");
+    let steps = vec![step("diff-check", &["git", "diff", "--check", &range])];
+    let selection = "foreign=true\nrepository_check=false\nWARNING: no .plangraph/fast-checks in \
+        this repository: only git diff --check runs\n";
+    Some((selection.into(), steps))
+}
 fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)> {
+    if let Some(foreign) = foreign_plan(root, base) {
+        return Ok(foreign);
+    }
     let mut selector = vec![
         "python3".into(),
         "tools/ci_select.py".into(),
