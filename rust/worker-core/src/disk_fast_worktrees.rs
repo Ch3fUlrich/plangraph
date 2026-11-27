@@ -5,6 +5,37 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(target_os = "linux")]
+pub fn registered(
+    repo: &Path,
+    time: Duration,
+) -> io::Result<Vec<(std::path::PathBuf, bool, bool)>> {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt, process::Command};
+    let output = crate::host_command::output(
+        Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["worktree", "list", "--porcelain", "-z"]),
+        time,
+    )?;
+    let mut rows = Vec::new();
+    let mut fields = output.split(|byte| *byte == 0);
+    while let Some(field) = fields.next().filter(|field| !field.is_empty()) {
+        let Some(path) = field.strip_prefix(b"worktree ") else {
+            return Err(io::Error::other("invalid Git worktree listing"));
+        };
+        let path = std::path::PathBuf::from(OsStr::from_bytes(path));
+        let (mut locked, mut detached) = (false, false);
+        for field in fields.by_ref().take_while(|field| !field.is_empty()) {
+            locked |= field == b"locked" || field.starts_with(b"locked ");
+            detached |= field == b"detached";
+        }
+        rows.push((path, locked, detached));
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(rows)
+}
+
 pub(super) fn remove_old_fast_tree(
     repo: &Path,
     path: &Path,

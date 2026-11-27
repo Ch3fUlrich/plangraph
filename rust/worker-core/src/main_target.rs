@@ -9,11 +9,54 @@ use std::{
 
 /// Cargo's own markers, never the directory name: its CACHEDIR.TAG or the `.rustc_info.json`
 /// beside a profile directory.
-fn identified(target: &Path) -> bool {
+pub fn identified(target: &Path) -> bool {
     let tag = target.join("CACHEDIR.TAG");
     fs::symlink_metadata(&tag).is_ok_and(|m| m.is_file() && m.len() <= 1 << 20)
         && fs::read(&tag).is_ok_and(|b| b.starts_with(CACHEDIR_SIGNATURE))
         || crate::private_targets::cargo_target(target)
+}
+
+pub(crate) fn git_until(
+    tree: &Path,
+    args: &[&str],
+    deadline: std::time::Instant,
+) -> io::Result<Vec<u8>> {
+    let remaining = deadline
+        .checked_duration_since(std::time::Instant::now())
+        .ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))?;
+    crate::host_command::output(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(tree)
+            .args(args),
+        remaining,
+    )
+}
+
+/// Check that a worktree's Cargo target contains only ignored, untracked files.
+pub fn ignored_rust_target(tree: &Path, deadline: std::time::Instant) -> io::Result<bool> {
+    let git = |args: &[&str]| git_until(tree, args, deadline);
+    let ignored = git(&[
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+        "--",
+        "rust/target/",
+    ])?;
+    Ok(ignored == b"rust/target/\0"
+        && git(&[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "rust/target/",
+        ])?
+        .is_empty())
 }
 
 /// Track source metadata within one directory without following marker symlinks.

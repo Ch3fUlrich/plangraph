@@ -90,6 +90,10 @@ mod artifact_walk {
     }
 
     impl ArtifactWalk {
+        pub(crate) fn close_streams(&mut self) {
+            self.dirs.clear();
+            self.seen.clear();
+        }
         pub(crate) fn root_stamp(&self) -> Option<Stamp> {
             self.seen.first().map(|(_, stamp)| *stamp)
         }
@@ -203,7 +207,7 @@ fn retained(slot: &Path, report: &mut Report) -> Option<u64> {
 
 /// Real directory `slot` of the pool of `primary`: the primary, or a direct `slot-*` child of its
 /// pool root, neither a symlink (ancestors may be). `None` when it does not exist.
-fn trusted_slot(primary: &Path, slot: &Path) -> io::Result<Option<PathBuf>> {
+pub(crate) fn trusted_slot(primary: &Path, slot: &Path) -> io::Result<Option<PathBuf>> {
     let meta = match fs::symlink_metadata(slot) {
         Ok(meta) => meta,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),

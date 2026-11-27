@@ -46,6 +46,20 @@ fn cargo_output(root: &Path) -> bool {
 /// A mounted profile is listed too: the removal guard refuses it and reports why.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
+    let mut candidates = Vec::new();
+    for profile in debug_artifacts(root)? {
+        let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
+        candidates.push((newest, profile, bytes));
+    }
+    candidates.sort();
+    Ok(candidates
+        .into_iter()
+        .map(|(_, path, bytes)| (path, bytes))
+        .collect())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn debug_artifacts(root: &Path) -> io::Result<Vec<PathBuf>> {
     if !cargo_output(root) {
         return Ok(vec![]);
     }
@@ -65,14 +79,9 @@ pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
         {
             continue;
         }
-        let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
-        candidates.push((newest, profile, bytes));
+        candidates.push(profile);
     }
-    candidates.sort();
-    Ok(candidates
-        .into_iter()
-        .map(|(_, path, bytes)| (path, bytes))
-        .collect())
+    Ok(candidates)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -169,6 +178,7 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 pub struct Candidate {
     pub path: PathBuf,
     pub boundary: PathBuf,
@@ -176,7 +186,13 @@ pub struct Candidate {
     pub lease_root: PathBuf,
     pub(crate) cutoff: SystemTime,
     pub(crate) identity: (u64, u64),
+    pub(crate) maintenance: bool,
+    pub(crate) cap: Option<PoolCap>,
 }
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
 
 #[cfg(target_os = "linux")]
 impl Candidate {
@@ -190,6 +206,8 @@ impl Candidate {
             boundary,
             cutoff,
             identity,
+            maintenance: false,
+            cap: None,
         })
     }
 

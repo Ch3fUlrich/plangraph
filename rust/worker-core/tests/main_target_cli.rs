@@ -9,6 +9,17 @@ use std::{
 };
 use support::{fixture, git};
 
+fn age_unrelated_target(root: &std::path::Path) {
+    // A protected main target can coexist with successful reclamation on a hot test device.
+    let old = SystemTime::now() - Duration::from_secs(2 * 86400);
+    for path in ["clean/target/cache", "clean/target"] {
+        fs::File::open(root.join(path))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+}
+
 /// Hosts run `pg-disk-hygiene` from a user unit whose `WorkingDirectory` is the main checkout:
 /// the unit pins the checkout, yet its idle `rust/target` must still be removed (and one the
 /// unit names itself must not).
@@ -16,6 +27,7 @@ use support::{fixture, git};
 fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
     for pin_target_itself in [false, true] {
         let (tmp, repo, root) = fixture();
+        age_unrelated_target(&root);
         let target = repo.join("rust/target");
         fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         fs::create_dir_all(target.join("debug")).unwrap();
@@ -55,7 +67,7 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
         let reader = tmp.path().join("process-cwds");
         pg_worker_core::executable_test_support::write_executable(
             &reader,
-            "#!/bin/sh\necho '[[],false]'\n",
+            "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
         );
         let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
             .args(["--apply", "--repo"])
@@ -131,7 +143,7 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let reader = tmp.path().join("process-cwds");
     pg_worker_core::executable_test_support::write_executable(
         &reader,
-        "#!/bin/sh\necho '[[],false]'\n",
+        "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--repo"])
@@ -166,6 +178,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
     for variant in ["bare", "symlinked-refs", "none"] {
         let with_repository = variant != "none";
         let (tmp, repo, root) = fixture();
+        age_unrelated_target(&root);
         fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         let target = repo.join("rust/target");
         fs::create_dir_all(target.join("debug")).unwrap();
@@ -222,7 +235,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
         let reader = tmp.path().join("process-cwds");
         pg_worker_core::executable_test_support::write_executable(
             &reader,
-            "#!/bin/sh\necho '[[],false]'\n",
+            "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
         );
         let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
             .args(["--apply", "--repo"])

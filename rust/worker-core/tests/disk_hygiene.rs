@@ -8,6 +8,93 @@ use std::{
 #[path = "support/disk_hygiene.rs"]
 mod support;
 use support::{fixture, git};
+
+#[test]
+fn active_build_in_a_keeps_only_a() {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    if std::env::var_os("TEST_CARGO_CHILD").is_some() {
+        // SAFETY: the static name is NUL-terminated and remains live for prctl.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NAME, c"cargo".as_ptr()) },
+            0
+        );
+        let _ = std::io::stdin().read(&mut [0u8]);
+        return;
+    }
+    let (tmp, repo, root) = fixture();
+    let [a, b] = ["clean", "dirty"].map(|name| root.join(name).join("rust/target"));
+    for path in [&a, &b] {
+        fs::create_dir_all(path.join("debug")).unwrap();
+        fs::write(path.join(".rustc_info.json"), "{}").unwrap();
+        fs::write(path.join("debug/output"), [0u8; 8192]).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        for entry in [
+            path.clone(),
+            path.join(".rustc_info.json"),
+            path.join("debug"),
+            path.join("debug/output"),
+        ] {
+            fs::File::open(entry).unwrap().set_modified(old).unwrap();
+        }
+    }
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "active_build_in_a_keeps_only_a"])
+        .env("TEST_CARGO_CHILD", "1")
+        .current_dir(root.join("clean"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(fs::File::open(a.join("debug/output")).unwrap())
+        .spawn()
+        .unwrap();
+    let proc = std::path::PathBuf::from(format!("/proc/{}", child.id()));
+    let cwd = fs::read_link(proc.join("cwd")).unwrap();
+    let fd = fs::read_link(proc.join("fd/2")).unwrap();
+    let inventory = serde_json::json!({"version": 1, "cwds": [cwd.as_os_str().as_encoded_bytes()],
+        "open_paths": [fd.as_os_str().as_encoded_bytes()], "cargo_targets": []});
+    let legacy = serde_json::json!([[cwd], true]);
+    let reader = tmp.path().join("reader");
+    pg_worker_core::executable_test_support::write_executable(&reader, format!(
+        "#!/bin/sh\nif [ \"$1\" = --hygiene-references ]; then echo '{inventory}'; else echo '{legacy}'; fi\n"));
+    let pins = tmp.path().join("pins.json");
+    fs::write(&pins, "[]").unwrap();
+    let applied = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
+        .args([
+            "--apply",
+            "--cleanup-free-bytes",
+            &u64::MAX.to_string(),
+            "--repo",
+        ])
+        .arg(&repo)
+        .arg("--root")
+        .arg(&root)
+        .arg("--pins")
+        .arg(pins)
+        .arg("--tmp-root")
+        .arg(tmp.path().join("scratch"))
+        .arg("--state")
+        .arg(tmp.path().join("state"))
+        .env("HOME", tmp.path())
+        .env("PLANGRAPH_CARGO_TARGET_DIR", tmp.path().join("shared"))
+        .env_remove("PLANGRAPH_WORKTREE_MOUNTS")
+        .env("PG_PROCESS_INVENTORY", "reader")
+        .env("PG_PROCESS_CWD_READER", reader)
+        .output()
+        .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    child.stdin.take();
+    child.wait().unwrap();
+    assert!(a.is_dir());
+    assert!(!b.exists(), "{}", String::from_utf8_lossy(&applied.stdout));
+    let row: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert!(row["kept"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["path"] == a.to_str().unwrap() && row["reason"] == "busy"));
+}
+
 #[test]
 fn disk_hygiene_pinned_dirty_and_live_survive_real_cleanup() {
     let (_tmp, repo, root) = fixture();
@@ -467,6 +554,15 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     let slot = tmp.path().join("cache/cargo-target-pool/slot-1");
     fs::create_dir_all(slot.join("debug")).unwrap();
     fs::write(slot.join("debug/blob"), vec![0u8; 16384]).unwrap();
+    fs::write(slot.join(".rustc_info.json"), r#"{"rustc_fingerprint":0}"#).unwrap();
+    fs::write(slot.join("debug/.cargo-lock"), "").unwrap();
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    for entry in ["debug/blob", "debug/.cargo-lock", "debug"] {
+        fs::File::open(slot.join(entry))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
     fs::create_dir_all(&primary).unwrap();
     let pins = tmp.path().join("pins.json");
     fs::write(&pins, "[]").unwrap();
@@ -478,7 +574,7 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     let reader = tmp.path().join("process-cwds");
     pg_worker_core::executable_test_support::write_executable(
         &reader,
-        "#!/bin/sh\necho '[[],false]'\n",
+        "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--shared-target-cap-bytes", "2048", "--repo"])
@@ -493,6 +589,7 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
         .arg(&state)
         .env("HOME", tmp.path().join("home"))
         .env("PG_PROCESS_CWD_READER", &reader)
+        .env("PG_PROCESS_INVENTORY", "reader")
         .env("PLANGRAPH_CARGO_TARGET_DIR", &primary)
         .output()
         .unwrap();

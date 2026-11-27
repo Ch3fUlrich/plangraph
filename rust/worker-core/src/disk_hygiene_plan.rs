@@ -1,18 +1,17 @@
 //! Device-scoped disk hygiene reclamation and its pressure outcomes.
-use super::{hygiene_report::display_path, HygieneReport, KeptPath};
-use crate::host_link::{
-    enqueue_disk_hygiene, DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS,
-};
+use super::{display_path, HygieneReport, KeptPath};
+use crate::host_link::{DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS};
 pub use crate::shared_target::Candidate;
-use crate::{
-    cargo_cache::ExclusiveLease,
-    cargo_pool_trim::{remove_guarded_if, stamp, ArtifactWalk},
-};
+use discovery::rank_slices;
+pub use discovery::{FinalProof, Layout};
+#[path = "disk_hygiene_plan_discovery.rs"]
+mod discovery;
+use crate::cargo_pool_trim::ArtifactWalk;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeSet,
     fs, io,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -49,72 +48,6 @@ impl<'a> Budget<'a> {
     }
 }
 
-/// A candidate's freshness and ownership walk, held under its removal lease.
-pub struct FinalProof {
-    item: Candidate,
-    uid: u32,
-    _lease: ExclusiveLease,
-    walk: ArtifactWalk,
-}
-
-impl FinalProof {
-    /// Acquire the nonblocking owner lease before inspecting any candidate contents.
-    pub fn begin(item: Candidate) -> Result<Self, &'static str> {
-        // SAFETY: geteuid has no preconditions.
-        let uid = unsafe { libc::geteuid() };
-        item.safe(uid)?;
-        let lease = item.lease()?;
-        Ok(Self {
-            item,
-            uid,
-            _lease: lease,
-            walk: ArtifactWalk::default(),
-        })
-    }
-
-    /// Continue until EOF or the current deadline, restarting stale observations under the lease.
-    pub fn advance(&mut self, room: impl Fn() -> bool) -> Result<bool, &'static str> {
-        self.item.safe(self.uid)?;
-        match self.walk.unchanged(&room) {
-            Some(false) => self.walk = ArtifactWalk::default(),
-            Some(true) => (),
-            None => return Ok(false),
-        }
-        while room() && !self.walk.complete {
-            self.walk.step(
-                &self.item.path,
-                self.item.cutoff,
-                self.item.identity.0,
-                self.uid,
-            )?;
-        }
-        Ok(self.walk.complete)
-    }
-
-    /// Apply a completed proof after refreshing protection. Return bytes only for an allowed action.
-    pub fn remove(
-        &self,
-        apply: bool,
-        allowed: impl FnOnce() -> io::Result<bool>,
-        before_unlink: impl FnOnce() -> bool,
-    ) -> io::Result<Option<u64>> {
-        if !self.walk.complete {
-            return Err(io::Error::other("candidate proof incomplete"));
-        }
-        self.item.safe(self.uid).map_err(io::Error::other)?;
-        let mut authorized = Ok(false);
-        let removed = remove_guarded_if(&self.item.boundary, &self.item.path, apply, |path| {
-            authorized = allowed();
-            matches!(authorized, Ok(true))
-                && fs::symlink_metadata(path).ok().map(|meta| stamp(&meta))
-                    == self.walk.root_stamp()
-                && (!apply || before_unlink())
-        })?;
-        authorized?;
-        Ok(removed.then_some(self.walk.credit))
-    }
-}
-
 #[derive(Default)]
 pub struct Ranked {
     measured: bool,
@@ -132,60 +65,6 @@ impl Ranked {
     pub fn complete(&self) -> bool {
         self.walk.complete
     }
-
-    pub fn reclaimable_bytes(&self) -> Option<u64> {
-        self.walk.complete.then_some(self.walk.credit)
-    }
-}
-
-fn rank_candidate(
-    row: &mut Ranked,
-    item: &Candidate,
-    budget: &Budget<'_>,
-    uid: u32,
-    deadline: Instant,
-    left: &mut usize,
-    resuming: bool,
-) {
-    let tick = (budget.clock)();
-    let end = deadline.min(tick + budget.candidate_for.saturating_sub(row.spent));
-    let result = (|| {
-        item.safe(uid)?;
-        let _lease = item.lease()?;
-        if let Some(observed) = row.walk.root_stamp() {
-            let current = fs::symlink_metadata(&item.path).map_err(|_| "probe_unavailable")?;
-            if stamp(&current) != observed {
-                row.walk = ArtifactWalk::default();
-            }
-        }
-        if resuming {
-            match row.walk.unchanged(|| (budget.clock)() < end) {
-                Some(false) => row.walk = ArtifactWalk::default(),
-                Some(true) => (),
-                None => {
-                    row.spent = budget.candidate_for;
-                    return Ok(());
-                }
-            }
-        }
-        let count = budget
-            .slice_entries
-            .min(budget.candidate_entries - row.work)
-            .min(*left);
-        for _ in 0..count {
-            if row.walk.complete || (budget.clock)() >= end {
-                break;
-            }
-            row.measured = true;
-            row.work += 1;
-            *left -= 1;
-            row.walk
-                .step(&item.path, item.cutoff, item.identity.0, uid)?;
-        }
-        Ok(())
-    })();
-    row.reason = result.err();
-    row.spent += (budget.clock)().saturating_duration_since(tick);
 }
 
 /// Rank provider-approved targets in round-robin slices, holding only the current target's lease.
@@ -199,60 +78,32 @@ pub fn rank_candidates(
         .filter(|item| seen.insert((item.path.clone(), item.identity)))
         .map(|item| (item, Ranked::default()))
         .collect();
-    rank_slices(&mut rows, budget, budget.start + budget.rank_for, false);
+    rank_slices(
+        &mut rows,
+        budget,
+        budget.start + budget.rank_for,
+        false,
+        None,
+    );
     rows
 }
 
 /// Continue incomplete measurements within the refresh budget and the overall pass deadline.
 pub fn refresh_ranking(rows: &mut [(Candidate, Ranked)], budget: &Budget<'_>) {
+    refresh_with_lease(rows, budget, None);
+}
+
+fn refresh_with_lease(rows: &mut [(Candidate, Ranked)], budget: &Budget<'_>, held: Option<&Path>) {
     for (_, row) in &mut *rows {
         row.work = 0;
         row.spent = Duration::ZERO;
     }
     let end = (budget.start + budget.pass_for).min((budget.clock)() + budget.refresh_for);
-    rank_slices(rows, budget, end, true);
-}
-
-fn rank_slices(rows: &mut [(Candidate, Ranked)], budget: &Budget<'_>, end: Instant, refresh: bool) {
-    // SAFETY: geteuid has no preconditions.
-    let uid = unsafe { libc::geteuid() };
-    let mut left = budget.rank_entries;
-    loop {
-        let before = left;
-        for (item, row) in &mut *rows {
-            if left == 0 || (budget.clock)() >= end {
-                break;
-            }
-            if row.reason.is_none()
-                && !row.walk.complete
-                && row.work < budget.candidate_entries
-                && row.spent < budget.candidate_for
-            {
-                rank_candidate(
-                    row,
-                    item,
-                    budget,
-                    uid,
-                    end,
-                    &mut left,
-                    refresh && row.work == 0,
-                );
-            }
-        }
-        if left == before {
-            break;
-        }
-    }
-    rows.sort_by(|(a, ra), (b, rb)| {
-        rb.walk
-            .bytes
-            .cmp(&ra.walk.bytes)
-            .then_with(|| a.path.cmp(&b.path))
-    });
+    rank_slices(rows, budget, end, true, held);
 }
 
 impl HygieneReport {
-    fn pressure_events(&mut self) -> Vec<Value> {
+    pub(crate) fn pressure_events(&mut self) -> Vec<Value> {
         let mut alerts = vec![];
         for row in self.devices.values() {
             let Some(free) = row.end_free_bytes else {
@@ -299,63 +150,290 @@ impl HygieneReport {
         }
         alerts
     }
+}
 
-    fn json(&self) -> io::Result<Value> {
-        let free = self
-            .devices
-            .values()
-            .filter_map(|row| row.end_free_bytes)
-            .min();
-        let mut report = serde_json::to_value(&self.summary)?;
-        report["free_bytes"] = json!(free);
-        report["devices"] = json!(self.devices.values().collect::<Vec<_>>());
-        report["kept"] = json!(self.kept);
-        report["started_at"] = json!(self.started_at.as_secs());
-        report["time_to_first_removal"] = json!(self.time_to_first_removal);
-        report["first_removal_deadline_missed"] = json!(self.first_removal_deadline_missed);
-        report["stage_durations"] = json!(self.stage_durations);
-        report["budget_exhausted"] = json!(self.budget_exhausted);
-        Ok(report)
-    }
+/// Fresh protection, process and space samples are supplied by the invocation.
+pub struct ReclaimChecks<'a> {
+    pub protection: &'a dyn Fn(&Candidate, Instant) -> io::Result<Option<&'static str>>,
+    pub inventory: &'a dyn Fn(Instant) -> io::Result<super::HygieneInventory>,
+    pub space: &'a dyn Fn(&Path) -> io::Result<u64>,
+}
 
-    /// Finalize the report once. Report writes and alert enqueues have independent results.
-    pub fn persist(
-        &mut self,
-        state: &Path,
-        host: impl FnOnce() -> io::Result<String>,
-    ) -> (io::Result<Vec<u8>>, io::Result<()>) {
-        let alerts = self.pressure_events();
-        self.summary.freed_bytes = self
-            .devices
-            .values()
-            .map(|row| row.freed_bytes)
-            .fold(0, u64::saturating_add);
-        self.summary.skipped.extend(
-            self.kept
+/// Reclaim a ranked set with one final lease and a fresh free-space sample after each removal.
+pub fn reclaim(
+    report: &mut HygieneReport,
+    candidates: Vec<Candidate>,
+    budget: &Budget<'_>,
+    checks: &ReclaimChecks<'_>,
+) -> bool {
+    // SAFETY: geteuid takes no arguments.
+    let uid = unsafe { libc::geteuid() };
+    let now = budget.clock;
+    let ranking_end = budget.start + budget.rank_for;
+    let begin = now();
+    let initial = (checks.inventory)(ranking_end);
+    report
+        .stage_durations
+        .insert("inventory", now().duration_since(begin).as_secs_f64());
+    let mut usable = initial.is_ok();
+    let mut seen = BTreeSet::new();
+    let mut rows: Vec<_> = candidates
+        .into_iter()
+        .filter(|item| seen.insert(item.path.clone()))
+        .map(|item| {
+            let reason =
+                match &initial {
+                    Ok(inv) => item.safe(uid).err().or_else(|| {
+                        match (checks.protection)(&item, ranking_end) {
+                            Ok(reason) => {
+                                reason.or_else(|| inv.blocks(&item.scope).then_some("busy"))
+                            }
+                            Err(error) => {
+                                report
+                                    .summary
+                                    .error
+                                    .get_or_insert_with(|| error.to_string());
+                                usable = false;
+                                Some("probe_unavailable")
+                            }
+                        }
+                    }),
+                    Err(_) => Some("probe_unavailable"),
+                };
+            (
+                item,
+                Ranked {
+                    reason,
+                    ..Ranked::default()
+                },
+            )
+        })
+        .collect();
+    let apply = !report.summary.dry_run;
+    let mut proof: Option<FinalProof> = None;
+    let mut free: std::collections::BTreeMap<_, _> = report
+        .devices
+        .iter()
+        .map(|(&device, row)| (device, row.start_free_bytes))
+        .collect();
+    let mut scanned = Duration::ZERO;
+    let mut attempted = Duration::ZERO;
+    let mut removed = BTreeSet::new();
+    for (first, maintenance) in [(true, false), (false, false), (false, true)] {
+        if !usable {
+            break;
+        }
+        let tick = now();
+        if first {
+            rank_slices(&mut rows, budget, ranking_end, false, None);
+        } else if !maintenance {
+            refresh_with_lease(
+                &mut rows,
+                budget,
+                proof.as_ref().map(|held| held.item.lease_root.as_path()),
+            );
+        }
+        scanned += now().duration_since(tick);
+        if let Some(held) = &proof {
+            if let Some(i) = rows
                 .iter()
-                .map(|row| format!("{}: {}", display_path(&row.path), row.reason)),
-        );
-        let report = self
-            .json()
-            .and_then(|row| crate::disk_runtime::write_hygiene_report(state, &row));
-        let queued = (|| {
-            if alerts.is_empty() {
-                return Ok(());
+                .position(|(item, _)| item.path == held.item.path)
+            {
+                rows.swap(0, i);
             }
-            let host = host()?;
-            let mut errors = vec![];
-            for event in alerts {
-                let device = event["device"].as_u64().unwrap();
-                if let Err(error) = enqueue_disk_hygiene(state, self.started_at, &host, event) {
-                    errors.push(format!("device {device}: {error}"));
+        }
+        let end = budget.start
+            + if first {
+                budget.first_for
+            } else {
+                budget.pass_for
+            };
+        let tick = now();
+        for idx in 0..rows.len() {
+            if now() >= end {
+                break;
+            }
+            let (item, row) = &mut rows[idx];
+            if row.reason.is_some() || removed.contains(&item.path) {
+                continue;
+            }
+            let id = item.identity.0;
+            let Some(device) = report.devices.get_mut(&id) else {
+                row.reason = Some("root_unavailable");
+                continue;
+            };
+            let Some(available) = free[&id] else {
+                row.reason = Some("probe_unavailable");
+                continue;
+            };
+            let hot = device
+                .start_free_bytes
+                .is_some_and(|start| start < device.cleanup_floor_bytes);
+            if available >= device.cleanup_floor_bytes {
+                if hot || !item.maintenance {
+                    row.reason = Some("floor_met");
+                    continue;
+                }
+                if !maintenance {
+                    continue;
+                }
+                row.reason =
+                    crate::cargo_pool::hygiene_cap_failure(item, &report.summary.projected, || {
+                        now() < end
+                    });
+                if row.reason.is_some() {
+                    continue;
                 }
             }
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(io::Error::other(errors.join(", ")))
+            if removed.iter().any(|path| item.path.starts_with(path)) {
+                row.reason = Some("covered");
+                continue;
             }
-        })();
-        (report, queued)
+            let tested = (|| {
+                if proof.is_none() {
+                    proof = Some(FinalProof::begin(item.clone())?);
+                }
+                proof.as_mut().unwrap().advance(|| now() < end)
+            })();
+            match tested {
+                Ok(false) => break,
+                Err(reason) => {
+                    row.reason = Some(reason);
+                    proof = None;
+                    continue;
+                }
+                Ok(true) => (),
+            }
+            // Close the measurement stream before process inventory observes this invocation's fds.
+            let scope = item.scope.clone();
+            for (other, rank) in &mut rows {
+                if other.path.starts_with(&scope) {
+                    rank.walk.close_streams();
+                }
+            }
+            let (item, row) = &mut rows[idx];
+            let result = proof.as_ref().unwrap().remove(
+                apply,
+                || {
+                    match (checks.protection)(item, end) {
+                        Ok(None) => (),
+                        Ok(reason) => {
+                            row.reason = reason;
+                            return Ok(false);
+                        }
+                        Err(error) => {
+                            report
+                                .summary
+                                .error
+                                .get_or_insert_with(|| error.to_string());
+                            usable = false;
+                            return Ok(false);
+                        }
+                    }
+                    if now() >= end {
+                        return Ok(false);
+                    }
+                    let Ok(inventory) = (checks.inventory)(end) else {
+                        usable = false;
+                        return Ok(false);
+                    };
+                    let mut lease = item.lease_root.as_os_str().to_os_string();
+                    lease.push(".plangraph-lock");
+                    if inventory.blocks_except(&item.scope, Path::new(&lease)) {
+                        row.reason = Some("busy");
+                        return Ok(false);
+                    }
+                    Ok(true)
+                },
+                || {
+                    let elapsed = now();
+                    if elapsed >= end {
+                        return false;
+                    }
+                    report
+                        .time_to_first_removal
+                        .get_or_insert(elapsed.duration_since(budget.start).as_secs_f64());
+                    true
+                },
+            );
+            match result {
+                Ok(None) if !usable || now() >= end => break,
+                Ok(None) => {
+                    row.reason.get_or_insert("unsafe");
+                }
+                Err(_) => row.reason = Some("remove_failed"),
+                Ok(Some(bytes)) => {
+                    removed.insert(item.path.clone());
+                    let kind = if item.cap.is_some() {
+                        "pool_evict "
+                    } else {
+                        ""
+                    };
+                    report.summary.actions.push(format!(
+                        "{} {kind}{} bytes={bytes}",
+                        if apply { "removed" } else { "would-remove" },
+                        display_path(&item.path)
+                    ));
+                    if apply {
+                        device.freed_bytes = device.freed_bytes.saturating_add(bytes);
+                        let sample = (checks.space)(&device.root).map_err(|error| {
+                            report
+                                .summary
+                                .error
+                                .get_or_insert_with(|| error.to_string());
+                        });
+                        free.insert(id, sample.ok());
+                    } else {
+                        device.projected_bytes +=
+                            report.summary.projected.project(&item.path, bytes);
+                        free.insert(
+                            id,
+                            device
+                                .start_free_bytes
+                                .map(|start| start.saturating_add(device.projected_bytes)),
+                        );
+                    }
+                    if first {
+                        proof = None;
+                        break;
+                    }
+                }
+            }
+            proof = None;
+        }
+        attempted += now().duration_since(tick);
     }
+    for (item, row) in rows {
+        if removed.contains(&item.path) {
+            continue;
+        }
+        let reason = if usable {
+            row.reason.unwrap_or("run_budget")
+        } else {
+            "probe_unavailable"
+        };
+        report.budget_exhausted |= reason == "run_budget";
+        report.kept.push(KeptPath {
+            device: Some(item.identity.0),
+            path: item.path,
+            bytes: row.measured.then_some(row.walk.bytes),
+            bytes_is_lower_bound: !row.walk.complete && row.measured,
+            reason,
+        });
+    }
+    report
+        .stage_durations
+        .insert("scanning", scanned.as_secs_f64());
+    report
+        .stage_durations
+        .insert("reclamation", attempted.as_secs_f64());
+    report.first_removal_deadline_missed = apply
+        && report.devices.values().any(|row| {
+            row.start_free_bytes
+                .is_some_and(|free| free < row.cleanup_floor_bytes)
+        })
+        && report
+            .time_to_first_removal
+            .is_none_or(|elapsed| elapsed > budget.first_for.as_secs_f64());
+    usable
 }

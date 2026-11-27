@@ -178,24 +178,48 @@ pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec
     slots.into_iter().partition(|slot| !is_review_slot(slot))
 }
 
-/// Private and scratch discovery must leave every shared cache and its pool to the pool policy.
-pub fn hygiene_exclusions(shared: &[PathBuf], home: &Path) -> Vec<PathBuf> {
-    let fallback = shared
-        .first()
-        .and_then(|primary| crate::cargo_cache::review_fallback_primary(primary, home));
-    let mut exclusions = Vec::new();
-    for target in shared.iter().chain(fallback.iter()) {
-        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
-        for primary in [target, &canonical] {
-            if let Ok(pool) = pool_root(primary) {
-                exclusions.push(pool.canonicalize().unwrap_or(pool));
-            }
+pub use crate::idle_targets::hygiene_exclusions;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool> {
+    let bytes = match fs::read(lease_file_path(slot)?) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let row = serde_json::from_slice::<SlotLeaseRecord>(&bytes).ok();
+    Ok(!stale_reason(row.as_ref(), Some(state)))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_cap_failure(
+    item: &crate::shared_target::Candidate,
+    projected: &crate::disk_hygiene::Projection,
+    room: impl Fn() -> bool,
+) -> Option<&'static str> {
+    let crate::shared_target::PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
+    let mut total = 0u64;
+    let mut complete = true;
+    for slot in slots.iter().filter(|slot| slot.is_dir()) {
+        if !room() {
+            return Some("run_budget");
         }
-        exclusions.push(canonical);
+        let size = try_exclusive_lease(slot)
+            .ok()
+            .flatten()
+            .and_then(|_lease| slot_size(slot).ok());
+        complete &= size.is_some();
+        let size = size
+            .unwrap_or_default()
+            .saturating_sub(projected.under(slot));
+        total = total.saturating_add(size);
+        if total > *total_limit
+            || (size > *limit && slot.canonicalize().ok().as_ref() == Some(&item.scope))
+        {
+            return None;
+        }
     }
-    exclusions.sort();
-    exclusions.dedup();
-    exclusions
+    Some(if complete { "cap_met" } else { "run_budget" })
 }
 
 /// Trim every idle slot of the pool at `primary` to `cap_bytes` each, ordinary slots together to

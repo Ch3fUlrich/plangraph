@@ -1,6 +1,8 @@
 //! Sample configured build, worktree and scratch directories at each disk crossing above 85% used.
-use crate::disk_hygiene::Report;
+use crate::disk_hygiene::{display_path, HygieneReport, Report};
+use crate::host_link::enqueue_disk_hygiene;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::{BTreeMap, HashSet},
     fs, io,
@@ -197,6 +199,74 @@ pub fn record_configured(
         Err(error) => report
             .skipped
             .push(format!("disk watermark unavailable: {error}")),
+    }
+}
+
+impl HygieneReport {
+    pub fn sample_devices(&mut self, sample: impl Fn(&Path) -> io::Result<u64>) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let roots: Vec<_> = self
+            .devices
+            .values()
+            .map(|row| (row.device, row.root.clone()))
+            .collect();
+        for (device, root) in roots {
+            let available = sample(&root);
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default();
+            self.sample_end(device, available, now.as_secs());
+        }
+    }
+
+    fn report_json(&self) -> io::Result<serde_json::Value> {
+        let mut report = serde_json::to_value(&self.summary)?;
+        let extra = json!({
+            "free_bytes": self.devices.values().filter_map(|row| row.end_free_bytes).min(), "devices": self.devices.values().collect::<Vec<_>>(), "kept": self.kept,
+            "started_at": self.started_at.as_secs(), "time_to_first_removal": self.time_to_first_removal,
+            "first_removal_deadline_missed": self.first_removal_deadline_missed,
+            "stage_durations": self.stage_durations, "budget_exhausted": self.budget_exhausted
+        });
+        report
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        Ok(report)
+    }
+
+    /// Finalize the report once. Report writes and alert enqueues have independent results.
+    pub fn persist(
+        &mut self,
+        state: &Path,
+        host: impl FnOnce() -> io::Result<String>,
+    ) -> (io::Result<Vec<u8>>, io::Result<()>) {
+        let alerts = self.pressure_events();
+        self.summary.freed_bytes = self
+            .devices
+            .values()
+            .map(|row| row.freed_bytes)
+            .fold(0, u64::saturating_add);
+        self.summary.skipped.extend(
+            self.kept
+                .iter()
+                .map(|row| format!("{}: {}", display_path(&row.path), row.reason)),
+        );
+        let report = self
+            .report_json()
+            .and_then(|row| crate::disk_runtime::write_hygiene_report(state, &row));
+        let queued = if alerts.is_empty() {
+            Ok(())
+        } else {
+            host().and_then(|host| {
+                alerts.into_iter().fold(Ok(()), |prior, event| {
+                    let device = event["device"].as_u64().unwrap();
+                    let result = enqueue_disk_hygiene(state, self.started_at, &host, event)
+                        .map_err(|error| io::Error::other(format!("device {device}: {error}")));
+                    prior.and(result)
+                })
+            })
+        };
+        (report, queued)
     }
 }
 

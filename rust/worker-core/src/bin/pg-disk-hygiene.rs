@@ -1,19 +1,32 @@
+#[cfg(target_os = "linux")]
 use pg_worker_core::{
-    disk_hygiene::{self, Guards, Report, Thresholds},
+    disk_hygiene::{
+        self, Budget, Candidate, Guards, HygieneInventory, HygieneReport, ReclaimChecks, Thresholds,
+    },
     disk_runtime, sweep_facts, work_disks,
 };
+#[cfg(target_os = "linux")]
 use std::{
     env, io,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
+#[cfg(target_os = "linux")]
+fn execute(
+    args: &[String],
+    state: &Path,
+    budget: &Budget<'_>,
+    started: Duration,
+) -> io::Result<HygieneReport> {
     execute_with(
         args,
         state,
         work_disks::configured_mounts(),
-        disk_runtime::process_references,
+        budget,
+        started,
+        disk_runtime::hygiene_references,
+        disk_runtime::disk_space,
         || {
             let temp = env::temp_dir();
             let tmp = Path::new("/tmp");
@@ -26,13 +39,18 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     )
 }
 
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 fn execute_with(
     args: &[String],
     state: &Path,
     mounts: Vec<PathBuf>,
-    processes: impl Fn() -> io::Result<(Vec<PathBuf>, bool)>,
+    budget: &Budget<'_>,
+    started: Duration,
+    inventory: impl Fn(Instant) -> io::Result<HygieneInventory>,
+    sample: impl Fn(&Path) -> io::Result<disk_runtime::DiskSpace>,
     caches: impl FnOnce() -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)>,
-) -> io::Result<Report> {
+) -> io::Result<HygieneReport> {
     let (mut repo, mut pins) = (None, None);
     let mut roots = Vec::new();
     let mut tmp_root = None;
@@ -82,253 +100,137 @@ fn execute_with(
     }
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let thresholds = thresholds.validate()?;
-    let mut guards = Guards::load(&pins, state)?;
-    let configured: std::collections::BTreeMap<_, _> = mounts
-        .into_iter()
-        .map(|mount| (work_disks::worktree_root(&mount), mount))
-        .collect();
-    roots.extend(configured.keys().cloned());
-    let fast_checks =
-        pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(io::Error::other)?;
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::other("HOME unset"))?;
+    let mut report = HygieneReport::new(started, !apply);
+    for mount in mounts {
+        let root = work_disks::worktree_root(&mount);
+        if work_disks::mounted_space(&mount).is_ok() {
+            roots.push(root);
+        } else {
+            report.keep_boundary(root, "root_unavailable");
+        }
+    }
+    let fast_checks = pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(|error| {
+        Guards::load(&pins, state)
+            .err()
+            .unwrap_or_else(|| io::Error::other(error))
+    })?;
     roots.extend(
         [state.join("runs"), state.join("worktrees"), fast_checks]
             .into_iter()
             .filter(|path| path.is_dir()),
     );
-    let mut report = Report {
-        free_bytes: u64::MAX,
-        alarm: false,
-        dry_run: !apply,
-        freed_bytes: 0,
-        actions: vec![],
-        skipped: vec![],
-        error: None,
-        projected: Default::default(),
-    };
-    let mut available = std::collections::BTreeMap::new();
-    for root in roots.into_iter().collect::<std::collections::BTreeSet<_>>() {
-        let sample = (|| -> io::Result<_> {
-            if let Some(mount) = configured.get(&root) {
-                return Ok((root.clone(), work_disks::mounted_space(mount)?));
+    roots = roots
+        .into_iter()
+        .filter_map(|root| match root.canonicalize() {
+            Ok(path) => Some(path),
+            Err(_) => {
+                report.keep_boundary(root, "root_unavailable");
+                None
             }
-            let path = root.canonicalize()?;
-            let space = disk_runtime::disk_space(&path)?;
-            Ok((path, space))
-        })();
-        match sample {
-            Ok((path, space)) => {
-                available.insert(path, space);
-            }
-            Err(error) => {
-                report.alarm = true;
-                report
-                    .skipped
-                    .push(format!("{}: root unavailable: {error}", root.display()));
-            }
-        }
-    }
-    if available.is_empty() {
-        return Err(io::Error::other(report.skipped.join("; ")));
-    }
+        })
+        .collect();
     let (mut scratch, shared) = caches()?;
     if let Some(root) = tmp_root {
         scratch = vec![root];
     }
-    #[cfg(target_os = "linux")]
-    pg_worker_core::disk_watermark::record_configured(
-        state,
-        available.keys().cloned(),
-        &shared,
-        &scratch,
-        &mut report,
-    );
-    // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
-    let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
-    guards.pinned.extend(
-        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
-            .into_iter()
-            .map(|r| r.path),
-    );
-    let (cwds, building) = processes()?;
-    guards.live.extend(
-        cwds.into_iter()
-            .filter(|path| available.keys().any(|root| path.starts_with(root))),
-    );
-    for (root, space) in &available {
-        let limits = thresholds.for_filesystem(space.total);
-        report.free_bytes = report.free_bytes.min(space.free);
-        if space.free < limits.alarm_free_bytes {
-            report.alarm = true;
-            eprintln!(
-                "ALERT disk hygiene: {} free_bytes={} total_bytes={}",
-                root.display(),
-                space.free,
-                space.total
-            );
+    let repo = repo.canonicalize()?;
+    let layout = disk_hygiene::Layout {
+        repo: &repo,
+        roots: &roots,
+        scratch: &scratch,
+        shared: &shared,
+        home: &home,
+        cap,
+    };
+    let candidates = layout.discover(&mut report, budget, thresholds, &sample)?;
+    let protection = |item: &Candidate, end| {
+        let mut guards = Guards::load(&pins, state)?;
+        guards.pinned.extend(
+            sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, &home)?
+                .into_iter()
+                .filter(|r| item.boundary != repo || r.path != repo)
+                .map(|r| r.path),
+        );
+        if guards.pin_protects(&item.scope) {
+            return Ok(Some("pinned"));
         }
-        if !building {
-            let result = disk_hygiene::sweep_checked(
+        if guards.protects(&item.scope) {
+            return Ok(Some("busy"));
+        }
+        layout.protection(item, state, end)
+    };
+    let free = |path: &Path| sample(path).map(|space| space.free);
+    let checks = ReclaimChecks {
+        protection: &protection,
+        inventory: &inventory,
+        space: &free,
+    };
+    let usable = disk_hygiene::reclaim(&mut report, candidates, budget, &checks);
+    report.sample_devices(free);
+    let end = budget.start + budget.pass_for;
+    if usable {
+        for root in &roots {
+            use std::os::unix::fs::MetadataExt;
+            let id = root.metadata()?.dev();
+            let Some(device) = report.devices.get_mut(&id) else {
+                continue;
+            };
+            let at_floor = device
+                .start_free_bytes
+                .is_some_and(|n| n < device.cleanup_floor_bytes)
+                && device
+                    .end_free_bytes
+                    .is_some_and(|n| n >= device.cleanup_floor_bytes);
+            if at_floor || (budget.clock)() >= end {
+                continue;
+            }
+            let maintenance = disk_hygiene::sweep_checked(
                 &repo,
                 root,
-                &guards,
+                &Guards::default(),
                 SystemTime::now(),
-                space.free,
-                limits,
+                u64::MAX,
+                thresholds,
                 apply,
                 |tree| {
-                    let (cwds, building) = processes()?;
-                    Ok(!building
-                        && !cwds.iter().any(|cwd| cwd.starts_with(tree))
-                        && !Guards::load(&pins, state)?.protects(tree))
+                    let item = Candidate::new(tree.to_path_buf(), root.clone(), SystemTime::now())?;
+                    Ok((budget.clock)() < end
+                        && protection(&item, end)?.is_none()
+                        && !inventory(end)?.blocks(tree))
                 },
             )?;
-            report.freed_bytes = report.freed_bytes.saturating_add(result.freed_bytes);
-            report.actions.extend(result.actions);
-            report.skipped.extend(result.skipped);
-        }
-    }
-    if building {
-        report
-            .skipped
-            .push("build running: cache cleanup deferred".into());
-    }
-    if !building {
-        let mut private_guards = Guards {
-            pinned: guards.pinned.clone(),
-            live: guards.live.clone(),
-        };
-        // Pool slots look like private Cargo targets; only the guarded pool trimmer may reach them.
-        private_guards
-            .pinned
-            .extend(pg_worker_core::cargo_pool::hygiene_exclusions(
-                &shared,
-                Path::new(&home),
-            ));
-        let worktrees = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
-            .lines()
-            .filter_map(|line| line.strip_prefix("worktree "))
-            .map(PathBuf::from)
-            .filter(|path| available.keys().any(|root| path.starts_with(root)))
-            .collect::<Vec<_>>();
-        if let Err(error) = pg_worker_core::private_targets::sweep(
-            None,
-            &worktrees,
-            &private_guards,
-            apply,
-            &mut report,
-        ) {
-            report.alarm = true;
-            report.error = Some(error.to_string());
-        }
-        if let Err(error) = pg_worker_core::main_target::sweep_main_checkout_target(
-            &repo,
-            &private_guards,
-            SystemTime::now(),
-            apply,
-            &mut report,
-            &processes,
-        ) {
-            report.alarm = true;
-            report.error = Some(error.to_string());
-        }
-        let legacy: Vec<PathBuf> = pg_worker_core::idle_targets::LEGACY_CONTAINERS
-            .iter()
-            .map(|relative| Path::new(&home).join(relative))
-            .collect();
-        if let Err(error) = pg_worker_core::idle_targets::sweep(
-            &legacy,
-            &private_guards,
-            SystemTime::now(),
-            apply,
-            &mut report,
-            &processes,
-        ) {
-            report.alarm = true;
-            report.error = Some(error.to_string());
-        }
-        private_guards.pinned.extend(available.keys().cloned());
-        private_guards.pinned.extend(configured.keys().cloned());
-        for path in &scratch {
-            if let Err(error) = pg_worker_core::private_targets::sweep(
-                Some(path),
-                &[],
-                &private_guards,
-                apply,
-                &mut report,
-            ) {
-                report.alarm = true;
-                report.error = Some(error.to_string());
+            if maintenance.freed_bytes > 0 {
+                device.freed_bytes = device.freed_bytes.saturating_add(maintenance.freed_bytes);
+            }
+            report.summary.actions.extend(maintenance.actions);
+            report.summary.skipped.extend(maintenance.skipped);
+            if maintenance.freed_bytes > 0 {
+                report.sample_end(
+                    id,
+                    free(root),
+                    started.as_secs() + (budget.clock)().duration_since(budget.start).as_secs(),
+                );
             }
         }
     }
-    {
-        for cache in &shared {
-            let pressure = match disk_runtime::disk_space(cache) {
-                Ok(space) => space.free < thresholds.for_filesystem(space.total).cleanup_free_bytes,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
-            };
-            if let Err(error) = disk_runtime::shared_cache_capped(
-                cache,
-                &guards,
-                building,
-                cap,
-                pressure,
-                apply,
-                &mut report,
-            ) {
-                report.alarm = true;
-                report.error = Some(error.to_string());
-            }
-        }
-        // Pool slots are guarded by their own leases, so idle ones are trimmed even while
-        // another build runs; the primary target also waits for the process scan. Review slots
-        // are one per seat run: they have their own fixed budget.
-        if let Some(primary) = shared.first() {
-            let (mut slots, review) =
-                pg_worker_core::cargo_pool::pool_slot_sets(primary, &mut report);
-            if building {
-                slots.remove(0);
-            }
-            trim_pool(primary, &slots, &review, cap, apply, &mut report);
-        }
-    }
-    // Review seats whose shared target sits under the system temp directory build in the default
-    // pool; its review slots are trimmed to the same cap (the pool's other slots are not ours).
-    if let (Some(primary), Some(home)) = (shared.first(), env::var_os("HOME")) {
-        if let Some(fallback) =
-            pg_worker_core::cargo_cache::review_fallback_primary(primary, Path::new(&home))
-        {
-            let (_, review) = pg_worker_core::cargo_pool::pool_slot_sets(&fallback, &mut report);
-            trim_pool(&fallback, &[], &review, cap, apply, &mut report);
-        }
-    }
+    pg_worker_core::disk_watermark::record_configured(
+        state,
+        roots,
+        &shared,
+        &scratch,
+        &mut report.summary,
+    );
     Ok(report)
 }
-
-/// Trims the ordinary and the review slots of the pool at `primary`; a failure is the run's alarm.
-fn trim_pool(
-    primary: &Path,
-    ordinary: &[PathBuf],
-    review: &[PathBuf],
-    cap: u64,
-    apply: bool,
-    report: &mut Report,
-) {
-    let alarm = |report: &mut Report, result: io::Result<u64>| {
-        if let Err(error) = result {
-            report.alarm = true;
-            report.error = Some(error.to_string());
-        }
-    };
-    let result =
-        pg_worker_core::cargo_pool::enforce_pool_cap(primary, ordinary, cap, apply, report);
-    alarm(report, result);
-    let result =
-        pg_worker_core::cargo_pool::enforce_review_slots(primary, review, cap, apply, report);
-    alarm(report, result);
-}
+#[cfg(target_os = "linux")]
 fn run() -> io::Result<()> {
+    let budget = Budget::new(Instant::now(), &Instant::now);
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?;
     let args: Vec<_> = env::args().skip(1).collect();
     // Resolve the report destination before parsing/collecting any fallible facts.
     let state = args
@@ -343,21 +245,29 @@ fn run() -> io::Result<()> {
         })
         .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph")))
         .ok_or_else(|| io::Error::other("HOME or --state required to write report"))?;
-    let result = execute(&args, &state);
-    let report = match &result {
-        Ok(report) => serde_json::to_value(report)?,
-        Err(error) => {
-            serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"free_bytes":null})
-        }
-    };
-    let bytes = disk_runtime::write_hygiene_report(&state, &report)?;
-    println!("{}", String::from_utf8_lossy(&bytes));
-    result.and_then(|r| match r.error {
-        Some(e) => Err(io::Error::other(e)),
-        None => Ok(()),
-    })
+    let mut report = execute(&args, &state, &budget, started).unwrap_or_else(|error| {
+        let mut report = HygieneReport::new(started, !args.iter().any(|a| a == "--apply"));
+        report.summary.alarm = true;
+        report.summary.error = Some(error.to_string());
+        report
+    });
+    let (bytes, queued) =
+        report.persist(&state, pg_worker_core::host_link::disk_hygiene_alert_host);
+    if let Err(error) = &queued {
+        eprintln!("ALERT disk hygiene enqueue failed: {error}");
+    }
+    println!("{}", String::from_utf8_lossy(&bytes?));
+    queued?;
+    report
+        .summary
+        .error
+        .map_or(Ok(()), |error| Err(io::Error::other(error)))
 }
 fn main() -> std::process::ExitCode {
+    #[cfg(not(target_os = "linux"))]
+    fn run() -> std::io::Result<()> {
+        Err(std::io::Error::other("disk hygiene requires Linux"))
+    }
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -449,17 +359,18 @@ mod tests {
             &args,
             fixture.path(),
             vec![offline.clone()],
-            || Ok((vec![], false)),
+            &Budget::new(Instant::now(), &Instant::now),
+            Duration::ZERO,
+            |_| Ok(HygieneInventory::default()),
+            disk_runtime::disk_space,
             || Ok((vec![], vec![])),
         )
         .unwrap();
-        assert!(report.alarm);
-        assert!(report
-            .skipped
-            .iter()
-            .any(|message| message.contains(offline.to_str().unwrap())));
+        assert!(report.summary.alarm);
+        assert!(report.kept.iter().any(|row| row.path.starts_with(&offline)));
         for target in expected {
             assert!(report
+                .summary
                 .actions
                 .iter()
                 .any(|message| message.contains(target.to_str().unwrap())));
@@ -472,7 +383,10 @@ mod tests {
             &args,
             fixture.path(),
             vec![],
-            || Ok((vec![], false)),
+            &Budget::new(Instant::now(), &Instant::now),
+            Duration::ZERO,
+            |_| Ok(HygieneInventory::default()),
+            disk_runtime::disk_space,
             || Ok((vec![], vec![])),
         )
         .unwrap();
@@ -485,7 +399,7 @@ mod tests {
     fn slot(path: &Path) {
         let old = SystemTime::now() - Duration::from_secs(2 * 86_400);
         fs::create_dir_all(path).unwrap();
-        fs::write(path.join(".rustc_info.json"), "{}").unwrap();
+        fs::write(path.join(".rustc_info.json"), r#"{"rustc_fingerprint":0}"#).unwrap();
         for (name, extra) in [("1111111111111111", 10_000), ("2222222222222222", 0)] {
             let unit = path.join("debug/build").join(format!("foo-{name}"));
             fs::create_dir_all(&unit).unwrap();
@@ -495,7 +409,15 @@ mod tests {
                 fs::File::open(file).unwrap().set_modified(at).unwrap();
             }
         }
-        for file in [path.join(".rustc_info.json"), path.to_path_buf()] {
+        fs::write(path.join("debug/.cargo-lock"), "").unwrap();
+        for file in [
+            ".rustc_info.json",
+            "debug/.cargo-lock",
+            "debug/build",
+            "debug",
+            "",
+        ] {
+            let file = path.join(file);
             fs::File::open(file).unwrap().set_modified(old).unwrap();
         }
     }
@@ -563,11 +485,20 @@ mod tests {
                 &args,
                 fixture.path(),
                 vec![],
-                || Ok((vec![], false)),
+                &Budget::new(Instant::now(), &Instant::now),
+                Duration::ZERO,
+                |_| Ok(HygieneInventory::default()),
+                |_| {
+                    Ok(disk_runtime::DiskSpace {
+                        free: 100,
+                        total: 100,
+                    })
+                },
                 || Ok((scratch, shared)),
             )
             .unwrap();
             let evictions = result
+                .summary
                 .actions
                 .iter()
                 .filter(|a| a.contains("pool_evict"))
@@ -576,7 +507,15 @@ mod tests {
             report = Some(result);
         }
         let report = report.unwrap();
-        assert!(report.freed_bytes >= 800, "{report:?}");
+        assert!(
+            report
+                .devices
+                .values()
+                .map(|row| row.freed_bytes)
+                .sum::<u64>()
+                >= 800,
+            "{report:?}"
+        );
         for pool in &pools {
             let left = fs::read_dir(pool)
                 .unwrap()

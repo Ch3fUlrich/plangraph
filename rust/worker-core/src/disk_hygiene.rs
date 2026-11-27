@@ -5,9 +5,14 @@ mod fast_worktrees;
 #[path = "disk_hygiene_plan.rs"]
 mod plan;
 #[cfg(target_os = "linux")]
+pub(crate) use hygiene_report::display_path;
+#[cfg(target_os = "linux")]
 pub use hygiene_report::{Device, HygieneReport, KeptPath};
 #[cfg(target_os = "linux")]
-pub use plan::{rank_candidates, refresh_ranking, Budget, Candidate, FinalProof, Ranked};
+pub use plan::{
+    rank_candidates, reclaim, refresh_ranking, Budget, Candidate, FinalProof, Layout, Ranked,
+    ReclaimChecks,
+};
 
 use crate::host_command;
 use serde::Serialize;
@@ -105,7 +110,14 @@ mod inventory {
 
         /// A path reference protects the scope that contains it.
         pub fn blocks(&self, scope: &Path) -> bool {
-            self.references().any(|path| path.starts_with(scope))
+            self.blocks_except(scope, Path::new(""))
+        }
+
+        pub(crate) fn blocks_except(&self, scope: &Path, lease: &Path) -> bool {
+            paths(&self.cwds)
+                .chain(self.cargo_targets())
+                .chain(paths(&self.open_paths).filter(|path| *path != lease))
+                .any(|path| path.starts_with(scope))
         }
     }
 }
@@ -172,7 +184,7 @@ mod hygiene_report {
         pub reason: &'static str,
     }
 
-    pub(super) fn display_path(path: &Path) -> String {
+    pub(crate) fn display_path(path: &Path) -> String {
         let mut display = String::new();
         for chunk in path.as_os_str().as_bytes().utf8_chunks() {
             display.push_str(&chunk.valid().replace('%', "%25"));

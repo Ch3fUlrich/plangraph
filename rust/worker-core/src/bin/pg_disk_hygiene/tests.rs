@@ -6,6 +6,77 @@ use serde_json::Value;
 use std::{ffi::OsString, fs, io, os::unix::ffi::OsStringExt, path::Path, time::Duration};
 
 #[test]
+fn pressure_removes_largest_until_resampled_floor() {
+    use pg_worker_core::disk_hygiene::{
+        reclaim, Budget, Candidate, HygieneInventory, ReclaimChecks,
+    };
+    use std::{
+        cell::RefCell,
+        os::unix::fs::MetadataExt,
+        time::{Instant, SystemTime},
+    };
+
+    for initial in [150, 200] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let dev = root.metadata().unwrap().dev();
+        let cutoff = SystemTime::now();
+        let paths = ["small", "large", "middle"].map(|name| root.join(name));
+        let mut candidates = Vec::new();
+        for (path, size) in paths.iter().zip([8192, 65536, 32768]) {
+            fs::create_dir(path).unwrap();
+            fs::write(path.join("data"), vec![0u8; size]).unwrap();
+            for file in [path, &path.join("data")] {
+                fs::File::open(file)
+                    .unwrap()
+                    .set_modified(cutoff - Duration::from_secs(3600))
+                    .unwrap();
+            }
+            candidates.push(Candidate::new(path.clone(), root.clone(), cutoff).unwrap());
+        }
+        let samples = RefCell::new(Vec::new());
+        let space = |_: &Path| {
+            let present = paths.each_ref().map(|path| path.is_dir());
+            samples.borrow_mut().push(present);
+            Ok(if present[2] { 150 } else { 200 })
+        };
+        let mut report = HygieneReport::new(Duration::from_secs(100), false);
+        let limits = Thresholds {
+            alarm_free_bytes: 100,
+            cleanup_free_bytes: 200,
+        };
+        report
+            .devices
+            .insert(dev, Device::new(dev, root, Some(initial), limits));
+        assert!(reclaim(
+            &mut report,
+            candidates,
+            &Budget::new(Instant::now(), &Instant::now),
+            &ReclaimChecks {
+                inventory: &|_| Ok(HygieneInventory::default()),
+                protection: &|_, _| Ok(None),
+                space: &space
+            }
+        ));
+        if initial == 150 {
+            assert_eq!(
+                *samples.borrow(),
+                [[true, false, true], [true, false, false]]
+            );
+            assert!(report.devices[&dev].freed_bytes > 0);
+        } else {
+            assert!(samples.borrow().is_empty());
+            assert_eq!(report.devices[&dev].freed_bytes, 0);
+        }
+        assert!(paths[0].is_dir());
+        assert!(report
+            .kept
+            .iter()
+            .any(|row| row.path == paths[0] && row.reason == "floor_met"));
+    }
+}
+
+#[test]
 fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
     use pg_worker_core::{
         cargo_cache::try_exclusive_lease,
