@@ -1,6 +1,6 @@
 # Writer feeder
 
-`plangraph feed --once` starts at most one native Codex writer on the current
+`plangraph feed --once` fills available native Codex writer slots on the current
 host. Run the supplied `deploy/systemd/pg-feeder.service` and `.timer` every two
 minutes after configuring the host; these units are examples and are not installed
 by the CLI. `KillMode=process` lets detached supervisors and writers outlive the
@@ -19,7 +19,12 @@ creates feeder state, or appends an event. Normal ticks append one JSON line to
 `~/.local/state/plangraph/feeder/events.jsonl`, including refusals and adapter
 errors. Decisions are `idle`, `refused`, `would_spawn`, `pending` or `spawned`.
 Routine admission refusals exit 0 so the timer stays healthy; adapter/envelope/
-start errors carry `error: true` and exit 2.
+start errors before the first launch carry `error: true` and exit 2.
+Each batch consumes one slot and one run's RAM. The next batch avoids all files
+held by earlier batches in the tick. A dry run lists each batch, card and brief
+under `would_start`. A live tick lists accepted launches under `started`.
+Both lists report `slots` and the `stopped` reason. A later refusal preserves the
+successful decision and its earlier launches.
 There is no LLM in scheduling. Claims never update priority.
 
 ## Activity boundaries
@@ -92,6 +97,12 @@ Deploy this compatibility fix on every queried host. Host-health diagnostic rows
 without a run ID are not running writers and do not block selection; actual
 anonymous writers consume their host slot. Remote scope uses observed run records;
 unreachable-host diagnostics do not prove a writer exists.
+Fleet-launch writers also consume a slot on their host and hold every plangraph
+item key on their card. The feeder matches launcher records to spawner rows by
+run ID and counts each run once. A recent working job record, an active Claude
+roster entry or a live PID establishes liveness for sessions absent from ps.
+Whole item-key tokens in fleet-session rows carry the same scope before the
+launcher's session record appears.
 An item-level claim refusal records its key/reason in `skipped` and tries the next
 eligible item in the same tick, at most once per item. Authentication, unavailable
 keeper/decisions, and start/compensation errors stop the tick. A lost claim response
@@ -130,19 +141,27 @@ memory, one-minute load, effective CPU count, and disk space on the run-state
 and existing Cargo target filesystems. It uses the spawner host identity from
 `PLANGRAPH_HOST_NAME` or the host registry.
 
+On WSL, the available RAM sample is the lower of WSL's MemAvailable and Windows'
+free physical memory after the Windows floor (6 GB by default). The PowerShell
+read has a 15-second limit. After a failed read, the feeder uses a cached value
+for at most one facts window (300 seconds by default). Without a fresh value it
+refuses as `windows_ram_unreadable`. Dry runs can read the cache.
+
 Live hosts admit by free RAM (D-5122). Free RAM above `ram_floor_bytes`, divided by
 `ram_per_run_bytes`, is `slots_by_ram`; the host's writer limit is its running writers
-plus `new_writers_allowed`. Load1 only paces: where the kernel has no
+plus `new_writers_allowed`. CPU pressure above `cpu_pressure_max_percent` (50% by
+default) refuses new writers and reports the measured `some avg300` and the threshold.
+Facts files can supply `cpu_pressure_avg300`. Where the kernel has no
 `/proc/pressure/cpu` file (only a missing file counts; an unreadable or malformed one
 still belongs to a PSI kernel) and load1 is at or above the cpu count, the host gets
-one new writer per tick (`load_paced`). An unreadable load average means no pacing,
-not a refusal. The cpu pressure thresholds and the Windows RAM of a WSL host come in
-later slices; until the Windows side is sampled the WSL workstation's RAM is
-overstated, so keep its timer disabled (or `feeder.off` set) until then.
+one new writer per tick (`load_paced`). If the load average is unreadable, the
+RAM budget sets the slots. The decision records `psi`, `psi_unreadable` or
+`load_fallback` as its CPU pressure source.
 Every decision with an available sample, including an idle tick, records its capacity
 line: host, cpus, `load1` (null when unavailable), running writers, free RAM, floor,
 RAM per writer, `slots_by_ram`, `new_writers_allowed`, `load_paced`, `writer_limit`
-(null for a host the policy does not list), disk and quota.
+(null for a host the policy does not list), disk and quota. It also records both
+RAM views and the Windows reading's source on WSL.
 
 The policy lists the hosts that run writers under `[max_writers]` (`coding`, `dell`,
 `workstation`). A host it does not list refuses as `unknown_host:<name>` under both
@@ -181,18 +200,30 @@ existing reader's formats. Reader observations older than `quota_max_age_seconds
 (default 10800 seconds, matching the store's hourly cadence) or from the future
 make that account unavailable. A malformed window disables its account, while
 independent healthy accounts remain usable. Exhausted accounts contribute zero.
-A successful reader returning no valid fresh codex account refuses; an unavailable reader uses
-the explicitly supplied facts quota. Missing, invalid, or exhausted quota refuses.
-The fallback quota has the same freshness bound as the other supplied facts.
+Hosts with their own Codex observations keep the local reader. A live host without
+those observations reads the center's `quota-facts.json` in its plangraph config
+directory. Set `PLANGRAPH_QUOTA_FACTS` to use another path. The file holds an
+`observed_at` Unix timestamp in seconds and a `rows` array in the quota reader's
+format. The worker applies its own `quota_facts_max_age_seconds` (default 900) to
+the envelope and `quota_max_age_seconds` to the observations. A missing, unreadable,
+expired or unusable snapshot refuses as `quota_stale` with both ages when available
+and retains the live capacity line. Explicit facts keep their supplied quota
+fallback when the local reader is unavailable. Invalid or exhausted quota refuses.
 
-Policy `batch_max_items` (default 1, range 1..=50; any other value refuses every tick as `invalid_policy`) lets one writer run hold related ready items: the
+Policy `batch_max_items` defaults to 6 in both the shipped policy loaded by the feeder service
+and the built-in policy. The range is 1..=50. Set it to 1 for single-item runs. A value outside
+the range refuses the tick as `invalid_policy`. A batch holds the
 first eligible item in launch order plus later eligible items of its family or sharing its
 files, in launch order. Every item is claimed on its own, then checked against the claimed
 items of every host (the keeper snapshot, queued runs included): a claim whose files overlap
 another live claim outside the batch is released by its own epoch and skipped as
 `files_reserved_by:<key>`, so two hosts that claim at once never both keep overlapping files
 (both may yield; the next tick retries). A failed launch releases only its own batch's claims.
-The card of a batch lists every key as `item_keys` and the union of the files. Its brief is a `PLANGRAPH-BATCH-INPUT-V1` payload (one item per key, one `Plan-Item` trailer each), so the run receives the batch-writer skill, not the single-task one.
+The card of a batch lists every key as `item_keys` and the union of the files. Its
+`PLANGRAPH-BATCH-INPUT-V1` brief gives the batch-writer one `Plan-Item` trailer per key.
+Each live launch reserves its own status file in the review directory. The batch brief's
+`STATUS_FILE` and the recorded `writer_status_path` name that same file, so review briefs read
+only the DONE lines of their own run.
 
 `--house-rules PATH` defaults to `deploy/feeder/house-rules.md`. Brief generation
 preserves the keeper title, description (including Why/How), done criteria and
@@ -221,12 +252,11 @@ and
 `install -Dm644 deploy/systemd/pg-feeder.timer ~/.config/systemd/user/pg-feeder.timer`,
 then run `systemctl --user daemon-reload` and
 `systemctl --user enable --now pg-feeder.timer`.
-Do not enable the timer on the WSL workstation. Before its checkout takes the
-RAM-budget policy, the host must show positive evidence of one of two states:
+Before the WSL workstation's feeder rollout is approved, keep the timer
+disabled or set `feeder.off`. The host must show positive evidence of one of two states:
 `systemctl --user is-enabled pg-feeder.timer` prints exactly `disabled` and
 `systemctl --user is-active pg-feeder.timer` prints exactly `inactive` (any other
 output, such as `enabled`, `enabled-runtime`, `active` or `activating`, does not count;
 `systemctl --user disable --now pg-feeder.timer` reaches the state), or
-`~/.config/plangraph/feeder.off` exists. An enabled or active timer still fires and
-admits writers. WSL free RAM overstates
-what the workstation has until the Windows RAM sampling slice is deployed.
+`~/.config/plangraph/feeder.off` exists. Before enabling the timer, verify that
+the deployed binary reports the Windows RAM sample in a dry run.

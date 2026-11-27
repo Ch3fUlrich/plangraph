@@ -681,14 +681,14 @@ def replay_facts(root, base, head):
             "replay_receipts": {env: _read_replay(head, env) for env in inventory}}
 
 
-_PYTEST_STATUS = {"PASSED": "pass", "FAILED": "fail", "ERROR": "fail",
-                  "SKIPPED": "skip", "XFAIL": "skip", "XPASS": "fail"}
+_PYTEST_STATUS = {"passed": "pass", "failed": "fail", "skipped": "skip"}
 _RUST_STATUS = {"ok": "pass", "FAILED": "fail", "ignored": "skip"}
 
 
 def _run_observation(command, cwd, env, evidence, label):
     """Write both streams even if a subprocess cannot start or hits its deadline."""
-    out, err = (evidence / f"{label}.{stream}.log" for stream in ("stdout", "stderr"))
+    logs = {stream: f"{evidence.name}/{label}.{stream}.log" for stream in ("stdout", "stderr")}
+    out, err = (evidence.parent / path for path in logs.values())
     with out.open("wb") as stdout, err.open("wb") as stderr:
         try:
             result = run_test_process(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=1800)
@@ -696,37 +696,37 @@ def _run_observation(command, cwd, env, evidence, label):
         except (subprocess.TimeoutExpired, OSError) as exc:
             stderr.write(f"\n{exc}\n".encode("utf-8", errors="replace"))
             rc = None
-    return out.read_text(encoding="utf-8", errors="replace"), {
-        "command": command, "label": label, "returncode": rc,
-        "stdout": out.relative_to(evidence.parent).as_posix(), "stderr": err.relative_to(evidence.parent).as_posix()}
-
+    return out.read_text(encoding="utf-8", errors="replace"), dict(command=command, label=label, returncode=rc, **logs)
 
 
 def _observe_python(checkout, env, evidence, files, browser, observations, attempts, errors):
-    command = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "--color=no"]
+    from affected_tests import OUTCOME_PLUGIN, read_record_file
+    options = ["-p", "no:cacheprovider", "--color=no"]
     if browser:
-        command += ["-m", "browser"]
-    output, collection = _run_observation([*command, "--collect-only", "-q", *files], checkout, env,
-                                          evidence, "python-collect")
+        options += ["-m", "browser"]
+    output, collection = _run_observation([sys.executable, "-m", "pytest", *options, "--collect-only", "-q", *files],
+                                          checkout, env, evidence, "python-collect")
     prefixes = tuple(f"{path}::" for path in files)
     names = {line.strip() for line in output.splitlines() if line.startswith(prefixes)}
     if collection["returncode"] != 0 or not all(any(name.startswith(p) for name in names) for p in prefixes):
         errors.append(f"could not collect all changed Python test files (logs {collection['stdout']} and {collection['stderr']})")
         return collection
     observations.update((name, []) for name in sorted(names))
+    replay = OUTCOME_PLUGIN + "\nimport pytest, sys\nsys.exit(pytest.main(sys.argv[1:], plugins=[sys.modules[__name__]]))"
     for n in range(1, REPLAY_RUNS + 1):
-        output, row = _run_observation([*command, "-v", "-rA", "--capture=tee-sys", *files], checkout, env,
-                                       evidence, f"python-{n}")
-        attempts.append(row)
-        states = {}
-        for status, description in re.findall(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (.+)$", output, re.M):
-            # The diagnostic separator can occur inside a parameter id. Prefer the longest collected match.
+        record_path = evidence / f"python-{n}.outcomes.json"
+        argv = [sys.executable, "-c", replay, *options, "-v", "-rA", "--capture=tee-sys", *files]
+        output, row = _run_observation(argv, checkout, dict(env, AFFECTED_OUTCOMES=str(record_path)), evidence, f"python-{n}")
+        attempts.append(row | {"outcomes": record_path.relative_to(evidence.parent).as_posix()})
+        recorded, _ = read_record_file(record_path)
+        states = {name: _PYTEST_STATUS.get(recorded.get(name), "missing") for name in names}
+        for description in re.findall(r"^XPASS (.+)$", output, re.M):
+            # The recorder counts a non-strict XPASS as passed. The summary names it separately.
             candidates = (name for name in names if description == name or description.startswith(f"{name} "))
-            name = max(candidates, key=len, default=None)
-            if name and states.get(name) != "fail":
-                states[name] = _PYTEST_STATUS[status]
-        for name in names:
-            observations[name].append(states.get(name, "missing"))
+            if name := max(candidates, key=len, default=None):
+                states[name] = "fail"
+        for name, state in states.items():
+            observations[name].append(state)
         if row["returncode"] not in (0, 1) or (row["returncode"] == 1 and "fail" not in states.values()):
             errors.append(f"Python replay {n} exited {row['returncode']} (logs {row['stdout']} and {row['stderr']})")
     return collection

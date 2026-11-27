@@ -70,7 +70,10 @@ fn tick_tries_next_after_item_refusal_but_stops_for_infrastructure_or_start_fail
         [
             "claim plangraph:PATCH-PR",
             "claim plangraph:BUILD-CI-FIX",
-            "start plangraph:BUILD-CI-FIX"
+            "start plangraph:BUILD-CI-FIX",
+            "claim plangraph:HIGH-OLD",
+            "claim plangraph:HIGH-NEW",
+            "start plangraph:HIGH-OLD",
         ]
     );
     let mut f = Fake {

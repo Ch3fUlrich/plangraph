@@ -667,6 +667,13 @@ def test_remote_rows_carry_batch_member_keys_and_refuse_malformed_ones(tmp_path,
         assert rows[0]['status'] == 'unknown' and 'item_keys' not in rows[0], bad
 
 
+def test_fleet_session_rows_keep_run_kind_for_the_feeder_card_split(tmp_path, monkeypatch):
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='private-a')])
+    row = dict(run_id='run-a', host='node-a', status='running', role='implement',
+               run_kind='fleet-session', item_key='plangraph:A plangraph:B')
+    assert remote_ps.list_runs([], transport=lambda *args: json.dumps({'runs': [row]})) == [row]
+
+
 def test_batch_card_keys_land_on_the_run_record():
     from plangraph.spawner.item_key import annotate_item
     record = {}
@@ -681,7 +688,11 @@ def test_batch_card_keys_land_on_the_run_record():
         assert 'item_keys' not in record, card
 
 
-def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize('prompt_text', [
+    pytest.param(r'fix the literal \0 string', id='literal-backslash-zero'),
+    pytest.param('reject an embedded \0 byte', id='nul-byte'),
+])
+def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys, prompt_text):
     from types import SimpleNamespace
     from plangraph.spawner import cli, overflow
     from plangraph.spawner.service import SpawnService
@@ -702,7 +713,7 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
     record_path.parent.mkdir(parents=True)
     record_path.write_text(json.dumps(prior))
     prompt = tmp_path / 'fix.md'
-    prompt.write_text('fix the round', encoding='utf-8')
+    prompt.write_text(prompt_text, encoding='utf-8')
     calls = []
 
     def fake_ssh(argv, **kwargs):
@@ -713,7 +724,7 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
             assert step['argv'] == ['pg-spawnd', 'resume-local', 'run-a', '--state', '/target-state']
             assert json.loads(step['stdin_text']) == dict(
                 host='ash', session_id=prior['session_id'], cwd=prior['cwd'],
-                final_head=prior['final_head'], resume_number=0, prompt='fix the round')
+                final_head=prior['final_head'], resume_number=0, prompt=prompt_text)
             body = dict(ok=True, run_id='run-a', resume_number=1, started=3)
         else:
             assert step['argv'][-2:] == ['result', 'run-a']
@@ -727,7 +738,15 @@ def test_remote_resume_ack_clears_previous_outcome(tmp_path, monkeypatch, capsys
             receipt['begin'] + '\n' + json.dumps(body) + '\n' + receipt['end'] + '\n').encode())
 
     monkeypatch.setattr(remote_ps.subprocess, 'run', fake_ssh)
-    assert cli.main(['resume', 'run-a', '--prompt-file', str(prompt)]) == 0
+    rc = cli.main(['resume', 'run-a', '--prompt-file', str(prompt)])
+    if '\0' in prompt_text:
+        assert calls == []
+        assert rc == 1
+        assert capsys.readouterr().err.strip() == 'resume prompt must contain between 1 byte and 1 MiB of text'
+        assert service.result('run-a') == prior
+        return
+
+    assert rc == 0
     resumed = json.loads(capsys.readouterr().out)
     assert resumed['resume_number'] == 1
     assert resumed['resume_from']['head'] == 'a' * 40

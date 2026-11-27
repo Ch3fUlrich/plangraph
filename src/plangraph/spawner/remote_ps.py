@@ -20,10 +20,12 @@ MAX_WORKERS = 16
 TIMEOUT = 3
 # A WSL guest or Windows host answers through wsl.exe or cmd.exe, which starts slower.
 SLOW_HOST_FACTOR = 3
-FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key', 'item_keys')
+FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code',
+          'item_key', 'item_keys', 'run_kind')
 FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    started=(int, float), ended=(int, float, type(None)),
-                   pid=(int, type(None)), exit_code=(int, type(None)), item_key=(str, type(None)), item_keys=(list,))
+                   pid=(int, type(None)), exit_code=(int, type(None)), item_key=(str, type(None)),
+                   item_keys=(list,), run_kind=(str, type(None)))
 
 
 class HostQueryError(ValueError):
@@ -678,7 +680,7 @@ def resume_run(service, run_id, prompt):
     if (prior.get('status') not in ('completed', 'failed') or prior.get('ended') is None
             or type(round_number) is not int or not 0 <= round_number < 2**64 - 1):
         raise ValueError('native writer has no ended round to resume')
-    if not prompt.strip() or len(prompt.encode()) > MAX_OUTPUT or '\\0' in prompt:
+    if not prompt.strip() or len(prompt.encode()) > MAX_OUTPUT or '\0' in prompt:
         raise ValueError('resume prompt must contain between 1 byte and 1 MiB of text')
 
     request = json.dumps({**{key: prior[key] for key in pins},

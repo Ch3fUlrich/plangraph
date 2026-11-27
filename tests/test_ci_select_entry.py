@@ -319,3 +319,81 @@ def test_browser():
     assert all(receipt.parent / row["stdout"] not in logs for row in browser_run["attempts"])
     assert json.loads(receipt.read_text()) == second
     assert json.loads((receipt.parent / first["record"]).read_text()) == first
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="default replay runs on Linux")
+@pytest.mark.parametrize("variant", ["all-observed", "missing", "teardown-error", "xpass"])
+def test_replay_distinguishes_real_skips_from_missing(tmp_path, monkeypatch, variant):
+    test_path = "tests/test_skips.py"
+    content = """import os
+
+import pytest
+
+
+@pytest.mark.skipif(True, reason="environment unavailable")
+def test_skipif():
+    raise AssertionError
+
+
+@pytest.fixture
+def after_skip(value):
+    yield
+    if value == 2 and os.environ["REPLAY_VARIANT"] == "teardown-error":
+        pytest.fail("teardown failed after the skip")
+
+
+@pytest.mark.parametrize("value", [1, 2], ids=["first - skipped", "second skipped"])
+def test_runtime_skip(value, after_skip):
+    print("output before skipping")
+    pytest.skip("shared runtime skip")
+
+
+@pytest.mark.xfail(reason="known failure")
+def test_expected_failure():
+    assert False
+
+
+@pytest.mark.xfail(os.environ["REPLAY_VARIANT"] == "xpass", reason="unexpected success", strict=False)
+def test_maybe_missing():
+    pass
+"""
+    conftest = """import os
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ["REPLAY_VARIANT"] == "missing" and not config.getoption("--collect-only"):
+        items[:] = [item for item in items if item.name != "test_maybe_missing"]
+"""
+    root, base, head = tree(tmp_path, {test_path: content}, {"tests/conftest.py": conftest})
+    telemetry = tmp_path / "telemetry"
+    monkeypatch.setenv("PLANGRAPH_TELEMETRY_DIR", str(telemetry))
+    monkeypatch.setenv("REPLAY_VARIANT", variant)
+    args = ["entry-set", "--root", str(root), "--base", base, "--head", head,
+            "--replay", "--environment", "default"]
+
+    result = ci_select.main(args)
+    receipt_path = telemetry / "entry-replay" / head / "default.json"
+    receipt = json.loads(receipt_path.read_text())
+    expected = {
+        "test_skipif": "skip",
+        "test_runtime_skip[first - skipped]": "skip",
+        "test_runtime_skip[second skipped]": "fail" if variant == "teardown-error" else "skip",
+        "test_expected_failure": "skip",
+        "test_maybe_missing": "missing" if variant == "missing" else "pass",
+    }
+    reports = {receipt_path.parent / row["outcomes"] for row in receipt["attempts"]}
+    assert len(reports) == 5
+    recorded = {"pass": "passed", "skip": "skipped", "fail": "failed"}
+    for report in reports:
+        assert json.loads(report.read_text(encoding="utf-8"))["outcomes"] == {
+            f"{test_path}::{name}": recorded[state] for name, state in expected.items() if state != "missing"}
+
+    assert [row["returncode"] for row in receipt["attempts"]] == [int(variant == "teardown-error")] * 5
+    if variant == "xpass":
+        expected["test_maybe_missing"] = "fail"
+    assert receipt["observations"] == {f"{test_path}::{name}": [state] * 5 for name, state in expected.items()}
+    assert receipt["flaky"] == []
+    unsuccessful = [f"{test_path}::{name}" for name, state in expected.items() if state in ("missing", "fail")]
+    assert receipt["errors"] == (["unsuccessful observations: " + ", ".join(unsuccessful)] if unsuccessful else [])
+    assert receipt["ok"] == (variant == "all-observed")
+    assert result == int(variant != "all-observed")
