@@ -101,14 +101,13 @@ fn launch_inner(
                 Err(error) => return Launch::Uncertain(format!("host link state: {error}")),
             }
         }
-        if let Some(distro) = registry
-            .resolve(&host.id)
-            .and_then(|host| host.wsl_distro.as_deref())
-        {
-            if !host_command::valid_wsl_distro(distro) {
-                return Launch::Refused("invalid WSL distribution".into());
+        if let Some(entry) = registry.resolve(&host.id) {
+            if let Some(distro) = entry.wsl_distro.as_deref() {
+                match host_command::wsl_exec(distro, entry.env.get("PATH").map(String::as_str)) {
+                    Ok(args) => cmd.args(args),
+                    Err(error) => return Launch::Refused(error.to_string()),
+                };
             }
-            cmd.args(["wsl.exe", "--distribution", distro, "--exec"]);
         }
         cmd.arg("pg-spawnd");
         cmd

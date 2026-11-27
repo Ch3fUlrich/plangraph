@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from enum import StrEnum
 import json
 import os
 import re
@@ -22,6 +23,13 @@ import urllib.request
 
 TIMEOUT = 10
 _watchdog_values = set()
+
+
+class DoctorStatus(StrEnum):
+    PASS = 'pass'
+    WARN = 'warn'
+    FAIL = 'fail'
+    SKIP = 'skip'
 
 
 def load_watchdog_env():
@@ -88,7 +96,7 @@ async def mcp(module, command=None):
         tools = (await receive(2)).get('tools', [])
         if not tools:
             raise ValueError('tools/list returned no tools')
-        return 'pass', f'{len(tools)} tools'
+        return DoctorStatus.PASS, f'{len(tools)} tools'
     try:
         return await asyncio.wait_for(exchange(), TIMEOUT)
     finally:
@@ -117,7 +125,7 @@ def whoami():
         if response.status != 200:
             raise ValueError(f'HTTP {response.status}')
         identity = json.load(response)
-    return 'pass', f"principal={identity['name']} role={identity['role']}"
+    return DoctorStatus.PASS, f"principal={identity['name']} role={identity['role']}"
 
 
 def completion():
@@ -125,20 +133,20 @@ def completion():
     sink = KeeperSink()
     if not sink.url or not sink.token_file:
         raise KeeperNotConfigured('completion requires PG_URL and PG_TOKEN_FILE')
-    return 'pass', 'keeper completion sink configured'
+    return DoctorStatus.PASS, 'keeper completion sink configured'
 
 
 async def harness(name):
     binary = shutil.which(name)
     if binary is None:
-        return 'skip', 'not on PATH'
+        return DoctorStatus.SKIP, 'not on PATH'
     child = await asyncio.create_subprocess_exec(binary, '--version',
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     try:
         output, _ = await asyncio.wait_for(child.communicate(), TIMEOUT)
         if child.returncode:
             raise RuntimeError(f'version exited {child.returncode}')
-        return 'pass', (output.decode(errors='replace').splitlines() or [''])[0]
+        return DoctorStatus.PASS, (output.decode(errors='replace').splitlines() or [''])[0]
     finally:
         if child.returncode is None:
             try:
@@ -157,7 +165,7 @@ def claude_shell(environ=None, settings_path=None, platform=None):
     """
     environ = os.environ if environ is None else environ
     if (platform or sys.platform) == 'win32':
-        return 'skip', 'shell override applies to POSIX hosts'
+        return DoctorStatus.SKIP, 'shell override applies to POSIX hosts'
     value = environ.get('CLAUDE_CODE_SHELL')
     if not value:
         path = settings_path or Path(environ.get('CLAUDE_CONFIG_DIR')
@@ -169,8 +177,8 @@ def claude_shell(environ=None, settings_path=None, platform=None):
             value = None
     shell = value or environ.get('SHELL') or ''
     if Path(shell).name == 'bash':
-        return 'pass', 'sessions run ' + shell
-    return 'fail', ('sessions run ' + (shell or 'the login shell') +
+        return DoctorStatus.PASS, 'sessions run ' + shell
+    return DoctorStatus.FAIL, ('sessions run ' + (shell or 'the login shell') +
                     ' (zsh word-splitting, nomatch and = expansion break agent commands);'
                     ' set CLAUDE_CODE_SHELL=/bin/bash in the Claude settings env block')
 
@@ -209,7 +217,7 @@ def host_path(checks):
         detail = 'host identity mismatch: no matching id or alias'
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         detail = 'invalid host registry'
-    checks.append(dict(name='host_path', status='fail', detail=detail))
+    checks.append(dict(name='host_path', status=DoctorStatus.FAIL, detail=detail))
     return None
 
 
@@ -234,22 +242,22 @@ def _memory_access():
         result = subprocess.run(['og-memory', 'probe-access'], check=False,
             stdin=subprocess.DEVNULL, capture_output=True, timeout=2 * TIMEOUT + 2)
     except FileNotFoundError:
-        return 'fail', 'og-memory unavailable'
+        return DoctorStatus.FAIL, 'og-memory unavailable'
     except subprocess.TimeoutExpired:
-        return 'fail', 'og-memory probe timed out'
+        return DoctorStatus.FAIL, 'og-memory probe timed out'
     except OSError:
-        return 'fail', 'og-memory probe unavailable'
+        return DoctorStatus.FAIL, 'og-memory probe unavailable'
     success = b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13'
     if result.returncode == 0 and result.stdout.strip() == success and not result.stderr:
-        return 'pass', success.decode('ascii')
+        return DoctorStatus.PASS, success.decode('ascii')
     reason = result.stderr.strip()
     if result.returncode == 1 and not result.stdout and reason in {
         b'HttpUnconfigured', b'HttpConfigurationUnavailable', b'HealthUnavailable',
         b'HealthTimeout', b'WrongGraph', b'MissingHub', b'Unauthorized', b'Forbidden',
         b'UnsupportedApi', b'ReadUnavailable', b'ReadTimeout',
     }:
-        return 'fail', reason.decode('ascii')
-    return 'fail', 'unexpected og-memory probe response'
+        return DoctorStatus.FAIL, reason.decode('ascii')
+    return DoctorStatus.FAIL, 'unexpected og-memory probe response'
 
 
 async def _diagnose(probe, checks, memory_probe=False):
@@ -288,7 +296,7 @@ async def _diagnose(probe, checks, memory_probe=False):
             detail = 'unavailable'
         except (OSError, subprocess.TimeoutExpired, ValueError, UnicodeError):
             pass
-        return [dict(name='ps_hosts', status='fail', detail=detail)]
+        return [dict(name='ps_hosts', status=DoctorStatus.FAIL, detail=detail)]
     checks.extend(await asyncio.to_thread(source_checks))
 
     async def check(name, operation):
@@ -296,7 +304,7 @@ async def _diagnose(probe, checks, memory_probe=False):
             result = operation()
             status, detail = await result if hasattr(result, '__await__') else result
         except Exception as exc:
-            status, detail = 'fail', f'{type(exc).__name__}: {exc}'
+            status, detail = DoctorStatus.FAIL, f'{type(exc).__name__}: {exc}'
         checks.append(dict(name=name, status=status, detail=clean(detail)))
 
     for component in ('spawner', 'keeper'):
@@ -309,7 +317,7 @@ async def _diagnose(probe, checks, memory_probe=False):
     for name in HARNESSES:
         await check('harness_' + name, lambda: harness(name))
     if not any(shutil.which(name) for name in HARNESSES):
-        await check('harness_any', lambda: ('fail', 'no harness on PATH'))
+        await check('harness_any', lambda: (DoctorStatus.FAIL, 'no harness on PATH'))
 
     service = None
     def route(role):
@@ -322,11 +330,11 @@ async def _diagnose(probe, checks, memory_probe=False):
         if not plan.legs:
             raise ValueError('no routed leg')
         plans[role] = [leg.id for leg in plan.legs[:3]]
-        return 'pass', plan.legs[0].id
+        return DoctorStatus.PASS, plan.legs[0].id
 
     async def probe_role(role):
         if not probe:
-            return 'skip', 'enable with --probe'
+            return DoctorStatus.SKIP, 'enable with --probe'
         if role not in plans:
             raise ValueError('no routed legs to probe')
         kwargs = {'role': role} if role == 'review' else {}
@@ -335,12 +343,12 @@ async def _diagnose(probe, checks, memory_probe=False):
         outcomes = {row['id']: row for row in rows}
         detail = '; '.join(leg + ': ' + ('answered' if outcomes.get(leg, {}).get('ok')
             else str(outcomes.get(leg, {}).get('reason', 'no probe result'))) for leg in plans[role])
-        return ('pass' if any(outcomes.get(leg, {}).get('ok') for leg in plans[role]) else 'fail'), detail
+        return (DoctorStatus.PASS if any(outcomes.get(leg, {}).get('ok') for leg in plans[role]) else DoctorStatus.FAIL), detail
 
     for role in ('implement', 'review'):
         await check('route_' + role, lambda: route(role))
         await check('probe_' + role, lambda: probe_role(role))
-    return dict(checks=checks, ok=not any(row['status'] == 'fail' for row in checks))
+    return dict(checks=checks, ok=not any(row['status'] == DoctorStatus.FAIL for row in checks))
 
 
 def main(argv=None):

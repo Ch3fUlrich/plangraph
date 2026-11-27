@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import time
 
+from . import doctor as host_doctor
 from .doctor import clean
 from .private_io import atomic_write_private
 from .remote_ps import configured_hosts
@@ -419,8 +420,15 @@ def probe_host(name, config, state, runner, timeout, *, persist):
                 if not isinstance(ok, bool) or not isinstance(rows, list):
                     raise ValueError()
                 for row in rows:
-                    if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
+                    status = row['status']
+                    if not isinstance(row['name'], str) or not isinstance(status, str):
                         raise ValueError()
+                    try:
+                        host_doctor.DoctorStatus(status)
+                    except ValueError:
+                        label = status if re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', status) else 'unrecognized'
+                        fail('doctor', f'unknown_status {label}')
+                        return None
                 return ok, rows
             doctor = measure('doctor', prefix + 'doctor --json', parse_doctor, **spawner('doctor --json'))
             if doctor is not None:

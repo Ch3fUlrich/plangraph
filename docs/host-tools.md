@@ -232,18 +232,26 @@ entry, current main checkout in `repos.plangraph.root`, role-specific
 reservations, and memory floor. List the repository IDs approved for SSH
 transport in the registry's `public_repos` field. A workstation WSL entry uses
 `os: linux`, the Windows SSH endpoint in `ssh_target`, and the distribution in
-`wsl_distro`. Placement, readiness and status probes reach the guest
-through `wsl.exe --exec pg-spawnd steps` with a JSON step plan on stdin, never a shell; install
-`pg-spawnd` on the guest's `PATH`. Its paths use the distribution's Linux filesystem. Set
-`placement_fallback: true` on the orchestration host to rank it after ready
+`wsl_distro`. Set `env.PATH` to the guest's Linux tool path, including the
+directory where `pg-spawnd` is installed. Placement, readiness and status
+probes carry that PATH through `wsl.exe --exec` and send a JSON step plan on
+stdin. Install the matching `pg-spawnd steps` runner on the guest before using
+the route. When a registry entry sets `env.PATH`, Python WSL step plans fill
+in unset `PG_URL`, `PG_TOKEN_FILE`, `PLANGRAPH_HOST_NAME`, and
+`CLAUDE_CODE_SHELL` from the guest's `plangraph.env`. Set `PG_TOKEN_FILE` to an
+absolute or home-relative path on the guest. Doctor `skip` rows leave readiness
+passing when the remaining checks pass.
+
+Set `placement_fallback: true` on the orchestration host to rank it after ready
 workers. Among ready worker hosts, placement uses free memory above each
 host's floor. The run record includes the selected host and placement reason.
 
 After merge, install the matching spawner and `pg-host-readiness` binaries on
 the three hosts and ensure noninteractive SSH can find them. Configure the
-registry on each host so `self` names that host. Regenerate the status and
-session projections with `python3 -m plangraph.fleet_sync genconfig write`,
-then restart the affected spawner units. Run
+registry on each host so `self` names that host. `host-sync --install-release`
+refreshes both projections during installation. After a registry-only edit,
+run `python3 -m plangraph.fleet_sync genconfig write` to refresh them immediately.
+Restart the affected spawner units. Run
 `python3 -m plangraph.spawner.host_ready --json` on each placement origin.
 Confirm each host reports a trusted checkout, matching main SHA, working
 tools and login, a pre-push test interpreter (the checkout's `.venv`, else
@@ -251,6 +259,18 @@ tools and login, a pre-push test interpreter (the checkout's `.venv`, else
 session `.service` unit (when it has one) keeping the group and other write bits clear, and no failures. Refresh the `host_ready` readiness record before its
 ten-minute freshness window expires, and the `package-readiness` record before
 its 120-second window expires.
+
+The deploy manifest assigns the `host-ready.service` and `host-ready.timer`
+user units to the keeper role. Install the files from `deploy/host-ready/` in
+the orchestration user's `~/.config/systemd/user/`, run `systemctl --user
+daemon-reload`, then enable `host-ready.timer` with `systemctl --user enable
+--now host-ready.timer`. The timer starts a sweep 30 seconds after boot and
+60 seconds after the previous sweep ends. Each sweep runs
+`python3 -m plangraph.spawner.host_ready` for all registry readiness candidates
+and writes `~/.local/state/plangraph/host-ready/<host>.json`. Check the schedule
+with `systemctl --user list-timers host-ready.timer` and individual results
+with `journalctl --user -u host-ready.service`. Check each host file's `ok` and
+`checked_at` fields before relying on it for placement.
 
 Submit a writer and a review from a placement origin and verify both run types
 land on the remote Linux worker and on the workstation WSL. Record the run IDs

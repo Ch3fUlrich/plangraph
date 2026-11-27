@@ -196,6 +196,14 @@ env_files = ["worker-liveness.env"]
 first_run = "systemctl --user start pg-worker-liveness.service exits 0 and journals one verdict per worker"
 
 [[unit]]
+name = "host-ready"
+dir = "host-ready"
+files = ["host-ready.service", "host-ready.timer"]
+hosts = ["keeper"]
+env_files = ["plangraph.env"]
+first_run = "systemctl --user start host-ready.service journals a verdict and refreshes the readiness file for each registry candidate"
+
+[[unit]]
 name = "plangraph-agents-view"
 files = ["plangraph-agents-view.service", "plangraph-agents-view.timer"]
 hosts = ["keeper"]
