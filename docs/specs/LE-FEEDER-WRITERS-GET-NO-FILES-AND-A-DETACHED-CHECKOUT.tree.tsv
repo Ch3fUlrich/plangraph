@@ -1,15 +1,15 @@
 path	disposition	required	row IDs	label
-changelog.d/LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT.md	write	yes	E1 E2	predicted
-docs/writer-feeder.md	write	yes	E1 E2	observed
-rust/plangraph-cli/src/feeder/adapters.rs	write	yes	E2	observed
-rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed
-rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E1 E2	observed
-rust/plangraph-cli/src/feeder/selection.rs	write	yes	E1	observed
-rust/plangraph-cli/src/feeder/sources.rs	write	yes	E2	observed
-rust/plangraph-cli/src/feeder/spec.rs	write	yes	E1	predicted
-rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E1	observed
-rust/plangraph-cli/tests/feeder.rs	write	yes	E1 E2	observed
-rust/plangraph-cli/tests/feeder_batches.rs	write	yes	E1	observed
-rust/plangraph-cli/tests/feeder_contracts.rs	write	yes	E1	observed
-rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E1	observed
-rust/plangraph-cli/tests/feeder_support/mod.rs	write	yes	E1 E2	observed
+changelog.d/LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT.md	write	yes	E1 E2	predicted (<= 15 changed lines; <= 15 final lines)
+docs/writer-feeder.md	write	yes	E1 E2	observed (<= 30 changed lines; <= 292 final lines)
+rust/plangraph-cli/src/feeder/adapters.rs	write	yes	E1 E2	observed (<= 30 changed lines; <= 594 final lines)
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed (<= 30 changed lines; <= 355 final lines)
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E1 E2	observed (<= 30 changed lines; <= 394 final lines)
+rust/plangraph-cli/src/feeder/selection.rs	write	yes	E1	observed (<= 15 changed lines; <= 279 final lines)
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E1 E2	observed (<= 60 changed lines; <= 790 final lines)
+rust/plangraph-cli/src/feeder/spec.rs	write	yes	E1 E2	predicted (<= 260 changed lines; <= 260 final lines)
+rust/plangraph-cli/src/feeder/workflow.rs	write	yes	E1	observed (<= 40 changed lines; <= 366 final lines)
+rust/plangraph-cli/tests/feeder.rs	write	yes	E1 E2	observed (<= 260 changed lines; <= 713 final lines)
+rust/plangraph-cli/tests/feeder_batches.rs	write	yes	E1	observed (<= 20 changed lines; <= 593 final lines)
+rust/plangraph-cli/tests/feeder_contracts.rs	write	yes	E1	observed (<= 20 changed lines; <= 314 final lines)
+rust/plangraph-cli/tests/feeder_slots.rs	write	yes	E1	observed (<= 10 changed lines; <= 111 final lines)
+rust/plangraph-cli/tests/feeder_support/mod.rs	write	yes	E1 E2	observed (<= 80 changed lines; <= 281 final lines)

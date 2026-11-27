@@ -1,14 +1,77 @@
 {
   "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT.md": {
+      "max_changed_lines": 15,
+      "max_final_lines": 15
+    },
+    "docs/writer-feeder.md": {
+      "max_changed_lines": 30,
+      "max_final_lines": 292
+    },
+    "rust/plangraph-cli/src/feeder/adapters.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 594
+    },
+    "rust/plangraph-cli/src/feeder/mod.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 355
+    },
+    "rust/plangraph-cli/src/feeder/runtime.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 394
+    },
+    "rust/plangraph-cli/src/feeder/selection.rs": {
+      "max_changed_lines": 15,
+      "max_final_lines": 279
+    },
+    "rust/plangraph-cli/src/feeder/sources.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 790
+    },
+    "rust/plangraph-cli/src/feeder/spec.rs": {
+      "max_changed_lines": 260,
+      "max_final_lines": 260
+    },
+    "rust/plangraph-cli/src/feeder/workflow.rs": {
+      "max_changed_lines": 40,
+      "max_final_lines": 366
+    },
+    "rust/plangraph-cli/tests/feeder.rs": {
+      "max_changed_lines": 260,
+      "max_final_lines": 713
+    },
+    "rust/plangraph-cli/tests/feeder_batches.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 593
+    },
+    "rust/plangraph-cli/tests/feeder_contracts.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 314
+    },
+    "rust/plangraph-cli/tests/feeder_slots.rs": {
+      "max_changed_lines": 10,
+      "max_final_lines": 111
+    },
+    "rust/plangraph-cli/tests/feeder_support/mod.rs": {
+      "max_changed_lines": 80,
+      "max_final_lines": 281
+    }
+  },
   "cards": {
     "LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT": {
-      "outcome": "The feeder claims only items whose spec card on main names a write set, gives the writer exactly those files and its lane branch, and releases every claim of a run that ends without a commit.",
+      "outcome": "The feeder claims only items whose spec card on origin's main names a write set, uses those files as the item's scope everywhere, gives the writer exactly those files and its lane branch, and releases every claim of a run that ended with no commit at all.",
       "read_set": [
         "deploy/feeder/house-rules.md",
         "docs/PLANNER-KIT.md",
+        "docs/specs/FEEDER-WSL-RAM-AND-CPU-PRESSURE.card.yaml",
+        "rust/pg-spawnd/src/batch_writer_brief.rs",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_base.rs",
         "rust/pg-spawnd/src/native_writer_host.rs",
         "rust/plangraph-cli/tests/feeder_transport.rs",
-        "rust/worker-core/src/host_command.rs"
+        "rust/worker-core/src/host_command.rs",
+        "src/plangraph/spawner/service.py"
       ],
       "write_set": [
         "changelog.d/LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT.md",
@@ -30,7 +93,7 @@
       "risk_tags": [
         "live-step"
       ],
-      "estimate_tokens": 90000,
+      "estimate_tokens": 110000,
       "window_class": "128k",
       "heldout_check": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test feeder_batches --test feeder_contracts --test feeder_slots --test feeder_transport && cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --lib feeder"
     }
