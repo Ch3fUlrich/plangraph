@@ -1,10 +1,10 @@
 # LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE
 
-Outcome. A change to `skills/<name>/evals/<file>.json` selects the skill tests (pytest only), like a skill page, instead of the full suite.
+Outcome. A change to `skills/<name>/evals/evals.json` selects the skill tests (pytest only), like a skill page, instead of the full suite.
 
 - plan_source. Keeper item plangraph:LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE, 2026-11-27, priority 10, D-7047, D-7052.
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
-- card SHA-256. 664de84c8e3c74d6e4e78eada450bfc45aa7b3af67c631b012622745227e0d32
+- card SHA-256. 658f1937ef572351cff92529b8ce6324b9b4d967b27ff6362ba0d04c9eeee4fd
 - tree SHA-256. d75cd080d8174c6586b9918c6aea4876f82e78c6c05904dc2598116ff1725806
 - evidence_after_deploy. No deployment: the selector runs from the checkout. Record the fast-checks log of the next skill-only head (skill page plus evals.json) with `pytest=true`, `full=false` and a total wall under 300 s.
 
@@ -18,7 +18,7 @@ Outcome. A change to `skills/<name>/evals/<file>.json` selects the skill tests (
 
 ## Decisions
 
-- D1. One predicate `_is_skill_test_input(p)` covers both skill inputs: `skills/**.md` (unchanged) and exactly `skills/<name>/evals/<file>.json` (four path segments, third is `evals`, name ends `.json`). Deeper or other JSON under `skills/` stays unknown, so it still runs the full suite. Use segment checks, not `fnmatch`, because `*` in `fnmatchcase` crosses `/`.
+- D1. One predicate `_is_skill_test_input(p)` covers both skill inputs: `skills/**.md` (unchanged) and exactly `skills/<name>/evals/evals.json` (four path segments, third `evals`, fourth `evals.json`), the one file its pytest readers open (`tests/test_skill_evals.py:14-18`, `tests/test_planning_skill_token.py:57-58`). Any other file under `evals/`, deeper JSON or other JSON under `skills/` stays unknown, so it still runs the full suite. Use segment checks, not `fnmatch`, because `*` in `fnmatchcase` crosses `/`.
 - D2. `_is_known()` returns true for the predicate. The loop's existing skill branch uses it: `pytest=true`, then `continue` (no `pytest-postgres`, no Rust, no browser).
 - D3. Net growth of `tools/ci_select.py` is at most 8 lines (the file must stay at or under 800). No other selector behaviour changes.
 
@@ -32,7 +32,7 @@ Outcome. A change to `skills/<name>/evals/<file>.json` selects the skill tests (
 | --- | --- | --- | --- |
 | B1 | E1 | `select(["skills/x/evals/evals.json"])` gives `pytest=true`, every other suite false, `full=false`. The CLI prints `pytest=true`, `rust=false`, `browser=false` and `full=false`. | X1 X2 |
 | B2 | E1 | A skill page plus its evals.json selects the same as the page alone. | X1 |
-| B3 | E1 | `skills/x/evals/sub/a.json`, `skills/x/evals.json` and `skills/x/scripts/x.sh` still select `full=true`. | X3 |
+| B3 | E1 | `skills/x/evals/other.json`, `skills/x/evals/sub/evals.json`, `skills/x/evals.json` and `skills/x/scripts/x.sh` still select `full=true`. | X3 |
 
 ## Verification
 

@@ -8,7 +8,7 @@
   },
   "cards": {
     "LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE": {
-      "outcome": "A change to skills/<name>/evals/<file>.json selects the skill tests (pytest only), like a skill page, instead of the full suite.",
+      "outcome": "A change to `skills/<name>/evals/evals.json` selects the skill tests (pytest only), like a skill page, instead of the full suite.",
       "read_set": [
         ".docs-map",
         "tests/test_planning_skill_token.py",
