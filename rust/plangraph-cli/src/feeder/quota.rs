@@ -1,6 +1,7 @@
 use super::adapters::{quota_snapshots, Env};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 pub(super) fn field<'a>(r: &'a Value, names: &[&str]) -> Option<&'a Value> {
     names.iter().find_map(|n| r.get(n).filter(|v| !v.is_null()))
 }
@@ -199,6 +200,78 @@ pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) 
         .reduce(f64::max)
 }
 
+fn has_codex_rows(rows: &Value) -> bool {
+    rows.as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|row| identity(row).is_some_and(|(provider, _)| provider == "codex"))
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct StaleQuota(pub String);
+
+fn newest_codex_age(rows: &Value, now: i64) -> Option<i64> {
+    rows.as_array()?
+        .iter()
+        .filter(|row| identity(row).is_some_and(|(provider, _)| provider == "codex"))
+        .filter_map(|row| observed(row).and_then(stamp))
+        .max()
+        .map(|at| now.saturating_sub(at))
+}
+
+/// Read the center envelope under the worker's own envelope and observation age limits.
+fn center_rows(
+    text: Option<&str>,
+    now: i64,
+    max_age: i64,
+    observation_max_age: i64,
+) -> Result<Value, StaleQuota> {
+    let doc: Option<Value> = text.and_then(|text| serde_json::from_str(text).ok());
+    let observed_at = doc.as_ref().and_then(|doc| doc["observed_at"].as_i64());
+    let rows = doc.as_ref().map_or(&Value::Null, |doc| &doc["rows"]);
+    let snapshot_age = observed_at.map(|at| now.saturating_sub(at));
+    let problem = if doc.is_none() {
+        "no readable center quota snapshot"
+    } else if snapshot_age.is_none() {
+        "center quota snapshot has no valid observed_at"
+    } else if snapshot_age.is_some_and(|age| !(0..=max_age).contains(&age)) {
+        "center quota snapshot is outside its freshness window"
+    } else if remaining(rows, now, observation_max_age).is_none() {
+        "center quota snapshot has no usable codex observation"
+    } else {
+        return Ok(rows.clone());
+    };
+    let age_text = |age: Option<i64>| age.map_or_else(|| "unknown".into(), |age| format!("{age}s"));
+    Err(StaleQuota(format!(
+        "quota_stale: {problem}; snapshot age {} (limit {max_age}s); codex observation age {} (limit {observation_max_age}s)",
+        age_text(snapshot_age),
+        age_text(newest_codex_age(rows, now)),
+    )))
+}
+
+/// A host with its own codex observations keeps its local reader. Otherwise live
+/// admission reads the center snapshot. A quota supplied in explicit facts keeps
+/// the existing fallback for an unavailable local reader.
+pub(super) fn rows_for_host(
+    local: Option<Value>,
+    supplied: Option<f64>,
+    center: &Path,
+    now: i64,
+    max_age: i64,
+    observation_max_age: i64,
+) -> Result<Option<Value>, StaleQuota> {
+    if supplied.is_some() || local.as_ref().is_some_and(has_codex_rows) {
+        return Ok(local);
+    }
+    center_rows(
+        std::fs::read_to_string(center).ok().as_deref(),
+        now,
+        max_age,
+        observation_max_age,
+    )
+    .map(Some)
+}
+
 /// Print the most recent available observation for each provider, account and window;
 /// `pool` prints the per-window readout of the codex pool instead.
 pub fn run_status(env: &Env, args: &[String]) -> i32 {
@@ -266,117 +339,4 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    #[test]
-    fn aliases_exhaustion_freshness_and_account_isolation() {
-        let now = 1_800_000_000;
-        let row = |a: &str, w: &str, at: i64, q: Value| json!({"provider":format!("codex:{a}"),"windowKey":w,"timestamp":at,"remainingPct":q});
-        let mut rows = vec![
-            row("a", "day", now - 10, json!(90)),
-            row("a", "week", now - 10, json!(30)),
-            row("b", "day", now - 20, json!(99)),
-            row("b", "day", now - 5, json!(2)),
-            row("broken", "day", now - 5, json!("bad")),
-        ];
-        assert_eq!(remaining(&json!(rows), now, 10800), Some(30.0));
-        rows[0]["isExhausted"] = json!("true");
-        assert_eq!(remaining(&json!(rows), now, 10800), Some(2.0));
-        rows[3]["isExhausted"] = json!("1");
-        assert_eq!(remaining(&json!(rows), now, 10800), Some(0.0));
-        assert_eq!(
-            remaining(
-                &json!([row("a", "day", now - 10801, json!(99))]),
-                now,
-                10800
-            ),
-            None
-        );
-        assert_eq!(
-            remaining(&json!([row("a", "day", now + 1, json!(99))]), now, 10800),
-            None
-        );
-        assert_eq!(remaining(&json!([]), now, 10800), None);
-    }
-    #[test]
-    fn newest_malformed_window_cannot_reuse_older_high_quota() {
-        let rows = json!([
-            {"provider":"codex","connection_id":"a","window_key":"day","created_at":"2026-01-01T00:00:00Z","remaining_percentage":99},
-            {"provider":"codex","connection_id":"a","window_key":"day","created_at":"2026-01-01T00:00:01Z","remaining_percentage":null},
-            {"provider":"codex","connection_id":"b","window_key":"day","created_at":"2026-01-01 00:00:01","remaining_percentage":40}
-        ]);
-        assert_eq!(remaining(&rows, 1767225602, 10800), Some(40.0));
-    }
-    #[test]
-    fn stamp_ns_reads_one_instant_alike_and_ranks_every_parseable_instant() {
-        let iso = stamp_ns(&json!("2027-01-15T08:00:00.250000000")).unwrap();
-        assert_eq!(stamp_ns(&json!(1_799_999_999.25 + 1.0)), Some(iso)); // seconds, a float fraction
-        assert_eq!(stamp_ns(&json!(1_799_999_999_250.0 + 1_000.0)), Some(iso)); // milliseconds
-        assert_eq!(stamp_ns(&json!("2027-01-15 08:00:00.25+00:00")), Some(iso));
-        assert_eq!(stamp_ns(&json!("2027-01-15 09:00:00.25 +01:00")), Some(iso));
-        // A fraction a float cannot hold keeps its decimal reading.
-        assert_eq!(
-            stamp_ns(&json!(1_800_000_000.1)),
-            stamp_ns(&json!("2027-01-15T08:00:00.1"))
-        );
-        // Absurd instants rank at the ends, bounded, never lost.
-        let (low, high) = (
-            stamp_ns(&json!(-1e100)).unwrap(),
-            stamp_ns(&json!(1e300)).unwrap(),
-        );
-        let future = stamp_ns(&json!("9999-12-31T00:00:00Z")).unwrap();
-        assert!(low < stamp_ns(&json!(-1.0)).unwrap() && high > future && future > STAMP_MAX_NS);
-        assert!(stamp_ns(&json!(-1.0)).unwrap() < 0 && iso < STAMP_MAX_NS);
-        assert!(low > i128::MIN / 2 && high < i128::MAX / 2);
-        assert_eq!(stamp_ns(&json!("not a time")), None);
-        // The snapshot reader writes a numeric time as its decimal text; a JSON number could
-        // not keep this fraction (default decoding moves it 200 ns).
-        let ms = stamp_ns(&json!("1795581490000.0015")).unwrap();
-        assert_eq!(ms, 1_795_581_490_000_001_500);
-        assert_eq!(stamp_ns(&json!("1795581490.0000015")), Some(ms));
-        assert_eq!(stamp_ns(&json!("1.5e-07")), Some(150));
-        // Exponent text keeps every digit: a float would drop the last nanosecond here.
-        assert_eq!(
-            stamp_ns(&json!("1.795581490000001501e12")),
-            Some(1_795_581_490_000_001_501)
-        );
-        assert_eq!(
-            stamp_ns(&json!("17955814900000015.01e-4")),
-            Some(1_795_581_490_000_001_501)
-        );
-        assert_eq!(stamp_ns(&json!("0.0000000000001e13")), Some(1_000_000_000));
-        assert_eq!(stamp_ns(&json!("-1.5e0")), Some(-1_500_000_000));
-        // An enormous exponent costs nothing: zero stays zero, a vanishing value is zero.
-        for text in [
-            "0e2147483647",
-            "0e2147483630",
-            "-0e2147483648",
-            "0e99999999999999999999",
-        ] {
-            assert_eq!(stamp_ns(&json!(text)), Some(0), "{text}");
-        }
-        for text in ["1e-2147483648", "1e-99999999999", "1e-99999999999999999999"] {
-            assert_eq!(stamp_ns(&json!(text)), Some(0), "{text}");
-        }
-        assert_eq!(
-            stamp_ns(&json!("+1800000000.5")),
-            stamp_ns(&json!(1_800_000_000.5))
-        );
-        for word in ["inf", "NaN", "e", "-", "."] {
-            assert_eq!(stamp_ns(&json!(word)), None, "{word}");
-        }
-    }
-    #[test]
-    fn the_legacy_readers_keep_an_empty_connection_id_apart_from_the_suffix_account() {
-        let now = 1_800_000_000;
-        let rows = json!([
-            {"provider":"codex:a","connection_id":"","window_key":"day","created_at":now - 10,"remaining_percentage":80},
-            {"provider":"codex","connection_id":"a","window_key":"week","created_at":now - 10,"remaining_percentage":10},
-        ]);
-        // Two accounts (the unnamed one and `a`): the pool takes the better, not the merged minimum.
-        assert_eq!(remaining(&rows, now, 10_800), Some(80.0));
-        assert_eq!(identity(&rows[0]), Some(("codex", "")));
-        assert_eq!(pool_identity(&rows[0]), Some(("codex", "a")));
-    }
-}
+mod tests;

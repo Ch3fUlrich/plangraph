@@ -1,5 +1,5 @@
 use super::*;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -191,6 +191,23 @@ fn pin_local(cmd: &mut Command, dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Start the spawner and collect its output. `ran` turns true the moment the process exists:
+/// from then on a failure to read its output does not prove that no writer started.
+fn run_spawner(
+    cmd: &mut Command,
+    ran: &mut bool,
+    collect: impl FnOnce(std::process::Child) -> std::io::Result<std::process::Output>,
+) -> Result<std::process::Output, String> {
+    let child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "cannot execute spawner")?;
+    *ran = true;
+    collect(child).map_err(|_| "spawner output unreadable".into())
+}
+
 pub(super) struct Adapters<'a, T> {
     pub keeper: T,
     pub env: &'a Env,
@@ -218,6 +235,32 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         self.keeper
             .call("release?fmt=json", Some(json!({"key":key,"epoch":epoch})))
             .map(|_| ())
+    }
+    /// Create the status file with `create_new`, so no two launches (of any feeder host on this
+    /// filesystem) ever hold the same file; a taken name gets a numeric suffix.
+    fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
+        let path = Path::new(wanted);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|_| "cannot create review directory")?;
+        }
+        let stem = wanted.strip_suffix(".txt").unwrap_or(wanted);
+        for n in 0..64 {
+            let candidate = if n == 0 {
+                wanted.to_owned()
+            } else {
+                format!("{stem}-{n}.txt")
+            };
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(_) => return Ok(candidate),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err("cannot create status file".into()),
+            }
+        }
+        Err("no free status file name".into())
     }
     fn rival(
         &mut self,
@@ -263,6 +306,21 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         Ok(None)
     }
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String> {
+        // The reserved status file is given back only while no writer can have started: when
+        // the spawner never ran. Once it ran, a lost or malformed receipt does not prove that
+        // no writer started, and a freed name could be reserved again while that writer appends.
+        let mut spawner_ran = false;
+        let result = self.launch(card, brief, &mut spawner_ran);
+        if result.is_err() && !spawner_ran {
+            if let Some(path) = card["writer_status_path"].as_str() {
+                let _ = fs::remove_file(path);
+            }
+        }
+        result
+    }
+}
+impl<T: Transport> Adapters<'_, T> {
+    fn launch(&self, card: &Value, brief: &str, spawner_ran: &mut bool) -> Result<Value, String> {
         let dir = tempfile::Builder::new()
             .prefix("launch-")
             .tempdir_in(&self.state)
@@ -285,7 +343,7 @@ impl<T: Transport> Launch for Adapters<'_, T> {
         .arg("--prompt-file")
         .arg(prompt_path)
         .args(["--wait", "0"]);
-        let out = cmd.output().map_err(|_| "cannot execute spawner")?;
+        let out = run_spawner(&mut cmd, spawner_ran, |child| child.wait_with_output())?;
         let mut run = receipt(&out.stdout, out.status.code())?;
         if run["host"].as_str().is_none_or(str::is_empty) {
             run["host"] = json!(self.host);
@@ -312,6 +370,24 @@ impl<T: Transport> Launch for Adapters<'_, T> {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    #[test]
+    fn status_files_are_reserved_exclusively() {
+        let dir = tempfile::tempdir().unwrap();
+        let wanted = dir.path().join("reviews/status-a-1-e1.txt");
+        let wanted = wanted.to_str().unwrap();
+        let mut a = Adapters {
+            keeper: Fake(RefCell::new(vec![])),
+            env: &Env::new(),
+            repo: dir.path().into(),
+            state: dir.path().into(),
+            host: "h".into(),
+        };
+        let first = a.allocate_status(wanted).unwrap();
+        let second = a.allocate_status(wanted).unwrap();
+        assert_eq!(first, wanted);
+        assert_eq!(second, wanted.replace("-e1.txt", "-e1-1.txt"));
+        assert!(Path::new(&first).is_file() && Path::new(&second).is_file());
+    }
     #[test]
     fn python_adapter_uses_the_selected_checkout_before_installed_sources() {
         let d = tempfile::tempdir().unwrap();
