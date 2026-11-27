@@ -1,16 +1,17 @@
 path	disposition	required	row IDs	label
 .docs-map	write	yes	E1 E2	predicted (<= 1 changed lines; <= 32 final lines)
-.docs-map-unmapped.json	write	yes	E1	new (<= 1300 changed lines; <= 1300 final lines)
+.docs-map-unmapped.json	write	yes	E1	new (<= 1500 changed lines; <= 1500 final lines)
 changelog.d/DOCS-CURRENT-WITH-EVERY-CHANGE-AND-AFTER-EVERY-TRAIN.md	write	yes	E1 E2	new (<= 2 changed lines; <= 2 final lines)
 docs/contributing/DOCS-CURRENT-WITH-EVERY-CHANGE-AND-AFTER-EVERY-TRAIN.md	write	yes	E1 E2	new (<= 40 changed lines; <= 40 final lines)
-rust/plangraph-cli/src/docs_audit.rs	write	yes	E2	new (<= 330 changed lines; <= 330 final lines)
-rust/plangraph-cli/src/docs_audit_tests.rs	write	yes	E2	new (<= 260 changed lines; <= 260 final lines)
+rust/plangraph-cli/src/docs_audit.rs	write	yes	E2	new (<= 420 changed lines; <= 420 final lines)
+rust/plangraph-cli/src/docs_audit_tests.rs	write	yes	E2	new (<= 380 changed lines; <= 380 final lines)
+rust/plangraph-cli/src/keeper_events.rs	write	yes	E2	predicted (<= 45 changed lines; <= 125 final lines)
 rust/plangraph-cli/src/lib.rs	write	yes	E2	predicted (<= 1 changed lines; <= 44 final lines)
 rust/plangraph-cli/src/main.rs	write	yes	E2	predicted (<= 3 changed lines; <= 217 final lines)
 tests/test_docs_coverage.py	write	yes	E1	new (<= 170 changed lines; <= 170 final lines)
-tests/test_merge_batch_docs_audit.py	write	yes	E2	new (<= 80 changed lines; <= 80 final lines)
-tools/check_changelog_docs.py	write	yes	E1	predicted (<= 120 changed lines; <= 567 final lines)
-tools/merge_batch.py	write	yes	E2	predicted (<= 24 changed lines; <= 293 final lines)
+tests/test_merge_batch_docs_audit.py	write	yes	E2	new (<= 140 changed lines; <= 140 final lines)
+tools/check_changelog_docs.py	write	yes	E1	predicted (<= 130 changed lines; <= 577 final lines)
+tools/merge_batch.py	write	yes	E2	predicted (<= 45 changed lines; <= 314 final lines)
 rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E2	observed
 rust/test_support/python.rs	read	yes	E2	observed
 tests/changelog_docs_util.py	read	yes	E1 E2	observed
