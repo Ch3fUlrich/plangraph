@@ -112,19 +112,7 @@ mod proc_fixture {
             fs::create_dir_all(&bin).unwrap();
             let row = json!([{"provider":"codex","window_key":"w","remaining_percentage":80,
                 "created_at":chrono::Utc::now().timestamp()}]);
-            let stub = bin.join("python3");
-            pg_worker_core::executable_test_support::write_executable(
-                &stub,
-                format!("#!/bin/sh\nprintf '%s' '{row}'\n"),
-            );
-            // A concurrent test's fork can still hold the stub's write descriptor, and the
-            // adapter would then fail with "text file busy" and read as no quota. The shared
-            // spawn retries until that window has passed; later forks cannot inherit it.
-            pg_worker_core::executable_test_support::spawn(
-                std::process::Command::new(&stub).stdout(std::process::Stdio::null()),
-            )
-            .and_then(|mut child| child.wait())
-            .unwrap();
+            write_local_quota_stub(&bin, &row);
             let env = Env::from([
                 ("PLANGRAPH_HOST_NAME".into(), host.into()),
                 ("PATH".into(), bin.to_string_lossy().into()),
@@ -152,6 +140,12 @@ mod proc_fixture {
             self.dir.path().join("proc").join(name)
         }
         fn decide(&self) -> Value {
+            self.decision().unwrap()
+        }
+        fn decision(&self) -> Result<Value, String> {
+            self.decision_with_runs(&[])
+        }
+        fn decision_with_runs(&self, running: &[Run]) -> Result<Value, String> {
             let policy: Policy =
                 toml::from_str(&fs::read_to_string(&self.options.policy).unwrap()).unwrap();
             decide(
@@ -162,12 +156,128 @@ mod proc_fixture {
                 policy,
                 None,
                 &self.ready,
-                &[],
+                running,
             )
-            .unwrap()
         }
     }
     const SATURATED: &str = "1000000.0 1000000.0 1000000.0 1/2 3\n";
+
+    fn write_local_quota_stub(bin: &Path, rows: &Value) {
+        let stub = bin.join("python3");
+        pg_worker_core::executable_test_support::write_executable(
+            &stub,
+            format!("#!/bin/sh\nprintf '%s' '{rows}'\n"),
+        );
+        // Wait for any concurrent fork holding the stub's write descriptor to exec.
+        pg_worker_core::executable_test_support::spawn(
+            std::process::Command::new(&stub).stdout(std::process::Stdio::null()),
+        )
+        .and_then(|mut child| child.wait())
+        .unwrap();
+    }
+
+    #[test]
+    fn center_quota_drives_live_admission_and_preserves_capacity_when_stale() {
+        let mut live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        write_local_quota_stub(&live.dir.path().join("bin"), &json!([]));
+        let path = live.dir.path().join("center-quota.json");
+        live.env.insert(
+            "PLANGRAPH_QUOTA_FACTS".into(),
+            path.to_string_lossy().into(),
+        );
+        let now = chrono::Utc::now().timestamp();
+        let write = |envelope_at, row_at| {
+            fs::write(&path, json!({"observed_at":envelope_at, "rows":[
+                {"provider":"codex:fixture","windowKey":"week","remainingPct":63,"timestamp":row_at}
+            ]}).to_string()).unwrap();
+        };
+        let running = [Run {
+            run_id: "run-after-sample".into(),
+            host: "dell".into(),
+            status: "running".into(),
+            started: Some((now + 60) as f64),
+            ..Run::default()
+        }];
+        let decide = || live.decision_with_runs(&running).unwrap();
+        write(now - 10, now - 20);
+        let fresh = decide();
+        assert_eq!(fresh["decision"], "would_spawn", "{fresh}");
+        assert_eq!(fresh["capacity"]["quota_remaining_percent"], 63.0);
+        assert_eq!(fresh["capacity"]["running_writers"], 1);
+        assert_eq!(fresh["capacity"]["free_ram_bytes"], 12_384_000_000u64);
+
+        for (envelope_at, row_at) in [(now - 950, now - 20), (now - 10, now - 11_000)] {
+            write(envelope_at, row_at);
+            let stale = decide();
+            assert_eq!(stale["decision"], "refused", "{stale}");
+            let reason = stale["reason"].as_str().unwrap();
+            assert!(reason.starts_with("quota_stale:"), "{reason}");
+            assert!(
+                reason.contains("snapshot age") && reason.contains("codex observation age"),
+                "{reason}"
+            );
+            for key in ["running_writers", "free_ram_bytes", "slots_by_ram"] {
+                assert_eq!(stale["capacity"][key], fresh["capacity"][key]);
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_pressure_refuses_above_the_limit_and_admits_at_the_limit() {
+        let live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        fs::create_dir(live.proc("pressure")).unwrap();
+        for (pressure, decision) in [(50.0, "would_spawn"), (70.15, "refused")] {
+            fs::write(
+                live.proc("pressure/cpu"),
+                format!(
+                "some avg10=1.0 avg60=30.0 avg300={pressure} total=4\nfull avg300=0.0 total=0\n"
+            ),
+            )
+            .unwrap();
+            let row = live.decide();
+            assert_eq!(row["decision"], decision, "{row}");
+            assert_eq!(row["capacity"]["cpu_pressure_avg300"], pressure);
+            assert_eq!(row["capacity"]["cpu_pressure_source"], "psi");
+            if decision == "refused" {
+                assert_eq!(row["reason"], "cpu_pressure avg300=70.15 > 50");
+            }
+        }
+    }
+
+    #[test]
+    fn on_wsl_the_windows_free_memory_less_its_floor_caps_the_sample() {
+        let live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        fs::write(
+            live.proc("version"),
+            "Linux version microsoft-standard-WSL2",
+        )
+        .unwrap();
+        let exe = live.dir.path().join("bin/powershell.exe");
+        pg_worker_core::executable_test_support::write_executable(
+            &exe,
+            "#!/bin/sh\nprintf '10000000\\r\\n'\n",
+        );
+        let row = live.decide();
+        let capacity = &row["capacity"];
+        assert_eq!(capacity["wsl_free_ram_bytes"], 16_384_000_000u64);
+        assert_eq!(capacity["windows_free_ram_bytes"], 10_240_000_000u64);
+        assert_eq!(capacity["windows_ram_source"], "live");
+        assert_eq!(capacity["free_ram_bytes"], 4_240_000_000u64);
+        assert_eq!(row["decision"], "refused");
+        assert!(!live.dir.path().join("state").exists());
+    }
+
+    #[test]
+    fn an_unreadable_windows_side_admits_nothing_and_says_why() {
+        let mut live = Live::new("dell", "[max_writers]\ndell = 5\n");
+        live.env
+            .insert("WSL_INTEROP".into(), "interop-fixture".into());
+        let reason = live.decision().unwrap_err();
+        assert!(
+            reason.starts_with("windows_ram_unreadable: powershell.exe:"),
+            "{reason}"
+        );
+    }
 
     #[test]
     fn live_decision_reports_ram_budget_and_psi_pacing() {

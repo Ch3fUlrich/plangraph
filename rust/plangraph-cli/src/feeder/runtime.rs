@@ -68,7 +68,7 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let local = sources::registry_policy(home, &mut policy)?;
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
-    let running = sources::runs(env, &o.repo, &ready, state, o.dry)?;
+    let running = sources::runs(env, &o.repo, &ready, state, home, o.dry)?;
     decide(
         home,
         env,
@@ -88,15 +88,28 @@ fn capacity_line(
     facts: &HostFacts,
     free_ram_bytes: u64,
     policy: &Policy,
-    cpu: capacity::Cpu,
+    measured: capacity::Measured,
     budget: &capacity::Budget,
 ) -> Value {
+    let cpu = measured.cpu;
+    let pressure_source = match (cpu.psi, facts.cpu_pressure_avg300) {
+        (false, _) => "load_fallback",
+        (true, Some(_)) => "psi",
+        (true, None) => "psi_unreadable",
+    };
     json!({
         "host":facts.host, "cpus":cpu.cpus, "load1":cpu.load1, "running_writers":facts.running_writers,
         "free_ram_bytes":free_ram_bytes, "ram_floor_bytes":policy.ram_floor_bytes,
+        "wsl_free_ram_bytes":measured.wsl_free_ram_bytes,
+        "windows_free_ram_bytes":measured.windows.map(|windows| windows.free_bytes),
+        "windows_ram_source":measured.windows.map(|windows| windows.source),
+        "windows_ram_floor_bytes":measured.windows.map(|_| policy.windows_ram_floor_bytes),
         "ram_per_writer_bytes":policy.ram_per_run_bytes,
         "slots_by_ram":budget.slots_by_ram, "new_writers_allowed":budget.new_writers_allowed,
         "load_paced":budget.load_paced, "writer_limit":budget.limit,
+        "cpu_pressure_avg300":facts.cpu_pressure_avg300,
+        "cpu_pressure_max_percent":policy.cpu_pressure_max_percent,
+        "cpu_pressure_source":pressure_source,
         "free_disk_bytes":facts.free_disk_bytes,
         "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
     })
@@ -121,26 +134,41 @@ fn decide(
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
     }
     let host = env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local);
-    let (sample, cpu) = if o.live {
+    let (sample, measured) = if o.live {
         let host = host
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, cpu) = capacity::sample(host, disk_root, env, &o.proc, o.open_psi)?;
-        (sample, Some(cpu))
+        let (sample, measured) = capacity::sample(
+            host, disk_root, env, &o.proc, o.open_psi, &policy, state, o.dry,
+        )?;
+        (sample, Some(measured))
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let mut facts = sources::facts(env, &o.repo, sample, running, home, &policy, local)?;
-    let measurement = if let Some(cpu) = cpu {
+    let (mut facts, stale_quota) =
+        match sources::facts(env, &o.repo, sample, running, home, &policy, local)? {
+            sources::FactsOutcome::Ready(facts) => (facts, None),
+            sources::FactsOutcome::QuotaStale { reason, facts } => (facts, Some(reason)),
+        };
+    let measurement = if let Some(measured) = measured {
         let free_ram_bytes = facts.free_ram_bytes;
-        let budget = capacity::apply(&mut facts, &mut policy, cpu)?;
-        Some(capacity_line(&facts, free_ram_bytes, &policy, cpu, &budget))
+        let budget = capacity::apply(&mut facts, &mut policy, measured.cpu)?;
+        Some(capacity_line(
+            &facts,
+            free_ram_bytes,
+            &policy,
+            measured,
+            &budget,
+        ))
     } else {
         None
     };
+    if let Some(reason) = stale_quota {
+        return Ok(json!({"decision":"refused","reason":reason,"capacity":measurement}));
+    }
     if !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item","capacity":measurement}));
     }
