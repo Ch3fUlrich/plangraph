@@ -259,12 +259,14 @@ impl HygieneReport {
             Ok(())
         } else {
             host().and_then(|host| {
-                alerts.into_iter().fold(Ok(()), |prior, event| {
+                let mut queued = Ok(());
+                for event in alerts {
                     let device = event["device"].as_u64().unwrap();
                     let result = enqueue_disk_hygiene(state, self.started_at, &host, event)
                         .map_err(|error| io::Error::other(format!("device {device}: {error}")));
-                    prior.and(result)
-                })
+                    queued = queued.and(result);
+                }
+                queued
             })
         };
         (report, queued)
