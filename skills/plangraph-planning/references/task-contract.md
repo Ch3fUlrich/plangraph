@@ -17,7 +17,7 @@ Call paths:    <every entry point that must enforce the rule, as path::Symbol>
 Reuse:         <existing helpers the writer must call, as path::Symbol>
 Tests:         <each test by name with the entry point it drives; fails on the base>
 Non-goals:     <what the task must not add or change>
-Design review: <run id and DESIGN-OK on this exact text; or, after 3 rounds, the recorded exception: who, when, spec hash, open points>
+Design review: <run id of the one design review, the spec sha after the correction round, open points for the implementer>
 Forbidden:     <API changes, new dependencies, unrelated refactors, repo-wide git operations>
 Interfaces:    <signatures/contracts the task must honour; copied, not discovered>
 Acceptance:    <one command; pass = exit 0 and "N passed">
