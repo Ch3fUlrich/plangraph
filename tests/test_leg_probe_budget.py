@@ -15,15 +15,16 @@ import pytest
 from test_leg_probe_w1 import _child_runner, _events, _leg
 
 
-def exercise_local_probe(tmp_path, monkeypatch, *, code, isolated=False, cancel=False, contended=False):
+def exercise_local_probe(tmp_path, monkeypatch, *, code, isolated=False, cancel=False, contended=False, seed=True):
     from plangraph.routing_support.leg_state import LegStateStore
     from plangraph.spawner import host_ready, leg_probe, probe_cleanup, resolver
 
     runner = _child_runner(tmp_path, monkeypatch, 'raise AssertionError("process created")', 'claude')
     leg = SimpleNamespace(model='claude-haiku-5-5', harness='claude')
     store = LegStateStore(tmp_path / 'legs.sqlite')
-    store.record_probe_pass(leg_probe.key(leg), caller='existing')
-    before = _events(store)
+    if seed:
+        store.record_probe_pass(leg_probe.key(leg), caller='existing')
+        before = _events(store)
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
     cargo_lease = host_ready.cargo_lease
     try_lock = host_ready._try_cargo_lock
@@ -95,7 +96,10 @@ def exercise_local_probe(tmp_path, monkeypatch, *, code, isolated=False, cancel=
     with cargo_lease(exclusive=True) as holder:
         result = asyncio.run(exercise(holder))
     assert calls == []
-    assert _events(store) == before
+    if seed:
+        assert _events(store) == before
+    else:
+        assert not store.path.exists()
     job, = runner.jobs.values()
     if cancel:
         assert job.status == 'cancelled'
@@ -119,6 +123,45 @@ def test_local_probe_failure_does_not_book(tmp_path, monkeypatch, code):
 
 def test_cancelled_probe_closes_dispatch_gate(tmp_path, monkeypatch):
     exercise_local_probe(tmp_path, monkeypatch, code='probe_pre_dispatch_timeout', isolated=True, cancel=True)
+
+
+def test_cancellation_during_failed_cleanup_does_not_book(tmp_path, monkeypatch):
+    from plangraph.routing_support.leg_state import LegStateStore
+    from plangraph.spawner import leg_probe, probe_cleanup
+
+    async def spawn(**kwargs):
+        return SimpleNamespace(job_id='finished', status='completed', exit_code=0, stdout='OK')
+
+    async def exercise():
+        entered, release = asyncio.Event(), asyncio.Event()
+        cleanup = probe_cleanup.cleanup
+
+        async def failed_cleanup(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            await cleanup(*args, **kwargs)
+            raise RuntimeError('fixture cleanup failure')
+
+        monkeypatch.setattr(probe_cleanup, 'cleanup', failed_cleanup)
+        runner = SimpleNamespace(spawn=spawn, cancel=_cancel_finished)
+        task = asyncio.create_task(leg_probe.probe(runner, leg, store=store, role='review'))
+        await asyncio.wait_for(entered.wait(), 2)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError) as cancelled:
+            await task
+        assert str(cancelled.value.__cause__) == 'fixture cleanup failure'
+
+    async def _cancel_finished(job_id):
+        pass
+
+    leg = _leg()
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_probe_pass('other', caller='existing')
+    before = _events(store)
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda *args, **kwargs: '/bin/true')
+    asyncio.run(exercise())
+    assert _events(store) == before
 
 
 @pytest.mark.parametrize('cancel', [False, True])

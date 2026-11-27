@@ -243,12 +243,12 @@ def test_timeout_mid_spawn_still_cancels_child(tmp_path, monkeypatch):
 
 def test_probe_shared_lease_timeout_does_not_book(tmp_path, monkeypatch):
     from test_leg_probe_budget import exercise_local_probe
-    exercise_local_probe(tmp_path, monkeypatch, code='cargo_lease_timeout')
+    exercise_local_probe(tmp_path, monkeypatch, code='cargo_lease_timeout', seed=False)
 
 
 def test_probe_outer_wait_for_before_dispatch_does_not_book(tmp_path, monkeypatch):
     from test_leg_probe_budget import exercise_local_probe
-    exercise_local_probe(tmp_path, monkeypatch, code='probe_pre_dispatch_timeout', isolated=True)
+    exercise_local_probe(tmp_path, monkeypatch, code='probe_pre_dispatch_timeout', isolated=True, seed=False)
 
 
 def test_probe_is_single_flight_per_leg(monkeypatch):

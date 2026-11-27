@@ -380,16 +380,19 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None, quota_rep
         from .probe_cleanup import cleanup
         cleanup_task = asyncio.create_task(cleanup(runner, spawn_task, job, root, owned_ids, fault=launch_state.fault))
         # A second caller cancellation must not interrupt tree cleanup.
-        cancelled = False
         while not cleanup_task.done():
             try:
-                await asyncio.shield(cleanup_task)
+                await asyncio.wait([cleanup_task])
             except asyncio.CancelledError:
                 launch_state.cancel()
-                cancelled = True
-        if cancelled:
+        try:
+            cleanup_task.result()
+        except Exception as exc:
+            if launch_state.cancelled:
+                raise asyncio.CancelledError from exc
+            raise
+        if launch_state.cancelled:
             raise asyncio.CancelledError
-        cleanup_task.result()
     if not infra:
         caller = 'review-probe' if review_mode else 'leg-probe'
         if ok:
