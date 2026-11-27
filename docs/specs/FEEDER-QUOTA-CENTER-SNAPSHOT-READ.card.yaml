@@ -1,0 +1,30 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FEEDER-QUOTA-CENTER-SNAPSHOT-READ": {
+      "outcome": "Read fresh center quota on live workers without local Codex observations and retain capacity diagnostics on stale-quota refusals.",
+      "read_set": [
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "src/plangraph/routing_support/quota_snapshots.py"
+      ],
+      "write_set": [
+        "changelog.d/FEEDER-QUOTA-CENTER-SNAPSHOT-READ.md",
+        "deploy/feeder/policy.toml",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/quota.rs",
+        "rust/plangraph-cli/src/feeder/quota/tests.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
+        "rust/plangraph-cli/src/feeder/sources.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 120000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test quota_status"
+    }
+  }
+}

@@ -2,11 +2,13 @@
 //! spawn is an effectful activity behind `Launch` (including compensating release).
 mod adapters;
 mod capacity;
+mod lanes;
 pub(crate) mod pool;
 pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
+mod windows_ram;
 mod workflow;
 pub(crate) use adapters::MERGE_INDEX_EXPIRED;
 pub use adapters::{Env, SlowKeeper, Transport};
@@ -47,10 +49,13 @@ pub struct Policy {
     pub max_writers: BTreeMap<String, usize>,
     pub host_aliases: BTreeMap<String, String>,
     pub quota_max_age_seconds: i64,
+    pub quota_facts_max_age_seconds: i64,
     pub ram_per_run_bytes: u64,
     pub ram_floor_bytes: u64,
+    pub windows_ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
     pub quota_floor_percent: f64,
+    pub cpu_pressure_max_percent: f64,
     pub facts_max_age_seconds: i64,
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
@@ -62,13 +67,16 @@ impl Default for Policy {
             max_writers: BTreeMap::from([("coding".into(), 3), ("dell".into(), 5)]),
             host_aliases: BTreeMap::new(),
             quota_max_age_seconds: 10_800,
+            quota_facts_max_age_seconds: 900,
             ram_per_run_bytes: 4_000_000_000,
             ram_floor_bytes: 3_000_000_000,
+            windows_ram_floor_bytes: 6_000_000_000,
             disk_floor_bytes: 10_000_000_000,
             quota_floor_percent: 10.0,
+            cpu_pressure_max_percent: 50.0,
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
-            batch_max_items: 1,
+            batch_max_items: 6,
         }
     }
 }
@@ -127,6 +135,8 @@ pub struct HostFacts {
     pub free_ram_bytes: u64,
     pub free_disk_bytes: u64,
     pub quota_remaining_percent: Option<f64>,
+    #[serde(default)]
+    pub cpu_pressure_avg300: Option<f64>,
     /// Unix seconds; admission compares with the caller's clock, not an internal clock.
     pub observed_at: i64,
     #[serde(default)]
@@ -149,8 +159,10 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         Some("kill_switch".to_string())
     } else if !p.quota_floor_percent.is_finite()
         || !(0.0..100.0).contains(&p.quota_floor_percent)
+        || !(0.0..=100.0).contains(&p.cpu_pressure_max_percent)
         || p.facts_max_age_seconds < 0
         || p.quota_max_age_seconds < 0
+        || p.quota_facts_max_age_seconds < 0
         || p.ram_per_run_bytes == 0
         || p.disk_floor_bytes == 0
         || p.estimate_tokens == 0
@@ -162,6 +174,14 @@ pub fn admit(f: &HostFacts, p: &Policy) -> Admission {
         Some("stale_facts".to_string())
     } else if limit.is_none() {
         Some(format!("unknown_host:{}", f.host))
+    } else if let Some(pressure) = f
+        .cpu_pressure_avg300
+        .filter(|pressure| *pressure > p.cpu_pressure_max_percent)
+    {
+        Some(format!(
+            "cpu_pressure avg300={pressure} > {}",
+            p.cpu_pressure_max_percent
+        ))
     } else if f.running_writers >= limit.unwrap_or(0) {
         Some("max_writers".to_string())
     } else if f.free_ram_bytes < p.ram_per_run_bytes {
@@ -241,6 +261,12 @@ pub fn same_host(a: &str, b: &str, p: &Policy) -> bool {
 pub trait Launch {
     fn claim(&mut self, key: &str) -> Result<u64, ClaimError>;
     fn start(&mut self, card: &Value, brief: &str) -> Result<Value, String>;
+    /// Reserve the status file of one launch exclusively and return its path. `wanted` is the
+    /// preferred path; the result is unique among every launch that shares the review
+    /// directory. The default has no shared directory to arbitrate and keeps `wanted`.
+    fn allocate_status(&mut self, wanted: &str) -> Result<String, String> {
+        Ok(wanted.into())
+    }
     fn release(&mut self, key: &str, epoch: u64) -> Result<(), String>;
     /// After `key` is claimed: the key of another claimed item (outside `batch`) whose files
     /// overlap `files`. The claimant yields to any such claim, so two hosts claiming at once

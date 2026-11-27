@@ -1,0 +1,40 @@
+[
+  {
+    "brief": "PLANGRAPH-BATCH-INPUT-V1\n{\"items\":[{\"brief\":\"Plan item: plangraph:ALPHA-1\\nTitle: ALPHA-1\\n\\n\\n\\nDone criteria:\\nnull\\n\\nFiles:\\nsrc/a.rs\\n\\nNotes:\\nfiles: [\\\"src/a.rs\\\"]\\n\\nTask metadata:\\n{}\\n\\nrules\\n\",\"key\":\"plangraph:ALPHA-1\",\"title\":\"ALPHA-1\"},{\"brief\":\"Plan item: plangraph:ALPHA-2\\nTitle: ALPHA-2\\n\\n\\n\\nDone criteria:\\nnull\\n\\nFiles:\\nsrc/a.rs\\n\\nNotes:\\nfiles: [\\\"src/a.rs\\\"]\\n\\nTask metadata:\\n{}\\n\\nrules\\n\",\"key\":\"plangraph:ALPHA-2\",\"title\":\"ALPHA-2\"}],\"run\":{\"base\":\"origin/main at launch\",\"fast_checks\":[\"python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2\",\"python3 tools/preflight.py --base origin/main --head HEAD --lane\"],\"name\":\"feeder-alpha-1\",\"review_cmd\":\"the native worker starts the review of another family on the exact head\",\"review_wait_seconds\":1800,\"round_cap\":8,\"status_file\":\"/reviews/status-alpha-1-aaaaaaaa-eN.txt\",\"trailers\":[\"Plan-Item: plangraph:ALPHA-1\",\"Plan-Item: plangraph:ALPHA-2\",\"Writer: codex/gpt-6.2-sol-medium (native-codex spawner run)\",\"Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one\"],\"worktree\":\"the run worktree (the current directory)\",\"writer_family\":\"gpt\"}}",
+    "card": {
+      "base_ref": "refs/heads/main",
+      "estimate_tokens": 100000,
+      "files": [
+        "src/a.rs"
+      ],
+      "item_key": "plangraph:ALPHA-1",
+      "item_keys": [
+        "plangraph:ALPHA-1",
+        "plangraph:ALPHA-2"
+      ],
+      "repo": "/repo",
+      "review_dir": "/reviews",
+      "run_kind": "native-codex",
+      "writer_status_path": "/reviews/status-alpha-1-aaaaaaaa-eN.txt"
+    }
+  },
+  {
+    "brief": "PLANGRAPH-BATCH-INPUT-V1\n{\"items\":[{\"brief\":\"Plan item: plangraph:BETA-1\\nTitle: BETA-1\\n\\n\\n\\nDone criteria:\\nnull\\n\\nFiles:\\nsrc/b.rs\\n\\nNotes:\\nfiles: [\\\"src/b.rs\\\"]\\n\\nTask metadata:\\n{}\\n\\nrules\\n\",\"key\":\"plangraph:BETA-1\",\"title\":\"BETA-1\"},{\"brief\":\"Plan item: plangraph:BETA-2\\nTitle: BETA-2\\n\\n\\n\\nDone criteria:\\nnull\\n\\nFiles:\\nsrc/b.rs\\n\\nNotes:\\nfiles: [\\\"src/b.rs\\\"]\\n\\nTask metadata:\\n{}\\n\\nrules\\n\",\"key\":\"plangraph:BETA-2\",\"title\":\"BETA-2\"}],\"run\":{\"base\":\"origin/main at launch\",\"fast_checks\":[\"python3 tools/affected_tests.py --base origin/main --head HEAD --local --files-only --run -n 2\",\"python3 tools/preflight.py --base origin/main --head HEAD --lane\"],\"name\":\"feeder-beta-1\",\"review_cmd\":\"the native worker starts the review of another family on the exact head\",\"review_wait_seconds\":1800,\"round_cap\":8,\"status_file\":\"/reviews/status-beta-1-aaaaaaaa-eN.txt\",\"trailers\":[\"Plan-Item: plangraph:BETA-1\",\"Plan-Item: plangraph:BETA-2\",\"Writer: codex/gpt-6.2-sol-medium (native-codex spawner run)\",\"Changelog: a changelog.d/<ITEM>.md fragment, or a Changelog: skip (<reason>) trailer on every commit without one\"],\"worktree\":\"the run worktree (the current directory)\",\"writer_family\":\"gpt\"}}",
+    "card": {
+      "base_ref": "refs/heads/main",
+      "estimate_tokens": 100000,
+      "files": [
+        "src/b.rs"
+      ],
+      "item_key": "plangraph:BETA-1",
+      "item_keys": [
+        "plangraph:BETA-1",
+        "plangraph:BETA-2"
+      ],
+      "repo": "/repo",
+      "review_dir": "/reviews",
+      "run_kind": "native-codex",
+      "writer_status_path": "/reviews/status-beta-1-aaaaaaaa-eN.txt"
+    }
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FEEDER-BATCH-S2-PER-RUN-STATUS-PATH": {
+      "outcome": "Give each feeder batch its own review status file and launch related ready items together under the six-item default.",
+      "read_set": [
+        "deploy/systemd/pg-feeder.service",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "src/plangraph/review/prompt.py"
+      ],
+      "write_set": [
+        "changelog.d/FEEDER-BATCH-S2-PER-RUN-STATUS-PATH.md",
+        "deploy/feeder/policy.toml",
+        "docs/writer-feeder.md",
+        "rust/pg-spawnd/src/native_writer_host_review_tests.rs",
+        "rust/pg-spawnd/tests/fixtures/feeder-batch-input.txt",
+        "rust/pg-spawnd/tests/fixtures/feeder-overlap-launches.json",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/plangraph-cli/tests/feeder_batches.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder_batches && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --bin pg-spawnd reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 120000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib status_files_are_reserved_exclusively"
+    }
+  }
+}

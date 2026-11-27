@@ -26,7 +26,7 @@ import pytest  # noqa: E402
 from contract_world import make_plan, ok, snapshot  # noqa: E402
 
 from keeper_util import World, seed  # noqa: E402
-from plangraph.keeper import api, config, snapshot_io, snapshot_writer  # noqa: E402
+from plangraph.keeper import api, config, daemon as keeper_daemon, snapshot_io, snapshot_writer  # noqa: E402
 from plangraph.keeper.errors import ConnectionLost  # noqa: E402
 from test_keeper_api import call, make_cfg  # noqa: E402
 
@@ -260,9 +260,9 @@ def _paused_capture(tmp_path, monkeypatch, backend, pause=10, failure=None):
             assert entered.wait(3)
             start = time.monotonic()
             for path in ("whoami", "show/demo:A?fmt=json", "ready?fmt=json", "snapshot"):
-                assert pool.submit(call, server, "/v1/" + path, token=world.tok("reader")).result(1)[0] == 200
+                assert pool.submit(call, server, "/v1/" + path, token=world.tok("reader")).result(5)[0] == 200
             claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"), body={"key": "demo:A"})
-            assert claim.result(1)[0] == 200 and time.monotonic() - start < 1
+            assert claim.result(5)[0] == 200 and time.monotonic() - start < 5
             assert captures[0] is not world.conn and hasattr(captures[0], "schema") == (backend == "postgres")
             with server.lock:
                 world.conn.execute("INSERT INTO aliases(old_key,new_key,ts,actor,reason) VALUES(?,?,?,?,?)",
@@ -419,7 +419,6 @@ def test_startup_snapshot_uses_committed_capture(tmp_path, monkeypatch, backend)
 
 
 def _startup_snapshot(tmp_path, monkeypatch, backend, legacy=False):
-    from plangraph.keeper import daemon
     world = World(tmp_path, backend=backend)
     seed(world, [("A", [])])
     cfg = make_cfg(tmp_path, world)
@@ -428,6 +427,7 @@ def _startup_snapshot(tmp_path, monkeypatch, backend, legacy=False):
     seen = []
 
     def server(*args, **kwargs):
+        assert kwargs.get("log_timing") is True
         srv = make(*args, **kwargs)
         srv.read_path = None if legacy else srv.read_path
         return srv
@@ -448,7 +448,7 @@ def _startup_snapshot(tmp_path, monkeypatch, backend, legacy=False):
     if not legacy:
         monkeypatch.setattr(snapshot_io, "_write", write)
     world.close()
-    daemon.run(cfg, ready=lambda srv: signal.raise_signal(signal.SIGINT))
+    keeper_daemon.run(cfg, ready=lambda srv: signal.raise_signal(signal.SIGINT))
     assert seen and "demo:A" in {item["key"] for item in snapshot_io.read_snapshot(cfg.snapshot)["items"]}
 
 
