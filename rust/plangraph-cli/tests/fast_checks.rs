@@ -176,7 +176,7 @@ fn worker_fast_checks_execute_with_fixture_mode_and_visible_output() {
     let selector = "#!/bin/sh\ncase \"$1\" in tools/ci_select.py) echo rust-worker=true;; esac\n";
     let cargo = r#"#!/bin/sh
 [ "$1" = run ] || exit 0
-test "${PG_FAST_CHECK_FIXTURES_ONLY-}:${PG_RECORD_DIR+x}:${PG_TEMPORAL_CLI+x}" = '1::' || exit 7
+test "${PG_FAST_CHECK_FIXTURES_ONLY-}|${PG_RECORD_DIR+x}|${PG_TEMPORAL_CLI+x}" = '1||' || exit 7
 prefix='[run][--manifest-path][rust/Cargo.toml][-p][pg-spawnd][--bin][ci-temporal][--]'
 test "$(printf '[%s]' "$@")" = "$prefix"'[cargo][test][--manifest-path][rust/worker/Cargo.toml][-p][pg-worker][--][--show-output]' || exit 8
 echo worker-fixture-command-verified
