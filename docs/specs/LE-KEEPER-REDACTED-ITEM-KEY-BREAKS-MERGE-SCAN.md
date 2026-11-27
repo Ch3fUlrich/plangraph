@@ -72,3 +72,13 @@ Per-file caps are in the card `line_caps` and the TSV. plangraph:LE-NO-KEEPER-VE
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 8, wrong 0. The round 1 X3 citation is fixed.
+FIT/TREE: Covers define, scan isolation and diagnostics. Legacy row cleanup remains a router step. Nine write paths and both digests match.
+POINTS: R1 D1, X3 and X4 fixed at :23,49–50. Type checks precede regex validation, X3 starts the real HTTP refresh worker, and the card restores the credential-guard test.
+POINTS: R1 X2 still open, :40,48, tests/test_keeper_merge_close_auto.py:55–60,98–107,219–228. The two repos and fresh fixtures are fixed, but `env` requires seats and X2 supplies none. Pass `require_seats=False` as the existing two-repo test does, or record valid seats. Pass `frozen` explicitly and assert both closes and the one malformed listing in each mode. BLOCKS

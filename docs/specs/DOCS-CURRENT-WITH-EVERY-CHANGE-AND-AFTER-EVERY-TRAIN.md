@@ -84,3 +84,17 @@ Per-file caps are in the card `line_caps` and the TSV. The ratchet is data (JSON
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 14, wrong 2. Both round 1 citation corrections are fixed.
+WRONG :17 tools/merge_batch_util.py:793–800 supports the best-effort legacy close only. Limit the claim to that helper. `tools/merge_batch_land.py:498–506` has settlement subprocesses that can fail the command.
+WRONG :18 rust/plangraph-cli/src/keeper_events.rs:46–57 converts HTTP status to an error string. Specify how the show lookup distinguishes a 404 through the production client.
+FIT/TREE: Covers strict coverage and post-landing filing. Routing owns the rule text. Thirteen write paths and both digests match. Measured 1,344 initial entries against a 1,500-line cap.
+POINTS: R1 D2–D3 still open, :26–27, tools/check_changelog_docs.py:365–389. Only the generator enforces the bootstrap intersection. A hand-edited first ratchet can include a newly added unmapped path. Enforce `R_head ⊆ U(base)` in the gate and add a forged-bootstrap test. BLOCKS
+POINTS: R1 D4/D9 still open, :28,33, tools/merge_batch_land.py:460–489,619–637. Resumed `settle` can cold-start past the entire landing, and a later `land` can skip a failed range by preferring its explicit base to the older cursor. Carry the verified base and landed SHA through settlement, preserve pending ranges across failures, and test both cases. BLOCKS
+POINTS: R1 D5 still open, :29,59. The macro regex matches commented-out `macro_rules!` definitions, and taking the last segment lets `B::run` hide removal of `A::run`. Resolve the qualifier for supported forms, exclude comments, and add both cases to X4. BLOCKS
+POINTS: R1 D7–D8 and X3–X4 sibling module fixed at :31,58,75. POST refusals are structured, filing failure retains the cursor, and the test module has an explicit path.

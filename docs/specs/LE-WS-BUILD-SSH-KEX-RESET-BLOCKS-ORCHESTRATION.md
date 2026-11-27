@@ -71,3 +71,14 @@ Per-file caps are in the card `line_caps` and the TSV. plangraph:LE-NO-PROGRESS-
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 9, wrong 0. Both round 1 citation corrections are fixed.
+FIT/TREE: Covers coordinator detection and routing. Windows recurrence prevention stays a host task. Seven write paths, both digests and the caps match.
+POINTS: R1 D1/D5 still open in part, :22,26, rust/worker-core/src/host_link.rs:43–52. The updated alert correctly calls server causes hypotheses, but the classifier treats any `kex_exchange_identification` diagnostic as a reset. Require an explicit reset or close diagnostic in that phase and add a banner-error negative case. BLOCKS
+POINTS: R1 D2 and D3 fixed at :23–24,41,49–50. The retry has a four-second bound and a slow second-failure case. Episode expiry uses the saved last reset, with zero-reset and backward-clock cases.
+POINTS: R1 D5/X2 still open in part, :42,50, rust/worker-core/tests/host_link.rs:23–38. The binary test now checks payload and ID, but one file can still mean a second enqueue overwrote the same filename. Consume the file after the third tick and assert the fourth creates none. BLOCKS

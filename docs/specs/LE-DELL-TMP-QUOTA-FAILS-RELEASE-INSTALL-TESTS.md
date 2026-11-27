@@ -77,3 +77,16 @@ Per-file caps are in the card `line_caps` and the TSV. `host_ready.py` (794 line
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 15, wrong 1.
+WRONG :19 deploy/systemd/pg-feeder.service:10 identifies the feeder’s `plangraph.env`. It does not establish the spawner session’s environment. Cite the actual session unit or its generated configuration.
+FIT/TREE: Covers readiness and release diagnostics. TMPDIR rollout and the full fast-check remain host steps. Twelve write paths, both digests and the caps match.
+POINTS: R1 D1/D4 still open, :25–26,52,67–69, src/plangraph/spawner/remote_ps.py:133–146 and deploy/systemd/pg-feeder.service:10. Plain POSIX SSH drops the step plan, and the manager-only branch misses a unit’s `EnvironmentFile` override. Forward `env_file` through registry and local config, source it in the POSIX script, and test the effective TMPDIR through both launch paths. BLOCKS
+POINTS: R1 D5 still open, :30,53, rust/plangraph-cli/src/host_sync_release.rs:156 and rust/plangraph-cli/src/host_sync_plan.rs:17–27. Lock and build handling are specified, but metadata still reduces a quota diagnostic to `ErrorKind::Other`. Reuse the classifier for metadata and cover that fake-Cargo failure. BLOCKS
+POINTS: D2–D3, :26–28. A valid fractional floor of 2.5 GiB rejects 2.9 GiB free after truncation to 2. Compare bytes and round only the displayed value. Add a fractional-boundary case. BLOCKS
+POINTS: R1 X4 fixed at :54,68. The POSIX SSH stub is in the write set and has a healthy `stat -f` response.

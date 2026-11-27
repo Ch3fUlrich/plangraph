@@ -81,3 +81,16 @@ Per-file caps are in the card `line_caps` and the TSV. plangraph:LE-KEEPER-REDAC
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 10, wrong 0.
+FIT/TREE: Covers stale-review release and named-commit waiver close in file mode. The operator rows and live cleanup remain rollout steps. Nine write paths and both digests match.
+POINTS: R1 D2 index guard still open, :24,56, src/plangraph/keeper/store_context.py:344–368,392–410. Only the owning project is required fresh and pinned, while the search can silently skip an unavailable second repository holding the qualified trailer. Validate every repository that can hold the item’s merge and test a failed secondary index. BLOCKS
+POINTS: R1 D2 operator authority fixed at :25,47,56. The decision row must carry operator authority, be a release row and list the item key.
+POINTS: R1 D5–D6 still open, :28–29, src/plangraph/keeper/store_waiver.py:541–548 and src/plangraph/keeper/store_close.py:524–534. The named SHA reaches the live floor, but `_deploy_pending` still accepts verified unit evidence without that floor. Apply the floor to the unit-evidence check and make X4 use an otherwise valid pre-landing row. BLOCKS
+POINTS: R1 D7 still open, :30–31,75, src/plangraph/keeper/api_routes.py:340–347 and src/plangraph/keeper/store.py:396–399. Per-row evidence is specified, but the route instructions omit `epoch`, and `_epoch_ok` returns `epoch_stale`. Forward `epoch`, align the refusal code, and assert a wrong epoch is refused over HTTP. BLOCKS
+POINTS: R1 X1–X5 HTTP coverage fixed at :48,60. Both endpoints have real preview/apply cases.

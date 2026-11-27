@@ -77,3 +77,17 @@ Per-file caps are in the card `line_caps` and the TSV. plangraph:LE-WS-BUILD-SSH
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 16, wrong 1. The round 1 completion-event citation is fixed.
+WRONG :15 rust/plangraph-cli/src/feeder/runtime.rs:68–70 shows the API call. `src/plangraph/keeper/store_context.py:445–523` shows the additional claim-readiness and reconciliation checks that determine the returned `items`.
+FIT/TREE: Covers Keeper and feeder alerts. Staged delivery and stopgap retirement remain rollout steps. Eighteen write paths and both digests match.
+POINTS: R1 D1 completion and E2 fixed at :22,34,50. All three completion events and the empty-history threshold are covered, and the command matches the unit.
+POINTS: R1 D1/D8 still open, :22,29, src/plangraph/keeper/store_context.py:445–523. Bare `views.ready` still counts a p10 lane the production ready endpoint puts in `needs_reconcile` or `in_progress`. Reuse the agent-ready `items` selection and add an already-merged or open-PR case. BLOCKS
+POINTS: R1 D4 placement fixed, but X3 is still open, :52 and card:109, rust/plangraph-cli/src/feeder/runtime.rs:274–275. The `feeder::off_alert` filter excludes `feeder::runtime::live_tests`. Add the live `decide` test to `check_cmd`. BLOCKS
+POINTS: R1 D6 still open, :27,71–72, rust/worker-core/src/host_link.rs:56–60. Retry is specified, but the implementation’s `&'static str` return cannot carry `feeder_off_alert_error`. Return status plus error detail and assert both in the retry test. BLOCKS
+POINTS: D10, :71 and .docs-map:30. If the docs ratchet lands first, the new `off_alert.rs` is unmapped. Add its mapping to `docs/writer-feeder.md` and list `.docs-map` in the card and tree. BLOCKS
