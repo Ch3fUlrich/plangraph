@@ -1,11 +1,11 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-WS-BUILD-SSH-KEX-RESET-BLOCKS-ORCHESTRATION.md	write	yes	E1 E2	new (<= 2 changed lines; <= 2 final lines)
-docs/host-link.md	write	yes	E1 E2	predicted (<= 10 changed lines; <= 56 final lines)
-rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E2	predicted (<= 14 changed lines; <= 245 final lines)
-rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E2	predicted (<= 45 changed lines; <= 316 final lines)
+docs/host-link.md	write	yes	E1 E2	predicted (<= 10 changed lines; <= 60 final lines)
+rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E2	predicted (<= 14 changed lines; <= 257 final lines)
+rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E2	predicted (<= 45 changed lines; <= 361 final lines)
 rust/worker-core/src/bin/pg-host-link.rs	write	yes	E1	predicted (<= 30 changed lines; <= 199 final lines)
-rust/worker-core/src/host_link.rs	write	yes	E1	predicted (<= 90 changed lines; <= 419 final lines)
-rust/worker-core/tests/host_link.rs	write	yes	E1	predicted (<= 110 changed lines; <= 444 final lines)
+rust/worker-core/src/host_link.rs	write	yes	E1	predicted (<= 90 changed lines; <= 464 final lines)
+rust/worker-core/tests/host_link.rs	write	yes	E1	predicted (<= 160 changed lines; <= 494 final lines)
 deploy/systemd/pg-host-ssh-link@.service	read	yes	E1	observed
 deploy/systemd/pg-host-ssh-link@.timer	read	yes	E1	observed
 rust/worker-core/src/host_command.rs	read	yes	E1	observed

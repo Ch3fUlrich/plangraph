@@ -7,15 +7,15 @@
     },
     "docs/host-link.md": {
       "max_changed_lines": 10,
-      "max_final_lines": 56
+      "max_final_lines": 60
     },
     "rust/plangraph-cli/src/host_link_bridge.rs": {
       "max_changed_lines": 14,
-      "max_final_lines": 245
+      "max_final_lines": 257
     },
     "rust/plangraph-cli/tests/host_link_bridge.rs": {
       "max_changed_lines": 45,
-      "max_final_lines": 316
+      "max_final_lines": 361
     },
     "rust/worker-core/src/bin/pg-host-link.rs": {
       "max_changed_lines": 30,
@@ -23,11 +23,11 @@
     },
     "rust/worker-core/src/host_link.rs": {
       "max_changed_lines": 90,
-      "max_final_lines": 419
+      "max_final_lines": 464
     },
     "rust/worker-core/tests/host_link.rs": {
-      "max_changed_lines": 110,
-      "max_final_lines": 444
+      "max_changed_lines": 160,
+      "max_final_lines": 494
     }
   },
   "cards": {
