@@ -6,36 +6,36 @@
       "max_final_lines": 2
     },
     "docs/KEEPER.md": {
-      "max_changed_lines": 14,
-      "max_final_lines": 722
+      "max_changed_lines": 16,
+      "max_final_lines": 734
     },
     "src/plangraph/keeper/api_routes.py": {
       "max_changed_lines": 16,
-      "max_final_lines": 528
+      "max_final_lines": 534
     },
     "src/plangraph/keeper/cli.py": {
       "max_changed_lines": 14,
       "max_final_lines": 388
     },
     "src/plangraph/keeper/cli_output_verbs.py": {
-      "max_changed_lines": 90,
-      "max_final_lines": 277
+      "max_changed_lines": 100,
+      "max_final_lines": 287
     },
     "src/plangraph/keeper/store_verbs.py": {
-      "max_changed_lines": 80,
-      "max_final_lines": 706
+      "max_changed_lines": 110,
+      "max_final_lines": 736
     },
     "src/plangraph/keeper/store_waiver.py": {
-      "max_changed_lines": 26,
-      "max_final_lines": 797
+      "max_changed_lines": 24,
+      "max_final_lines": 799
     },
     "tests/test_keeper_close_merged_named_sha.py": {
-      "max_changed_lines": 170,
-      "max_final_lines": 170
+      "max_changed_lines": 260,
+      "max_final_lines": 260
     },
     "tests/test_keeper_release_review.py": {
-      "max_changed_lines": 200,
-      "max_final_lines": 200
+      "max_changed_lines": 300,
+      "max_final_lines": 300
     }
   },
   "cards": {
@@ -46,6 +46,8 @@
         "src/plangraph/keeper/context_sources.py",
         "src/plangraph/keeper/store.py",
         "src/plangraph/keeper/store_close.py",
+        "src/plangraph/keeper/store_context.py",
+        "src/plangraph/keeper/store_review.py",
         "src/plangraph/keeper/store_runs.py",
         "tests/keeper_util.py",
         "tests/test_keeper_close_merged.py",
@@ -65,8 +67,8 @@
       ],
       "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_release_review.py tests/test_keeper_close_merged_named_sha.py",
       "risk_tags": [],
-      "estimate_tokens": 70000,
-      "window_class": "128k",
+      "estimate_tokens": 90000,
+      "window_class": "256k",
       "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_close_merged.py tests/test_keeper_close_merged_scan.py tests/test_keeper_api.py tests/test_mcp_routes.py"
     }
   }
