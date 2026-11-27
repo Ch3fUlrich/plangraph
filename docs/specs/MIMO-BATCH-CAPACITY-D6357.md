@@ -5,8 +5,8 @@ Restore a usable MiMo Pro review seat on the normal spawner route, with enough r
 ## Binding
 
 - D1. Protected order D-7020 rule 3.104(1) and D-7019 rule 3.103(2,4). Data commit `dfc9cc344799e37c5c4bccf15b9f6f3d7f600b22`. Source base `c3cdc1749e95eb7bd824fc799f8b82fa1e15efed`.
-- D2. One gpt-6.2-sol-high implementation lane. SPAWNER-REVIEW-TOOLS supplies policy and command acceptance. RL28-LIVE-OPENCODE-PROOF supplies the live check. Its existing open RL28-RUST-SEAT-TOOLS-IN-LAUNCH dependency needs a routing disposition before the live item can close.
-- D3. Design candidate. Card SHA-256 `0b25a9183e03487e294158875f1ca5ce2a025f357bbe2809baa8f724d2d0f6d9`. Tree SHA-256 `2c084e13fda7cce1c35ece17f25bdba7aadecb77c404c7083067f760f4a75e08`. Protected binding, design_ref and independent design acceptance are pending.
+- D2. One gpt-6.2-sol-high implementation lane. SPAWNER-REVIEW-TOOLS supplies policy and command acceptance. RL28-LIVE-OPENCODE-PROOF supplies the live check. The open launch-refusal and RL28 Rust seat-tools items govern the same policy. Routing must settle their ownership and prerequisite edges before implementation admission. Use one policy implementation under that disposition.
+- D3. Design candidate. Card SHA-256 `792635ca7ac788ef0646c36cf2caec57667959fcc2ae7ddbc114401a7193c8dd`. Tree SHA-256 `ee8ebbc98fc8161447b14f6468227b66479bc2c0aaf12f201f4312538a589309`. Keeper has the design_ref. Protected scope disposition, lane publication and exact independent design acceptance are pending.
 - D4. The existing policy parks MiMo in `review_tools_denied_legs`. Its declared mode is inline-only. `opencode_repository_review` currently selects the existing DeepSeek and GLM repository seats. Its renderer grants wildcard Cargo and pytest commands. That renderer alone does not prove tool confinement. `pg-jail` currently provides filesystem confinement under Landlock ABI V3.
 
 ## Entry points and ownership
@@ -33,6 +33,6 @@ Restore a usable MiMo Pro review seat on the normal spawner route, with enough r
 ## Scope and review
 
 - R1. Review-tool admission changes a security boundary. Review the exact command matcher, read boundary, final configuration, scrubbed child and network enforcement before route activation. The configured model's existing provider access stays isolated from test tooling.
-- R2. Keep routing additions inside existing line limits and use the mapped docs in place. New code belongs in Rust. Reuse the existing fixture modules and preserve each tool-policy negative case. The current source scope is proposed for exact review, including any gate grant routing requires.
+- R2. Keep routing.py within 800 lines and runner.py within its 1157-line baseline. Keep docs/SPAWNER.md at 668 lines or fewer with an in-place link and place the MiMo-specific detail in the existing companion operations page. New code belongs in Rust. Reuse the existing fixture modules and preserve each tool-policy negative case. The current source scope is proposed for exact review, including any gate grant routing requires.
 - N1. Keep unrelated legs, credential storage, service configuration and rollout ownership on their existing contracts. Keep inline-only as the protected fallback decision if the default cannot fit one safe lane. That fallback needs separate disposition of the required live Read and Test proof.
 - Live. The executor runs one witnessed exact-head MiMo review on the approved host after protected deployment authorization. Publish sanitized run evidence and keep the parent open until S1 and the applicable part evidence pass.
