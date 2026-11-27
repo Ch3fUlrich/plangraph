@@ -1,0 +1,26 @@
+path	disposition	required	row IDs	label
+changelog.d/BATCH-STEP-RUNNER-AGENT-STEPS.md	write	yes	E1 E2	predicted (≤8 final lines, base 0)
+docs/SPAWNER.md	read	yes	E1	observed
+docs/batch-step-contract.md	read	yes	E2	observed
+docs/native-codex-writer.md	read	yes	E1	observed
+docs/operations/batch-step-runner-agent-steps.md	write	yes	E1 E2	predicted (≤65 final lines, base 0)
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer.rs	write	yes	E1 E2	predicted (≤650 final lines, base 627)
+rust/pg-spawnd/src/native_writer_base.rs	read	yes	E1	observed
+rust/pg-spawnd/src/native_writer_commands.rs	read	yes	E1	observed
+rust/pg-spawnd/src/native_writer_host.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_review.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_review_route.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_session.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/native_writer_stage.rs	write	yes	E1 E2	predicted (≤43 final lines, base 32)
+rust/pg-spawnd/src/native_writer_step_actions.rs	write	yes	E1 E2	predicted (≤310 final lines, base 0)
+rust/pg-spawnd/src/native_writer_step_actions_tests.rs	write	yes	E1 E2	predicted (≤290 final lines, base 0)
+rust/pg-spawnd/src/native_writer_step_flow.rs	write	yes	E1 E2	predicted (≤370 final lines, base 0)
+rust/pg-spawnd/src/native_writer_timing.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/round_progress.rs	read	yes	E1	observed
+rust/pg-spawnd/src/step_runner.rs	write	yes	E1 E2	predicted (≤650 final lines, base 526)
+rust/pg-spawnd/src/step_runner_agent.rs	write	yes	E1 E2	predicted (≤180 final lines, base 0)
+rust/pg-spawnd/src/step_runner_log.rs	read	yes	E2	observed
+rust/pg-spawnd/src/step_runner_tests.rs	read	yes	E2	observed
+rust/worker-core/src/batch_steps.rs	read	yes	E2	observed
+tools/check_file_size.py	read	yes	E1 E2	observed

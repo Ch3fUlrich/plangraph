@@ -1,0 +1,34 @@
+path	disposition	required	row IDs	label
+changelog.d/BATCH-STEP-RUNNER-CLI-ENTRY.md	write	yes	E1 E2 E3	predicted (≤8 final lines, base 0)
+docs/SPAWNER.md	read	yes	E1 E2	observed
+docs/batch-step-contract.md	read	yes	E1 E2	observed
+docs/operations/batch-step-runner-cli.md	write	yes	E1 E2 E3	predicted (≤100 final lines, base 0)
+docs/writer-feeder.md	read	yes	E1	observed
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2 E3	observed
+rust/pg-spawnd/src/batch_step_services.rs	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/batch_steps_cli.rs	write	yes	E1 E2 E3	predicted (≤390 final lines, base 0)
+rust/pg-spawnd/src/batch_steps_state.rs	write	yes	E1 E2 E3	predicted (≤350 final lines, base 0)
+rust/pg-spawnd/src/cli.rs	write	yes	E1 E2 E3	predicted (≤415 final lines, base 388)
+rust/pg-spawnd/src/main.rs	write	yes	E1 E2 E3	predicted (≤139 final lines, base 133, prior item cap 136)
+rust/pg-spawnd/src/native_writer.rs	read	yes	E1 E2 E3	observed
+rust/pg-spawnd/src/native_writer_base.rs	write	yes	E1 E2 E3	predicted (≤355 final lines, base 302)
+rust/pg-spawnd/src/native_writer_commands.rs	write	yes	E1 E2 E3	predicted (≤470 final lines, base 398)
+rust/pg-spawnd/src/native_writer_host.rs	write	yes	E1 E2 E3	predicted (≤610 final lines, base 550)
+rust/pg-spawnd/src/native_writer_step_actions.rs	read	yes	E1 E2	predicted
+rust/pg-spawnd/src/round_progress.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/step_runner.rs	write	yes	E1 E2 E3	predicted (≤680 final lines, base 526, prior item cap 650)
+rust/pg-spawnd/src/step_runner_log.rs	write	yes	E1 E2 E3	predicted (≤115 final lines, base 91)
+rust/pg-spawnd/src/step_runner_shell.rs	read	yes	E1 E2	observed
+rust/pg-spawnd/src/step_runner_tests.rs	read	yes	E2	observed
+rust/pg-spawnd/src/writer_control.rs	read	yes	E2 E3	observed
+rust/pg-spawnd/tests/batch_steps_cli.rs	write	yes	E1 E2 E3	predicted (≤300 final lines, base 0)
+rust/pg-spawnd/tests/batch_steps_cli_fixture/mod.rs	write	yes	E1 E2 E3	predicted (≤360 final lines, base 0)
+rust/pg-spawnd/tests/native_resume_route.rs	read	yes	E3	observed
+rust/pg-spawnd/tests/native_writer.rs	read	yes	E3	observed
+rust/pg-spawnd/tests/steps_cli.rs	read	yes	E3	observed
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E1	observed
+rust/plangraph-cli/src/feeder/workflow.rs	read	yes	E1	observed
+rust/worker-core/src/batch_steps.rs	read	yes	E2	observed
+rust/worker-core/src/run/record_io.rs	read	yes	E2	observed
+src/plangraph/spawner/base_fresh.py	read	yes	E1 E2	observed
+src/plangraph/spawner/overflow.py	read	yes	E1	observed

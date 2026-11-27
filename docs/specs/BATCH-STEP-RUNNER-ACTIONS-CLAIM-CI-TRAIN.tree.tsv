@@ -1,0 +1,29 @@
+path	disposition	required	row IDs	label
+changelog.d/BATCH-STEP-RUNNER-ACTIONS-CLAIM-CI-TRAIN.md	write	yes	E1 E2 E3	predicted (≤8 final lines, base 0)
+docs/KEEPER.md	read	yes	E1	observed
+docs/batch-step-contract.md	read	yes	E1 E2 E3	observed
+docs/ci-gate.md	read	yes	E3	observed
+docs/landing-train.md	read	yes	E3	observed
+docs/operations/batch-step-runner-actions.md	write	yes	E1 E2 E3	predicted (≤85 final lines, base 0)
+rust/pg-spawnd/Cargo.toml	read	yes	E1 E2 E3	observed
+rust/pg-spawnd/src/adapter.rs	write	yes	E1 E2 E3	predicted (≤250 final lines, base 246)
+rust/pg-spawnd/src/batch_step_services.rs	write	yes	E1 E2 E3	predicted (≤370 final lines, base 0)
+rust/pg-spawnd/src/batch_step_services_tests.rs	write	yes	E1 E2 E3	predicted (≤350 final lines, base 0)
+rust/pg-spawnd/src/main.rs	write	yes	E1 E2 E3	predicted (≤136 final lines, base 133)
+rust/pg-spawnd/src/native_writer_step_actions.rs	read	yes	E2	predicted
+rust/pg-spawnd/src/step_runner.rs	read	yes	E2 E3	observed
+rust/pg-spawnd/src/step_runner_shell.rs	write	yes	E1 E2 E3	predicted (≤345 final lines, base 239)
+rust/pg-spawnd/src/step_runner_tests.rs	read	yes	E2 E3	observed
+rust/plangraph-cli/src/ci_watch/mod.rs	read	yes	E3	observed
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E1	observed
+rust/plangraph-cli/src/feeder/workflow.rs	read	yes	E1	observed
+rust/plangraph-cli/src/land/cli.rs	read	yes	E3	observed
+rust/plangraph-cli/src/land/registrar.rs	read	yes	E3	observed
+rust/plangraph-cli/src/wait_ci.rs	read	yes	E3	observed
+rust/worker-core/src/batch_steps.rs	read	yes	E2 E3	observed
+rust/worker-core/tests/batch_steps.rs	read	yes	E2 E3	observed
+src/plangraph/keeper/api.py	read	yes	E1	observed
+src/plangraph/keeper/cli.py	read	yes	E1	observed
+src/plangraph/keeper/cli_verbs.py	read	yes	E1	observed
+src/plangraph/keeper/store_merge_locks.py	read	yes	E3	observed
+src/plangraph/keeper/store_verbs.py	read	yes	E1	observed

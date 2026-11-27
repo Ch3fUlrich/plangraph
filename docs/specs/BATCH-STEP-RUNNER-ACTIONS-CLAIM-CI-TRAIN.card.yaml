@@ -1,0 +1,49 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "BATCH-STEP-RUNNER-ACTIONS-CLAIM-CI-TRAIN": {
+      "outcome": "Compose keeper claims, exact-head CI classification evidence and verified train admission with the batch runner.",
+      "read_set": [
+        "docs/KEEPER.md",
+        "docs/batch-step-contract.md",
+        "docs/ci-gate.md",
+        "docs/landing-train.md",
+        "rust/pg-spawnd/Cargo.toml",
+        "rust/pg-spawnd/src/native_writer_step_actions.rs",
+        "rust/pg-spawnd/src/step_runner.rs",
+        "rust/pg-spawnd/src/step_runner_tests.rs",
+        "rust/plangraph-cli/src/ci_watch/mod.rs",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/plangraph-cli/src/land/cli.rs",
+        "rust/plangraph-cli/src/land/registrar.rs",
+        "rust/plangraph-cli/src/wait_ci.rs",
+        "rust/worker-core/src/batch_steps.rs",
+        "rust/worker-core/tests/batch_steps.rs",
+        "src/plangraph/keeper/api.py",
+        "src/plangraph/keeper/cli.py",
+        "src/plangraph/keeper/cli_verbs.py",
+        "src/plangraph/keeper/store_merge_locks.py",
+        "src/plangraph/keeper/store_verbs.py"
+      ],
+      "write_set": [
+        "changelog.d/BATCH-STEP-RUNNER-ACTIONS-CLAIM-CI-TRAIN.md",
+        "docs/operations/batch-step-runner-actions.md",
+        "rust/pg-spawnd/src/adapter.rs",
+        "rust/pg-spawnd/src/batch_step_services.rs",
+        "rust/pg-spawnd/src/batch_step_services_tests.rs",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/step_runner_shell.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --no-fail-fast",
+      "risk_tags": [
+        "auth",
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 32000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --lib step_runner_tests --no-fail-fast && cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --test batch_steps --no-fail-fast"
+    }
+  }
+}

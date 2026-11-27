@@ -1,0 +1,45 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "BATCH-STEP-RUNNER-AGENT-STEPS": {
+      "outcome": "Run native write, exact-head review and same-session fix through the batch step runner\u2019s agent transitions.",
+      "read_set": [
+        "docs/SPAWNER.md",
+        "docs/batch-step-contract.md",
+        "docs/native-codex-writer.md",
+        "rust/pg-spawnd/Cargo.toml",
+        "rust/pg-spawnd/src/native_writer_base.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/pg-spawnd/src/native_writer_review.rs",
+        "rust/pg-spawnd/src/native_writer_review_route.rs",
+        "rust/pg-spawnd/src/native_writer_session.rs",
+        "rust/pg-spawnd/src/native_writer_timing.rs",
+        "rust/pg-spawnd/src/round_progress.rs",
+        "rust/pg-spawnd/src/step_runner_log.rs",
+        "rust/pg-spawnd/src/step_runner_tests.rs",
+        "rust/worker-core/src/batch_steps.rs",
+        "tools/check_file_size.py"
+      ],
+      "write_set": [
+        "changelog.d/BATCH-STEP-RUNNER-AGENT-STEPS.md",
+        "docs/operations/batch-step-runner-agent-steps.md",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_stage.rs",
+        "rust/pg-spawnd/src/native_writer_step_actions.rs",
+        "rust/pg-spawnd/src/native_writer_step_actions_tests.rs",
+        "rust/pg-spawnd/src/native_writer_step_flow.rs",
+        "rust/pg-spawnd/src/step_runner.rs",
+        "rust/pg-spawnd/src/step_runner_agent.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --no-fail-fast",
+      "risk_tags": [
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 33000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test native_resume_route --test native_writer_mcp --test native_writer --no-fail-fast"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "BATCH-STEP-RUNNER-CLI-ENTRY": {
+      "outcome": "Start or resume the batch step runner on the admitted work host from a private saved step list.",
+      "read_set": [
+        "docs/SPAWNER.md",
+        "docs/batch-step-contract.md",
+        "docs/writer-feeder.md",
+        "rust/pg-spawnd/Cargo.toml",
+        "rust/pg-spawnd/src/batch_step_services.rs",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_step_actions.rs",
+        "rust/pg-spawnd/src/round_progress.rs",
+        "rust/pg-spawnd/src/step_runner_shell.rs",
+        "rust/pg-spawnd/src/step_runner_tests.rs",
+        "rust/pg-spawnd/src/writer_control.rs",
+        "rust/pg-spawnd/tests/native_resume_route.rs",
+        "rust/pg-spawnd/tests/native_writer.rs",
+        "rust/pg-spawnd/tests/steps_cli.rs",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/worker-core/src/batch_steps.rs",
+        "rust/worker-core/src/run/record_io.rs",
+        "src/plangraph/spawner/base_fresh.py",
+        "src/plangraph/spawner/overflow.py"
+      ],
+      "write_set": [
+        "changelog.d/BATCH-STEP-RUNNER-CLI-ENTRY.md",
+        "docs/operations/batch-step-runner-cli.md",
+        "rust/pg-spawnd/src/batch_steps_cli.rs",
+        "rust/pg-spawnd/src/batch_steps_state.rs",
+        "rust/pg-spawnd/src/cli.rs",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/native_writer_base.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/pg-spawnd/src/step_runner.rs",
+        "rust/pg-spawnd/src/step_runner_log.rs",
+        "rust/pg-spawnd/tests/batch_steps_cli.rs",
+        "rust/pg-spawnd/tests/batch_steps_cli_fixture/mod.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --no-fail-fast",
+      "risk_tags": [
+        "auth",
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 39000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test steps_cli --test native_resume_route --test native_writer --no-fail-fast"
+    }
+  }
+}
