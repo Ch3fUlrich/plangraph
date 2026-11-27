@@ -62,7 +62,7 @@ def _lock_wait_line(phase, waiter, start, end, spans, evicted):
 
 
 class KeeperLock:
-    """Track completed outer ownership intervals, using the native RLock as the fence."""
+    """Track outer RLock holds. Timing defaults on for direct use and off for HTTP servers."""
 
     def __init__(self, *, log_timing=True):
         self._lock = RLock()
