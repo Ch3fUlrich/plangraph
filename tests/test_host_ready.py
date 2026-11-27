@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -134,6 +135,67 @@ def test_failures(tmp_path, mode):
                     doctor='doctor.keeper_whoami: failed', fetch='fetch: command_failed',
                     session='session: command_failed')
     assert expected[mode] in result['failures']
+
+
+@pytest.mark.parametrize('failed', [False, True])
+def test_doctor_skip_rows_parse_as_ok(tmp_path, monkeypatch, capsys, failed):
+    from plangraph.planner import legs
+    from plangraph.spawner import doctor, service
+
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('CLAUDE_CODE_SHELL', '/bin/bash')
+    monkeypatch.setattr(legs, 'HARNESSES', (sys.executable,))
+    monkeypatch.setattr(doctor, 'mcp', lambda module: (
+        'fail' if failed and module == 'plangraph.spawner.mcp' else 'pass', 'fixture MCP'))
+    monkeypatch.setattr(doctor, 'whoami', lambda: ('pass', 'fixture identity'))
+    monkeypatch.setattr(doctor, 'completion', lambda: ('pass', 'fixture completion sink'))
+    monkeypatch.setattr(service, 'SpawnService', lambda: SimpleNamespace(
+        route=lambda *args, **kwargs: SimpleNamespace(legs=[SimpleNamespace(id='fixture-leg')])))
+
+    def source_probe(argv, **kwargs):
+        assert argv[1:] == ['doctor-sources']
+        return SimpleNamespace(returncode=0, stdout=b'[]')
+
+    with monkeypatch.context() as environment:
+        environment.setattr(doctor.subprocess, 'run', source_probe)
+        exit_code = doctor.main(['--json'])
+    output = capsys.readouterr().out
+    assert exit_code == int(failed)
+    rows = {row['name']: row['status'] for row in json.loads(output)['checks']}
+    assert rows['probe_implement'] == rows['probe_review'] == 'skip'
+
+    def fake(argv, **kwargs):
+        if 'doctor --json' in argv[-1]:
+            return SimpleNamespace(returncode=exit_code, stdout=output)
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['keeper_ok'] and result['doctor_ok'] is not failed
+    assert result['ok'] is not failed
+    assert result['failures'] == (['doctor.mcp_spawner: failed', 'doctor: failed'] if failed else [])
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+@pytest.mark.parametrize('known', [True, False])
+def test_doctor_status_list_shared(tmp_path, monkeypatch, known):
+    from plangraph.spawner import doctor
+
+    def extended_status(status):
+        if status != 'pass' and not (known and status == 'deferred'):
+            raise ValueError(status)
+        return status
+
+    monkeypatch.setattr(doctor, 'DoctorStatus', extended_status, raising=False)
+
+    def fake(argv, **kwargs):
+        if 'doctor --json' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(ok=True, checks=[
+                dict(name='keeper_whoami', status='pass'), dict(name='probe', status='deferred')])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['ok'] is known
+    assert result['failures'] == ([] if known else ['doctor: unknown_status deferred'])
 
 
 def test_parallel_deadlines(tmp_path):
@@ -575,19 +637,26 @@ def test_source_probe_plan_reports_missing_and_unimportable_sources_by_exit_code
     assert src['steps'][1]['cwd'] == '/' and src['steps'][1]['argv'][-1] == 'import plangraph'
 
 
-def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
+@pytest.mark.parametrize('path', [None, '/srv/worker/.local/bin:/usr/bin:/bin'])
+def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path, path):
     seen = []
     def fake(argv, **kwargs):
         seen.append((argv, kwargs.get('input')))
         return plan_runner([], missing=())(argv, **kwargs) if 'input' in kwargs else runner(argv, **kwargs)
     (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
         dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
-    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu')
+    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu', session_unit='/run/worker.pid')
+    prefix = 'wsl.exe --distribution Ubuntu --exec '
+    if path:
+        config['env'] = {'PATH': path}
+        prefix += f'/usr/bin/env PATH={path} '
     result = h.check_host('fiction', config, tmp_path, fake)
     assert result['ok'], result['failures']
     assert seen and all(argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
-                        and argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+                        and argv[-1] == prefix + 'pg-spawnd steps'
                         and json.loads(body)['steps'] for argv, body in seen)
+    tools = {step['argv'][0] for _, body in seen for step in json.loads(body)['steps']}
+    assert {'pg-host-readiness', 'plangraph', 'codex'} <= tools
 
 
 @pytest.mark.parametrize('wsl', [False, True])

@@ -109,6 +109,18 @@ def wsl_distro(host):
     return distro
 
 
+def wsl_path(host):
+    """Read an optional guest PATH safe as a single word in the Windows SSH shell."""
+    env = host.get('env', {})
+    if isinstance(env, dict):
+        if 'PATH' not in env:
+            return None
+        path = env['PATH']
+        if isinstance(path, str) and re.fullmatch(r'/[A-Za-z0-9_./+-]*(?::/[A-Za-z0-9_./+-]*)*', path):
+            return path
+    raise ValueError('invalid WSL PATH')
+
+
 def plan_body(script, steps=None, **plan):
     """The JSON step plan for `pg-spawnd steps`: `steps`, or the one argv of a simple `script`."""
     if steps is None:
@@ -121,13 +133,17 @@ def plan_body(script, steps=None, **plan):
 def invocation(host, script, steps=None, **plan):
     """The remote command and its stdin: a script for a POSIX login shell, or a step plan.
 
-    A WSL guest is reached through `wsl.exe --exec`, which runs no shell, so it gets the plan
-    as JSON on stdin for `pg-spawnd steps`.
+    `wsl.exe --exec` runs no login shell. Set PATH before starting the step runner so it and
+    its guest tools can use user-installed binaries. The plan travels as JSON on stdin.
     """
     distro = wsl_distro(host)
     if distro is None:
         return script, None
-    return f'wsl.exe --distribution {distro} --exec {WSL_RUNNER}', plan_body(script, steps, **plan)
+    path = wsl_path(host)
+    env = f'/usr/bin/env PATH={path} ' if path is not None else ''
+    if path is not None:
+        plan['host_env_defaults'] = True
+    return f'wsl.exe --distribution {distro} --exec {env}{WSL_RUNNER}', plan_body(script, steps, **plan)
 
 
 def host_invocation(host, *, query=False):
@@ -330,10 +346,15 @@ def configured_hosts():
             continue
         entry = _registry_entry(host, sources)
         if entry:
-            keep = {k: v for k, v in host.items() if k not in ('src', 'win_src', 'wsl_distro', 'state_dir')}
-            host = {**keep, **{k: entry[k] for k in ('src', 'win_src', 'wsl_distro', 'state_dir')
-                               if k in entry}}
+            fields = ('src', 'win_src', 'wsl_distro', 'state_dir', 'env')
+            host = {**{k: v for k, v in host.items() if k not in fields},
+                    **{k: entry[k] for k in fields if k in entry}}
         # The effective entry is validated, whichever file its values came from.
+        try:
+            if 'wsl_distro' in host:
+                wsl_path(host)
+        except ValueError:
+            host = dict(name='invalid-config', invalid=True)
         validated[index] = host if state_dir_ok(host) else dict(name='invalid-config', invalid=True)
     return validated
 
