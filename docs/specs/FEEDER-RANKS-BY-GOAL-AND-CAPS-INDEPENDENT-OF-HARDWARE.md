@@ -83,7 +83,7 @@ Final line caps are in the card. Additions: `capacity.rs` <= 15, `mod.rs` <= 25,
 
 ## Open points for design approval
 
-Dispatch waits for the planner to record this scope split on the keeper item (review r1 D2-D3, D6, D7):
+The planner recorded this scope split on the keeper item on 2026-11-27 18:40Z (plan-roadmap-0969; review r1 D2-D3, D6, D7); the fleet cap and token budget are now plangraph:FLEET-WRITER-CAP-AND-TOKEN-BUDGET-AT-THE-KEEPER-CLAIM:
 - New item, keeper work: a fleet-wide writer cap and an hourly token budget enforced atomically at the keeper claim. The claim is refused with `fleet_cap` or `token_budget`, computed from the keeper's own claim and attempt records under the claim transaction. A host-local feeder cannot reserve a shared allowance (`feeder/runtime.rs:200-214`), and attempts exist only after a run ends (`store_card_updates.py:41-43`). The feeder then only reports the keeper's refusal code. Its test must have two hosts contend for the last allowance.
 - Done points (1) "a speed item outranks an other item of equal priority" and (6) "needs_spec counts by category" move to plangraph:ITEM-CATEGORY-RANKED and to a follow-up of plangraph:LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC.
 - Add the keeper dependency edge from this item to plangraph:LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.
