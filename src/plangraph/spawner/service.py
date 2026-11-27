@@ -35,7 +35,8 @@ def exact_inline_diff_ref(reference, timeout):
             key: subprocess.check_output(
                 ['git', '-C', reference['repo'], 'rev-parse', '--verify', '--end-of-options',
                  reference[key] + '^{commit}'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=checkout_env(), text=True, timeout=max(0, deadline - time.monotonic())).strip()
+                env=checkout_env(), text=True, encoding='utf-8', errors='replace',
+                timeout=max(0, deadline - time.monotonic())).strip()
             for key in ('base', 'head')
         })
     except SpawnRefused as exc:
