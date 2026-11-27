@@ -1,0 +1,38 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "rust/plangraph-cli/src/fast_checks.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 545
+    },
+    "rust/plangraph-cli/tests/fast_checks_foreign_repo.rs": {
+      "max_changed_lines": 170,
+      "max_final_lines": 170
+    }
+  },
+  "cards": {
+    "LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY": {
+      "outcome": "plangraph fast-checks in a checkout without tools/ci_select.py runs the repository's declared check, or only git diff --check with a warning, so native writer heads in other projects can get a green receipt.",
+      "read_set": [
+        "rust/plangraph-cli/src/fast_check_target.rs",
+        "rust/plangraph-cli/src/fast_check_worktree.rs",
+        "rust/plangraph-cli/tests/fast_checks.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/worker-core/src/cargo_cache.rs"
+      ],
+      "write_set": [
+        "changelog.d/LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY.md",
+        "docs/contributing/LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY.md",
+        "rust/plangraph-cli/src/fast_checks.rs",
+        "rust/plangraph-cli/tests/fast_checks_foreign_repo.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test fast_checks_foreign_repo",
+      "risk_tags": [
+        "host-exec"
+      ],
+      "estimate_tokens": 60000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test fast_checks"
+    }
+  }
+}
