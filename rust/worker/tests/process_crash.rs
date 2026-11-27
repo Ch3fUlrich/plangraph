@@ -165,6 +165,27 @@ fn worker(addr: &str, queue: &str, build: &str, ready: Option<&Path>) -> Process
 }
 
 #[test]
+fn fixtures_only_reports_crash_skip_without_temporal() {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "--show-output"])
+        .arg("sigkill_mid_attempt_and_mid_timer_stays_pinned")
+        .env_clear()
+        .env("PG_FAST_CHECK_FIXTURES_ONLY", "1")
+        .env("TEMPORAL_CLI", "sentinel-temporal-cli")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let marker = "PG_FAST_CHECK_SKIP sigkill_mid_attempt_and_mid_timer_stays_pinned \
+                  reason=requires_temporal_deployment_fixture";
+    assert_eq!(
+        stdout.lines().filter(|line| *line == marker).count(),
+        1,
+        "{stdout}"
+    );
+}
+
+#[test]
 fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
     if std::env::var("PG_FAST_CHECK_FIXTURES_ONLY").as_deref() == Ok("1") {
         println!(

@@ -29,11 +29,13 @@ fn workspace_write_commit_uses_fixture_sandbox_and_cleans_up() {
         return;
     }
     let root = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(root.path().join("checkout/repo")).unwrap();
-    for dir in ["bin", "home", "codex-home"] {
-        std::fs::create_dir(root.path().join(dir)).unwrap();
+    for dir in ["checkout/repo", "bin", "home", "codex-home"] {
+        std::fs::create_dir_all(root.path().join(dir)).unwrap();
     }
-    std::os::unix::fs::symlink("/usr/bin/git", root.path().join("bin/git")).unwrap();
+    let git = output(Command::new("/bin/sh").args(["-c", "command -v git"]))
+        .expect("the fixture requires Git on PATH");
+    let git = std::fs::canonicalize(git.trim_end_matches('\n')).unwrap();
+    std::os::unix::fs::symlink(git, root.path().join("bin/git")).unwrap();
     pg_worker_core::executable_test_support::write_executable(
         root.path().join("bin/codex"),
         r#"#!/bin/sh

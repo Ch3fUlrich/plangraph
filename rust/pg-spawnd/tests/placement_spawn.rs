@@ -87,7 +87,7 @@ fn real_run_and_failure() {
 fn waiting_spawn_does_not_block_second_connection() {
     // serve uses a current-thread runtime; Fixture also pins Tokio's worker
     // count to one so an inline dispatch cannot hide on a second worker.
-    let f = Fixture::new(HELD_TASK, Value::Null, &[]);
+    let f = held_fixture(&[]);
     let socket = f.state.path().join("socket");
     let mut waiter = common::McpClient::connect(&socket);
     waiter.set_response_timeout(std::time::Duration::from_secs(35));
@@ -114,7 +114,27 @@ fn waiting_spawn_does_not_block_second_connection() {
     std::fs::write(f.state.path().join("release"), "").unwrap();
     assert_eq!(payload(thread.join().unwrap())["status"], "completed");
 }
-const HELD_TASK: &str = r#"exec /usr/bin/timeout 30 /bin/sh -c ": > held; while ! test -f release; do /bin/sleep .02; done""#;
+fn held_fixture(extra: &[&str]) -> Fixture {
+    use std::{os::unix::ffi::OsStrExt, process::Command};
+    let resolved = Command::new("/bin/sh")
+        .args(["-c", "command -v timeout"])
+        .output()
+        .unwrap();
+    assert!(
+        resolved.status.success(),
+        "the fixture requires timeout on PATH"
+    );
+    let path = std::ffi::OsStr::from_bytes(resolved.stdout.strip_suffix(b"\n").unwrap());
+    let path = std::fs::canonicalize(path).unwrap();
+    // Use the fixture's working directory so the daemon's PATH cannot change the selection.
+    let fixture = Fixture::new(
+        r#"exec ./fixture-timeout 30 /bin/sh -c ": > held; while ! test -f release; do sleep .02; done""#,
+        Value::Null,
+        extra,
+    );
+    std::os::unix::fs::symlink(path, fixture.state.path().join("fixture-timeout")).unwrap();
+    fixture
+}
 
 fn wait_for_fixture(mut ready: impl FnMut() -> bool) {
     use std::time::{Duration, Instant};
@@ -130,11 +150,7 @@ fn wait_for_fixture(mut ready: impl FnMut() -> bool) {
 
 #[test]
 fn queue_full_and_nonblocking_wait() {
-    let mut f = Fixture::new(
-        HELD_TASK,
-        Value::Null,
-        &["--max-runs", "1", "--max-queued", "0"],
-    );
+    let mut f = held_fixture(&["--max-runs", "1", "--max-queued", "0"]);
     let first = payload(f.spawn(0.0));
     assert!(["queued", "running"].contains(&first["status"].as_str().unwrap()));
     wait_for_fixture(|| f.state.path().join("held").exists());
