@@ -442,6 +442,9 @@ fn execute(args: &[String]) -> Result<()> {
         if step.label == "pg-worker/test" {
             command
                 .env_remove("PG_JAIL_BIN")
+                .env_remove("PG_RECORD_DIR")
+                .env_remove("PG_TEMPORAL_CLI")
+                .env("PG_FAST_CHECK_FIXTURES_ONLY", "1")
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
         }
@@ -454,6 +457,9 @@ fn execute(args: &[String]) -> Result<()> {
             .env("FILESIZE_REQUIRE_BASE", &base)
             .env("NEWCODE_BASE", &base)
             .env("CHANGELOG_BASE", &base);
+        if step.label == "pg-worker/test" {
+            command.args(["--", "--show-output"]);
+        }
         let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
         let seconds = tick.elapsed().as_secs_f64();
         #[rustfmt::skip]
