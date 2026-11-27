@@ -9,6 +9,7 @@ mod discovery;
 use crate::cargo_pool_trim::ArtifactWalk;
 use serde_json::{json, Value};
 use std::{
+    cell::Cell,
     collections::BTreeSet,
     fs, io,
     path::{Path, PathBuf},
@@ -18,6 +19,7 @@ use std::{
 /// One monotonic clock and limits for discovery, ranking, and reclamation.
 pub struct Budget<'a> {
     pub start: Instant,
+    pub(crate) first_removal: Cell<Option<Instant>>,
     pub clock: &'a dyn Fn() -> Instant,
     pub rank_for: Duration,
     pub first_for: Duration,
@@ -34,6 +36,7 @@ impl<'a> Budget<'a> {
     pub fn new(start: Instant, clock: &'a dyn Fn() -> Instant) -> Self {
         Self {
             start,
+            first_removal: Cell::new(None),
             clock,
             rank_for: Duration::from_secs(45),
             first_for: Duration::from_secs(60),
@@ -45,6 +48,15 @@ impl<'a> Budget<'a> {
             rank_entries: 1_000_000,
             discovery_entries: 16_384,
         }
+    }
+    /// Record the first mutation boundary while the current stage still has time.
+    pub fn before_unlink(&self, end: Instant) -> bool {
+        let now = (self.clock)();
+        if now < end {
+            self.first_removal
+                .set(self.first_removal.get().or(Some(now)));
+        }
+        now < end
     }
 }
 
@@ -364,16 +376,7 @@ pub fn reclaim(
                     }
                     Ok(true)
                 },
-                || {
-                    let elapsed = now();
-                    if elapsed >= end {
-                        return false;
-                    }
-                    report
-                        .time_to_first_removal
-                        .get_or_insert(elapsed.duration_since(budget.start).as_secs_f64());
-                    true
-                },
+                || budget.before_unlink(end),
             );
             match result {
                 Ok(None) if !usable || now() >= end => break,
@@ -450,9 +453,7 @@ pub fn reclaim(
         && report.devices.values().any(|row| {
             row.start_free_bytes
                 .is_some_and(|free| free < row.cleanup_floor_bytes)
-        })
-        && report
-            .time_to_first_removal
-            .is_none_or(|elapsed| elapsed > budget.first_for.as_secs_f64());
+        });
+    report.sync_timing(budget);
     usable
 }

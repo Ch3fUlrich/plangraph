@@ -216,9 +216,9 @@ fn execute_with(
                     {
                         return Ok(false);
                     }
-                    Ok(!inventory(end)
-                        .inspect_err(|_| usable.set(false))?
-                        .blocks(tree))
+                    let facts = inventory(end).inspect_err(|_| usable.set(false))?;
+                    Ok(!facts.blocks(tree)
+                        && (!apply || (tree.to_str().is_some() && budget.before_unlink(end))))
                 },
             )?;
             device.freed_bytes = device.freed_bytes.saturating_add(maintenance.freed_bytes);
@@ -229,6 +229,7 @@ fn execute_with(
             }
         }
     }
+    report.sync_timing(budget);
     let diagnostic_start = (budget.clock)();
     if diagnostic_start < end {
         pg_worker_core::disk_watermark::record_configured(
@@ -396,6 +397,7 @@ mod tests {
                 .iter()
                 .any(|message| message.contains(target.to_str().unwrap())));
             assert!(target.is_dir());
+            fs::remove_dir_all(target).unwrap();
         }
         fs::write(&stamp, &head).unwrap();
         let mut args = args;
@@ -412,6 +414,7 @@ mod tests {
         )
         .unwrap();
         assert!(!stranded.exists(), "{report:?}");
+        assert!(report.time_to_first_removal.is_some() && !report.first_removal_deadline_missed);
         assert_eq!(fs::read_to_string(&stamp).unwrap(), head);
         let listing = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"]).unwrap();
         assert!(!listing.contains("check-stranded-fast"), "{listing}");

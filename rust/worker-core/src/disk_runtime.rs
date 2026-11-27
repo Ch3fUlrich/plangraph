@@ -27,6 +27,16 @@ pub fn write_hygiene_report(state: &Path, report: &serde_json::Value) -> io::Res
 
 #[cfg(target_os = "linux")]
 impl crate::disk_hygiene::HygieneReport {
+    pub fn sync_timing(&mut self, budget: &crate::disk_hygiene::Budget<'_>) {
+        self.time_to_first_removal = budget
+            .first_removal
+            .get()
+            .map(|at| at.duration_since(budget.start).as_secs_f64());
+        self.first_removal_deadline_missed &= self
+            .time_to_first_removal
+            .is_none_or(|elapsed| elapsed > budget.first_for.as_secs_f64());
+    }
+
     pub fn sample_devices(&mut self, sample: impl Fn(&Path) -> io::Result<u64>) {
         let ids: Vec<_> = self.devices.keys().copied().collect();
         for device in ids {
