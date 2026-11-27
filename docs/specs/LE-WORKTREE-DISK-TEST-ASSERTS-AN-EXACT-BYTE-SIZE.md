@@ -11,15 +11,15 @@ Outcome. The shared Cargo cache cap test accepts the filesystem's allocation sla
 ## Checked against base
 
 - The test asserts `result["size"] == 12.0 / 1024.0` GiB exactly (`rust/worker-core/src/worktree_disk_tests.rs:165`). The size comes from `plangraph.spawner.host_ready.cargo_target_size_gb` (`rust/worker-core/src/worktree_disk_tests.rs:118`).
-- `cargo_target_size_gb` sums allocated bytes, `st_blocks * 512`, per regular file and skips symlinks and repeated hard links (`src/plangraph/spawner/host_ready.py:150-174`). Allocated bytes are the production measure for the cap, so the production code stays.
-- Each of the 3 writer processes writes one 4 MiB file (`worktree_disk_tests.rs:178`, `disk_test_writer_process`), so the apparent total is 12 MiB = 12,582,912 bytes. The coding.vm failure measured 0.011730194091796877 GiB = 12,595,200 bytes: 12,288 bytes (4 KiB per file) of block allocation above the apparent size.
+- `cargo_target_size_gb` walks the target without following symlinked directories. For every non-symlink file entry it adds `st_blocks * 512` (allocated bytes), or `st_size` where the platform has no `st_blocks`, and it counts a repeated hard link once (`src/plangraph/spawner/host_ready.py:150-174`). It does not check that an entry is a regular file. On the Linux and WSL hosts `st_blocks` exists, so the cap measures allocated bytes. That production measure stays.
+- The test starts 3 writer processes (`worktree_disk_tests.rs:84`), and each writes one 4 MiB file (`worktree_disk_tests.rs:177`, `disk_test_writer_process`), so the apparent total is 12 MiB = 12,582,912 bytes. The coding.vm failure measured 0.011730194091796877 GiB = 12,595,200 bytes: 12,288 bytes (4 KiB per file) of block allocation above the apparent size.
 - Class search over Rust tests that compare a measured disk size: `rust/worker-core/src/disk_watermark.rs` and `cargo_pool_trim.rs` sum `blocks() * 512`, but their tests compare slot orders and injected sizes, not a measured total. `worktree_disk_cap_tests.rs` and `worktree_disk_reap_tests.rs` assert no size. This test is the only exact comparison on a measured allocation.
 
 ## Decisions
 
 - D1. Keep the production measure (allocated bytes). The test compares the measured byte count against the apparent bytes the writers wrote, with a per-file slack bound. The fixture forms `files = 3` and `file_bytes = 4 MiB`, and the bound is `files * file_bytes <= measured <= files * (file_bytes + SLACK_PER_FILE)` with `SLACK_PER_FILE = 64 KiB`. 64 KiB covers one indirect or extent block and directory-free allocation rounding on ext4, xfs and the WSL ext4 disk (observed +4 KiB per file), and it is far below one 4 MiB file, so a missing, extra or double-counted file falls outside.
 - D2. A measured size below the apparent bytes fails. Sparse or compressed allocation is not expected on the three hosts' work disks. A future host with compression needs its own decision, not a looser bound.
-- D3. The Python bridge prints the size in bytes (`round(size_gb * 1024**3)`), so the Rust side compares integers instead of floats.
+- D3. The Python bridge puts the size in bytes into the existing `size` field of its one JSON object (`size=round(size_gb * 1024 ** 3)` at `worktree_disk_tests.rs:118`, reported by the `json.dumps(dict(...))` at `:120-122`), so stdout stays one JSON object and the Rust side compares integers instead of floats.
 - D4. Put the bound in one pure helper, `fn cache_size_within_slack(measured: u64, files: u64, file_bytes: u64) -> bool`, in the same test module. A unit test pins it without the filesystem.
 
 ## Entry points
@@ -49,7 +49,7 @@ Write X1 first. On the base it does not compile (the helper is missing). Then ch
 
 ### Implementation
 
-- In the embedded Python, print `size=round(h.cargo_target_size_gb(target) * 1024 ** 3)`.
+- In the embedded Python, change only line 118 to `size = round(h.cargo_target_size_gb(target) * 1024 ** 3)`. The existing `json.dumps(dict(..., size=size, ...))` stays.
 - Add the `SLACK_PER_FILE` constant with a comment naming block allocation as the reason, the helper, and X1 next to the test.
 
 ## Open points for design approval
