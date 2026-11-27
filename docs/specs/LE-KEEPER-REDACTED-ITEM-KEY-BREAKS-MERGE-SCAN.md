@@ -5,7 +5,7 @@ Outcome. Define refuses a malformed or redacted item id, one malformed stored ke
 - plan_source. Keeper item plangraph:LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN, 2026-11-25 01:26Z, priority 10, D-6868, D-6874.
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. c2ae36652ecfea3834a05b537f90d5e96e79c99c2120d748c7745e646440fc5e
-- tree SHA-256. 1bce342869288787870babb4d1ef984c75f289357c7b7eeee54d20261d8da35e
+- tree SHA-256. 5b1fef21e4eb42b8ab334abfdad367e1d9eacea303677ad509e64036f404dd3a
 - evidence_after_deploy. After the keeper restart onto the merged head: `plangraph merge-close` (dry run) on coding.vm ends with an empty `scan_errors` or only non-`merge_scan_failed` reasons, and any stored malformed key appears once in `listed` with `evidence_unverified: malformed_key`. Record the run line in the item evidence.
 
 ## Checked against base
@@ -13,7 +13,7 @@ Outcome. Define refuses a malformed or redacted item id, one malformed stored ke
 - The crash is still on main. `_split` returns `(None, None)` for a key failing `_KEY_RE`; `indexed_work` then evaluates `bare.lower()`. [src/plangraph/keeper/context_sources.py:39,99-104,416-436]
 - `warm_merge_scan` calls `_warm_merge_candidates`, which calls `indexed_work` for every candidate in every project, and turns any exception into `merge_scan_failed: <class>` for the whole project. [src/plangraph/keeper/store_runs.py:312-345]
 - `indexed_parts` does not raise for `bare=None` (`parts.get(None, ())`), but returns parts filed under nothing useful. [src/plangraph/keeper/context_sources.py:407-413]
-- Define never checks the id shape: `_normalise` builds `key = f"{project}:{identifier}"` and runs only the credential guard on text fields. [src/plangraph/keeper/store_input.py:168-178]
+- Define never checks the id shape: `_normalise` builds `key = f"{project}:{identifier}"` and runs only the secret-text guard on text fields. [src/plangraph/keeper/store_input.py:168-178]
 - The automatic close lists a candidate with its reason when `_merge_repository(item)` raises `Refused`. [src/plangraph/keeper/store_close.py:712-735; src/plangraph/keeper/store_waiver.py:131-151]
 - The refresh worker already logs one `merge_index_refresh` line to the `plangraph.keeper` logger. [src/plangraph/keeper/api_routes.py:469-476]
 - File sizes against the 800-line gate: context_sources.py 793, store_runs.py 796, store_close.py 798 (not touched), store_waiver.py 771.
@@ -44,7 +44,7 @@ Outcome. Define refuses a malformed or redacted item id, one malformed stored ke
 
 Write X1-X3 first; on the base X1 stores the item, X2 raises in the scan (`merge_scan_failed: AttributeError`), X3 shows no module or line.
 
-- X1. `tests/test_keeper_malformed_key.py::test_define_refuses_a_redacted_or_malformed_id` (World + `defn`, as in `test_keeper_credential_guard.py`).
+- X1. `tests/test_keeper_malformed_key.py::test_define_refuses_a_redacted_or_malformed_id` (World + `defn`, as the existing keeper text-guard tests build them).
 - X2. `tests/test_keeper_malformed_key.py::test_one_malformed_key_does_not_fail_the_scan_of_any_repository`. Reuse the `env`, `set_states`, `auto` helpers by importing them from `test_keeper_merge_close_auto`; land two merged items in the fixture repo, then `UPDATE items SET key='demo:[REDACTED]', id='[REDACTED]' WHERE key='demo:N'` on `env.conn` (a legacy row; define can no longer create it). Assert B2 for the frozen path (warm first) and the unfrozen path.
 - X3. `tests/test_keeper_malformed_key.py::test_a_failed_scan_names_module_and_line`: monkeypatch `context_sources.indexed_work` to raise `AttributeError`, warm, read `close_merged_auto(...)["scan_errors"]`, and run the API refresh path through `door_util.Doors` (as `test_a_failed_scan_reports_its_reason_over_http`) with `caplog` on `plangraph.keeper`.
 - X4. Held out: the card's `heldout_check` (merge close, credential guard and create tests) stays green unchanged.

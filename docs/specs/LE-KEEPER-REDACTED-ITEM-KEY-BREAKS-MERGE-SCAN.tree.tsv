@@ -10,5 +10,4 @@ src/plangraph/keeper/store_waiver.py	write	yes	E2	predicted (<= 4 changed lines;
 tests/test_keeper_malformed_key.py	write	yes	E1 E2 E3	new (<= 140 changed lines; <= 140 final lines)
 src/plangraph/keeper/store_close.py	read	yes	E2	observed
 tests/keeper_util.py	read	yes	E1 E2 E3	observed
-tests/test_keeper_credential_guard.py	read	yes	E1	observed
 tests/test_keeper_merge_close_auto.py	read	yes	E2 E3	observed

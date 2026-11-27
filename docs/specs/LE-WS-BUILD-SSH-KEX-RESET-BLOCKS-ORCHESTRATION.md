@@ -6,7 +6,7 @@ Outcome. The coordinator's per-minute SSH link check tells a pre-banner kex rese
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. 9cc5f5b2310562ef5fed144afed58cfffcff323626fcebe74d2c51e69b0b278b
 - tree SHA-256. c3a679cc5387d4687e6b440d5267ca1cc418ec338fe2f3cdf47fac0c9a179299
-- evidence_after_deploy. Host steps, not code: (1) the workstation host session, with admin rights, stops the stuck pre-auth `sshd.exe` children or restarts the Windows OpenSSH service, and records the sshd log cause (Event Viewer OpenSSH/Operational) in the item evidence; (2) 20 consecutive `ssh ws-build true` calls spaced 30 s from coding.vm succeed under normal fleet load. After the new `pg-host-link` reaches coding.vm (`pg-host-ssh-link@ws-build.timer`): record one `host-ssh-kex-reset` routing message from a staged episode, or the unit's journal lines `kex_reset` with no alert below the threshold.
+- evidence_after_deploy. Host steps, not code: (1) the workstation host session, with admin rights, stops the stuck pre-auth `sshd.exe` children or restarts the Windows OpenSSH service, and records the sshd log cause (Event Viewer OpenSSH/Operational) in the item evidence; (2) 20 consecutive `ssh ws-build true` calls spaced 30 s from coding.vm succeed under normal fleet load. After the new `pg-host-link` reaches coding.vm (the `pg-host-ssh-link` timer instance for ws-build): record one `host-ssh-kex-reset` routing message from a staged episode, or the unit's journal lines `kex_reset` with no alert below the threshold.
 
 ## Checked against base
 

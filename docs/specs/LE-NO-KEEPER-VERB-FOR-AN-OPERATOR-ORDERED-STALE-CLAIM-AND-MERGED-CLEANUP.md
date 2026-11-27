@@ -6,7 +6,7 @@ Outcome. A release-review verb returns stale in_review claims to open under a de
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. 66d42757acc279768f0632d7eaf9f599fb3c06d759bd8d8cf0e003b963b3753a
 - tree SHA-256. 9bbbc28035c733c19140ba504a3a3fb9edfcd7dce3cdf6212eb70e67fc424b71
-- evidence_after_deploy. After the keeper restart: run `release-review --file ~/.local/state/plan-roadmap/stale-claims-20261127T1201Z.jsonl --decision-ref D-N` (preview) and then with `--apply`; run `close-merged --file <remaining merged list> D-W --waive-seats D-W` (preview, then `--apply`) on a new OPERATOR `Waiver: merged-without-witnesses` row whose `Waives-seats:` lists the remaining keys and whose `Cutoff:` covers their merges. Record both TSV outputs (counts per class) in the item evidence. Writing the waiver row is routing's step with the operator's D-id.
+- evidence_after_deploy. After the keeper restart: run `release-review --file the plan-roadmap state file of 2026-11-27 12:01Z (stale claims) --decision-ref D-N` (preview) and then with `--apply`; run `close-merged --file <remaining merged list> D-W --waive-seats D-W` (preview, then `--apply`) on a new OPERATOR `Waiver: merged-without-witnesses` row whose `Waives-seats:` lists the remaining keys and whose `Cutoff:` covers their merges. Record both TSV outputs (counts per class) in the item evidence. Writing the waiver row is routing's step with the operator's D-id.
 
 ## Checked against base
 
