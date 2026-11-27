@@ -411,6 +411,9 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
     // The workstation is listed, so its limit comes from the policy file; any other host
     // refuses by name.
     assert_eq!(p.max_writers["workstation"], 8);
+    // The self-stop and pacing keys are top-level policy, not host names.
+    assert_eq!(p.max_writers.len(), 3);
+    assert_eq!((p.no_commit_stop, p.no_commit_window, p.pace_by_commit), (3, 5, true));
     assert_eq!(writer_limit("workstation", &p), Some(8));
     assert_eq!(writer_limit("workstation.example", &p), Some(8));
     assert_eq!(
@@ -451,20 +454,6 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
         ),
         Admission::Refuse("max_writers".into())
     );
-}
-
-#[test]
-fn a_brief_without_files_hands_the_scope_to_the_writer() {
-    let item: Task =
-        serde_json::from_value(json!({"key":"plangraph:NO-FILES","title":"t"})).unwrap();
-    let text = brief(&item, "rules");
-    assert!(
-        text.contains(&format!("Files:\n{NO_FILES_LISTED}\n")),
-        "{text}"
-    );
-    let item: Task =
-        serde_json::from_value(json!({"key":"plangraph:WITH-FILES","files":["src/a.rs"]})).unwrap();
-    assert!(brief(&item, "rules").contains("Files:\nsrc/a.rs\n"));
 }
 
 fn feeder_run(started: f64, status: &str, reason: &str) -> Run {
@@ -521,15 +510,31 @@ fn the_feeder_stops_a_host_after_repeated_runs_without_a_commit() {
 }
 
 #[test]
-fn the_first_feeder_run_of_a_host_is_a_canary() {
+fn a_host_starts_its_next_writer_only_when_its_running_writers_have_committed() {
     let p = Policy::default();
-    let running = vec![feeder_run(1.0, "running", "")];
-    let stop = feeder_stop(&running, "dell", &p).unwrap();
-    assert!(stop.starts_with("canary_pending"), "{stop}");
+    let warming = vec![feeder_run(1.0, "running", "")];
+    let stop = feeder_stop(&warming, "dell", &p).unwrap();
+    assert!(
+        stop.starts_with("warming: run-1 has no commit yet"),
+        "{stop}"
+    );
     assert_eq!(feeder_stop(&[], "dell", &p), None);
-    let proven = vec![
-        feeder_run(1.0, "completed", ""),
-        feeder_run(2.0, "running", ""),
-    ];
-    assert_eq!(feeder_stop(&proven, "dell", &p), None);
+    let working = vec![Run {
+        base_sha: "base".into(),
+        final_head: "head".into(),
+        ..feeder_run(1.0, "running", "")
+    }];
+    assert_eq!(feeder_stop(&working, "dell", &p), None);
+    // A turn that ended on the base is not work yet.
+    let idle = vec![Run {
+        base_sha: "base".into(),
+        final_head: "base".into(),
+        ..feeder_run(1.0, "running", "")
+    }];
+    assert!(feeder_stop(&idle, "dell", &p).is_some());
+    let off = Policy {
+        pace_by_commit: false,
+        ..Policy::default()
+    };
+    assert_eq!(feeder_stop(&warming, "dell", &off), None);
 }

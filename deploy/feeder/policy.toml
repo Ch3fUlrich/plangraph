@@ -11,13 +11,15 @@ quota_facts_max_age_seconds = 900
 estimate_tokens = 100000
 batch_max_items = 6
 
+# Self-stop: a host feeds no writer while 3 of its last 5 ended feeder runs added no commit,
+# and starts its next writer only when its running feeder writers have committed.
+no_commit_stop = 3
+no_commit_window = 5
+pace_by_commit = true
+
 # Match full configured host names first, then their first DNS label.
 [max_writers]
 coding = 3
 dell = 5
 workstation = 8
 
-# Self-stop: a host feeds no writer while 3 of its last 5 ended feeder runs added no commit,
-# and only one canary run until a run of that window committed.
-no_commit_stop = 3
-no_commit_window = 5

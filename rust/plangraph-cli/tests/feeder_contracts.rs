@@ -58,7 +58,11 @@ fn drive(v: &Value, f: &mut Fake, dry: bool) -> Value {
         v,
         &[proven],
         &facts(),
-        &Policy::default(),
+        // These contracts cover claim and start order; pacing by commit has its own test.
+        &Policy {
+            pace_by_commit: false,
+            ..Policy::default()
+        },
         "rules",
         "/repo",
         "/reviews",

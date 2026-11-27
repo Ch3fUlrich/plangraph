@@ -8,6 +8,7 @@ pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
+pub mod spec;
 mod windows_ram;
 mod workflow;
 pub(crate) use adapters::MERGE_INDEX_EXPIRED;
@@ -64,6 +65,9 @@ pub struct Policy {
     /// ended without a commit; 0 turns the stop off.
     pub no_commit_stop: usize,
     pub no_commit_window: usize,
+    /// A host starts its next feeder writer only when every running feeder writer of that host
+    /// has made a commit.
+    pub pace_by_commit: bool,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -83,6 +87,7 @@ impl Default for Policy {
             batch_max_items: 6,
             no_commit_stop: 3,
             no_commit_window: 5,
+            pace_by_commit: true,
         }
     }
 }
@@ -109,6 +114,12 @@ pub struct Run {
     /// Why the run ended (`no_commit: ...` when its last writer turn added no commit).
     #[serde(default, deserialize_with = "null_default")]
     pub reason: String,
+    /// The head after the writer's last turn and the base it started from: a commit exists when
+    /// they differ.
+    #[serde(default, deserialize_with = "null_default")]
+    pub final_head: String,
+    #[serde(default, deserialize_with = "null_default")]
+    pub base_sha: String,
     /// The run was started by the feeder: its card pushes to a `lane/feeder-` branch.
     #[serde(skip)]
     pub feeder: bool,
@@ -117,6 +128,10 @@ impl Run {
     /// Whether this run works on `key`, as its item or as a member of its batch.
     pub fn holds(&self, key: &str) -> bool {
         self.item_key == key || self.item_keys.iter().any(|k| k == key)
+    }
+    /// The writer has made a commit beyond its base: it is working.
+    pub fn committed(&self) -> bool {
+        !self.final_head.is_empty() && self.final_head != self.base_sha
     }
     pub fn active(&self) -> bool {
         !pg_worker_core::run::record::releases_ownership(&self.status)
@@ -244,29 +259,14 @@ pub fn brief(item: &Task, house_rules: &str) -> String {
     .filter_map(|k| item.fields.get(k).map(|v| (k, v)))
     .collect();
     format!("Plan item: {}\nTitle: {}\n\n{}\n\nDone criteria:\n{}\n\nFiles:\n{}\n\nNotes:\n{}\n\nTask metadata:\n{}\n\n{}\n",
-        item.key,item.title,item.description.as_deref().unwrap_or(""),done,files_section(&item.files),
+        item.key,item.title,item.description.as_deref().unwrap_or(""),done,item.files.join("\n"),
         item.fields.get("note").and_then(Value::as_str).unwrap_or(""),serde_json::to_string(&metadata).expect("JSON values"),
         house_rules.replace("{{item_key}}",&item.key).trim())
 }
 
-/// The brief's file list. A keeper item carries no write set unless a spec gave it one, so an
-/// empty list hands the scope to the writer instead of leaving a section the writer reads as
-/// "no file may change".
-pub fn files_section(files: &[String]) -> String {
-    if files.is_empty() {
-        NO_FILES_LISTED.into()
-    } else {
-        files.join("\n")
-    }
-}
-pub const NO_FILES_LISTED: &str = "None listed. Choose the files this item needs inside this \
-repository from its description and done criteria, keep the change inside the item, and name \
-every changed file in your final message. The run worktree is a detached checkout of main: \
-commit on it; the native host pushes the accepted head to the run's lane branch.";
-
-/// Why the feeder starts no writer on `host` now, from the host's own feeder runs: the stop when
-/// `no_commit_stop` of the last `no_commit_window` ended runs added no commit, and the canary
-/// while no ended run of that window committed and one run is still going.
+/// Why the feeder starts no writer on `host` now, from the host's own feeder runs: the stop while
+/// `no_commit_stop` of the last `no_commit_window` ended runs added no commit, and the pacing
+/// while a running writer of the host has not made its first commit (it is not yet working).
 pub fn feeder_stop(runs: &[Run], host: &str, p: &Policy) -> Option<String> {
     let mut mine: Vec<&Run> = runs
         .iter()
@@ -290,11 +290,17 @@ pub fn feeder_stop(runs: &[Run], host: &str, p: &Policy) -> Option<String> {
             ended.len()
         ));
     }
-    let proven = ended.iter().any(|r| !barren(r));
-    if !proven && mine.iter().any(|r| r.active()) {
-        return Some(
-            "canary_pending: the host's first feeder run has not ended with a commit".into(),
-        );
+    if p.pace_by_commit {
+        if let Some(r) = mine.iter().find(|r| r.active() && !r.committed()) {
+            let name = if r.run_id.is_empty() {
+                "the run started in this tick"
+            } else {
+                &r.run_id
+            };
+            return Some(format!(
+                "warming: {name} has no commit yet; the next writer starts when it works"
+            ));
+        }
     }
     None
 }

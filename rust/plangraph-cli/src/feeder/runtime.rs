@@ -69,7 +69,9 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
     let running = sources::runs(env, &o.repo, &ready, state, home, o.dry)?;
-    decide(
+    // Only items with a spec card reach selection; the rest wait for the planning session.
+    let (ready, needs_spec) = super::spec::require_specs(&o.repo, &ready);
+    let mut row = decide(
         home,
         env,
         o,
@@ -78,7 +80,10 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
         local.as_deref(),
         &ready,
         &running,
-    )
+    )?;
+    row["needs_spec"] = json!(needs_spec.len());
+    row["needs_spec_first"] = json!(needs_spec.iter().take(10).collect::<Vec<_>>());
+    Ok(row)
 }
 
 /// The capacity line of a live decision: why this host admits or refuses. `load1` is null and

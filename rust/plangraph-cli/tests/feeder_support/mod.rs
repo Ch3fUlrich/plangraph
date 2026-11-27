@@ -22,6 +22,8 @@ pub fn ready(items: Vec<Value>) -> Value {
 pub fn policy(batch: usize) -> Policy {
     Policy {
         batch_max_items: batch,
+        // These tests cover batching and slots; pacing by commit has its own test.
+        pace_by_commit: false,
         ..Policy::default()
     }
 }
