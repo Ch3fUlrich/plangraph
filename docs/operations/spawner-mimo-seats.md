@@ -25,7 +25,7 @@ For the supervised S1 run, record the published base and head, the request size 
 cap, the final tool-denial event, the gateway response-side MiMo Pro identity and
 the canonical verdict. Use the first seat's brief and diff. Attach the required
 repository-capable seat verdicts and exact-head test evidence from their own runs.
-See [the protected live procedure](../specs/MIMO-BATCH-CAPACITY-D6357.md#acceptance).
+Use the S1 command in the approved design's acceptance section.
 
 ## MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
