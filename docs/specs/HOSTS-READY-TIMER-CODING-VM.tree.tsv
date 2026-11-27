@@ -1,0 +1,9 @@
+path	disposition	required	row IDs	label
+changelog.d/HOSTS-READY-TIMER-CODING-VM.md	write	yes	E1 E2	predicted
+deploy/host-ready/host-ready.service	write	yes	E1 E2	predicted
+deploy/host-ready/host-ready.timer	write	yes	E1 E2	predicted
+deploy/liveness/liveness-watchdog@.timer	read	yes	E1 E2	predicted
+deploy/manifest.toml	write	yes	E1 E2	predicted
+docs/host-tools.md	write	yes	E1 E2	predicted
+rust/plangraph-cli/src/deploy_manifest/tests.rs	write	yes	E1 E2	predicted
+src/plangraph/spawner/host_ready.py	read	yes	E1 E2	predicted

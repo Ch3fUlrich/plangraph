@@ -3,7 +3,7 @@
 use std::{fs, path::Path, process::Command};
 
 #[test]
-fn rust_release_installs_train_cli_and_spawner_together() {
+fn readiness_followup_rust_release_installs_train_cli_and_spawner_together() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path();
     let repo = home.join("repo");
@@ -134,8 +134,38 @@ done
     let head = git(&["rev-parse", "HEAD"]);
     assert_eq!(check_release(&head, &[]).status.code(), Some(1));
 
+    let config = home.join(".config/plangraph");
+    fs::create_dir_all(&config).unwrap();
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src"),
+        repo.join("src"),
+    )
+    .unwrap();
+    fs::write(config.join("hosts.json"), r#"{"hosts":[{"id":"guest","os":"linux","transport":"ssh","ssh_target":"windows-hop","wsl_distro":"Ubuntu","caps":{"mem_floor_mb":4096},"repos":{"plangraph":{"root":"/srv/repo"}}}]}"#).unwrap();
+    let stale = || {
+        fs::write(
+            config.join("ps-hosts.json"),
+            r#"{"hosts":[{"name":"guest","target":"windows-hop","win_src":"C:/old/src"}]}"#,
+        )
+        .unwrap()
+    };
+    let assert_projections = || {
+        let read = |name| {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(config.join(name)).unwrap())
+                .unwrap()
+        };
+        let ps = read("ps-hosts.json");
+        assert_eq!(ps["hosts"][0]["wsl_distro"], "Ubuntu");
+        assert!(ps["hosts"][0].get("win_src").is_none());
+        assert_eq!(
+            read("overflow-hosts.json")["hosts"]["guest"]["wsl_distro"],
+            "Ubuntu"
+        );
+    };
+    stale();
     let output = run(&[]);
     assert!(output.status.success(), "{output:?}");
+    assert_projections();
     assert!(bin.join("pg-spawnd").is_file());
     assert!(bin.join("pg-disk-hygiene").is_file());
     assert!(bin.join("pg-telemetry").is_file());
@@ -145,7 +175,9 @@ done
         fs::read_to_string(&stamp).unwrap().trim(),
         git(&["rev-parse", "HEAD:rust"])
     );
+    stale();
     assert!(String::from_utf8_lossy(&run(&[]).stdout).contains("SAME"));
+    assert_projections();
 
     let checked = check_release(&head, &[]);
     assert!(checked.status.success(), "{checked:?}");
@@ -228,8 +260,9 @@ done
     assert!(check.status.success(), "{check:?}");
 
     // The timer can advance Git without rebuilding when the Rust tree is unchanged.
-    fs::write(repo.join("README.md"), "Documentation").unwrap();
-    git(&["add", "README.md"]);
+    let documentation = "release-fixture-notes.md";
+    fs::write(repo.join(documentation), "Documentation").unwrap();
+    git(&["add", documentation]);
     git(&[
         "-c",
         "user.name=Fixture",

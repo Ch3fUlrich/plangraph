@@ -72,16 +72,17 @@ fn command(h: &Value) -> Option<String> {
         .unwrap_or_else(|| quote(src));
     let probe = format!("test -d {path} || exit 44");
     if let Some(distro) = h.get("wsl_distro") {
-        if !pg_worker_core::host_command::valid_wsl_distro(distro.as_str()?)
-            || src.starts_with("~/")
-        {
+        if src.starts_with("~/") {
             return None;
         }
+        let path = match h.get("env").and_then(|env| env.get("PATH")) {
+            Some(value) => Some(value.as_str()?),
+            None => None,
+        };
         // `wsl.exe --exec` runs no shell: the source test is a step plan on stdin.
-        Some(format!(
-            "wsl.exe --distribution {} --exec pg-spawnd steps",
-            distro.as_str()?
-        ))
+        let mut args = pg_worker_core::host_command::wsl_exec(distro.as_str()?, path).ok()?;
+        args.extend(["pg-spawnd".into(), "steps".into()]);
+        Some(args.join(" "))
     } else {
         Some(probe)
     }

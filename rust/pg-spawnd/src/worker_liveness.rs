@@ -37,10 +37,8 @@ fn remote(host: &HostEntry) -> Result<Command, String> {
     let route = host.ssh_route().ok_or("worker has no SSH route")?;
     let mut command = host_command::ssh(&route).map_err(|_| "worker SSH route is invalid")?;
     if let Some(distro) = host.wsl_distro.as_deref() {
-        if !host_command::valid_wsl_distro(distro) {
-            return Err("invalid worker WSL distribution".into());
-        }
-        command.args(["wsl.exe", "--distribution", distro, "--exec"]);
+        let path = host.env.get("PATH").map(String::as_str);
+        command.args(host_command::wsl_exec(distro, path).map_err(|error| error.to_string())?);
     }
     Ok(command)
 }
@@ -295,5 +293,47 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
         Err("one or more worker liveness checks failed".into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guest() -> HostEntry {
+        serde_json::from_value(json!({
+            "id": "guest", "aliases": [], "transport": "ssh", "ssh_target": "windows-hop",
+            "wsl_distro": "Ubuntu", "os": "linux", "state_dir": "/srv/state", "repos": {},
+            "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2,
+                "max_sessions": 4, "mem_floor_mb": 6144},
+            "warmup": {"warmup_s": 1, "ramp_mb": {"implement": 2048}},
+            "session_mb": 512, "roles": ["implement"]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn wsl_inventory_uses_the_guest_registry_path() {
+        let mut host = guest();
+        host.env
+            .insert("PATH".into(), "/srv/worker/.local/bin:/usr/bin:/bin".into());
+        let mut command = remote(&host).unwrap();
+        command.args(["pg-spawnd", "worker-active-runs", "guest"]);
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args[5..],
+            [
+                "windows-hop",
+                "wsl.exe",
+                "--distribution",
+                "Ubuntu",
+                "--exec",
+                "/usr/bin/env",
+                "PATH=/srv/worker/.local/bin:/usr/bin:/bin",
+                "pg-spawnd",
+                "worker-active-runs",
+                "guest"
+            ]
+        );
     }
 }
