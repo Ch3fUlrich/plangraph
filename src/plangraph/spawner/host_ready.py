@@ -2,6 +2,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import errno
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import sys
 import time
 
 from .private_io import atomic_write_private
+from .probe_cleanup import LEASE_REQUEST, SHARED_WAIT_S, LeaseWait, LocalLaunchFault
 from .host_ready_source import (
     checkout_floor, admission_shortfall, work_drive_checkouts,
     configured_work_drives as _configured_work_drives,
@@ -80,7 +82,7 @@ def shared_cargo_target():
 
 
 def cargo_child_env(env, *, pin_configured=False, target=None):
-    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or shared_cargo_target()))
+    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or _physical_cargo_target(shared_cargo_target())))
     if target is not None:
         result['CARGO_BUILD_BUILD_DIR'] = str(target)
     if pin_configured:
@@ -175,32 +177,85 @@ def cargo_target_size_gb(path):
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
-def _cargo_lease_for(target, exclusive=False, wait=0.0):
-    target = Path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    path = target.with_name(target.name + '.plangraph-lock')
-    deadline = time.monotonic() + wait
-    while True:
+class CargoLeaseTimeout(LocalLaunchFault):
+    def __init__(self, request, identity=None):
+        super().__init__('cargo_lease_timeout', stage='cargo_lease', **request.evidence(identity))
+
+
+def _physical_cargo_target(target):
+    target = Path(target).absolute()
+    if not target.name or '..' in target.parts:
+        raise OSError(errno.EINVAL, 'invalid Cargo target', str(target))
+    target = target.parent.resolve() / target.name
+    if target.is_symlink() or getattr(target, 'is_junction', lambda: False)():
+        raise OSError(errno.EINVAL, 'Cargo target leaf must be a plain directory', str(target))
+    return target
+
+
+def _lock_identity(path_or_fd):
+    try:
+        info = os.fstat(path_or_fd) if isinstance(path_or_fd, int) else os.stat(path_or_fd)
+        if info.st_ino:
+            return dict(device=info.st_dev, inode=info.st_ino)
+    except OSError:
+        pass
+    return 'unavailable'
+
+
+def _try_cargo_lock(path, exclusive):
+    if os.name == 'nt':
         try:
-            if os.name == 'nt':
-                return _windows_cargo_lease(path, exclusive)
-            lease = path.open('a+b')
-            try:
-                import fcntl
-                fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
-                return lease
-            except BaseException:
-                lease.close()
+            return _windows_cargo_lease(path, exclusive), None, None
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) != 32:  # ERROR_SHARING_VIOLATION
                 raise
-        except OSError:
-            if not exclusive or time.monotonic() >= deadline:
+            return None, exc, _lock_identity(path)
+    import fcntl
+    lease = path.open('a+b')
+    try:
+        fcntl.flock(lease, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+    except BaseException as exc:
+        try:
+            if not isinstance(exc, OSError) or exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                 raise
-            time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
+            return None, exc, _lock_identity(lease.fileno())
+        finally:
+            lease.close()
+    return lease, None, None
 
 
-def cargo_lease(exclusive=False, wait=0.0):
-    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
-    return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
+def _cargo_lease_for(target, exclusive=False, wait=None, *, deadline=None, request=None):
+    wait = (0.0 if exclusive else SHARED_WAIT_S) if wait is None else wait
+    if not math.isfinite(wait) or wait < 0:
+        raise ValueError('invalid Cargo lease wait')
+    request = request or LeaseWait(wait, deadline)
+    request.limit(wait)
+    target = _physical_cargo_target(target)
+    path = request.lock_path = target.with_name(target.name + '.plangraph-lock')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        if not exclusive and request.expired(immediate=wait == 0):
+            raise CargoLeaseTimeout(request)
+        lease, conflict, identity = _try_cargo_lock(path, exclusive)
+        if conflict is None:
+            if not exclusive and request.expired(immediate=wait == 0):
+                with lease:
+                    raise CargoLeaseTimeout(request, _lock_identity(lease.fileno()))
+            return lease
+        request.conflict_identity = identity
+        remaining = request.end - time.monotonic()
+        if exclusive and remaining <= 0:
+            raise conflict
+        if not exclusive and (remaining <= 0 or request.stop.is_set()):
+            raise CargoLeaseTimeout(request) from conflict
+        request.stop.wait(min(0.5 if exclusive else 0.1, remaining))
+
+
+def cargo_lease(exclusive=False, wait=None, *, deadline=None):
+    """Acquire the configured sibling lock, with a five-second shared wait by default."""
+    request = None if exclusive else LEASE_REQUEST.get()
+    return _cargo_lease_for((request.target if request else None) or shared_cargo_target(),
+                           exclusive, wait, deadline=deadline, request=request)
 
 
 CLI_TESTS_KEEP_ENV = 'PLANGRAPH_CLI_TESTS_KEEP'
@@ -318,7 +373,7 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
         except ValueError:
             wait = 30.0
         wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
-    with cargo_lease(exclusive=True, wait=wait):
+    with _cargo_lease_for(target, exclusive=True, wait=wait):
         for root in BUILD_ROOTS:   # refuse before any build root is pruned
             if (Path(target) / root).is_symlink():
                 raise ValueError(f'{Path(target) / root} is a symbolic link; build root not pruned')

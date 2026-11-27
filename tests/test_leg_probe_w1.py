@@ -216,33 +216,39 @@ def test_probe_waits_for_unregistered_session(tmp_path):
     assert result['ok'] is True, result
 
 
-def test_timeout_mid_spawn_still_cancels_child():
+def test_timeout_mid_spawn_still_cancels_child(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo'))
+    runner = _child_runner(tmp_path, monkeypatch, 'import time; time.sleep(60)', 'claude')
+    factory = runner.process_factory
+    children = []
 
-    class Runner:
-        def __init__(self):
-            self._tasks, self.jobs, self.cancelled = {}, {}, []
+    async def slow_factory(*args, **kwargs):
+        await asyncio.sleep(0.5)
+        children.append(await factory(*args, **kwargs))
+        return children[-1]
 
-        async def spawn(self, **kwargs):
-            await asyncio.sleep(0.5)  # the budget expires while spawn is in flight
-            job = SimpleNamespace(job_id='slow-spawn', status='running', exit_code=None)
-            self.jobs[job.job_id] = job
-            self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))
-            return job
-
-        async def cancel(self, job_id):
-            self.cancelled.append(job_id)
-            self.jobs[job_id].status = 'cancelled'
-            task = self._tasks.get(job_id)
-            if task:
-                task.cancel()
-
-    runner = Runner()
-    result = asyncio.run(leg_probe.probe(runner, _leg(), timeout_s=0.2))
+    runner.process_factory = slow_factory
+    leg = SimpleNamespace(model='claude-haiku-5-5', harness='claude')
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    result = asyncio.run(leg_probe.probe(runner, leg, timeout_s=0.25, role='review', store=store))
     assert result['ok'] is False
     assert result['reason'] == 'timeout'
     assert result['infra'] is False
-    assert runner.cancelled == ['slow-spawn']
+    child, = children
+    job, = runner.jobs.values()
+    assert child.returncode is not None and job.status == 'cancelled'
+    assert _events(store) == [(503, 'review-liveness-probe')]
+
+
+def test_probe_shared_lease_timeout_does_not_book(tmp_path, monkeypatch):
+    from test_leg_probe_budget import exercise_local_probe
+    exercise_local_probe(tmp_path, monkeypatch, code='cargo_lease_timeout')
+
+
+def test_probe_outer_wait_for_before_dispatch_does_not_book(tmp_path, monkeypatch):
+    from test_leg_probe_budget import exercise_local_probe
+    exercise_local_probe(tmp_path, monkeypatch, code='probe_pre_dispatch_timeout', isolated=True)
 
 
 def test_probe_is_single_flight_per_leg(monkeypatch):
