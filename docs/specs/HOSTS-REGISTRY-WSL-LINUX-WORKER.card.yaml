@@ -1,0 +1,26 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "HOSTS-REGISTRY-WSL-LINUX-WORKER": {
+      "outcome": "The registry generator and docs carry a Linux WSL worker entry (os linux, wsl_distro, ssh_target, caps, ramp, roles, env.PATH) and generate its overflow route with the WSL hop.",
+      "read_set": [
+        "rust/worker-core/src/hosts.rs",
+        "rust/worker-core/src/hosts/validate.rs",
+        "src/plangraph/spawner/overflow.py"
+      ],
+      "write_set": [
+        "src/plangraph/fleet_sync/genconfig.py",
+        "tests/test_fleet_sync.py",
+        "docs/placement-rules.md",
+        "changelog.d/HOSTS-REGISTRY-WSL-LINUX-WORKER.md"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_fleet_sync.py tests/test_fleet_sync_advance.py",
+      "risk_tags": [
+        "config"
+      ],
+      "estimate_tokens": 30000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_spawner_remote_ps.py"
+    }
+  }
+}
