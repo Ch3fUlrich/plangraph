@@ -47,6 +47,35 @@ snapshot, plans and route previews explicitly report
 `{host: null, reason: "placement_not_evaluated", free_mb: null}`; `route()` never
 performs readiness/health probing or reads local memory/swap for placement.
 
+### Linux workers reached through Windows SSH (D-6967)
+
+Register the WSL guest as its own Linux worker. Its `ssh_target` points to the
+Windows SSH server, and `wsl_distro` names the guest. Use Linux paths for the
+guest's `state_dir` and `repos`. The guest's copy of `hosts.json` names this
+entry in `self`. This excerpt shows the fields used by placement and readiness.
+
+```json
+{
+  "id": "wsl-worker",
+  "class": "workstation",
+  "os": "linux",
+  "transport": "ssh",
+  "ssh_target": "windows-hop.example.invalid",
+  "wsl_distro": "Ubuntu",
+  "remote_placement": true,
+  "roles": ["implement", "review"],
+  "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2, "max_sessions": 4, "mem_floor_mb": 6144},
+  "warmup": {"warmup_s": 30, "ramp_mb": {"implement": 2048, "review": 1024}},
+  "env": {"PATH": "/srv/worker/.local/bin:/usr/bin:/bin"}
+}
+```
+
+`remote_placement: true` opens the workstation to remote placement under
+D-6967. A switch set to `false` closes placement. The generated ps and overflow
+routes carry `wsl_distro` and `env.PATH`. The PATH is a colon-separated list of
+absolute guest directories, using letters, digits and `_./+-`. Include the
+guest's user tool directory and system tool directories.
+
 ## Operator view: local Rust rule source
 
 `placement_rule_store::RuleSource` accepts a configured env-file path (or None),

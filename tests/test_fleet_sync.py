@@ -179,6 +179,52 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
     assert genconfig.sync(registry) == 1
 
 
+@pytest.fixture
+def wsl_registry():
+    return {'hosts': [dict(
+        id='wsl-worker', os='linux', transport='ssh', ssh_target='windows-hop', wsl_distro='Ubuntu',
+        remote_placement=True, roles=['implement', 'review'], state_dir='/srv/worker/state',
+        repos={'plangraph': {'root': '/srv/repo'}}, caps={'mem_floor_mb': 6144},
+        warmup={'ramp_mb': {'implement': 2048, 'review': 1024}},
+        env={'PATH': '/srv/worker/.local/bin:/usr/bin:/bin', 'PG_SESSION_UNIT': 'worker.service'})]}
+
+
+def test_wsl_linux_entry_generates_overflow_route(wsl_registry):
+    generated = genconfig.generate(wsl_registry)
+    route = generated['overflow-hosts.json']['hosts']['wsl-worker']
+    path = wsl_registry['hosts'][0]['env']['PATH']
+    assert route['ssh'] == 'windows-hop' and route['wsl_distro'] == 'Ubuntu'
+    assert route['env'] == {'PATH': path}
+    assert route['remote_placement'] is True and route['session_unit'] == 'worker.service'
+    assert route['roles'] == ['implement', 'review'] and route['floor_mb'] == 6144
+    assert generated['ps-hosts.json']['hosts'][0]['env'] == {'PATH': path}
+    assert overflow.host_caps(wsl_registry, 'wsl-worker', 'review') == (1024, 6144)
+
+
+def test_wsl_entry_remote_placement_false_refused(wsl_registry, monkeypatch):
+    wsl_registry['hosts'][0]['remote_placement'] = False
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: wsl_registry)
+    monkeypatch.setattr(overflow, 'read_readiness', lambda name: dict(
+        ok=True, fresh=True, live_runs=0, mem_available_mb=16384))
+    config = overflow.placement_config(wsl_registry, 'implement')
+    assert not genconfig.remote_open(config, 'coordinator')
+    rows = overflow.ready_records(config)
+    assert rows['wsl-worker']['refusal'] == genconfig.REMOTE_PLACEMENT_CLOSED
+    assert overflow.decide(0, 2048, 6144, rows, True).host is None
+
+
+def test_ps_hosts_regenerated_from_registry(tmp_path, wsl_registry):
+    ps_path = tmp_path / 'ps-hosts.json'
+    ps_path.write_text(json.dumps({'hosts': [dict(
+        name='wsl-worker', target='windows-hop', win_src='C:/old/src')]}))
+    assert genconfig.sync(wsl_registry, write=True, directory=tmp_path) == 0
+    generated = genconfig.generate(wsl_registry)
+    for name, config in generated.items():
+        assert json.loads((tmp_path / name).read_text()) == config
+    assert 'win_src' not in generated[ps_path.name]['hosts'][0]
+    assert genconfig.sync(wsl_registry, directory=tmp_path) == 0
+
+
 def test_fleet_sync_unreachable(capsys, tmp_path):
     from plangraph.fleet_sync.__main__ import main
     path = tmp_path / 'hosts.json'

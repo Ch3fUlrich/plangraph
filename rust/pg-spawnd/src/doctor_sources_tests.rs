@@ -167,6 +167,19 @@ fn commands() {
     assert!(plan_absent_for_posix());
 }
 
+#[test]
+fn readiness_followup_doctor_source_check_uses_registry_path() {
+    let guest = json!({"name":"guest", "target":"windows-hop", "src":"/srv/repo/src",
+        "wsl_distro":"Ubuntu", "env":{"PATH":"/srv/worker/.local/bin:/usr/bin:/bin"}});
+    assert_eq!(
+        command(&guest).unwrap(),
+        "wsl.exe --distribution Ubuntu --exec /usr/bin/env PATH=/srv/worker/.local/bin:/usr/bin:/bin pg-spawnd steps"
+    );
+    let mut invalid = guest;
+    invalid["env"]["PATH"] = json!("/bin:%PATH%");
+    assert!(command(&invalid).is_none());
+}
+
 fn plan_absent_for_posix() -> bool {
     plan(&host()).is_none()
 }

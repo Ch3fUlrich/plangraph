@@ -170,9 +170,9 @@ its timeout stops waiting, not the writer. Process waits use `plangraph wait-pid
 (exact `--pid` or `--pid-file`, never a process-table cmdline scan), and
 `host_ready` probes non-unit sessions with `plangraph wait-pid --check --pid-file`
 for `.pid` targets or exact `pgrep -x --` otherwise.
-Set `env.PG_SESSION_UNIT` in a host registry entry to a systemd unit, a
-`.pid` file path, or the exact process name (`comm`) to include that session
-in readiness checks.
+Set `env.PG_SESSION_UNIT` to a systemd unit, `.pid` file path, or exact process
+name (`comm`) to include a session probe. See the
+[WSL readiness and rollout notes](host-tools.md#three-host-writer-and-review-rollout).
 Migration note: a legacy `overflow-hosts.json` `session_unit` is no longer read; readiness
 takes the session from `env.PG_SESSION_UNIT` in the host's registry entry, and without it the
 session probe is skipped. Move the old value there, and replace a `pgrep -f` command-line
