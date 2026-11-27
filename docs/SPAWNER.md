@@ -241,8 +241,8 @@ requested and served IDs, including when an effort variant serves its base model
 A writer child holds the gateway API key and session tag and can submit calls
 with that tag. The witness proves the model served for tagged gateway calls;
 it does not prove independence from the child or bind a response to its answer.
-The management log credential stays in the parent. The child-writable OpenCode
-store remains review-only request-side evidence.
+The management log credential stays in the parent. See [OpenCode client key setup](opencode-gateway.md).
+The child-writable OpenCode store remains review-only request-side evidence.
 The provider-state snapshot behind leg routing (`routing_support/quota_snapshots.py`)
 reads `/api/providers` with the same parent-only management token from
 `routing_support/opencode_render.py::load_token` (re-exported by `gateway_witness`), never with the

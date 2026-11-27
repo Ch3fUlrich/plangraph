@@ -107,6 +107,9 @@ def test_provider_omniroute():
     omniroute = providers["omniroute"]
 
     assert "AUTOOS_OMNIROUTE_KEY" in omniroute.get("env", [])
+    gateway_docs = (ROOT / "docs" / "opencode-gateway.md").read_text(encoding="utf-8")
+    assert "`AUTOOS_OMNIROUTE_KEY`" in gateway_docs
+    assert "`$HOME/.config/plangraph/omniroute-client.key`" in gateway_docs
     assert omniroute.get("package") == "@opencode/ai/providers/openai-compatible"
     assert omniroute.get("settings", {}).get("baseURL") == "{env:PLANGRAPH_REVIEW_URL}"
 

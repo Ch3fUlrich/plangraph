@@ -47,10 +47,20 @@ If neither deployment config nor a concrete provider URL resolves the active
 gateway provider, rendering returns the same named refusal for MiMo and
 OmniRoute: `not_served_on_host: gateway_base_url_unresolved`. Unresolved
 environment placeholders do not count as URLs; there is no localhost default.
-Credential handling is unchanged: config contains environment references, not
-credential values, and rendering does not read or log keys. The shared validator
+Rendered config contains credential environment references. The shared URL validator
 refuses URL userinfo, queries, fragments (including bare delimiters), and
 non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.
+
+When the rendered OpenCode config calls for `AUTOOS_OMNIROUTE_KEY`, the spawner
+uses a nonblank value from the environment if present. Otherwise it reads
+`$HOME/.config/plangraph/omniroute-client.key` (`USERPROFILE` when `HOME` is unset
+or empty on Windows) and puts the value in the child environment under the same
+name. Use a regular file containing one nonempty UTF-8 line within 8 KiB. The
+reader rejects symlinks for the file and its immediate directory. On POSIX, the
+effective user must own both and restrict access to the owner. Use modes
+`0600` and `0700`, respectively. If the client key file is missing, the spawner can
+fall back to AutoOS's `configuration/api-keys.yml` via its gateway key helper.
+A present but invalid file supplies no key.
 
 Plain-shell CLI runs resolve a missing deployment endpoint from
 `plangraph/omniroute-base-url` under XDG_CONFIG_HOME (otherwise HOME/.config).

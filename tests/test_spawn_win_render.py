@@ -221,13 +221,29 @@ def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, mo
 
 
 def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
-    """(i) Router D-2801 (a): parent AUTOOS_OMNIROUTE_KEY reaches child env without leaking.
+    _assert_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, source="parent-env")
+
+
+def test_client_file_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
+    _assert_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, source="client-file")
+
+
+def _assert_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch, *, source):
+    """(i) Parent env and the private client file both supply AUTOOS_OMNIROUTE_KEY.
 
     The child prints the sentinel to stdout and stderr so redact_env_values is
     proven to scrub it from the recorded tails, not merely absent by luck.
     """
-    sentinel = "SENTINEL-PARENT-ENV-KEY-999"
-    monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
+    sentinel = "SENTINEL-GATEWAY-CLIENT-KEY-999"
+    if source == "parent-env":
+        model = "omniroute/cx-gpt-6.2-sol-medium"
+        monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
+    else:
+        model = "mimo/mimo-v2.6-pro"
+        key_file = tmp_path / "fake-home" / ".config" / "plangraph" / "omniroute-client.key"
+        key_file.parent.mkdir(mode=0o700, parents=True)
+        key_file.write_text(sentinel + "\n", encoding="utf-8")
+        key_file.chmod(0o600)
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:8080/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
@@ -254,7 +270,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="omniroute/cx-gpt-6.2-sol-medium",
+            model=model,
             override_reason="testing manual model override",
             prompt="task",
             wait_seconds=None,

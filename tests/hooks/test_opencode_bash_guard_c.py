@@ -195,9 +195,9 @@ class TestL2ReadOnlyRole(L2RoleChecks, unittest.TestCase):
 
     # ------------------------------------------------------------------
     # AO-L2-LAUNCH merge criterion e (L2-SECRETS, 2026-10-08): the L2 lane's
-    # environment CARRIES `AUTOOS_OMNIROUTE_KEY`, because opencode expands the
-    # rendered config's `{env:AUTOOS_OMNIROUTE_KEY}` inside the child and the lane
-    # has no other way to its model. Carrying it is only safe while the lane's own
+    # environment CARRIES `AUTOOS_OMNIROUTE_KEY`, whether supplied by the parent
+    # environment or the spawner's client key file. OpenCode expands the rendered
+    # config's `{env:AUTOOS_OMNIROUTE_KEY}` inside the child. The lane's own
     # shell cannot READ it back: the launcher's allowlist picks which NAMES travel,
     # this gate picks which READS the session may perform, and the key sits in the
     # child's own environment either way — in `/proc/self/environ`, in `printenv`'s
