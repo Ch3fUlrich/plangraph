@@ -131,27 +131,11 @@ Card rules: **relative paths only**, no `..`, no absolute or drive paths; no sec
 paths or token-like strings anywhere in a card. The section 3 contract maps onto card fields:
 Scope -> `write_set` names every edited file, Acceptance -> one `check_cmd`.
 
-### Spec files and spec writer agents (rules 3.114, 3.118)
+### Specs
 
-A spec is three files per item on a spec lane: `docs/specs/<ID>.md` (the section 3 fields, each
-under its own heading: Objective, Decision sources, State and ownership, Call paths, Reuse, Tests,
-Non-goals, Acceptance; header lines plan_source, base commit, card and tree SHA-256),
-`<ID>.card.yaml` (the section 4 card) and `<ID>.tree.tsv` (one row per write_set path).
-Whoever writes specs, the planning session or a spawned agent, follows this list; a brief to a
-spec agent starts with "skills/plangraph-planning/SKILL.md sections 3-5 apply" and names its items:
-1. Read each item through its digest: `pg-ctx context <key>`, until it exists `pg show <key>` plus
-   the rules it names in router/DECISIONS.md on origin/main. The item's Why/How/done is the plan;
-   specs are written in the planning pass, while the plan context is loaded.
-2. Before writing, search for an existing spec of the item on main AND on open lanes
-   (`git log --all -- docs/specs/<ID>.md`); an unmerged reviewed spec is reused, not rewritten.
-3. Every claim is checked in the repository at the base commit (`path:line` or `path::Symbol`);
-   a decision the writer would otherwise take is written as a decision.
-4. Before the push: the public scrub (`tools/split/scrub_check.py --base origin/main --head HEAD .`,
-   no home paths, user@host, digit-mixed tokens) and `tools/ci_commit_gate.py check` (Writer
-   trailer `<model> <run|session id> (note)`); push with a fast-check receipt from a work host.
-5. Design review as in section 5, Work phase step 3: `--role research`, another family, tagged
-   points, the same reviewer session for the next round, at most 3 rounds; then the spec is final
-   and open points go to the implementer.
+Writing a spec and its design review are `skills/spec-creation/SKILL.md`: reuse a reviewed spec
+found on main or an open lane, the item digest first, three files per item, one design review
+and one correction round, then the spec is final. Load it only when an item needs a spec.
 
 ### Batch example (loads with `plangraph.planner.service.import_batch` / `card.load_cards_yaml`)
 
@@ -221,26 +205,10 @@ ops:
 **Work phase (Layer 2).** Effort is medium unless the operator asks otherwise.
 1. Optional: detail researchers for facts the plan lacks, using the research rules above.
 2. Refine task contracts against section 3; keep each card in sync with its contract.
-3. Design review before every writer launch. Spawn it with `--role research`, read-only in a
-   checkout, and pin the leg on every launch with `--leg` and an override reason: a
-   tools-capable leg that the route lists for the research role and whose family differs from
-   the family that wrote the spec. Do not rely on the route's order: the research route
-   applies no family exclusion (`--exclude-family` reaches review routing only), so even when
-   its first leg qualifies a spawn can fall through to a leg of the author's family. It is not a `--role review` run,
-   whose verdict parser accepts only ACCEPT and REQUEST_CHANGES. When no such leg serves, the
-   launch waits and the orchestrator reports it; no other role or family stands in. The
-   answer starts with `VERDICT: DESIGN-OK` or `VERDICT: DESIGN-CHANGE`,
-   then one line per point with a tag: SOURCE (a decision without a structured source), STATE
-   (an open lifecycle), PATH (an entry point not named), REUSE (an existing helper not named),
-   TEST (a test the done check needs), SCOPE (not doable inside the named files). Each point
-   names file or symbol, the defect of the spec and the change to the spec.
-   After DESIGN-CHANGE the planner revises the spec (each point taken in, or answered with a
-   fact from the repository) and the same reviewer session judges the revised text. An
-   implementer starts only on the exact spec text that received DESIGN-OK. One exception to
-   this gate: after 3 rounds without DESIGN-OK the review ends, the points still open are
-   listed in the spec as open, and the orchestrator may authorize the launch by a recorded
-   decision that names the spec text (its hash) and those points. A fix round of an unchanged
-   spec needs no new review.
+3. Design review before every writer launch, as `skills/spec-creation/SKILL.md` states: a
+   `--role research` run of another family than the author, tagged points, one correction
+   round, then the spec is final and open points go to the implementer. When no such leg
+   serves, the launch waits and the orchestrator reports it; no other role or family stands in.
 4. Spawn implementers by card via plangraph-spawn (`python3 tools/plangraph-spawn.py spawn --card @card.json --role implement ...`): independent tasks in parallel, dependent ones in order.
 5. Spawn reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
    using the route table; include a non-Claude family different from the writer.
@@ -394,7 +362,7 @@ research and review. If only Claude is available, record that coverage in the re
 - [ ] Every decision, priority, cap and cause names its source and number, or is marked EXPERIMENT with a measurement plan (rule 3.76)
 - [ ] For a plan that aims at throughput, speed, cost or quality: baselines recorded as evidence before the work; each change it lands written up as an evidence article
 - [ ] Every task passes the section 3 contract with all spec fields; file scopes disjoint; toolchain in each brief
-- [ ] DESIGN-OK on the exact spec text before its writer starts, or after 3 rounds the recorded exception with the open points; the points of earlier rounds are in the item
+- [ ] One design review and one correction round on the spec before its writer starts; open points are listed in the spec
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent
 - [ ] L1/L2 briefs carry the D-1272 small-fix clause; an L2 self-fix is <= ~10 lines, never auth/access/secrets, `Writer: L2`, 2 seats + judge
