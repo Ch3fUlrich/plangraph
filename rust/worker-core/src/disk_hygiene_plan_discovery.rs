@@ -1,5 +1,6 @@
 //! Candidate discovery and bounded ranking measurements for disk hygiene.
 use super::*;
+use crate::disk_hygiene::Device;
 use crate::{
     cargo_cache::ExclusiveLease,
     cargo_pool_trim::{remove_guarded_if, stamp},
@@ -97,6 +98,7 @@ impl Layout<'_> {
         };
         let now = SystemTime::now();
         let idle = now - Duration::from_secs(1800);
+        let main_idle = now - crate::main_target::IDLE_AFTER;
         let legacy = now - crate::idle_targets::IDLE_AFTER;
         let mut found = vec![];
         for (tree, locked, detached) in super::super::fast_worktrees::registered(
@@ -108,22 +110,16 @@ impl Layout<'_> {
                 break;
             }
             let main = tree == self.repo;
-            let Some(boundary) = self
+            let root = self
                 .roots
                 .iter()
-                .find(|root| tree != **root && tree.starts_with(root))
-                .cloned()
-                .or_else(|| main.then(|| tree.clone()))
-            else {
+                .find(|root| tree != **root && tree.starts_with(root));
+            let Some(boundary) = root.or(main.then_some(&tree)) else {
                 continue;
             };
             let target = tree.join("rust/target");
             if target.symlink_metadata().is_ok() {
-                let age = if main {
-                    now - crate::main_target::IDLE_AFTER
-                } else {
-                    idle
-                };
+                let age = if main { main_idle } else { idle };
                 let mut item = Candidate::new(target, tree.clone(), age)?;
                 item.maintenance = main;
                 if !main {
@@ -162,6 +158,7 @@ impl Layout<'_> {
                     &excluded,
                     &mut permit,
                     idle,
+                    crate::affected_scratch::is_run,
                 )?);
             }
             let (targets, complete) =
@@ -181,6 +178,17 @@ impl Layout<'_> {
                 found.push(item);
             }
         }
+        let parent = self.shared.first().and_then(|root| root.parent());
+        if let Some(path) = parent.and_then(|root| root.canonicalize().ok()) {
+            let marked = crate::private_targets::is_preflight_target;
+            found.extend(crate::affected_scratch::discover(
+                &path,
+                &excluded,
+                &mut permit,
+                idle,
+                marked,
+            )?);
+        }
         self.pool_candidates(&mut found, &mut report.summary, now, &mut permit)?;
         for path in self
             .roots
@@ -199,20 +207,14 @@ impl Layout<'_> {
             if report.devices.contains_key(&id) {
                 continue;
             }
-            match sample(&root) {
-                Ok(space) => {
-                    report.devices.insert(
-                        id,
-                        crate::disk_hygiene::Device::new(
-                            id,
-                            root,
-                            Some(space.free),
-                            thresholds.for_filesystem(space.total),
-                        ),
-                    );
-                }
-                Err(_) => report.keep_boundary(root, "root_unavailable"),
-            }
+            let Ok(space) = sample(&root) else {
+                report.keep_boundary(root, "root_unavailable");
+                continue;
+            };
+            let limits = thresholds.for_filesystem(space.total);
+            report
+                .devices
+                .insert(id, Device::new(id, root, Some(space.free), limits));
         }
         report
             .stage_durations
@@ -299,6 +301,7 @@ impl Layout<'_> {
             };
             for (slots, count) in [(ordinary, count), (review, DEFAULT_POOL_SLOTS as u64)] {
                 let group: std::sync::Arc<[PathBuf]> = slots.into();
+                let total_limit = self.cap.saturating_mul(count);
                 for slot in group.iter() {
                     if !permit() {
                         return Ok(());
@@ -314,11 +317,7 @@ impl Layout<'_> {
                         item.scope = root.clone();
                         item.lease_root = root.clone();
                         item.maintenance = true;
-                        item.cap = Some(PoolCap(
-                            self.cap,
-                            self.cap.saturating_mul(count),
-                            group.clone(),
-                        ));
+                        item.cap = Some(PoolCap(self.cap, total_limit, group.clone()));
                         found.push(item);
                     }
                 }

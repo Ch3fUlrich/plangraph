@@ -15,6 +15,13 @@ pub(crate) fn cargo_target(path: &Path) -> bool {
             .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
+pub(crate) fn is_preflight_target(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("preflight-cargo-"))
+        && cargo_target(path)
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) use process_paths::{process_cargo_path, resolve_deleted_path};
 

@@ -440,8 +440,14 @@ fn selector_scratch_uses_its_run_lease_for_final_proof() {
             .set_modified(now - Duration::from_secs(3600))
             .unwrap();
     }
-    let mut discovered =
-        crate::affected_scratch::discover(tmp.path(), &[], &mut || true, now).unwrap();
+    let mut discovered = crate::affected_scratch::discover(
+        tmp.path(),
+        &[],
+        &mut || true,
+        now,
+        crate::affected_scratch::is_run,
+    )
+    .unwrap();
     assert_eq!(discovered.len(), 1);
     let item = discovered.pop().unwrap();
     assert_eq!(item.path, target);

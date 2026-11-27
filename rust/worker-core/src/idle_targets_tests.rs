@@ -289,3 +289,27 @@ fn a_leased_target_with_an_unreadable_child_does_not_stop_the_sweep_of_its_sibli
         .iter()
         .any(|s| s.contains("cache lease held")));
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_discovery_accepts_only_direct_marked_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let age = Duration::from_secs(3600);
+    let named = target(&root, "preflight-cargo-old", age);
+    let unrelated = target(&root, "ordinary", age);
+    let nested = target(&unrelated, "preflight-cargo-nested", age);
+    fs::create_dir(root.join("preflight-cargo-unmarked")).unwrap();
+    let found = crate::affected_scratch::discover(
+        &root,
+        &[],
+        &mut || true,
+        SystemTime::now(),
+        crate::private_targets::is_preflight_target,
+    )
+    .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, named);
+    assert!(!found[0].selector_scratch);
+    assert!(unrelated.exists() && nested.exists());
+}

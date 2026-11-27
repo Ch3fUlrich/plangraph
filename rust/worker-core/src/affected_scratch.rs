@@ -71,13 +71,14 @@ pub(crate) fn discover(
     excluded: &[std::path::PathBuf],
     permit: &mut impl FnMut() -> bool,
     cutoff: SystemTime,
+    marked: impl Fn(&Path) -> bool,
 ) -> io::Result<Vec<crate::disk_hygiene::Candidate>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(root)?.take_while(|_| permit()) {
         let path = entry?.path();
-        if is_run(&path) && !excluded.iter().any(|other| path.starts_with(other)) {
+        if marked(&path) && !excluded.iter().any(|other| path.starts_with(other)) {
             let mut item = crate::disk_hygiene::Candidate::new(path, root.to_path_buf(), cutoff)?;
-            item.selector_scratch = true;
+            item.selector_scratch = is_run(&item.path);
             found.push(item);
         }
     }
