@@ -469,3 +469,38 @@ fn selector_scratch_uses_its_run_lease_for_final_proof() {
     assert!(proof.remove(true, || Ok(true), || true).unwrap().is_some());
     assert!(!target.exists());
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cap_scan_reports_an_incomplete_total_at_the_deadline() {
+    use crate::{
+        cargo_pool::hygiene_cap_failure,
+        disk_hygiene::{Candidate, Projection},
+        shared_target::PoolCap,
+    };
+    use std::cell::Cell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let slot = tmp.path().join("slot");
+    fs::create_dir(&slot).unwrap();
+    fs::write(slot.join("data"), [0u8; 128]).unwrap();
+    let mut item =
+        Candidate::new(slot.clone(), tmp.path().to_path_buf(), SystemTime::now()).unwrap();
+    let slots = vec![slot].into();
+    let projected = Projection::default();
+    item.cap = Some(PoolCap(1024, 1024, slots));
+    let permit = Cell::new(true);
+    assert_eq!(
+        hygiene_cap_failure(&item, &projected, || permit.replace(false)),
+        Some("run_budget")
+    );
+    assert_eq!(
+        hygiene_cap_failure(&item, &projected, || true),
+        Some("cap_met")
+    );
+    let Some(PoolCap(limit, _, _)) = item.cap.as_mut() else {
+        unreachable!()
+    };
+    *limit = 64;
+    assert_eq!(hygiene_cap_failure(&item, &projected, || true), None);
+}

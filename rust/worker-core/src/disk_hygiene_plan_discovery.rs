@@ -279,9 +279,9 @@ impl Layout<'_> {
         permit: &mut impl FnMut() -> bool,
     ) -> io::Result<()> {
         use crate::{
-            cargo_pool::{pool_slot_sets, PoolCap, DEFAULT_POOL_SLOTS},
+            cargo_pool::{pool_slot_sets, DEFAULT_POOL_SLOTS},
             cargo_pool_trim::trusted_slot,
-            shared_target::{debug_artifacts, STALE_AFTER},
+            shared_target::{debug_artifacts, PoolCap, STALE_AFTER},
         };
         let fallback = self
             .shared

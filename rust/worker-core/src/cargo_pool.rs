@@ -192,36 +192,40 @@ pub(crate) fn hygiene_slot_leased(slot: &Path, state: &Path) -> io::Result<bool>
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone)]
-pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
-
-#[cfg(target_os = "linux")]
 pub(crate) fn hygiene_cap_failure(
     item: &crate::shared_target::Candidate,
     projected: &crate::disk_hygiene::Projection,
     room: impl Fn() -> bool,
 ) -> Option<&'static str> {
-    let PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
+    let crate::shared_target::PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
     let mut total = 0u64;
     let mut complete = true;
     for slot in slots.iter().filter(|slot| slot.is_dir()) {
         if !room() {
             return Some("run_budget");
         }
-        let size = try_exclusive_lease(slot)
+        let remaining = total_limit.saturating_sub(total);
+        let own_slot = slot.canonicalize().ok().as_ref() == Some(&item.scope);
+        let threshold = if own_slot {
+            remaining.min(*limit)
+        } else {
+            remaining
+        };
+        let projected = projected.under(slot);
+        let mut size = 0u64;
+        let measured = try_exclusive_lease(slot).ok().flatten().and_then(|_lease| {
+            crate::disk_hygiene::scan_until(slot, &mut |bytes| {
+                size = size.saturating_add(bytes);
+                room() && size.saturating_sub(projected) <= threshold
+            })
             .ok()
-            .flatten()
-            .and_then(|_lease| slot_size(slot).ok());
-        complete &= size.is_some();
-        let size = size
-            .unwrap_or_default()
-            .saturating_sub(projected.under(slot));
-        total = total.saturating_add(size);
-        if total > *total_limit
-            || (size > *limit && slot.canonicalize().ok().as_ref() == Some(&item.scope))
-        {
+        });
+        complete &= measured.is_some();
+        let size = size.saturating_sub(projected);
+        if size > threshold {
             return None;
         }
+        total = total.saturating_add(size);
     }
     Some(if complete { "cap_met" } else { "run_budget" })
 }

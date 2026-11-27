@@ -32,10 +32,7 @@ pub struct Guards {
 pub use inventory::HygieneInventory;
 
 #[cfg(target_os = "linux")]
-pub(crate) fn file_identity(meta: &fs::Metadata) -> (u64, u64) {
-    use std::os::unix::fs::MetadataExt;
-    (meta.dev(), meta.ino())
-}
+pub(crate) use crate::main_target::file_identity;
 
 #[cfg(target_os = "linux")]
 pub(crate) fn invalid_inventory() -> io::Error {
@@ -81,8 +78,7 @@ mod inventory {
         }
 
         pub(crate) fn decode(bytes: &[u8]) -> io::Result<Self> {
-            let rows: HygieneInventory =
-                serde_json::from_slice(bytes).map_err(|_| invalid_inventory())?;
+            let rows: Self = serde_json::from_slice(bytes).map_err(|_| invalid_inventory())?;
             if rows.version != 1
                 || rows.references().any(|path| {
                     !path.is_absolute()
@@ -199,7 +195,7 @@ mod hygiene_report {
         serializer.serialize_str(&display_path(path))
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     pub struct HygieneReport {
         pub summary: Report,
         pub devices: BTreeMap<u64, Device>,
@@ -219,33 +215,23 @@ mod hygiene_report {
                     dry_run,
                     ..Report::default()
                 },
-                devices: BTreeMap::new(),
-                kept: vec![],
                 started_at,
-                time_to_first_removal: None,
-                first_removal_deadline_missed: false,
-                stage_durations: BTreeMap::new(),
-                budget_exhausted: false,
+                ..Self::default()
             }
         }
 
         /// Record a device's final sample. A failed sample contributes no available bytes.
         pub fn sample_end(&mut self, device: u64, free: io::Result<u64>, observed_at: u64) {
-            let row = self
-                .devices
-                .get_mut(&device)
-                .expect("sampled device is in the ledger");
+            let row = self.devices.get_mut(&device).expect("registered device");
             row.observed_at = observed_at;
-            row.end_free_bytes = match free {
-                Ok(free) => Some(free),
-                Err(error) => {
+            row.end_free_bytes = free
+                .inspect_err(|error| {
                     self.summary.alarm = true;
                     self.summary.error.get_or_insert_with(|| {
                         format!("device {device} final free space unavailable: {error}")
                     });
-                    None
-                }
-            };
+                })
+                .ok();
         }
     }
 }
@@ -392,12 +378,24 @@ impl Guards {
     }
 }
 pub fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
+    scan_until(path, &mut |_| true)
+}
+pub(crate) fn scan_until(
+    path: &Path,
+    visit: &mut impl FnMut(u64) -> bool,
+) -> io::Result<(u64, SystemTime)> {
+    if !visit(0) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
     let meta = fs::symlink_metadata(path)?;
     let mut newest = meta.modified()?;
     let mut bytes = if meta.is_file() { meta.len() } else { 0 };
+    if !visit(bytes) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
     if meta.is_dir() && !meta.file_type().is_symlink() {
         for entry in fs::read_dir(path)? {
-            let (size, modified) = scan(&entry?.path())?;
+            let (size, modified) = scan_until(&entry?.path(), visit)?;
             bytes = bytes.saturating_add(size);
             newest = newest.max(modified);
         }

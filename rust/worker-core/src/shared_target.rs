@@ -188,9 +188,12 @@ pub struct Candidate {
     pub(crate) identity: (u64, u64),
     pub(crate) maintenance: bool,
     pub(crate) selector_scratch: bool,
-    pub(crate) cap: Option<crate::cargo_pool::PoolCap>,
+    pub(crate) cap: Option<PoolCap>,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
 #[cfg(target_os = "linux")]
 impl Candidate {
     /// Describe a provider-approved removal unit. Its identity must survive until unlink.

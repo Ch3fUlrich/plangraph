@@ -7,6 +7,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(target_os = "linux")]
+pub(crate) fn file_identity(meta: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
 /// Cargo's own markers, never the directory name: its CACHEDIR.TAG or the `.rustc_info.json`
 /// beside a profile directory.
 pub fn identified(target: &Path) -> bool {
