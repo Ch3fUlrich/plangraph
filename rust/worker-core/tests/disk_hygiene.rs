@@ -497,17 +497,25 @@ fn disk_hygiene_cli_refuses_conflicting_modes() {
 #[test]
 fn disk_hygiene_guard_failure_replaces_stale_healthy_report() {
     let tmp = tempfile::tempdir().unwrap();
+    git(tmp.path(), &["init", "-q"]);
     fs::write(tmp.path().join("disk-hygiene.json"), r#"{"alarm":false}"#).unwrap();
     let pins = tmp.path().join("pins.json");
     fs::write(&pins, "[]").unwrap();
     fs::create_dir_all(tmp.path().join("runs/stray")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
-        .args(["--repo", "/missing", "--root"])
+        .arg("--repo")
+        .arg(tmp.path())
+        .arg("--root")
         .arg(tmp.path())
         .arg("--pins")
         .arg(pins)
         .arg("--state")
         .arg(tmp.path())
+        .arg("--tmp-root")
+        .arg(tmp.path())
+        .env("HOME", tmp.path())
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("PLANGRAPH_CARGO_TARGET_DIR")
         .output()
         .unwrap();
     assert!(!output.status.success());

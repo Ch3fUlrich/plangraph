@@ -112,9 +112,7 @@ fn execute_with(
             report.keep_boundary(root, "root_unavailable");
         }
     }
-    if !repo.is_dir() {
-        Guards::load(&pins, state)?;
-    }
+    Guards::load(&pins, state)?;
     let fast_checks =
         pg_worker_core::worktree::fast_check_state_dir(&repo).map_err(io::Error::other)?;
     roots.extend(
