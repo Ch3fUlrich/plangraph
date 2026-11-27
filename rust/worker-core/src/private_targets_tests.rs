@@ -426,17 +426,15 @@ fn hygiene_generic_cache_probe_refuses_committed_artifacts() {
 #[test]
 fn selector_scratch_uses_its_run_lease_for_final_proof() {
     use crate::{cargo_cache::CacheLease, disk_hygiene::FinalProof};
+    use std::os::unix::fs::DirBuilderExt;
+
     let tmp = tempfile::tempdir().unwrap();
-    let scratch = tempfile::Builder::new()
-        .prefix("pg-affected-fixture")
-        .rand_bytes(0)
-        .tempdir_in(tmp.path())
-        .unwrap();
-    let target = scratch.path();
+    let target = tmp.path().join("pg-affected-fixture");
+    fs::DirBuilder::new().mode(0o700).create(&target).unwrap();
     let marker = target.join(".lease");
     fs::write(&marker, b"plangraph-affected-pytest-v1\n").unwrap();
     let now = SystemTime::now();
-    for path in [target, marker.as_path()] {
+    for path in [&target, &marker] {
         fs::File::open(path)
             .unwrap()
             .set_modified(now - Duration::from_secs(3600))
