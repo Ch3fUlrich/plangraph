@@ -6,7 +6,7 @@ Restore a usable MiMo Pro review seat on the normal spawner route, with enough r
 
 - D1. Protected order D-7020 rule 3.104(1) and D-7019 rule 3.103(2,4). Data commit `dfc9cc344799e37c5c4bccf15b9f6f3d7f600b22`. Source base `c3cdc1749e95eb7bd824fc799f8b82fa1e15efed`.
 - D2. One gpt-6.2-sol-high implementation lane. SPAWNER-REVIEW-TOOLS supplies policy and command acceptance. RL28-LIVE-OPENCODE-PROOF supplies the live check. Its existing open RL28-RUST-SEAT-TOOLS-IN-LAUNCH dependency needs a routing disposition before the live item can close.
-- D3. Private design candidate for canonical `docs/specs/MIMO-BATCH-CAPACITY-D6357.md`. Card SHA-256 `0b25a9183e03487e294158875f1ca5ce2a025f357bbe2809baa8f724d2d0f6d9`. Tree SHA-256 `2c084e13fda7cce1c35ece17f25bdba7aadecb77c404c7083067f760f4a75e08`. Protected binding, design_ref and independent design acceptance are pending.
+- D3. Design candidate for canonical `docs/specs/MIMO-BATCH-CAPACITY-D6357.md`. Card SHA-256 `0b25a9183e03487e294158875f1ca5ce2a025f357bbe2809baa8f724d2d0f6d9`. Tree SHA-256 `2c084e13fda7cce1c35ece17f25bdba7aadecb77c404c7083067f760f4a75e08`. Protected binding, design_ref and independent design acceptance are pending.
 - D4. The existing policy parks MiMo in `review_tools_denied_legs`. Its declared mode is inline-only. `opencode_repository_review` currently selects the existing DeepSeek and GLM repository seats. Its renderer grants wildcard Cargo and pytest commands. That renderer alone does not prove tool confinement. `pg-jail` currently provides filesystem confinement under Landlock ABI V3.
 
 ## Entry points and ownership
