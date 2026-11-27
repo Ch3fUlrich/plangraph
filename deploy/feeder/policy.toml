@@ -16,3 +16,8 @@ batch_max_items = 6
 coding = 3
 dell = 5
 workstation = 8
+
+# Self-stop: a host feeds no writer while 3 of its last 5 ended feeder runs added no commit,
+# and only one canary run until a run of that window committed.
+no_commit_stop = 3
+no_commit_window = 5

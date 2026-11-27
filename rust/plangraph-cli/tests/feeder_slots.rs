@@ -30,7 +30,7 @@ fn dry_run_lists_every_batch_the_live_tick_starts_and_defers_overlapping_work() 
         let registry: Arc<Mutex<Registry>> = Arc::default();
         let row = tick(
             &ready(items.clone()),
-            &[],
+            &[proven("coding")],
             &capacity,
             &policy(1),
             "rules",

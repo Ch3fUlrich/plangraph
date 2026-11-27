@@ -237,6 +237,9 @@ pub fn tick(
         if let Admission::Refuse(reason) = admit(&sim_facts, policy) {
             break json!({"decision":"refused","item_key":seed.key,"reason":reason});
         }
+        if let Some(reason) = feeder_stop(&sim_runs, &sim_facts.host, policy) {
+            break json!({"decision":"refused","item_key":seed.key,"reason":reason});
+        }
         let (items, mut row) = if dry {
             let status = status_path(&batch, 0, reviews);
             let row = json!({"decision":"would_spawn",
@@ -306,6 +309,9 @@ pub fn tick(
             files: items.into_iter().flat_map(|item| item.files).collect(),
             status: "running".into(),
             role: "implement".into(),
+            host: sim_facts.host.clone(),
+            started: Some(sim_facts.now as f64),
+            feeder: true,
             ..Run::default()
         });
     };

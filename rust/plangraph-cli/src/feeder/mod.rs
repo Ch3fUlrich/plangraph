@@ -60,6 +60,10 @@ pub struct Policy {
     pub estimate_tokens: u64,
     /// Related ready items one writer batch may hold; 1 keeps one item per run.
     pub batch_max_items: usize,
+    /// The feeder stops a host when this many of its last `no_commit_window` ended feeder runs
+    /// ended without a commit; 0 turns the stop off.
+    pub no_commit_stop: usize,
+    pub no_commit_window: usize,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -77,6 +81,8 @@ impl Default for Policy {
             facts_max_age_seconds: 300,
             estimate_tokens: 100_000,
             batch_max_items: 6,
+            no_commit_stop: 3,
+            no_commit_window: 5,
         }
     }
 }
@@ -100,6 +106,12 @@ pub struct Run {
     /// Every item of a batch run; empty for a run of one item.
     #[serde(default, deserialize_with = "null_default")]
     pub item_keys: Vec<String>,
+    /// Why the run ended (`no_commit: ...` when its last writer turn added no commit).
+    #[serde(default, deserialize_with = "null_default")]
+    pub reason: String,
+    /// The run was started by the feeder: its card pushes to a `lane/feeder-` branch.
+    #[serde(skip)]
+    pub feeder: bool,
 }
 impl Run {
     /// Whether this run works on `key`, as its item or as a member of its batch.
@@ -232,9 +244,63 @@ pub fn brief(item: &Task, house_rules: &str) -> String {
     .filter_map(|k| item.fields.get(k).map(|v| (k, v)))
     .collect();
     format!("Plan item: {}\nTitle: {}\n\n{}\n\nDone criteria:\n{}\n\nFiles:\n{}\n\nNotes:\n{}\n\nTask metadata:\n{}\n\n{}\n",
-        item.key,item.title,item.description.as_deref().unwrap_or(""),done,item.files.join("\n"),
+        item.key,item.title,item.description.as_deref().unwrap_or(""),done,files_section(&item.files),
         item.fields.get("note").and_then(Value::as_str).unwrap_or(""),serde_json::to_string(&metadata).expect("JSON values"),
         house_rules.replace("{{item_key}}",&item.key).trim())
+}
+
+/// The brief's file list. A keeper item carries no write set unless a spec gave it one, so an
+/// empty list hands the scope to the writer instead of leaving a section the writer reads as
+/// "no file may change".
+pub fn files_section(files: &[String]) -> String {
+    if files.is_empty() {
+        NO_FILES_LISTED.into()
+    } else {
+        files.join("\n")
+    }
+}
+pub const NO_FILES_LISTED: &str = "None listed. Choose the files this item needs inside this \
+repository from its description and done criteria, keep the change inside the item, and name \
+every changed file in your final message. The run worktree is a detached checkout of main: \
+commit on it; the native host pushes the accepted head to the run's lane branch.";
+
+/// Why the feeder starts no writer on `host` now, from the host's own feeder runs: the stop when
+/// `no_commit_stop` of the last `no_commit_window` ended runs added no commit, and the canary
+/// while no ended run of that window committed and one run is still going.
+pub fn feeder_stop(runs: &[Run], host: &str, p: &Policy) -> Option<String> {
+    let mut mine: Vec<&Run> = runs
+        .iter()
+        .filter(|r| r.feeder && r.role == "implement" && same_host(&r.host, host, p))
+        .collect();
+    mine.sort_by(|a, b| {
+        b.started
+            .unwrap_or(0.0)
+            .total_cmp(&a.started.unwrap_or(0.0))
+    });
+    let ended: Vec<&Run> = mine
+        .iter()
+        .copied()
+        .filter(|r| !r.active())
+        .take(p.no_commit_window)
+        .collect();
+    let without = ended.iter().filter(|r| barren(r)).count();
+    if p.no_commit_stop > 0 && without >= p.no_commit_stop {
+        return Some(format!(
+            "no_commit_stop: {without} of the last {} ended feeder runs on this host added no commit",
+            ended.len()
+        ));
+    }
+    let proven = ended.iter().any(|r| !barren(r));
+    if !proven && mine.iter().any(|r| r.active()) {
+        return Some(
+            "canary_pending: the host's first feeder run has not ended with a commit".into(),
+        );
+    }
+    None
+}
+
+fn barren(r: &Run) -> bool {
+    r.reason.starts_with("no_commit") || r.reason == "writer_no_changes"
 }
 
 pub fn card(item: &Task, repo: &str, review_dir: &str, policy: &Policy) -> Value {

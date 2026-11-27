@@ -167,10 +167,23 @@ impl Launch for Host {
         Ok(())
     }
 }
+/// An ended feeder run with a commit on `host`: the host is past its canary, so one tick may
+/// start several runs.
+pub fn proven(host: &str) -> Run {
+    Run {
+        run_id: "run-proven".into(),
+        started: Some(1.0),
+        host: host.into(),
+        status: "completed".into(),
+        role: "implement".into(),
+        feeder: true,
+        ..Run::default()
+    }
+}
 pub fn drive(ready: &Value, host: &mut Host, name: &str, batch: usize, dry: bool) -> Value {
     tick(
         ready,
-        &[],
+        &[proven(name)],
         &facts(name),
         &policy(batch),
         "rules",

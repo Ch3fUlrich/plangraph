@@ -17,6 +17,7 @@ fn run(key: &str, files: &[&str]) -> Run {
         role: "implement".into(),
         files: files.iter().map(|s| (*s).into()).collect(),
         item_keys: vec![],
+        ..Run::default()
     }
 }
 
@@ -450,4 +451,85 @@ fn shipped_policy_preserves_host_caps_and_admission_floors() {
         ),
         Admission::Refuse("max_writers".into())
     );
+}
+
+#[test]
+fn a_brief_without_files_hands_the_scope_to_the_writer() {
+    let item: Task =
+        serde_json::from_value(json!({"key":"plangraph:NO-FILES","title":"t"})).unwrap();
+    let text = brief(&item, "rules");
+    assert!(
+        text.contains(&format!("Files:\n{NO_FILES_LISTED}\n")),
+        "{text}"
+    );
+    let item: Task =
+        serde_json::from_value(json!({"key":"plangraph:WITH-FILES","files":["src/a.rs"]})).unwrap();
+    assert!(brief(&item, "rules").contains("Files:\nsrc/a.rs\n"));
+}
+
+fn feeder_run(started: f64, status: &str, reason: &str) -> Run {
+    Run {
+        run_id: format!("run-{started}"),
+        started: Some(started),
+        item_key: format!("plangraph:ITEM-{started}"),
+        host: "dell".into(),
+        status: status.into(),
+        role: "implement".into(),
+        reason: reason.into(),
+        feeder: true,
+        ..Run::default()
+    }
+}
+
+#[test]
+fn the_feeder_stops_a_host_after_repeated_runs_without_a_commit() {
+    let p = Policy::default();
+    let nc = "no_commit: the writer ended its turn without a new commit after abc";
+    let runs = vec![
+        feeder_run(1.0, "failed", nc),
+        feeder_run(2.0, "failed", nc),
+        feeder_run(3.0, "failed", "writer_no_changes"),
+    ];
+    let stop = feeder_stop(&runs, "dell", &p).unwrap();
+    assert!(
+        stop.starts_with("no_commit_stop: 3 of the last 3"),
+        "{stop}"
+    );
+    // Another host and hand runs do not count.
+    assert_eq!(feeder_stop(&runs, "workstation", &p), None);
+    let hand: Vec<Run> = runs
+        .iter()
+        .cloned()
+        .map(|r| Run { feeder: false, ..r })
+        .collect();
+    assert_eq!(feeder_stop(&hand, "dell", &p), None);
+    // Only the last window counts: two newer committed runs leave 1 of 3 barren in a window of 3.
+    let p3 = Policy {
+        no_commit_window: 3,
+        ..Policy::default()
+    };
+    let mut recovered = runs.clone();
+    recovered.push(feeder_run(4.0, "completed", ""));
+    recovered.push(feeder_run(5.0, "completed", ""));
+    assert_eq!(feeder_stop(&recovered, "dell", &p3), None);
+    // 0 turns the stop off.
+    let off = Policy {
+        no_commit_stop: 0,
+        ..Policy::default()
+    };
+    assert_eq!(feeder_stop(&runs, "dell", &off), None);
+}
+
+#[test]
+fn the_first_feeder_run_of_a_host_is_a_canary() {
+    let p = Policy::default();
+    let running = vec![feeder_run(1.0, "running", "")];
+    let stop = feeder_stop(&running, "dell", &p).unwrap();
+    assert!(stop.starts_with("canary_pending"), "{stop}");
+    assert_eq!(feeder_stop(&[], "dell", &p), None);
+    let proven = vec![
+        feeder_run(1.0, "completed", ""),
+        feeder_run(2.0, "running", ""),
+    ];
+    assert_eq!(feeder_stop(&proven, "dell", &p), None);
 }

@@ -210,6 +210,12 @@ expired or unusable snapshot refuses as `quota_stale` with both ages when availa
 and retains the live capacity line. Explicit facts keep their supplied quota
 fallback when the local reader is unavailable. Invalid or exhausted quota refuses.
 
+A brief for an item without a file list says so and hands the scope to the writer (keeper
+items carry no write set unless a spec gave one). Each host checks its own feeder runs (cards
+pushing to `lane/feeder-`) before a launch: while `no_commit_stop` (3) of its last
+`no_commit_window` (5) ended runs added no commit it refuses as `no_commit_stop`, and until one
+of them committed it keeps a single canary run and refuses a second as `canary_pending`.
+
 Policy `batch_max_items` defaults to 6 in both the shipped policy loaded by the feeder service
 and the built-in policy. The range is 1..=50. Set it to 1 for single-item runs. A value outside
 the range refuses the tick as `invalid_policy`. A batch holds the

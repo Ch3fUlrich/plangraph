@@ -44,9 +44,19 @@ impl Launch for Fake {
     }
 }
 fn drive(v: &Value, f: &mut Fake, dry: bool) -> Value {
+    // The host is past its canary: an ended feeder run with a commit.
+    let proven = Run {
+        run_id: "run-proven".into(),
+        started: Some(1.0),
+        host: facts().host,
+        status: "completed".into(),
+        role: "implement".into(),
+        feeder: true,
+        ..Run::default()
+    };
     tick(
         v,
-        &[],
+        &[proven],
         &facts(),
         &Policy::default(),
         "rules",

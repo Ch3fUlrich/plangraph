@@ -79,6 +79,9 @@ fn read_runs(data: &Value) -> Result<Vec<Run>, String> {
             run.item_keys =
                 serde_json::from_value(row["card"]["item_keys"].clone()).unwrap_or_default();
         }
+        run.feeder = row["card"]["push_ref"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("refs/heads/lane/feeder-"));
         if lanes::is_fleet_row(row) && row["lane_card"] != true {
             // Registration can reach ps before fleet-launch publishes its session record.
             let card = std::mem::take(&mut run.item_key);
