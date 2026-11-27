@@ -4,8 +4,8 @@ Outcome. Reclaim idle rebuildable caches while unrelated builds run and alert on
 
 - plan_source. Keeper brief for plangraph:LE-DISK-HYGIENE-DEFERS-ALL-CLEANUP-WHILE-ANY-BUILD-RUNS, priority 10, review tier high, with the supplied 2026-11-26 incident measurements.
 - base commit. d948affa1da9565f12c58fb981bbf2dbc04974ad
-- card SHA-256. ec6c580dbc805517403281d2473f359f5e52df8e0460608a40b4ced323510b7b
-- tree SHA-256. be78aee3abf534075282286ead129be635ca32401a3577da6b3f9f611cc5f983
+- card SHA-256. 74232569b129c56242766385b8ffe4df0056f8e9e1cb6860d95d609abbb81339
+- tree SHA-256. 0636cbad056371c7f7a9600142fadfeea86809f2c06170cab3a909f4de4eac3b
 - evidence_after_deploy. Collect a 24-hour workstation series after approved deployment in the order specified under Process inventory and rollout. Apply S1 to a pressured timer invocation overlapping an observed Cargo or rustc process. Retain the overlapping invocation's NDJSON row, timestamps, deployed head and any matching Keeper alert ID, together with the root usage samples. The 85% outcome depends on N1.
 
 ## Decisions
@@ -70,6 +70,7 @@ The tree caps added plus deleted lines. Move the old binary dispatch at lines 15
 | `docs/operations/worker-disks.md` | 110 + 34 = 144 |
 | `rust/plangraph-cli/src/host_link_bridge.rs` | 171 + 65 = 236 |
 | `rust/plangraph-cli/tests/host_link_bridge.rs` | 218 + 105 = 323 |
+| `rust/plangraph-cli/tests/host_sync_env/disk.rs` | 780 |
 | `rust/worker-core/src/affected_scratch.rs` | 780 |
 | `rust/worker-core/src/bin/pg-disk-hygiene.rs` | 602 + (360 − 110) − 110 = 742 |
 | `rust/worker-core/src/bin/pg-process-cwds.rs` | 29 + 23 = 52 |

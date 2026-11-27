@@ -22,6 +22,7 @@ rust/pg-spawnd/src/worker_liveness.rs	read	yes	E3	observed
 rust/plangraph-cli/Cargo.toml	read	yes	E3	observed
 rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E3	predicted (<= 85 changed lines; <= 780 final lines)
 rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E3	predicted (<= 125 changed lines; <= 780 final lines)
+rust/plangraph-cli/tests/host_sync_env/disk.rs	write	yes	E3 E4	predicted (<= 1 changed lines; <= 780 final lines)
 rust/worker-core/Cargo.toml	read	yes	E1 E2	observed
 rust/worker-core/src/affected_scratch.rs	write	yes	E1 E2	predicted (<= 80 changed lines; <= 780 final lines)
 rust/worker-core/src/bin/flow_watchdog_hosts/disks.rs	read	yes	E3	observed
