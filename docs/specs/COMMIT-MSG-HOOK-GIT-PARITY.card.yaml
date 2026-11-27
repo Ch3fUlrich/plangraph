@@ -1,0 +1,48 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/COMMIT-MSG-HOOK-GIT-PARITY.md": {
+      "max_changed_lines": 2,
+      "max_final_lines": 2
+    },
+    "docs/rust-hooks.md": {
+      "max_changed_lines": 12,
+      "max_final_lines": 195
+    },
+    "rust/pg-hook/src/commit_args.rs": {
+      "max_changed_lines": 110,
+      "max_final_lines": 260
+    },
+    "rust/pg-hook/src/commit_msg.rs": {
+      "max_changed_lines": 80,
+      "max_final_lines": 380
+    },
+    "rust/pg-hook/tests/commit_message_parity.rs": {
+      "max_changed_lines": 300,
+      "max_final_lines": 300
+    }
+  },
+  "cards": {
+    "COMMIT-MSG-HOOK-GIT-PARITY": {
+      "outcome": "The pg-hook commit-msg check validates exactly the message Git saves for empty -m arguments, the core.commentChar=auto prefix Git chose before editing, --cleanup=scissors without an editor, and --no-message.",
+      "read_set": [
+        "rust/pg-hook/Cargo.toml",
+        "rust/pg-hook/tests/commit_message.rs",
+        "rust/pg-policy/src/lib.rs",
+        "tools/ci_commit_gate.py"
+      ],
+      "write_set": [
+        "changelog.d/COMMIT-MSG-HOOK-GIT-PARITY.md",
+        "docs/rust-hooks.md",
+        "rust/pg-hook/src/commit_args.rs",
+        "rust/pg-hook/src/commit_msg.rs",
+        "rust/pg-hook/tests/commit_message_parity.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-hook --bin commit-msg --test commit_message_parity",
+      "risk_tags": [],
+      "estimate_tokens": 60000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-hook --test commit_message"
+    }
+  }
+}
