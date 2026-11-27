@@ -37,6 +37,44 @@ pub(super) fn bins(items: &[(&str, &str)]) -> BTreeSet<(String, String)> {
 }
 
 #[test]
+fn readiness_followup_unit_runs_readiness_for_registry_hosts() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |path| std::fs::read_to_string(repo.join(path)).unwrap();
+    let manifest = Manifest::parse(&read(MANIFEST_PATH)).unwrap();
+    let unit = manifest
+        .unit
+        .iter()
+        .find(|unit| unit.name == "host-ready")
+        .unwrap();
+    assert_eq!(unit.hosts, ["keeper"]);
+    assert_eq!(unit.enable_unit().unwrap(), "host-ready.timer");
+    assert_eq!(unit.service_unit().as_deref(), Some("host-ready.service"));
+    let service = read("deploy/host-ready/host-ready.service");
+    assert!(service
+        .lines()
+        .any(|line| line == "ExecStart=/usr/bin/python3 -m plangraph.spawner.host_ready"));
+    let timer = read("deploy/host-ready/host-ready.timer");
+    let seconds = |text: &str, prefix: &str, suffix: &str| -> u32 {
+        text.lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .unwrap()
+            .strip_suffix(suffix)
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let max_age = seconds(
+        &read("src/plangraph/spawner/host_ready.py"),
+        "MAX_AGE = ",
+        "",
+    );
+    let interval = seconds(&timer, "OnUnitInactiveSec=", "s");
+    let accuracy = seconds(&timer, "AccuracySec=", "s");
+    let timeout = seconds(&service, "TimeoutStartSec=", "s");
+    assert!(interval > 0 && interval + accuracy + timeout < max_age);
+}
+
+#[test]
 fn a_complete_manifest_covers_the_tree() {
     let m = Manifest::parse(GOOD).unwrap();
     let units = set(&[

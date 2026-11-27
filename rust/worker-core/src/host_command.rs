@@ -50,6 +50,27 @@ pub fn valid_wsl_distro(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
+/// Build WSL guest argv up to the program, with PATH set before the guest looks up the tool.
+pub fn wsl_exec(distro: &str, path: Option<&str>) -> io::Result<Vec<String>> {
+    if !valid_wsl_distro(distro) {
+        return Err(io::Error::other("invalid WSL distribution"));
+    }
+    let mut args = Vec::from(["wsl.exe", "--distribution", distro, "--exec"].map(str::to_owned));
+    if let Some(path) = path {
+        // SSH joins the arguments for the Windows shell. Accept only plain absolute guest paths.
+        if !path.split(':').all(|dir| {
+            dir.starts_with('/')
+                && dir
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_./+-".contains(&byte))
+        }) {
+            return Err(io::Error::other("invalid WSL PATH"));
+        }
+        args.extend(["/usr/bin/env".into(), format!("PATH={path}")]);
+    }
+    Ok(args)
+}
+
 pub fn isolate_git(command: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("GIT_") {
@@ -129,6 +150,38 @@ fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wsl_hop_sets_path() {
+        let base = ["wsl.exe", "--distribution", "Ubuntu-24.04", "--exec"];
+        assert_eq!(wsl_exec("Ubuntu-24.04", None).unwrap(), base);
+        let path = "/srv/worker/.local/bin:/usr/bin:/bin";
+        let args = wsl_exec("Ubuntu-24.04", Some(path)).unwrap();
+        assert_eq!(args[..4], base);
+        assert_eq!(
+            args[4..],
+            ["/usr/bin/env", "PATH=/srv/worker/.local/bin:/usr/bin:/bin"]
+        );
+    }
+
+    #[test]
+    fn wsl_hop_refuses_invalid_paths() {
+        for path in [
+            "/bin;&echo",
+            "/bin:%TEMP%",
+            "/bin:$HOME/bin",
+            "/bin\n/bin",
+            "/bin::/usr/bin",
+            "bin:/usr/bin",
+            "",
+        ] {
+            assert_eq!(
+                wsl_exec("Ubuntu", Some(path)).unwrap_err().to_string(),
+                "invalid WSL PATH"
+            );
+        }
+        assert!(wsl_exec("Ubuntu & invalid", None).is_err());
+    }
 
     #[cfg(unix)]
     #[test]

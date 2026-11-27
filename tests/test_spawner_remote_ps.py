@@ -1,5 +1,6 @@
 import base64
 import json
+import shlex
 import sys
 import subprocess
 from threading import Barrier
@@ -153,6 +154,33 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, tmp_path, src, dis
     assert remote_ps.query_host(host, 2) == '{"runs": []}'
     if distro is not None:
         assert json.loads(received.read_text()) == {'steps': steps}
+
+def test_wsl_hop_sets_registry_path(tmp_path, monkeypatch):
+    guest = dict(name='node-a', target='target', src='/srv/repo/src', wsl_distro='Ubuntu')
+    config(tmp_path, monkeypatch, [dict(guest, env={'PATH': '/stale/bin'})])
+    (tmp_path / 'plangraph' / 'hosts.json').write_text(json.dumps({'hosts': [dict(
+        id='node-a', transport='ssh', os='linux', ssh_target='target', wsl_distro='Ubuntu',
+        repos={'plangraph': {'root': '/srv/repo'}}, caps={'mem_floor_mb': 1},
+        env={'PATH': '/srv/worker/.local/bin:/usr/bin:/bin'})]}))
+    host, = remote_ps.configured_hosts()
+    command, body = remote_ps.host_invocation(host, query=True)
+    assert command == ('wsl.exe --distribution Ubuntu --exec /usr/bin/env '
+                       'PATH=/srv/worker/.local/bin:/usr/bin:/bin pg-spawnd steps')
+    assert json.loads(body)['steps'][-1]['argv'] == ['python3', '-m', 'plangraph.spawner.remote_ps']
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='fixture executes the Linux guest argv')
+def test_wsl_hop_without_login_path_finds_tools(tmp_path):
+    (tmp_path / 'pg-spawnd').symlink_to(sys.executable)
+    (tmp_path / 'steps').write_text('import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n')
+    host = {'wsl_distro': 'Ubuntu', 'env': {'PATH': f'{tmp_path}:/usr/bin:/bin'}}
+    command, body = remote_ps.invocation(host, 'true')
+    argv = shlex.split(command)
+    assert argv[:4] == ['wsl.exe', '--distribution', 'Ubuntu', '--exec']
+    output = subprocess.run(argv[4:], cwd=tmp_path, input=body, capture_output=True, check=True,
+                            env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)})
+    assert json.loads(output.stdout) == {'host_env_defaults': True, 'steps': [{'argv': ['true']}]}
+
 
 @pytest.mark.parametrize('wsl', [False, True])
 @pytest.mark.parametrize('src', ['/opt/src;id', '$(id)',

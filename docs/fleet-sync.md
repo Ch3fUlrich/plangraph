@@ -84,6 +84,8 @@ the current main checkout at `repos.plangraph.root` and route to `ssh_target`
 or the host ID. Add a Linux registry entry with `wsl_distro` for a WSL host
 reached through Windows SSH. Use Linux checkout paths in that entry. Native
 Windows entries appear in the ps projection. Local entries stay local.
+For WSL entries, the ps and overflow projections include `env.PATH` so remote
+commands can resolve guest-installed tools without a login shell.
 
 The spawner derives overflow routes from the registry at admission. Set the
 top-level `public_repos` list to repository IDs approved for SSH transport.
@@ -92,7 +94,9 @@ every repository local. A host takes remote work only when its registry entry
 sets `remote_placement: true`; the default is off and the host refuses with
 "remote placement closed". The generated overflow
 projection retains `floor_mb` from the registry for status consumers.
-Regenerate the projections after changing the registry. See
+`host-sync --install-release` regenerates both projections from `hosts.json`,
+including when its binaries are already current. Use `genconfig write` to
+apply a registry edit between installs. See
 [post-merge verification](host-tools.md#three-host-writer-and-review-rollout).
 
 `drift --registry PATH` prints host, live SHA, release SHA, commits behind.
