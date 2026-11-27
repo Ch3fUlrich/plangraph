@@ -354,3 +354,96 @@ fn a_failing_command_carries_its_stdout_and_stderr() {
         "{error}"
     );
 }
+/// The cards and briefs the feeder produced for two overlapping launches (the feeder test
+/// `overlapping_feeder_launches_produce_...` pins this fixture to the feeder's real output).
+const FEEDER_LAUNCHES: &str = include_str!("../tests/fixtures/feeder-overlap-launches.json");
+
+/// Two overlapping feeder launches share a review directory. Each feeder card and brief goes
+/// through native writer persistence; the review rendered from the saved record quotes only
+/// the DONE lines of its own status file, the file the brief told the writer to append to.
+#[cfg(unix)]
+#[test]
+fn reviews_rendered_from_saved_writer_records_quote_only_their_own_done_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let review = root.join("review");
+    fs::create_dir_all(&review).unwrap();
+    let launches: Vec<Value> = serde_json::from_str(FEEDER_LAUNCHES).unwrap();
+    assert_eq!(launches.len(), 2);
+    let prepared: Vec<(String, PathBuf, Value)> = launches
+        .iter()
+        .enumerate()
+        .map(|(n, launch)| {
+            // Place the feeder's review directory and claim epoch in this test's directory.
+            let place = |text: String| {
+                text.replace("/reviews", review.to_str().unwrap())
+                    .replace("-eN.txt", &format!("-e{}.txt", 100 + n))
+            };
+            let card: Value = serde_json::from_str(&place(launch["card"].to_string())).unwrap();
+            let brief = place(launch["brief"].as_str().unwrap().into());
+            let payload: Value = serde_json::from_str(brief.split_once('\n').unwrap().1).unwrap();
+            // The brief quotes the very file the card hands to the record.
+            let status = card["writer_status_path"].as_str().unwrap().to_owned();
+            assert_eq!(payload["run"]["status_file"], json!(status));
+            // The writer appends one DONE line per assigned item to that file.
+            let done: String = card["item_keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|k| format!("DONE {} abc\n", k.as_str().unwrap()))
+                .collect();
+            fs::write(&status, done).unwrap();
+            let id = format!("run-feeder{n}");
+            let record_path = root.join(format!("state/runs/{id}/record.json"));
+            fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+            let request = root.join(format!("request-{n}.json"));
+            fs::write(
+                &request,
+                json!({
+                    "record": {"run_id": id, "repo": root, "base_ref": "refs/heads/main",
+                               "tool_path": root.join("no-tools")},
+                    "record_path": record_path,
+                    "card": card,
+                    "prompt": brief
+                })
+                .to_string(),
+            )
+            .unwrap();
+            (request.to_string_lossy().into_owned(), record_path, card)
+        })
+        .collect();
+    std::thread::scope(|scope| {
+        for (request, _, _) in &prepared {
+            scope.spawn(move || execute(vec![request.clone()]).unwrap());
+        }
+    });
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    for (_, record_path, card) in &prepared {
+        let record = crate::records::read_record_file(record_path)
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_eq!(record["writer_status_path"], card["writer_status_path"]);
+        let out = crate::test_python::command()
+            .env("PYTHONPATH", &src)
+            .args([
+                "-c",
+                "import json,sys\nfrom plangraph.review.prompt import render_brief\nprint(render_brief('review', {'writer_run': json.loads(sys.argv[1])}))",
+                &record.to_string(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let brief = String::from_utf8(out.stdout).unwrap();
+        let own = card["item_keys"][0].as_str().unwrap();
+        let other = if own.contains("ALPHA") {
+            "BETA"
+        } else {
+            "ALPHA"
+        };
+        assert!(brief.contains(&format!("DONE {own} abc")), "{brief}");
+        assert!(!brief.contains(other), "{brief}");
+    }
+}
