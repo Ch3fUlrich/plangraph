@@ -7,15 +7,13 @@
         ".docs-map",
         "rust/pg-spawnd/src/cli_review.rs",
         "rust/pg-spawnd/src/review_test_evidence.rs",
-        "rust/pg-spawnd/tests/mimo_output_cap.rs",
         "src/plangraph/routing_support/clients.py",
         "src/plangraph/routing_support/leg_state.py",
         "src/plangraph/spawner/gateway_witness.py",
         "src/plangraph/spawner/inline_diff.py",
-        "src/plangraph/spawner/launch_spec.py",
         "src/plangraph/spawner/seat_spawn.py",
-        "src/plangraph/spawner/service.py",
         "tests/fixtures/opencode-review-schema.json",
+        "tests/test_route_free_first.py",
         "tools/check_file_size.py"
       ],
       "write_set": [
@@ -31,12 +29,15 @@
         "rust/pg-jail/src/review_tools.rs",
         "rust/pg-jail/tests/escape.rs",
         "rust/pg-spawnd/src/launch_tests.rs",
+        "rust/pg-spawnd/tests/mimo_output_cap.rs",
         "src/plangraph/planner/legs.py",
         "src/plangraph/planner/route_policy.json",
         "src/plangraph/planner/route_policy.py",
         "src/plangraph/planner/routing.py",
+        "src/plangraph/spawner/launch_spec.py",
         "src/plangraph/spawner/opencode_isolation.py",
         "src/plangraph/spawner/runner.py",
+        "src/plangraph/spawner/service.py",
         "tests/test_opencode_isolation_go.py",
         "tests/test_route_policy_review_choice.py"
       ],
@@ -54,7 +55,7 @@
         "public-contract",
         "live-step"
       ],
-      "estimate_tokens": 270000,
+      "estimate_tokens": 285000,
       "window_class": "1m"
     }
   }
