@@ -1,0 +1,16 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md	write	yes	E1 E2 E3 E4	new (<= 5 final lines)
+docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md	write	yes	E1 E2 E3 E4	new (<= 10 final lines)
+rust/pg-spawnd/src/native_writer.rs	write	yes	E4	observed (<= 35 changed lines; <= 652 final lines)
+rust/pg-spawnd/src/native_writer_host.rs	write	yes	E4	observed (<= 25 changed lines; <= 565 final lines)
+rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E4	observed (<= 25 changed lines; <= 474 final lines)
+rust/pg-spawnd/src/native_writer_idle_tests.rs	read	yes	E4	observed
+rust/pg-spawnd/src/native_writer_stop_tests.rs	write	yes	E4	observed (<= 90 changed lines; <= 136 final lines)
+rust/pg-spawnd/src/native_writer_tests.rs	read	yes	E4	observed
+rust/pg-spawnd/src/writer_control.rs	read	yes	E4	observed
+rust/plangraph-cli/src/fast_check_target.rs	write	yes	E1	observed (<= 70 changed lines; <= 396 final lines)
+rust/plangraph-cli/src/fast_check_worktree.rs	write	yes	E2	observed (<= 20 changed lines; <= 150 final lines)
+rust/plangraph-cli/src/fast_checks.rs	write	yes	E2	observed (<= 60 changed lines; <= 590 final lines)
+rust/worker-core/src/cargo_pool.rs	write	yes	E3	observed (<= 30 changed lines; <= 451 final lines)
+rust/worker-core/src/fast_check_stamp.rs	write	yes	E2	observed (<= 3 changed lines; <= 777 final lines)
+rust/worker-core/tests/cargo_pool.rs	write	yes	E3	observed (<= 30 changed lines; <= 313 final lines)

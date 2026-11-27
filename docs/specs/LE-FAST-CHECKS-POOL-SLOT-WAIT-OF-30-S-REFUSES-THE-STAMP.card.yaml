@@ -1,0 +1,76 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "rust/pg-spawnd/src/native_writer.rs": {
+      "max_changed_lines": 35,
+      "max_final_lines": 652
+    },
+    "rust/pg-spawnd/src/native_writer_host.rs": {
+      "max_changed_lines": 25,
+      "max_final_lines": 565
+    },
+    "rust/pg-spawnd/src/native_writer_host_review_tests.rs": {
+      "max_changed_lines": 25,
+      "max_final_lines": 474
+    },
+    "rust/pg-spawnd/src/native_writer_stop_tests.rs": {
+      "max_changed_lines": 90,
+      "max_final_lines": 136
+    },
+    "rust/plangraph-cli/src/fast_check_target.rs": {
+      "max_changed_lines": 70,
+      "max_final_lines": 396
+    },
+    "rust/plangraph-cli/src/fast_check_worktree.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 150
+    },
+    "rust/plangraph-cli/src/fast_checks.rs": {
+      "max_changed_lines": 60,
+      "max_final_lines": 590
+    },
+    "rust/worker-core/src/cargo_pool.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 451
+    },
+    "rust/worker-core/src/fast_check_stamp.rs": {
+      "max_changed_lines": 3,
+      "max_final_lines": 777
+    },
+    "rust/worker-core/tests/cargo_pool.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 313
+    }
+  },
+  "cards": {
+    "LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP": {
+      "outcome": "A fast-checks run waits for a Cargo pool slot as long as its caller sets (default 900 s) and prints who holds the slots. A wait that runs out exits with its own busy code, writes no receipt, and the native writer driver retries it instead of starting a fix turn.",
+      "read_set": [
+        "rust/pg-spawnd/src/native_writer_idle_tests.rs",
+        "rust/pg-spawnd/src/native_writer_tests.rs",
+        "rust/pg-spawnd/src/writer_control.rs"
+      ],
+      "write_set": [
+        "changelog.d/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md",
+        "docs/contributing/LE-FAST-CHECKS-POOL-SLOT-WAIT-OF-30-S-REFUSES-THE-STAMP.md",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/pg-spawnd/src/native_writer_host_review_tests.rs",
+        "rust/pg-spawnd/src/native_writer_stop_tests.rs",
+        "rust/plangraph-cli/src/fast_check_target.rs",
+        "rust/plangraph-cli/src/fast_check_worktree.rs",
+        "rust/plangraph-cli/src/fast_checks.rs",
+        "rust/worker-core/src/cargo_pool.rs",
+        "rust/worker-core/src/fast_check_stamp.rs",
+        "rust/worker-core/tests/cargo_pool.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli -p pg-spawnd -p pg-worker-core busy",
+      "risk_tags": [
+        "host-exec"
+      ],
+      "estimate_tokens": 110000,
+      "window_class": "256k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --lib native_writer"
+    }
+  }
+}
