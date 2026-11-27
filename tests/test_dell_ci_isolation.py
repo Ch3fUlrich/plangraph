@@ -302,6 +302,7 @@ def test_real_sandbox_browser_cache(real_sandbox):
 def test_real_sandbox_network_and_job_services(real_sandbox, tmp_path):
     temporal = shutil.which('temporal', path=os.environ.get('PATH', '') + os.pathsep + str(Path.home() / '.local/bin'))
     if not temporal: pytest.skip('trusted Temporal CLI unavailable on this host')
+    if shutil.which('docker') is None: pytest.skip('docker unavailable on this host')
     temporal = str(Path(temporal).resolve())
     script = isolated_script('temporal --version', '/driver', '/job')
     assert '"$temporal" /toolchain/temporal-bin/temporal' in script
