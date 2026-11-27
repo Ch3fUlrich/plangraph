@@ -46,6 +46,20 @@ fn cargo_output(root: &Path) -> bool {
 /// A mounted profile is listed too: the removal guard refuses it and reports why.
 #[cfg(target_os = "linux")]
 pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
+    let mut candidates = Vec::new();
+    for profile in debug_artifacts(root)? {
+        let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
+        candidates.push((newest, profile, bytes));
+    }
+    candidates.sort();
+    Ok(candidates
+        .into_iter()
+        .map(|(_, path, bytes)| (path, bytes))
+        .collect())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn debug_artifacts(root: &Path) -> io::Result<Vec<PathBuf>> {
     if !cargo_output(root) {
         return Ok(vec![]);
     }
@@ -65,14 +79,9 @@ pub(crate) fn debug_profiles(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
         {
             continue;
         }
-        let (bytes, newest) = crate::disk_hygiene::scan(&profile)?;
-        candidates.push((newest, profile, bytes));
+        candidates.push(profile);
     }
-    candidates.sort();
-    Ok(candidates
-        .into_iter()
-        .map(|(_, path, bytes)| (path, bytes))
-        .collect())
+    Ok(candidates)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -121,6 +130,15 @@ pub(crate) const STALE_AFTER: Duration = Duration::from_secs(3600);
 
 /// Includes target-triple/profile layouts; never follows directory symlinks.
 pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBuf, u64)>> {
+    candidates_until(root, now, || true)
+}
+
+pub(crate) fn candidates_until(
+    root: &Path,
+    now: SystemTime,
+    room: impl Fn() -> bool,
+) -> io::Result<Vec<(PathBuf, u64)>> {
+    let scan = |path: &Path| crate::disk_hygiene::scan_until(path, &mut |_| room());
     let mut profiles = directories(root)?;
     for child in profiles.clone() {
         profiles.extend(directories(&child)?.into_iter().filter(|p| {
@@ -140,12 +158,12 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
             let mut crates: BTreeMap<(String, bool), Vec<_>> = BTreeMap::new();
             if kind == "incremental" {
                 for path in directories(&parent)? {
-                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
+                    let (size, newest) = scan(&path)?;
                     candidates.push((newest, path, size));
                 }
             } else {
                 for (name, path, compile) in build_units(&parent)? {
-                    let (size, newest) = crate::disk_hygiene::scan(&path)?;
+                    let (size, newest) = scan(&path)?;
                     crates
                         .entry((name, compile))
                         .or_default()
@@ -166,6 +184,75 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
         .into_iter()
         .map(|(_, path, size)| (path, size))
         .collect())
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub struct Candidate {
+    pub path: PathBuf,
+    pub boundary: PathBuf,
+    pub scope: PathBuf,
+    pub lease_root: PathBuf,
+    pub(crate) cutoff: SystemTime,
+    pub(crate) identity: (u64, u64),
+    pub(crate) maintenance: bool,
+    pub(crate) selector_scratch: bool,
+    pub(crate) variant: bool,
+    pub(crate) cap: Option<PoolCap>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+pub(crate) struct PoolCap(pub u64, pub u64, pub std::sync::Arc<[PathBuf]>);
+#[cfg(target_os = "linux")]
+impl Candidate {
+    /// Describe a provider-approved removal unit. Its identity must survive until unlink.
+    pub fn new(path: PathBuf, boundary: PathBuf, cutoff: SystemTime) -> io::Result<Self> {
+        let identity = crate::disk_hygiene::file_identity(&fs::symlink_metadata(&path)?);
+        Ok(Self {
+            scope: path.clone(),
+            lease_root: path.clone(),
+            path,
+            boundary,
+            cutoff,
+            identity,
+            maintenance: false,
+            selector_scratch: false,
+            variant: false,
+            cap: None,
+        })
+    }
+
+    pub(crate) fn safe(&self, uid: u32) -> Result<(), &'static str> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(&self.path).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => "vanished",
+            _ => "probe_unavailable",
+        })?;
+        if !meta.is_dir()
+            || crate::disk_hygiene::file_identity(&meta) != self.identity
+            || meta.uid() != uid
+            || !self.path.starts_with(&self.boundary)
+            || self.path == self.boundary
+            || self.path.canonicalize().as_ref().ok() != Some(&self.path)
+            || crate::cargo_pool_trim::mount_guard(&self.boundary, &self.path).is_err()
+        {
+            return Err("unsafe");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lease(&self) -> Result<crate::cargo_cache::ExclusiveLease, &'static str> {
+        if self.selector_scratch {
+            use crate::affected_scratch::acquire;
+            return acquire(&self.path, &Default::default(), &mut Default::default())
+                .map_err(|_| "probe_unavailable")?
+                .map(|(lease, _)| lease);
+        }
+        crate::cargo_cache::try_exclusive_lease(&self.lease_root)
+            .map_err(|_| "probe_unavailable")?
+            .ok_or("leased")
+    }
 }
 
 #[cfg(all(test, unix))]

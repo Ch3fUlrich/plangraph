@@ -178,6 +178,91 @@ pub fn pool_slot_sets(primary: &Path, report: &mut Report) -> (Vec<PathBuf>, Vec
     slots.into_iter().partition(|slot| !is_review_slot(slot))
 }
 
+/// Private and scratch discovery must leave every shared cache and its pool to the pool policy.
+pub fn hygiene_exclusions(shared: &[PathBuf], home: &Path) -> Vec<PathBuf> {
+    let fallback = shared
+        .first()
+        .and_then(|primary| crate::cargo_cache::review_fallback_primary(primary, home));
+    let mut exclusions = Vec::new();
+    for target in shared.iter().chain(fallback.iter()) {
+        let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+        for primary in [target, &canonical] {
+            if let Ok(pool) = crate::cargo_pool::pool_root(primary) {
+                exclusions.push(pool.canonicalize().unwrap_or(pool));
+            }
+        }
+        exclusions.push(canonical);
+    }
+    exclusions
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_cap_failure(
+    item: &crate::shared_target::Candidate,
+    projected: &crate::disk_hygiene::Projection,
+    room: impl Fn() -> bool,
+) -> Option<&'static str> {
+    let crate::shared_target::PoolCap(limit, total_limit, slots) = item.cap.as_ref()?;
+    let mut total = 0u64;
+    let mut complete = true;
+    for slot in slots.iter().filter(|slot| slot.is_dir()) {
+        if !room() {
+            return Some("run_budget");
+        }
+        let remaining = total_limit.saturating_sub(total);
+        let own_slot = slot.canonicalize().ok().as_ref() == Some(&item.scope);
+        let threshold = if own_slot {
+            remaining.min(*limit)
+        } else {
+            remaining
+        };
+        let projected = projected.under(slot);
+        let mut size = 0u64;
+        let measured = try_exclusive_lease(slot).ok().flatten().and_then(|_lease| {
+            crate::disk_hygiene::scan_until(slot, &mut |bytes| {
+                size = size.saturating_add(bytes);
+                room() && size.saturating_sub(projected) <= threshold
+            })
+            .ok()
+        });
+        complete &= measured.is_some();
+        let size = size.saturating_sub(projected);
+        if size > threshold {
+            return None;
+        }
+        total = total.saturating_add(size);
+    }
+    Some(if complete { "cap_met" } else { "run_budget" })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hygiene_variants(
+    item: &crate::shared_target::Candidate,
+    room: impl Fn() -> bool,
+) -> Vec<crate::shared_target::Candidate> {
+    let lease = room().then(|| item.lease().ok()).flatten();
+    let Some(_lease) = lease else {
+        return vec![];
+    };
+    let variants = crate::shared_target::candidates_until(&item.scope, SystemTime::now(), room)
+        .unwrap_or_default();
+    variants
+        .into_iter()
+        .filter_map(|(path, _)| {
+            if !path.starts_with(&item.path) {
+                return None;
+            }
+            let identity = crate::disk_hygiene::file_identity(&path.symlink_metadata().ok()?);
+            Some(crate::shared_target::Candidate {
+                path,
+                identity,
+                variant: true,
+                ..item.clone()
+            })
+        })
+        .collect()
+}
+
 /// Trim every idle slot of the pool at `primary` to `cap_bytes` each, ordinary slots together to
 /// N x cap and review slots together to their fixed budget. Leased slots are skipped.
 pub fn enforce_pool(
@@ -266,7 +351,7 @@ fn run_terminal_or_missing(state: &Path, run_id: &str) -> bool {
     sweep_runs::terminal(status) && !survivors
 }
 
-fn stale_reason(record: Option<&SlotLeaseRecord>, state: Option<&Path>) -> bool {
+pub(crate) fn stale_reason(record: Option<&SlotLeaseRecord>, state: Option<&Path>) -> bool {
     let Some(rec) = record else {
         return true;
     };

@@ -1,6 +1,18 @@
 //! Conservative cleanup of registered worktrees under an explicit root.
 #[path = "disk_fast_worktrees.rs"]
 mod fast_worktrees;
+#[cfg(target_os = "linux")]
+#[path = "disk_hygiene_plan.rs"]
+mod plan;
+#[cfg(target_os = "linux")]
+pub(crate) use hygiene_report::display_path;
+#[cfg(target_os = "linux")]
+pub use hygiene_report::{Device, HygieneReport, KeptPath};
+#[cfg(target_os = "linux")]
+pub use plan::{
+    rank_candidates, reclaim, refresh_ranking, Budget, Candidate, FinalProof, Layout, Ranked,
+    ReclaimChecks,
+};
 
 use crate::host_command;
 use serde::Serialize;
@@ -16,6 +28,96 @@ pub struct Guards {
     pub pinned: Vec<PathBuf>,
     pub live: Vec<PathBuf>,
 }
+#[cfg(target_os = "linux")]
+pub use inventory::HygieneInventory;
+
+#[cfg(target_os = "linux")]
+pub(crate) use crate::main_target::file_identity;
+
+#[cfg(target_os = "linux")]
+pub(crate) fn invalid_inventory() -> io::Error {
+    io::Error::other("unusable hygiene process inventory")
+}
+
+#[cfg(target_os = "linux")]
+mod inventory {
+    use super::*;
+    use std::{collections::BTreeSet, ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    /// Versioned process paths. Byte arrays preserve paths that are not UTF-8.
+    #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct HygieneInventory {
+        version: u8,
+        pub(crate) cwds: BTreeSet<Vec<u8>>,
+        pub(crate) open_paths: BTreeSet<Vec<u8>>,
+        pub(crate) cargo_targets: BTreeSet<Vec<u8>>,
+    }
+
+    fn paths(bytes: &BTreeSet<Vec<u8>>) -> impl Iterator<Item = &Path> {
+        bytes
+            .iter()
+            .map(|bytes| Path::new(OsStr::from_bytes(bytes)))
+    }
+
+    impl Default for HygieneInventory {
+        fn default() -> Self {
+            Self {
+                version: 1,
+                cwds: BTreeSet::new(),
+                open_paths: BTreeSet::new(),
+                cargo_targets: BTreeSet::new(),
+            }
+        }
+    }
+
+    impl HygieneInventory {
+        pub(crate) fn merge(&mut self, mut row: Self) {
+            self.cwds.append(&mut row.cwds);
+            self.open_paths.append(&mut row.open_paths);
+            self.cargo_targets.append(&mut row.cargo_targets);
+        }
+
+        pub(crate) fn decode(bytes: &[u8]) -> io::Result<Self> {
+            let rows: Self = serde_json::from_slice(bytes).map_err(|_| invalid_inventory())?;
+            if rows.version != 1
+                || rows.references().any(|path| {
+                    !path.is_absolute()
+                        || path.as_os_str().as_bytes().contains(&0)
+                        || path
+                            .components()
+                            .any(|part| part == std::path::Component::ParentDir)
+                })
+            {
+                return Err(invalid_inventory());
+            }
+            Ok(rows)
+        }
+
+        fn references(&self) -> impl Iterator<Item = &Path> {
+            paths(&self.cwds)
+                .chain(paths(&self.open_paths))
+                .chain(self.cargo_targets())
+        }
+
+        /// Explicit Cargo allocation roots observed in process environments.
+        pub fn cargo_targets(&self) -> impl Iterator<Item = &Path> {
+            paths(&self.cargo_targets)
+        }
+
+        /// A path reference protects the scope that contains it.
+        pub fn blocks(&self, scope: &Path) -> bool {
+            self.blocks_except(scope, Path::new(""))
+        }
+
+        pub(crate) fn blocks_except(&self, scope: &Path, lease: &Path) -> bool {
+            paths(&self.cwds)
+                .chain(self.cargo_targets())
+                .chain(paths(&self.open_paths).filter(|path| *path != lease))
+                .any(|path| path.starts_with(scope))
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub free_bytes: u64,
@@ -28,6 +130,126 @@ pub struct Report {
     /// Removals a dry run has named so far: a later pass over the same bytes counts them once.
     #[serde(skip)]
     pub projected: Projection,
+}
+
+#[cfg(target_os = "linux")]
+mod hygiene_report {
+    use super::*;
+    use serde::Serializer;
+    use std::{collections::BTreeMap, fmt::Write as _, os::unix::ffi::OsStrExt};
+
+    #[derive(Debug, Serialize)]
+    pub struct Device {
+        pub device: u64,
+        pub start_free_bytes: Option<u64>,
+        pub end_free_bytes: Option<u64>,
+        pub alarm_floor_bytes: u64,
+        pub cleanup_floor_bytes: u64,
+        pub freed_bytes: u64,
+        pub projected_bytes: u64,
+        #[serde(skip)]
+        pub root: PathBuf,
+        #[serde(skip)]
+        pub(super) observed_at: u64,
+    }
+
+    impl Device {
+        /// Start a ledger for one device and retain the boundary used to sample it.
+        pub fn new(device: u64, root: PathBuf, available: Option<u64>, limits: Thresholds) -> Self {
+            Self {
+                device,
+                start_free_bytes: available,
+                end_free_bytes: None,
+                alarm_floor_bytes: limits.alarm_free_bytes,
+                cleanup_floor_bytes: limits.cleanup_free_bytes,
+                freed_bytes: 0,
+                projected_bytes: 0,
+                root,
+                observed_at: 0,
+            }
+        }
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct KeptPath {
+        pub device: Option<u64>,
+        #[serde(serialize_with = "serialize_path")]
+        pub path: PathBuf,
+        pub bytes: Option<u64>,
+        pub bytes_is_lower_bound: bool,
+        pub reason: &'static str,
+    }
+
+    pub(crate) fn display_path(path: &Path) -> String {
+        let mut display = String::new();
+        for chunk in path.as_os_str().as_bytes().utf8_chunks() {
+            display.push_str(&chunk.valid().replace('%', "%25"));
+            for byte in chunk.invalid() {
+                write!(display, "%{byte:02X}").unwrap();
+            }
+        }
+        display
+    }
+
+    fn serialize_path<S: Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&display_path(path))
+    }
+
+    #[derive(Debug, Default)]
+    pub struct HygieneReport {
+        pub summary: Report,
+        pub devices: BTreeMap<u64, Device>,
+        pub kept: Vec<KeptPath>,
+        pub started_at: Duration,
+        pub time_to_first_removal: Option<f64>,
+        pub first_removal_deadline_missed: bool,
+        pub stage_durations: BTreeMap<&'static str, f64>,
+        pub budget_exhausted: bool,
+    }
+
+    impl HygieneReport {
+        /// Begin a hygiene report with an absolute timestamp and an empty device ledger.
+        pub fn new(started_at: Duration, dry_run: bool) -> Self {
+            Self {
+                summary: Report {
+                    dry_run,
+                    ..Report::default()
+                },
+                started_at,
+                ..Self::default()
+            }
+        }
+
+        pub(crate) fn report_json(&self) -> io::Result<serde_json::Value> {
+            use serde_json::json;
+            let mut report = serde_json::to_value(&self.summary)?;
+            let mut extra = json!({
+                "free_bytes": self.devices.values().filter_map(|row| row.end_free_bytes).min(), "devices": self.devices.values().collect::<Vec<_>>(), "kept": self.kept,
+                "started_at": self.started_at.as_secs(), "time_to_first_removal": self.time_to_first_removal,
+                "first_removal_deadline_missed": self.first_removal_deadline_missed,
+                "stage_durations": self.stage_durations, "budget_exhausted": self.budget_exhausted
+            });
+            report
+                .as_object_mut()
+                .unwrap()
+                .append(extra.as_object_mut().unwrap());
+            Ok(report)
+        }
+
+        /// Record a device's final sample. A failed sample contributes no available bytes.
+        pub fn sample_end(&mut self, device: u64, free: io::Result<u64>, observed_at: u64) {
+            let row = self.devices.get_mut(&device).expect("registered device");
+            row.observed_at = observed_at;
+            row.end_free_bytes = free
+                .inspect_err(|error| {
+                    self.summary.alarm = true;
+                    self.summary.error.get_or_insert_with(|| {
+                        format!("device {device} final free space unavailable: {error}")
+                    });
+                })
+                .ok();
+        }
+    }
 }
 
 /// Paths a dry run would remove, with the bytes credited for each. Nothing is removed, so a
@@ -172,12 +394,24 @@ impl Guards {
     }
 }
 pub fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
+    scan_until(path, &mut |_| true)
+}
+pub(crate) fn scan_until(
+    path: &Path,
+    visit: &mut impl FnMut(u64) -> bool,
+) -> io::Result<(u64, SystemTime)> {
+    if !visit(0) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
     let meta = fs::symlink_metadata(path)?;
     let mut newest = meta.modified()?;
     let mut bytes = if meta.is_file() { meta.len() } else { 0 };
+    if !visit(bytes) {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
     if meta.is_dir() && !meta.file_type().is_symlink() {
         for entry in fs::read_dir(path)? {
-            let (size, modified) = scan(&entry?.path())?;
+            let (size, modified) = scan_until(&entry?.path(), visit)?;
             bytes = bytes.saturating_add(size);
             newest = newest.max(modified);
         }

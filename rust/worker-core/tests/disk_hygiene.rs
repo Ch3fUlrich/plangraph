@@ -2,12 +2,186 @@
 use pg_worker_core::disk_hygiene::{sweep, sweep_checked, Guards, Thresholds};
 use std::{
     fs,
+    path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime},
 };
 #[path = "support/disk_hygiene.rs"]
 mod support;
 use support::{fixture, git};
+
+#[test]
+fn active_build_in_a_keeps_only_a() {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    if std::env::var_os("TEST_CARGO_CHILD").is_some() {
+        // SAFETY: the static name is NUL-terminated and remains live for prctl.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NAME, c"cargo".as_ptr()) },
+            0
+        );
+        let _ = std::io::stdin().read(&mut [0u8]);
+        return;
+    }
+    let (tmp, repo, root) = fixture();
+    let [a, b] = ["clean", "dirty"].map(|name| aged_rust_target(&root.join(name), 8192));
+    let deep = aged_rust_target(&tmp.path().join(".cache/session/nested"), 8192);
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "active_build_in_a_keeps_only_a"])
+        .env("TEST_CARGO_CHILD", "1")
+        .current_dir(root.join("clean"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(fs::File::open(a.join("debug/output")).unwrap())
+        .spawn()
+        .unwrap();
+    let proc = std::path::PathBuf::from(format!("/proc/{}", child.id()));
+    let cwd = fs::read_link(proc.join("cwd")).unwrap();
+    let fd = fs::read_link(proc.join("fd/2")).unwrap();
+    let inventory = serde_json::json!({"version": 1, "cwds": [cwd.as_os_str().as_encoded_bytes()],
+        "open_paths": [fd.as_os_str().as_encoded_bytes()],
+        "cargo_targets": [deep.as_os_str().as_encoded_bytes()]});
+    let legacy = serde_json::json!([[cwd], true]);
+    let reader = pg_worker_core::executable_test_support::write_script(tmp.path(), "reader", &format!(
+        "#!/bin/sh\nif [ \"$1\" = --hygiene-references ]; then echo '{inventory}'; else echo '{legacy}'; fi\n"));
+    let applied = run_pressure_cli(tmp.path(), &repo, &root, &reader, "state", "--apply");
+    assert!(child.try_wait().unwrap().is_none());
+    child.stdin.take();
+    child.wait().unwrap();
+    assert!(a.is_dir());
+    assert!(!b.exists(), "{}", String::from_utf8_lossy(&applied.stdout));
+    let row: serde_json::Value = serde_json::from_slice(&applied.stdout).unwrap();
+    for path in [&a, &deep] {
+        assert!(path.is_dir());
+        assert!(row["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["path"] == path.to_str().unwrap() && row["reason"] == "busy"));
+    }
+}
+
+fn aged_rust_target(tree: &Path, size: usize) -> PathBuf {
+    let path = tree.join("rust/target");
+    fs::create_dir_all(path.join("debug")).unwrap();
+    fs::write(path.join(".rustc_info.json"), "{}").unwrap();
+    fs::write(path.join("debug/output"), vec![0u8; size]).unwrap();
+    let old = SystemTime::now() - Duration::from_secs(3600);
+    for entry in ["", ".rustc_info.json", "debug", "debug/output"] {
+        fs::File::open(path.join(entry))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    path
+}
+
+fn run_pressure_cli(
+    home: &Path,
+    repo: &Path,
+    root: &Path,
+    reader: &Path,
+    state: &str,
+    mode: &str,
+) -> std::process::Output {
+    let pins = home.join("pins.json");
+    fs::write(&pins, "[]").unwrap();
+    let floor = u64::MAX.to_string();
+    Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
+        .args([mode, "--cleanup-free-bytes", &floor, "--repo"])
+        .arg(repo)
+        .arg("--root")
+        .arg(root)
+        .arg("--pins")
+        .arg(pins)
+        .arg("--tmp-root")
+        .arg(home.join("scratch"))
+        .arg("--state")
+        .arg(home.join(state))
+        .env("HOME", home)
+        .env_remove("XDG_CACHE_HOME")
+        .env("PLANGRAPH_CARGO_TARGET_DIR", home.join("shared"))
+        .env_remove("PLANGRAPH_WORKTREE_MOUNTS")
+        .env("PG_PROCESS_INVENTORY", "reader")
+        .env("PG_PROCESS_CWD_READER", reader)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn stalled_pressure_exits_one_reports_and_enqueues() {
+    use serde_json::{json, Value};
+    let read = |path| serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap();
+    let (tmp, repo, root) = fixture();
+    let paths: Vec<_> = (1..=6)
+        .map(|index| {
+            let tree = root.join(format!("fixture-{index}"));
+            git(
+                &repo,
+                &["worktree", "add", "--detach", tree.to_str().unwrap()],
+            );
+            aged_rust_target(&tree, index * 8192)
+        })
+        .collect();
+    let refs: Vec<_> = paths
+        .iter()
+        .map(|path| path.as_os_str().as_encoded_bytes())
+        .collect();
+    let empty = json!({"version": 1, "cwds": [], "open_paths": [], "cargo_targets": []});
+    let busy = json!({"version": 1, "cwds": [], "open_paths": refs, "cargo_targets": []});
+    for (state, mode, old) in [
+        ("apply", "--apply", false),
+        ("dry", "--dry-run", false),
+        ("old", "--apply", true),
+    ] {
+        let script = if old {
+            "#!/bin/sh\necho '[[],false]'\n".to_owned()
+        } else {
+            format!(
+                r#"#!/bin/sh
+if [ -e "$0.seen" ]; then echo '{busy}'; else touch "$0.seen"; echo '{empty}'; fi
+"#
+            )
+        };
+        let reader = pg_worker_core::executable_test_support::write_script(
+            tmp.path(),
+            &format!("reader-{state}"),
+            &script,
+        );
+        let output = run_pressure_cli(tmp.path(), &repo, &root, &reader, state, mode);
+        assert_eq!(output.status.code(), Some(i32::from(mode == "--apply")));
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let state = tmp.path().join(state);
+        for filename in ["disk-hygiene.json", "disk-hygiene.ndjson"] {
+            assert_eq!(read(state.join(filename)), report);
+        }
+        let reason = if old { "probe_unavailable" } else { "busy" };
+        for path in &paths {
+            assert!(path.is_dir() && report["kept"].as_array().unwrap().iter().any(|row|
+                row["path"] == path.to_str().unwrap() && row["reason"] == reason));
+        }
+        let outbox = state.join("watchdog/outbox");
+        if mode == "--dry-run" {
+            assert!(!outbox.exists());
+            continue;
+        }
+        let entries: Vec<_> = fs::read_dir(outbox).unwrap().map(Result::unwrap).collect();
+        assert_eq!(entries.len(), 1);
+        let event = read(entries[0].path());
+        assert_eq!(event["rule"], "disk-hygiene-zero-progress");
+        assert_eq!(report["error"], "disk hygiene zero progress");
+        let kept = event["kept"].as_array().unwrap();
+        assert_eq!(kept.len(), 5);
+        if !old {
+            for (row, path) in kept.iter().zip(paths.iter().rev()) {
+                assert_eq!(row["path"], path.to_str().unwrap());
+                assert_eq!(row["reason"], "busy");
+            }
+        }
+    }
+}
+
 #[test]
 fn disk_hygiene_pinned_dirty_and_live_survive_real_cleanup() {
     let (_tmp, repo, root) = fixture();
@@ -323,17 +497,25 @@ fn disk_hygiene_cli_refuses_conflicting_modes() {
 #[test]
 fn disk_hygiene_guard_failure_replaces_stale_healthy_report() {
     let tmp = tempfile::tempdir().unwrap();
+    git(tmp.path(), &["init", "-q"]);
     fs::write(tmp.path().join("disk-hygiene.json"), r#"{"alarm":false}"#).unwrap();
     let pins = tmp.path().join("pins.json");
     fs::write(&pins, "[]").unwrap();
     fs::create_dir_all(tmp.path().join("runs/stray")).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
-        .args(["--repo", "/missing", "--root"])
+        .arg("--repo")
+        .arg(tmp.path())
+        .arg("--root")
         .arg(tmp.path())
         .arg("--pins")
         .arg(pins)
         .arg("--state")
         .arg(tmp.path())
+        .arg("--tmp-root")
+        .arg(tmp.path())
+        .env("HOME", tmp.path())
+        .env_remove("XDG_CACHE_HOME")
+        .env_remove("PLANGRAPH_CARGO_TARGET_DIR")
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -467,6 +649,15 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     let slot = tmp.path().join("cache/cargo-target-pool/slot-1");
     fs::create_dir_all(slot.join("debug")).unwrap();
     fs::write(slot.join("debug/blob"), vec![0u8; 16384]).unwrap();
+    fs::write(slot.join(".rustc_info.json"), r#"{"rustc_fingerprint":0}"#).unwrap();
+    fs::write(slot.join("debug/.cargo-lock"), "").unwrap();
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    for entry in ["debug/blob", "debug/.cargo-lock", "debug"] {
+        fs::File::open(slot.join(entry))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
     fs::create_dir_all(&primary).unwrap();
     let pins = tmp.path().join("pins.json");
     fs::write(&pins, "[]").unwrap();
@@ -478,7 +669,7 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     let reader = tmp.path().join("process-cwds");
     pg_worker_core::executable_test_support::write_executable(
         &reader,
-        "#!/bin/sh\necho '[[],false]'\n",
+        "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--shared-target-cap-bytes", "2048", "--repo"])
@@ -493,6 +684,7 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
         .arg(&state)
         .env("HOME", tmp.path().join("home"))
         .env("PG_PROCESS_CWD_READER", &reader)
+        .env("PG_PROCESS_INVENTORY", "reader")
         .env("PLANGRAPH_CARGO_TARGET_DIR", &primary)
         .output()
         .unwrap();
@@ -553,4 +745,20 @@ fn old_fast_worktrees_are_swept_only_when_idle_and_disposable() {
     assert!(!root.join("idle-fast").exists(), "{report:?}");
     assert!(live.join("target/build").is_file());
     assert!(root.join("private-fast/.env").is_file());
+}
+
+#[test]
+fn outbox_failure_keeps_the_pressure_report() {
+    use pg_worker_core::disk_hygiene::{Device, HygieneReport};
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path();
+    fs::write(state.join("watchdog"), b"blocked").unwrap();
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let device = Device::new(1, state.to_path_buf(), Some(7), Thresholds::default());
+    report.devices.insert(1, device);
+    report.sample_end(1, Ok(7), 1);
+    let (saved, queued) = report.persist(state, || Ok("fixture-worker".into()));
+    assert!(queued.is_err());
+    let row: serde_json::Value = serde_json::from_slice(&saved.unwrap()).unwrap();
+    assert_eq!(row["error"], "disk hygiene zero progress");
 }

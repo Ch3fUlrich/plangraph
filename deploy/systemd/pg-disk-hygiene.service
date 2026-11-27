@@ -3,6 +3,7 @@ Description=Check worker disk and clean idle rebuildable state
 
 [Service]
 Type=oneshot
+EnvironmentFile=-%h/.config/plangraph/host-link.env
 # Existing sweep deployments supply disk settings through the shared file.
 EnvironmentFile=-%h/.config/plangraph/disk-hygiene.env
 EnvironmentFile=-%h/.config/plangraph/disk-hygiene-service.env

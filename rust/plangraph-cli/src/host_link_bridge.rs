@@ -1,7 +1,10 @@
 //! Deliver host-link outbox events to the keeper message bus.
+use pg_worker_core::host_link::{DISK_HYGIENE_BELOW_ALARM, DISK_HYGIENE_ZERO_PROGRESS};
 use serde_json::{json, Value};
 use std::{
-    env, fs,
+    env,
+    fmt::Write as _,
+    fs,
     io::{self, Read, Seek, Write},
     process::{Command, Stdio},
     time::Duration,
@@ -24,6 +27,53 @@ fn fallback(event: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn display_disk_path(path: &str) -> String {
+    const LIMIT: usize = 384;
+    let mut encoded = String::new();
+    for byte in path.bytes() {
+        match byte {
+            0..=31 | 127..=255 | b'"' | b'\'' | b'\\' => write!(encoded, "%{byte:02X}").unwrap(),
+            _ => encoded.push(char::from(byte)),
+        }
+    }
+    if encoded.len() <= LIMIT {
+        return encoded;
+    }
+    let basename = encoded.rsplit('/').next().unwrap();
+    let tail = ((LIMIT - 3) / 2).max((basename.len() + 1).min(LIMIT - 3 - 32));
+    let (mut left, mut right) = (LIMIT - 3 - tail, encoded.len() - tail);
+    // Paths from the outbox may already contain percent escapes for raw path bytes.
+    let boundary = |index: usize| {
+        (1..=2).all(|back| {
+            let field = &encoded.as_bytes()[index - back..index - back + 3];
+            field[0] != b'%' || !field[1..].iter().all(u8::is_ascii_hexdigit)
+        })
+    };
+    while !boundary(left) {
+        left -= 1;
+    }
+    while !boundary(right) {
+        right += 1;
+    }
+    format!("{}...{}", &encoded[..left], &encoded[right..])
+}
+
+fn disk_pressure_text(event: &Value, rule: &str, host: &str) -> Option<String> {
+    let device = event["device"].as_u64()?;
+    let free = event["end_free_bytes"].as_u64()?;
+    let floor = event["floor_bytes"].as_u64()?;
+    let freed = event["freed_bytes"].as_u64()?;
+    let host = display_disk_path(host);
+    let mut summary = format!("{rule} on {host} (device {device}, free {free} bytes, floor {floor} bytes, reclaimed {freed} bytes)");
+    let rows = event["kept"].as_array()?;
+    for row in rows.iter().take(5) {
+        let path = display_disk_path(row["path"].as_str()?);
+        let reason = display_disk_path(row["reason"].as_str()?);
+        write!(summary, "\n{reason} {path}").unwrap();
+    }
+    Some(summary)
+}
+
 fn deliver(event: &Value, rule: &str) -> Result<(), Box<dyn std::error::Error>> {
     let text = |key: &str| {
         event[key]
@@ -38,6 +88,9 @@ fn deliver(event: &Value, rule: &str) -> Result<(), Box<dyn std::error::Error>> 
         .ok_or("host-link event missing down_since")?;
     let mut worker_host = None;
     let summary = match rule {
+        DISK_HYGIENE_ZERO_PROGRESS | DISK_HYGIENE_BELOW_ALARM => {
+            disk_pressure_text(event, rule, host).ok_or("invalid disk hygiene event")?
+        }
         "host-link-down" => format!(
             "Host link from {host} to {} unreachable since {since}",
             text("peer")?
@@ -65,6 +118,11 @@ fn deliver(event: &Value, rule: &str) -> Result<(), Box<dyn std::error::Error>> 
         _ => unreachable!(),
     };
     let mut body = json!({ "text": summary });
+    if matches!(rule, DISK_HYGIENE_ZERO_PROGRESS | DISK_HYGIENE_BELOW_ALARM)
+        && serde_json::to_vec(&body)?.len() + 1 >= 4096
+    {
+        return Err("disk hygiene alert body is too large".into());
+    }
     if let Some(event) = worker_host {
         body["worker_host"] = event;
     }
@@ -119,7 +177,9 @@ fn run(input: impl Read) -> Result<(), Box<dyn std::error::Error>> {
                 | "host-ssh-recovered"
                 | "worker-host-unreachable"
                 | "worker-host-maintenance"
-                | "worker-host-recovered"),
+                | "worker-host-recovered"
+                | DISK_HYGIENE_ZERO_PROGRESS
+                | DISK_HYGIENE_BELOW_ALARM),
             ),
         ) => deliver(&event, rule),
         _ => fallback(&bytes),

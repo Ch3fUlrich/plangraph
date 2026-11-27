@@ -9,6 +9,17 @@ use std::{
 };
 use support::{fixture, git};
 
+fn age_unrelated_target(root: &std::path::Path) {
+    // A protected main target can coexist with successful reclamation on a hot test device.
+    let old = SystemTime::now() - Duration::from_secs(2 * 86400);
+    for path in ["clean/target/cache", "clean/target"] {
+        fs::File::open(root.join(path))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+}
+
 /// Hosts run `pg-disk-hygiene` from a user unit whose `WorkingDirectory` is the main checkout:
 /// the unit pins the checkout, yet its idle `rust/target` must still be removed (and one the
 /// unit names itself must not).
@@ -16,6 +27,7 @@ use support::{fixture, git};
 fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
     for pin_target_itself in [false, true] {
         let (tmp, repo, root) = fixture();
+        age_unrelated_target(&root);
         let target = repo.join("rust/target");
         fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         fs::create_dir_all(target.join("debug")).unwrap();
@@ -55,7 +67,7 @@ fn a_unit_pinning_the_checkout_root_does_not_stop_the_idle_main_target_sweep() {
         let reader = tmp.path().join("process-cwds");
         pg_worker_core::executable_test_support::write_executable(
             &reader,
-            "#!/bin/sh\necho '[[],false]'\n",
+            "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
         );
         let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
             .args(["--apply", "--repo"])
@@ -99,6 +111,13 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let home = tmp.path().join("home");
     let container = home.join(".cache/cargo-target");
     let old = SystemTime::now() - Duration::from_secs(3 * 86400);
+    let nested = root.join("clean/src/__pycache__");
+    let unknown = root.join("clean/target/not-cache");
+    pg_worker_core::private_targets::seed_cargo_fixture(&unknown, old, true).unwrap();
+    git(&root.join("clean"), &["add", "-f", "target/cache"]);
+    git(&root.join("clean"), &["commit", "-qm", "tracked fixture"]);
+    fs::write(repo.join(".git/info/exclude"), "__pycache__/\n").unwrap();
+    pg_worker_core::private_targets::seed_cargo_fixture(&nested, old, false).unwrap();
     for name in ["shared", "batch23", "holds-repository"] {
         let dir = container.join(name);
         fs::create_dir_all(dir.join("debug")).unwrap();
@@ -131,11 +150,12 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     let reader = tmp.path().join("process-cwds");
     pg_worker_core::executable_test_support::write_executable(
         &reader,
-        "#!/bin/sh\necho '[[],false]'\n",
+        "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
         .args(["--apply", "--repo"])
         .arg(&repo)
+        .args(["--cleanup-free-bytes", &u64::MAX.to_string()])
         .arg("--root")
         .arg(&root)
         .arg("--pins")
@@ -145,6 +165,8 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
         .arg("--state")
         .arg(&state)
         .env("HOME", &home)
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env_remove("PLANGRAPH_WORKTREE_MOUNTS")
         .env_remove("XDG_CONFIG_HOME")
         .env("PG_PROCESS_CWD_READER", &reader)
         .env("PG_PROCESS_INVENTORY", "reader")
@@ -156,7 +178,8 @@ fn the_configured_shared_target_under_a_legacy_container_is_never_swept() {
     assert!(output.status.success(), "{row}");
     assert!(container.join("shared/debug/blob").exists(), "{row}");
     assert!(!container.join("batch23").exists(), "{row}");
-    assert!(mirror.join("HEAD").exists(), "{row}");
+    assert!(mirror.join("HEAD").exists() && unknown.exists(), "{row}");
+    assert!(!nested.exists(), "{row}");
 }
 
 /// An aged cargo-marked target that also holds a bare repository with a commit is source: the CLI
@@ -166,6 +189,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
     for variant in ["bare", "symlinked-refs", "none"] {
         let with_repository = variant != "none";
         let (tmp, repo, root) = fixture();
+        age_unrelated_target(&root);
         fs::write(repo.join(".git/info/exclude"), "rust/target/\n").unwrap();
         let target = repo.join("rust/target");
         fs::create_dir_all(target.join("debug")).unwrap();
@@ -222,7 +246,7 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
         let reader = tmp.path().join("process-cwds");
         pg_worker_core::executable_test_support::write_executable(
             &reader,
-            "#!/bin/sh\necho '[[],false]'\n",
+            "#!/bin/sh\necho '{\"version\":1,\"cwds\":[],\"open_paths\":[],\"cargo_targets\":[]}'\n",
         );
         let output = Command::new(env!("CARGO_BIN_EXE_pg-disk-hygiene"))
             .args(["--apply", "--repo"])
@@ -251,6 +275,54 @@ fn an_aged_target_holding_a_bare_repository_survives_the_cli() {
         assert_eq!(target.exists(), with_repository, "{variant}: {row}");
         if with_repository {
             assert!(bare.join("HEAD").is_file() && target.join("debug/blob").is_file());
+        }
+    }
+}
+
+#[test]
+fn final_proof_keeps_its_lease_and_restarts_after_metadata_changes() {
+    use pg_worker_core::{
+        cargo_cache::try_exclusive_lease,
+        disk_hygiene::{Candidate, FinalProof},
+    };
+    use std::cell::Cell;
+    for changed in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let now = SystemTime::now();
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("data-0"), [0u8; 8192]).unwrap();
+        for path in [&target, &target.join("data-0")] {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(now - Duration::from_secs(3600))
+                .unwrap();
+        }
+        let item = Candidate::new(target, root, now).unwrap();
+        let target = item.path.clone();
+        let file = target.join("data-0");
+        let mut proof = FinalProof::begin(item).unwrap();
+        let steps = Cell::new(2usize);
+        assert!(!proof
+            .advance(|| {
+                let previous = steps.get();
+                steps.set(previous.saturating_sub(1));
+                previous > 0
+            })
+            .unwrap());
+        assert!(try_exclusive_lease(&target).unwrap().is_none());
+        assert!(proof.remove(true, || Ok(true), || true).is_err());
+        if changed {
+            fs::File::open(&file).unwrap().set_modified(now).unwrap();
+            assert_eq!(proof.advance(|| true), Err("young"));
+            assert!(target.exists());
+        } else {
+            assert!(proof.advance(|| true).unwrap());
+            assert_eq!(proof.remove(true, || Ok(false), || true).unwrap(), None);
+            assert!(target.exists());
+            assert!(proof.remove(true, || Ok(true), || true).unwrap().unwrap() > 0);
+            assert!(!target.exists());
         }
     }
 }

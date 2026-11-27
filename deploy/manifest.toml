@@ -89,7 +89,7 @@ first_run = "systemctl --user start pg-throughput.service exits 0; the throughpu
 name = "pg-disk-hygiene"
 files = ["pg-disk-hygiene.service", "pg-disk-hygiene.timer"]
 hosts = ["all"]
-env_files = ["disk-hygiene-service.env|disk-hygiene.env"]
+env_files = ["host-link.env", "disk-hygiene-service.env|disk-hygiene.env"]
 env_family = "disk-hygiene"
 first_run = "pg-disk-hygiene --repo REPO --root WORKTREES --pins PINS (dry run) lists candidates, then the service exits 0"
 

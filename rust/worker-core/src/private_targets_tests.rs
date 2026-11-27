@@ -370,3 +370,174 @@ fn affected_pytest_scratch_requires_owned_marker_age_and_idle_lease() {
     assert!(recent.exists() && unrelated.exists() && public.exists());
     drop(inherited);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hygiene_generic_cache_probe_refuses_committed_artifacts() {
+    use crate::disk_hygiene::{Candidate, Layout};
+    use std::time::Instant;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let git = |args: &[&str]| {
+        crate::host_command::output(
+            crate::git_test_support::command(repo)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args),
+            Duration::from_secs(10),
+        )
+        .unwrap()
+    };
+    git(&["init", "-q"]);
+    fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    let target = repo.join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("checked-in"), "preserve this file").unwrap();
+    git(&["add", ".gitignore"]);
+    git(&["add", "-f", "target/checked-in"]);
+    git(&["commit", "-qm", "fixture"]);
+    assert!(git(&["status", "--porcelain"]).is_empty());
+    let mut item = Candidate::new(target, repo.to_path_buf(), SystemTime::now()).unwrap();
+    item.scope = repo.to_path_buf();
+    let layout = Layout {
+        repo,
+        roots: &[],
+        scratch: &[],
+        shared: &[],
+        home: repo,
+        cache: None,
+        cap: 0,
+    };
+    assert_eq!(
+        layout
+            .protection(&item, repo, Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Some("unsafe")
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn selector_scratch_uses_its_run_lease_for_final_proof() {
+    use crate::{cargo_cache::CacheLease, disk_hygiene::FinalProof};
+    use std::os::unix::fs::DirBuilderExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("pg-affected-fixture");
+    fs::DirBuilder::new().mode(0o700).create(&target).unwrap();
+    let marker = target.join(".lease");
+    fs::write(&marker, b"plangraph-affected-pytest-v1\n").unwrap();
+    let now = SystemTime::now();
+    for path in [&target, &marker] {
+        fs::File::open(path)
+            .unwrap()
+            .set_modified(now - Duration::from_secs(3600))
+            .unwrap();
+    }
+    let mut discovered = crate::affected_scratch::discover(
+        tmp.path(),
+        &[],
+        &mut || true,
+        now,
+        crate::affected_scratch::is_run,
+        |_, _| {},
+    )
+    .unwrap();
+    assert_eq!(discovered.len(), 1);
+    let item = discovered.pop().unwrap();
+    assert_eq!(item.path, target);
+    let held = CacheLease::try_exclusive_file(fs::File::open(&marker).unwrap()).unwrap();
+    assert!(held.is_some());
+    assert_eq!(FinalProof::begin(item.clone()).err(), Some("leased"));
+    drop(held);
+    let mut proof = FinalProof::begin(item).unwrap();
+    assert!(proof.advance(|| true).unwrap());
+    assert!(
+        CacheLease::try_exclusive_file(fs::File::open(&marker).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(!tmp
+        .path()
+        .join("pg-affected-fixture.plangraph-lock")
+        .exists());
+    assert!(proof.remove(true, || Ok(true), || true).unwrap().is_some());
+    assert!(!target.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cap_scan_reports_an_incomplete_total_at_the_deadline() {
+    use crate::{
+        cargo_pool::hygiene_cap_failure,
+        disk_hygiene::{Candidate, Projection},
+        shared_target::PoolCap,
+    };
+    use std::cell::Cell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let slot = tmp.path().join("slot");
+    fs::create_dir(&slot).unwrap();
+    fs::write(slot.join("data"), [0u8; 128]).unwrap();
+    let mut item =
+        Candidate::new(slot.clone(), tmp.path().to_path_buf(), SystemTime::now()).unwrap();
+    let slots = vec![slot].into();
+    let projected = Projection::default();
+    item.cap = Some(PoolCap(1024, 1024, slots));
+    let permit = Cell::new(true);
+    assert_eq!(
+        hygiene_cap_failure(&item, &projected, || permit.replace(false)),
+        Some("run_budget")
+    );
+    assert_eq!(
+        hygiene_cap_failure(&item, &projected, || true),
+        Some("cap_met")
+    );
+    let Some(PoolCap(limit, _, _)) = item.cap.as_mut() else {
+        unreachable!()
+    };
+    *limit = 64;
+    assert_eq!(hygiene_cap_failure(&item, &projected, || true), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_discovery_accepts_only_direct_marked_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let named = root.join("preflight-cargo-old");
+    let unrelated = root.join("ordinary");
+    let nested = unrelated.join("preflight-cargo-nested");
+    let vanished = root.join("preflight-cargo-vanished");
+    for path in [&named, &unrelated, &nested, &vanished] {
+        fixture(path, true);
+    }
+    fs::create_dir(root.join("preflight-cargo-unmarked")).unwrap();
+    let mut kept = vec![];
+    let found = crate::affected_scratch::discover(
+        &root,
+        &[],
+        &mut || true,
+        SystemTime::now(),
+        |path| {
+            let marked = crate::private_targets::is_preflight_target(path);
+            if path == vanished {
+                fs::remove_dir_all(path).unwrap();
+            }
+            marked
+        },
+        |path, reason| kept.push((path.to_path_buf(), reason)),
+    )
+    .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path, named);
+    assert!(!found[0].selector_scratch);
+    assert!(unrelated.exists() && nested.exists());
+    assert_eq!(kept, [(vanished, "vanished")]);
+}
