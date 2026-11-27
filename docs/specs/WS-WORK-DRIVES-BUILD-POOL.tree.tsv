@@ -40,17 +40,19 @@ rust/plangraph-cli/src/feeder/sources.rs	read	yes	E1	observed
 rust/plangraph-cli/src/host_sync_release.rs	write	yes	E4	predicted (<= 45 changed lines; <= 421 final lines)
 rust/plangraph-cli/src/main.rs	read	yes	E2	observed
 rust/plangraph-cli/tests/deploy_manifest.rs	read	yes	E4	observed
+rust/plangraph-cli/tests/host_sync_env/disk.rs	write	yes	E4	predicted (<= 1 changed lines; <= 120 final lines)
 rust/worker-core/Cargo.toml	read	yes	E1 E3 E4	observed
-rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E4	predicted (<= 45 changed lines; <= 603 final lines)
+rust/worker-core/src/affected_scratch.rs	read	yes	E4	observed
+rust/worker-core/src/bin/pg-disk-hygiene.rs	write	yes	E4	predicted (<= 45 changed lines; <= 601 final lines)
 rust/worker-core/src/bin/pg-host-readiness.rs	write	yes	E3	predicted (<= 16 changed lines; <= 133 final lines)
-rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E4	predicted (<= 110 changed lines; <= 525 final lines)
+rust/worker-core/src/bin/pg_disk_hygiene/tests.rs	write	yes	E4	predicted (<= 110 changed lines; <= 532 final lines)
 rust/worker-core/src/cargo_build_target.rs	write	yes	E1 E2 E3 E4	predicted (<= 325 changed lines; <= 325 final lines)
 rust/worker-core/src/cargo_cache.rs	write	yes	E1 E3 E4	predicted (<= 100 changed lines; <= 413 final lines)
-rust/worker-core/src/cargo_pool.rs	write	yes	E2 E4	predicted (<= 30 changed lines; <= 440 final lines)
+rust/worker-core/src/cargo_pool.rs	write	yes	E2 E4	predicted (<= 30 changed lines; <= 456 final lines)
 rust/worker-core/src/cargo_pool_trim.rs	write	yes	E2 E4	predicted (<= 30 changed lines; <= 464 final lines)
 rust/worker-core/src/disk_hygiene.rs	read	yes	E4	observed
 rust/worker-core/src/disk_hygiene_plan.rs	read	yes	E4	observed
-rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E4	predicted (<= 60 changed lines; <= 520 final lines)
+rust/worker-core/src/disk_hygiene_plan_discovery.rs	write	yes	E4	predicted (<= 60 changed lines; <= 534 final lines)
 rust/worker-core/src/disk_runtime.rs	write	yes	E4	predicted (<= 45 changed lines; <= 639 final lines)
 rust/worker-core/src/host_readiness.rs	write	yes	E3	predicted (<= 45 changed lines; <= 438 final lines)
 rust/worker-core/src/idle_targets.rs	read	yes	E4	observed
