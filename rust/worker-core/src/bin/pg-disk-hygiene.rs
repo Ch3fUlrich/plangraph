@@ -122,16 +122,14 @@ fn execute_with(
             .into_iter()
             .filter(|path| path.is_dir()),
     );
-    roots = roots
-        .into_iter()
-        .filter_map(|root| match root.canonicalize() {
-            Ok(path) => Some(path),
-            Err(_) => {
-                report.keep_boundary(root, "root_unavailable");
-                None
-            }
-        })
-        .collect();
+    roots.retain_mut(|root| {
+        let Ok(path) = root.canonicalize() else {
+            report.keep_boundary(root.clone(), "root_unavailable");
+            return false;
+        };
+        *root = path;
+        true
+    });
     let (mut scratch, shared) = caches()?;
     if let Some(root) = tmp_root {
         scratch = vec![root];
@@ -168,23 +166,24 @@ fn execute_with(
         inventory: &inventory,
         space: &free,
     };
-    let usable = disk_hygiene::reclaim(&mut report, candidates, budget, &checks);
+    let usable = std::cell::Cell::new(disk_hygiene::reclaim(
+        &mut report,
+        candidates,
+        budget,
+        &checks,
+    ));
     report.sample_devices(free);
     let end = budget.start + budget.pass_for;
-    if usable {
+    if usable.get() {
         for root in &roots {
             use std::os::unix::fs::MetadataExt;
             let id = root.metadata()?.dev();
             let Some(device) = report.devices.get_mut(&id) else {
                 continue;
             };
-            let at_floor = device
-                .start_free_bytes
-                .is_some_and(|n| n < device.cleanup_floor_bytes)
-                && device
-                    .end_free_bytes
-                    .is_some_and(|n| n >= device.cleanup_floor_bytes);
-            if at_floor || (budget.clock)() >= end {
+            let floor = Some(device.cleanup_floor_bytes);
+            let at_floor = device.start_free_bytes < floor && device.end_free_bytes >= floor;
+            if at_floor || device.end_free_bytes.is_none() || (budget.clock)() >= end {
                 continue;
             }
             let maintenance = disk_hygiene::sweep_checked(
@@ -197,20 +196,20 @@ fn execute_with(
                 apply,
                 |tree| {
                     let item = Candidate::new(tree.to_path_buf(), root.clone(), SystemTime::now())?;
-                    Ok((budget.clock)() < end
-                        && protection(&item, end)?.is_none()
-                        && !inventory(end)?.blocks(tree))
+                    if !usable.get() || (budget.clock)() >= end || protection(&item, end)?.is_some()
+                    {
+                        return Ok(false);
+                    }
+                    Ok(!inventory(end)
+                        .inspect_err(|_| usable.set(false))?
+                        .blocks(tree))
                 },
             )?;
             device.freed_bytes = device.freed_bytes.saturating_add(maintenance.freed_bytes);
             report.summary.actions.extend(maintenance.actions);
             report.summary.skipped.extend(maintenance.skipped);
             if maintenance.freed_bytes > 0 {
-                report.sample_end(
-                    id,
-                    free(root),
-                    started.as_secs() + (budget.clock)().duration_since(budget.start).as_secs(),
-                );
+                report.sample_devices(free);
             }
         }
     }

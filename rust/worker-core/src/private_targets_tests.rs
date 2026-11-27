@@ -370,3 +370,53 @@ fn affected_pytest_scratch_requires_owned_marker_age_and_idle_lease() {
     assert!(recent.exists() && unrelated.exists() && public.exists());
     drop(inherited);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn hygiene_generic_cache_probe_refuses_committed_artifacts() {
+    use crate::disk_hygiene::{Candidate, Layout};
+    use std::time::Instant;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let git = |args: &[&str]| {
+        crate::host_command::output(
+            crate::git_test_support::command(repo)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args),
+            Duration::from_secs(10),
+        )
+        .unwrap()
+    };
+    git(&["init", "-q"]);
+    fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    let target = repo.join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("checked-in"), "preserve this file").unwrap();
+    git(&["add", ".gitignore"]);
+    git(&["add", "-f", "target/checked-in"]);
+    git(&["commit", "-qm", "fixture"]);
+    assert!(git(&["status", "--porcelain"]).is_empty());
+    let mut item = Candidate::new(target, repo.to_path_buf(), SystemTime::now()).unwrap();
+    item.scope = repo.to_path_buf();
+    let layout = Layout {
+        repo,
+        roots: &[],
+        scratch: &[],
+        shared: &[],
+        home: repo,
+        cap: 0,
+    };
+    assert_eq!(
+        layout
+            .protection(&item, repo, Instant::now() + Duration::from_secs(3))
+            .unwrap(),
+        Some("unsafe")
+    );
+}

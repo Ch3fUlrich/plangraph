@@ -4,8 +4,7 @@ use crate::{
     cargo_cache::ExclusiveLease,
     cargo_pool_trim::{remove_guarded_if, stamp},
 };
-use std::time::SystemTime;
-
+use std::{os::unix::fs::MetadataExt, time::SystemTime};
 pub(super) fn rank_candidate(
     row: &mut Ranked,
     item: &Candidate,
@@ -69,9 +68,7 @@ pub struct Layout<'a> {
 impl HygieneReport {
     pub fn keep_boundary(&mut self, path: PathBuf, reason: &'static str) {
         self.summary.alarm |= reason == "root_unavailable";
-        let device = fs::metadata(&path)
-            .ok()
-            .map(|meta| crate::disk_hygiene::file_identity(&meta).0);
+        let device = path.metadata().ok().map(|meta| meta.dev());
         self.kept.push(KeptPath {
             device,
             path,
@@ -194,10 +191,7 @@ impl Layout<'_> {
             let Ok(root) = path.canonicalize() else {
                 continue;
             };
-            let Some(id) = fs::metadata(&root)
-                .ok()
-                .map(|meta| crate::disk_hygiene::file_identity(&meta).0)
-            else {
+            let Ok(id) = root.metadata().map(|meta| meta.dev()) else {
                 continue;
             };
             if report.devices.contains_key(&id) {
@@ -259,12 +253,16 @@ impl Layout<'_> {
             {
                 return Ok(Some("unsafe"));
             }
-            let rel = item.path.strip_prefix(&item.scope).unwrap();
-            if !git(&["check-ignore", "--", &rel.to_string_lossy()])?.ends_with(b"\n") {
+            let rel = item
+                .path
+                .strip_prefix(&item.scope)
+                .unwrap()
+                .to_string_lossy();
+            if !git(&["--literal-pathspecs", "ls-files", "--", &rel])?.is_empty()
+                || !git(&["check-ignore", "--", &rel])?.ends_with(b"\n")
+            {
                 return Ok(Some("unsafe"));
             }
-        } else if !crate::private_targets::cargo_target(&item.path) {
-            return Ok(Some("unrecognized"));
         }
         Ok(None)
     }
