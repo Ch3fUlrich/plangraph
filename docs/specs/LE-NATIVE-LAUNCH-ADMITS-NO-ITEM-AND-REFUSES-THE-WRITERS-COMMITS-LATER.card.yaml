@@ -1,0 +1,87 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md": {
+      "max_changed_lines": 3,
+      "max_final_lines": 3
+    },
+    "docs/native-codex-writer.md": {
+      "max_changed_lines": 12,
+      "max_final_lines": 270
+    },
+    "docs/spawner/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md": {
+      "max_changed_lines": 14,
+      "max_final_lines": 14
+    },
+    "rust/pg-spawnd/src/lane_admit.rs": {
+      "max_changed_lines": 24,
+      "max_final_lines": 140
+    },
+    "rust/pg-spawnd/src/launch_admission.rs": {
+      "max_changed_lines": 120,
+      "max_final_lines": 120
+    },
+    "rust/pg-spawnd/src/launch_admission_tests.rs": {
+      "max_changed_lines": 110,
+      "max_final_lines": 110
+    },
+    "rust/pg-spawnd/src/main.rs": {
+      "max_changed_lines": 1,
+      "max_final_lines": 134
+    },
+    "rust/pg-spawnd/src/native_writer_commands.rs": {
+      "max_changed_lines": 6,
+      "max_final_lines": 402
+    },
+    "rust/pg-spawnd/src/native_writer_host_review_tests.rs": {
+      "max_changed_lines": 30,
+      "max_final_lines": 479
+    },
+    "rust/pg-spawnd/tests/lane_admit.rs": {
+      "max_changed_lines": 90,
+      "max_final_lines": 560
+    },
+    "rust/pg-spawnd/tests/native_tools.rs": {
+      "max_changed_lines": 4,
+      "max_final_lines": 153
+    },
+    "src/plangraph/spawner/run_refusal.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 123
+    }
+  },
+  "cards": {
+    "LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER": {
+      "outcome": "A native Codex launch whose brief names item keys the writer could not commit, or that admits no key at all, is refused at lane admission with the Plan item hint. The card's own keys are always admitted for the writer's Plan-Item trailers, and a second live run on the same review_dir is refused.",
+      "read_set": [
+        "rust/pg-spawnd/src/batch_writer_brief.rs",
+        "rust/pg-spawnd/src/errors.rs",
+        "rust/pg-spawnd/src/lane_guard.rs",
+        "rust/pg-spawnd/src/lane_launch.rs",
+        "rust/pg-spawnd/src/native_writer_context.rs",
+        "rust/pg-spawnd/src/native_writer_review.rs",
+        "rust/pg-spawnd/src/placement.rs",
+        "src/plangraph/spawner/overflow.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md",
+        "docs/native-codex-writer.md",
+        "docs/spawner/LE-NATIVE-LAUNCH-ADMITS-NO-ITEM-AND-REFUSES-THE-WRITERS-COMMITS-LATER.md",
+        "rust/pg-spawnd/src/lane_admit.rs",
+        "rust/pg-spawnd/src/launch_admission.rs",
+        "rust/pg-spawnd/src/launch_admission_tests.rs",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_host_review_tests.rs",
+        "rust/pg-spawnd/tests/lane_admit.rs",
+        "rust/pg-spawnd/tests/native_tools.rs",
+        "src/plangraph/spawner/run_refusal.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --bin pg-spawnd launch_admission && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --bin pg-spawnd native_writer_host::review_tests && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --test lane_admit --test native_tools",
+      "risk_tags": [],
+      "estimate_tokens": 55000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --lib lane_guard::tests && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-spawnd --test native_writer --test native_evidence"
+    }
+  }
+}
