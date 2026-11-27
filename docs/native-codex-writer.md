@@ -30,7 +30,10 @@ and ledger row record the effort used. The worker drives the batch writer loop i
 repository's fast gates present in the checkout (file size, new-code language,
 changelog/docs, `ci_commit_gate.py check` against the pinned base, and the private
 scrub when `~/.config/plangraph/scrub-words.txt` exists) and writes the stamp
-`<git-dir>/fast-checks/<head>`. A failure resumes the same Codex session with the
+`<git-dir>/fast-checks/<head>`. The shared exact-head receipt keeps check timings
+and failed checks for red diagnosis. Over 300 seconds it ends with
+`budget overrun wall_ns=<elapsed> limit_s=300`. Read the verdict with
+`plangraph fast-checks --stamp-green <head>`. A failure resumes the same Codex session with the
 output (stdout and stderr in full), at most twice per head. A turn that leaves HEAD at
 the base is resumed with the items of its brief and runs no gate; after two such
 resumes the run ends exit 7 `no_commit`. `codex-host-readiness` reports a placeholder

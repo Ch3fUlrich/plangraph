@@ -728,7 +728,7 @@ from a checkout. Use `--base <revision>` to override `origin/main`, or
 The command delegates job selection to `tools/ci_select.py`, includes committed,
 tracked local and untracked changes, and prints CI job booleans before its steps.
 Use `--owned-worktree` for committed-head checks. It runs in a disposable
-checkout and saves a receipt by commit SHA in the repository's shared Git state (`head`, `result green|red`, one `check` line each; also a note in `refs/notes/plangraph-fast-checks`). A red or missing receipt refuses the push and the review. `affected_tests.py --run` ends with `AFFECTED rc= batches= failed=`; read that line, never a log tail. `plangraph wait ci|files` waits with a deadline.
+checkout and saves a receipt by commit SHA in shared Git state and its local receipt ref (`head`, `result green|red`, one `check` line per step, and a final `budget overrun wall_ns=<elapsed> limit_s=300` line when exceeded). A red or missing receipt refuses the push and the review. `affected_tests.py --run` ends with `AFFECTED rc= batches= failed=`; read that line, never a log tail. `plangraph wait ci|files` waits with a deadline.
 It runs the four always-required tree guards, commit and whitespace gates,
 affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
 for touched Rust crates and local reverse dependencies in their own workspaces.
@@ -743,7 +743,7 @@ Class-Search body lines in the commit range using `pg-policy`.
 A non-Rust lane push can reuse a current cached policy executable even when
 the shared target is at the build cap.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
-warning and returns failure after checks, without interrupting or weakening them.
+warning and records the overrun in the receipt. The executed checks determine the verdict.
 Affected tests and base replays run with context, session and Python path
 overrides removed. To record a known base failure, use one `Fails-at-Base:`
 commit trailer per pytest node, with the pinned base SHA followed by the node

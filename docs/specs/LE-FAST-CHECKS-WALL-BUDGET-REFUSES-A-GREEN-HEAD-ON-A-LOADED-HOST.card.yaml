@@ -1,0 +1,55 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-FAST-CHECKS-WALL-BUDGET-REFUSES-A-GREEN-HEAD-ON-A-LOADED-HOST": {
+      "outcome": "A fast-checks run that passes every check gets its receipt on a loaded host; the 300 second budget is measured and reported, and does not alone refuse the head.",
+      "read_set": [
+        ".docs-map",
+        ".github/workflows/tests.yml",
+        "AGENTS.md",
+        "deploy/systemd/README.md",
+        "rust/Cargo.toml",
+        "rust/pg-spawnd/src/cli_review.rs",
+        "rust/pg-spawnd/src/main.rs",
+        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/pg-spawnd/src/native_writer_review.rs",
+        "rust/pg-spawnd/src/native_writer_stage.rs",
+        "rust/pg-spawnd/src/step_runner_shell.rs",
+        "rust/plangraph-cli/Cargo.toml",
+        "rust/plangraph-cli/src/fast_check_packages.rs",
+        "rust/plangraph-cli/src/fast_check_target.rs",
+        "rust/plangraph-cli/src/host_sync_release.rs",
+        "rust/plangraph-cli/src/landing_hosts.rs",
+        "rust/plangraph-cli/src/main.rs",
+        "rust/plangraph-cli/tests/fast_checks.rs",
+        "rust/worker-core/src/bin/pg-disk-hygiene.rs",
+        "rust/worker-core/src/cargo_pool_telemetry.rs",
+        "rust/worker-core/src/host_link.rs",
+        "rust/worker-core/src/worktree.rs",
+        "src/plangraph/spawner/base_fresh.py",
+        "src/plangraph/spawner/remote_ps.py",
+        "src/plangraph/spawner/stall_watchdog.py",
+        "tools/ci_select.py",
+        "tools/hooks/pre-push",
+        "tools/merge_batch_build.py"
+      ],
+      "write_set": [
+        "CONTRIBUTING.md",
+        "changelog.d/LE-FAST-CHECKS-WALL-BUDGET-REFUSES-A-GREEN-HEAD-ON-A-LOADED-HOST.md",
+        "docs/native-codex-writer.md",
+        "rust/plangraph-cli/src/fast_check_worktree.rs",
+        "rust/plangraph-cli/src/fast_checks.rs",
+        "rust/worker-core/src/fast_check_stamp.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --lib fast_checks::tests && cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test fast_checks && cargo test --manifest-path rust/Cargo.toml -p pg-worker-core --lib fast_check_stamp::tests",
+      "risk_tags": [
+        "auth"
+      ],
+      "estimate_tokens": 27000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd native_writer_host"
+    }
+  }
+}

@@ -1,0 +1,1 @@
+- Fast checks publish a green exact-head receipt when all checks pass, recording wall time above 300 seconds in the receipt alongside per-check timings.

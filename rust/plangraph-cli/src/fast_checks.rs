@@ -4,11 +4,13 @@ use crate::fast_check_packages::packages;
 mod replay;
 use pg_worker_core::cargo_cache;
 use pg_worker_core::fast_check_stamp as stamp;
+use stamp::Check;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
+const WALL_BUDGET: Duration = Duration::from_secs(300);
 
 #[path = "fast_check_fleet.rs"]
 mod fleet;
@@ -17,6 +19,76 @@ mod owned;
 #[path = "fast_check_target.rs"]
 mod target;
 use target::{jail_binary, resolve_cargo_target, run_step};
+
+#[cfg(test)]
+#[rustfmt::skip]
+mod tests {
+    use super::*;
+    use pg_worker_core::{git::{git, git_bytes, git_env, git_stdin}, worktree::fast_check_stamp};
+    const OVER_690: &str = "budget overrun wall_ns=690000000000 limit_s=300\n";
+    const OVER_453: &str = "budget overrun wall_ns=453000000000 limit_s=300\n";
+    fn note(root: &Path, tree: &str) -> String {
+        let args = ["-c", "i18n.commitEncoding=utf-8", "commit-tree", tree, "-m", "fast-checks receipt"];
+        let identity = [
+            ("GIT_AUTHOR_NAME", "plangraph"), ("GIT_AUTHOR_EMAIL", "plangraph@localhost"),
+            ("GIT_COMMITTER_NAME", "plangraph"), ("GIT_COMMITTER_EMAIL", "plangraph@localhost"),
+        ];
+        git_env(root, &args, &identity).unwrap()
+    }
+    fn repo() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init"]).unwrap();
+        let head = note(dir.path(), &git(dir.path(), &["write-tree"]).unwrap());
+        (dir, head)
+    }
+    fn check(root: &Path, head: &str, wall: u64, rc: i32, budget: &str) {
+        let path = root.join("results");
+        let rows = [Check { label: "affected-tests".into(), rc, seconds: 1.25 }];
+        let failures = (rc != 0).then(|| rows[0].label.clone());
+        let result = finish(Duration::from_secs(wall), &rows, failures.as_slice(), Some(&path));
+        assert_eq!(result.as_ref().err().map(String::as_str), (rc != 0).then_some("failed: affected-tests"));
+        let steps = format!("check affected-tests rc={rc} wall=1.250\n{budget}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), steps);
+        assert_eq!(owned::settle(root, head, &path, owned::fixture_status(result.is_ok())).is_ok(), rc == 0);
+        let text = format!("head {head}\nresult {}\n{steps}", if rc == 0 { "green" } else { "red" });
+        assert_eq!(std::fs::read_to_string(fast_check_stamp(root, head).unwrap()).unwrap(), text);
+        let tip = stamp::local_receipt_ref(head);
+        assert_eq!(git_bytes(root, &["show", &format!("{tip}:{head}")]).unwrap(), text.as_bytes());
+        assert_eq!(stamp::green(root, head), rc == 0);
+        assert_eq!(stamp::notes_commit_green(root, &tip, Some(head)).is_ok(), rc == 0);
+    }
+    macro_rules! cases {
+        ($($name:ident: $rc:literal, $($wall:literal => $budget:expr),+;)+) => {$(
+            #[test]
+            fn $name() { let (dir, head) = repo(); $(check(dir.path(), &head, $wall, $rc, $budget);)+ }
+        )+};
+    }
+    cases! {
+        green_over_budget_publishes_green_receipt_with_overrun: 0, 690 => OVER_690;
+        failed_over_budget_has_no_green_receipt: 7, 453 => OVER_453;
+        failed_under_budget_has_no_green_receipt: 7, 24 => "";
+        green_under_budget_keeps_receipt_format: 0, 24 => "", 300 => "";
+        overrun_rerun_replaces_head_report: 0, 453 => OVER_453, 490 => "budget overrun wall_ns=490000000000 limit_s=300\n";
+    }
+    #[test]
+    fn notes_validators_accept_only_canonical_overrun() {
+        let (dir, head) = repo();
+        let root = dir.path();
+        check(root, &head, 690, 0, OVER_690);
+        let tip = stamp::local_receipt_ref(&head);
+        assert!(stamp::notes_commit_green(root, &tip, None).is_ok());
+        assert!(stamp::notes_commit_green(root, &tip, Some(&"b".repeat(40))).is_err());
+        for tail in ["".into(), "budget overrun\n".into(), OVER_690.repeat(2),
+            OVER_690.replace("690", "300"), OVER_690.replace("690", "299"),
+            OVER_690.replace("300\n", "300 \n")] {
+            let text = format!("head {head}\nresult green\ncheck fmt rc=0 wall=1.000\n{tail}");
+            let blob = git_stdin(root, &["hash-object", "-w", "--stdin"], &text).unwrap();
+            let tree = git_stdin(root, &["mktree"], &format!("100644 blob {blob}\t{head}\n")).unwrap();
+            assert_eq!(stamp::text_is_green(&text, &head), tail.is_empty(), "{tail:?}");
+            assert_eq!(stamp::notes_commit_green(root, &note(root, &tree), None).is_ok(), tail.is_empty());
+        }
+    }
+}
 
 #[derive(Debug)]
 struct Step {
@@ -354,6 +426,7 @@ fn execute(args: &[String]) -> Result<()> {
     let target = resolve_cargo_target(&root, &primary[0], "fast-checks")?;
     let mut failures = Vec::new();
     let mut checks = Vec::new();
+    let results = std::env::var_os(owned::RESULTS_ENV).map(PathBuf::from);
     for step in steps {
         let tick = Instant::now();
         let mut command = Command::new(&step.args[0]);
@@ -382,15 +455,17 @@ fn execute(args: &[String]) -> Result<()> {
             .env("NEWCODE_BASE", &base)
             .env("CHANGELOG_BASE", &base);
         let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
+        let seconds = tick.elapsed().as_secs_f64();
+        #[rustfmt::skip]
         println!(
             "{} wall seconds: {:.3}",
             step.label,
-            tick.elapsed().as_secs_f64()
+            seconds
         );
         checks.push(stamp::Check {
             label: step.label.clone(),
             rc: status.code().unwrap_or(-1),
-            seconds: tick.elapsed().as_secs_f64(),
+            seconds,
         });
         if !status.success() {
             failures.push(step.label);
@@ -398,17 +473,23 @@ fn execute(args: &[String]) -> Result<()> {
             break;
         }
     }
+    finish(start.elapsed(), &checks, &failures, results.as_deref())
+}
+
+fn finish(wall: Duration, checks: &[Check], failures: &[String], to: Option<&Path>) -> Result<()> {
+    #[rustfmt::skip]
     println!(
         "fast-checks total wall seconds: {:.3}",
-        start.elapsed().as_secs_f64()
+        wall.as_secs_f64()
     );
-    if start.elapsed() > Duration::from_secs(300) {
-        eprintln!("WARNING: fast-checks exceeded the 300 second budget");
-        failures.push("budget".into());
-    }
+    let limit = WALL_BUDGET.as_secs();
+    let budget = stamp::BudgetOverrun::new(wall.as_nanos(), limit).inspect(|_| {
+        eprintln!("WARNING: fast-checks exceeded the {limit} second budget");
+    });
     // The owned-worktree parent turns these lines into the head's receipt.
-    if let Some(path) = std::env::var_os(owned::RESULTS_ENV) {
+    if let Some(path) = to {
         let lines: String = checks.iter().map(|c| c.line() + "\n").collect();
+        let lines = lines + &budget.map_or_else(String::new, |b| b.line() + "\n");
         std::fs::write(path, lines).map_err(|e| e.to_string())?;
     }
     if failures.is_empty() {
