@@ -4,8 +4,11 @@ pub(crate) fn tests_line(text: &str) -> Option<&str> {
 }
 
 pub(crate) fn required(leg: &serde_json::Value) -> bool {
-    leg["id"] == "claude-sonnet-5-5-high"
-        || (leg["harness"] == "claude" && leg["model"] == "claude-sonnet-5-5-high")
+    use crate::cli_review::{eligible, SONNET_HIGH_MODEL};
+    matches!(
+        leg["id"].as_str(),
+        Some(SONNET_HIGH_MODEL | "agy-claude-sonnet-5-5-high")
+    ) || (leg["model"] == SONNET_HIGH_MODEL && eligible(leg))
 }
 
 fn test_report(text: &str) -> Option<(std::ops::Range<usize>, &str)> {
@@ -98,7 +101,25 @@ pub(crate) fn reported(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::reported;
+    use super::{reported, required};
+    use serde_json::json;
+
+    #[test]
+    fn both_sonnet_seats_require_test_evidence() {
+        for (id, harness) in [
+            ("agy-claude-sonnet-5-5-high", "agy"),
+            ("claude-sonnet-5-5-high", "claude"),
+        ] {
+            assert!(required(&json!({"id":id})), "{id}");
+            assert!(
+                required(&json!({"harness":harness,"model":"claude-sonnet-5-5-high"})),
+                "{harness}"
+            );
+        }
+        assert!(!required(
+            &json!({"harness":"agy","model":"gemini-4-hydrogen-high"})
+        ));
+    }
 
     #[test]
     fn only_a_standalone_nonempty_tests_line_reports_tests() {

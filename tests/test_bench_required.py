@@ -108,7 +108,7 @@ def test_read_only_loader(tmp_path, table):
 
 def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
     from plangraph.planner.benchmarks import benchmark_rows_from_db
-    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
+    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-medium')
     missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-glm-5.3-flash')
     path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
     before = path.read_bytes()
@@ -210,7 +210,7 @@ def test_review_route_declares_unmeasured_agy_leg_without_blocking_strict_review
     from plangraph.spawner.bench_entry import benchmark_options
 
     pending = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-gpt-oss-120b")
-    control = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-gemini-4-neon-medium")
+    control = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-gemini-4-hydrogen-medium")
     model_ids = [f"{control.harness}/{control.model}"]
     if measured:
         model_ids.append(f"{pending.harness}/{pending.model}")

@@ -52,6 +52,23 @@ fn claude_stop_exit_zero_is_not_a_stopped_session_while_agents_still_lists_it_li
     );
 }
 
+#[test]
+fn claude_stop_retries_a_temporarily_busy_executable() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = claude_stub(dir.path(), "busy", 0, "[]");
+    let writer = fs::OpenOptions::new().write(true).open(&stub).unwrap();
+    let mut host = LocalHost::new(dir.path().to_path_buf(), "11111111-session".into());
+    host.claude_bin = Some(stub);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        drop(writer);
+    });
+
+    let ended = host.end_session("writer-1");
+    release.join().unwrap();
+    assert!(ended, "a temporary executable-busy error must be retried");
+}
+
 static RACING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// The member exits just before the signal arrives: the kernel refuses the signal.

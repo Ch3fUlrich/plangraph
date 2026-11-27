@@ -27,6 +27,13 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 #: (omitted account/combo dimensions are not wildcards for provider responses).
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
+_AGY_GEMINI_POOL = ("gemini-4-hydrogen", "gemini-4-argon")
+_AGY_QUOTA_MODELS = (*_AGY_GEMINI_POOL, "gemini-4-neon", "claude-sonnet-5-5")
+_AGY_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_AGY_QUOTA_KEY = re.compile(r"agy[/:](" + "|".join(_AGY_QUOTA_MODELS)
+                           + r")(?:-(?:" + "|".join(_AGY_EFFORTS) + r"))?")
+_LIMIT_SOURCES = ("harness-stderr", "provider-response")
+
 
 def leg_key(leg):
     """One leg key for probe and quota bookkeeping (Q16/M8).
@@ -37,19 +44,26 @@ def leg_key(leg):
             else leg.model)
 
 
+def agy_model_key(leg):
+    """Normalize effort aliases for model-specific Antigravity probe evidence."""
+    match = _AGY_QUOTA_KEY.fullmatch(leg) if isinstance(leg, str) else None
+    return "agy:" + match[1] if match else leg
+
+
 def quota_key(leg):
-    """D-5966: agy efforts share a model quota; native harness keys stay separate."""
-    if not isinstance(leg, str):
-        return leg
-    return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon|neon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
-                  r'agy:\1', leg)
+    """Normalize Antigravity quota keys, including the shared Argon/Hydrogen pool."""
+    model = agy_model_key(leg)
+    return "agy:" + _AGY_GEMINI_POOL[0] if model == "agy:" + _AGY_GEMINI_POOL[1] else model
 
 
-def _event_keys(leg, agy):
+def _event_keys(leg, agy, *, pooled=True):
     if not agy:
         return (leg,)
-    base = "agy/" + leg[4:]
-    return (leg, base, *(base + "-" + e for e in ("low", "medium", "high", "xhigh", "max")))
+    model = leg[4:]
+    models = _AGY_GEMINI_POOL if pooled and model == _AGY_GEMINI_POOL[0] else (model,)
+    # Both spellings and effort variants can appear in bookings made before pooling.
+    return tuple(prefix + member + suffix for member in models for prefix in ("agy:", "agy/")
+                 for suffix in ("", *("-" + effort for effort in _AGY_EFFORTS)))
 
 
 def _down_seconds(down_s):
@@ -225,7 +239,7 @@ class LegStateStore:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, status, _redact(body), None if reset is None else reset - now, reset, now, caller, "provider-response"))
 
     def record_probe_pass(self, leg, caller, now=None, account=None, combo=None):
-        leg = quota_key(leg)
+        leg = agy_model_key(leg)
         if not caller:
             raise LegStateError("requires successful provider response caller")
         with self._connect() as db:
@@ -234,7 +248,7 @@ class LegStateStore:
     def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
-        leg = quota_key(leg)
+        leg = agy_model_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         source = ('probe_failed_leg_serving' if serving
@@ -247,7 +261,7 @@ class LegStateStore:
 
     def last_probe_ts(self, leg):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
-        leg = quota_key(leg)
+        leg = agy_model_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -258,7 +272,7 @@ class LegStateStore:
 
     def last_probe_attempt_ts(self, leg, now=None):
         """The newest probe attempt (pass or fail); single-flight reuse only."""
-        leg = quota_key(leg)
+        leg = agy_model_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -292,6 +306,7 @@ class LegStateStore:
 
     def leg_status(self, leg, now=None, account=None, combo=None, *, harness=None):
         is_agy_harness = harness in (None, "agy")
+        model_key = agy_model_key(leg) if is_agy_harness else leg
         leg = quota_key(leg) if is_agy_harness else leg
         agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
         ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
@@ -306,6 +321,15 @@ class LegStateStore:
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
                 rows = list(rows)
+                if agy and leg == "agy:" + _AGY_GEMINI_POOL[0]:
+                    # A successful probe can clear the pool's limit. Probe failures
+                    # and other liveness evidence still belong to the model probed.
+                    booking = _pool_booking(rows)
+                    if booking is not None and now < _limit_end(booking):
+                        return {'state': 'limited', 'evidence': _event_evidence(booking)}
+                    model_keys = _event_keys(model_key, agy, pooled=False)
+                    rows = [r for r in rows if r is booking or
+                            (r['leg_key'] in model_keys and r['source'] not in _LIMIT_SOURCES)]
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
                 rows = iter(r for i, r in enumerate(rows) if r['source'] != 'probe_failed_leg_serving'
@@ -313,8 +337,7 @@ class LegStateStore:
                 row = next(rows, None)
                 if row is None or row["status"] == 200:
                     return {"state": "ok", "evidence": None}
-                evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
-                evidence["event_id"] = row["id"]
+                evidence = _event_evidence(row)
                 if row['source'] in ('liveness-probe', 'review-liveness-probe'):
                     # Two consecutive writer probe failures (or one scheduled review probe failure) book down; serving breaks the streak.
                     streak = 2 if row['source'] == 'review-liveness-probe' else 1
@@ -328,17 +351,15 @@ class LegStateStore:
                             behind = older
                             break
                     # A failed recovery probe leaves the active provider window in force.
-                    if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
+                    if (behind is not None and behind['source'] in _LIMIT_SOURCES
                             and now < _limit_end(behind)):
-                        evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
-                        evidence["event_id"] = behind["id"]
-                        return {"state": "limited", "evidence": evidence}
+                        return {"state": "limited", "evidence": _event_evidence(behind)}
                     if now >= row['ts'] + ttl:
                         return {'state': 'reprobe', 'evidence': evidence}
                     reset = row["reset_at"]
                     down = streak >= 2 and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
-                if row['source'] not in ('harness-stderr', 'provider-response') and now >= row['ts'] + ttl:
+                if row['source'] not in _LIMIT_SOURCES and now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
                 state = "limited" if now < _limit_end(row) else ("ok" if reset is not None else "reprobe")
@@ -349,11 +370,11 @@ class LegStateStore:
     def agy_probe_status(self, leg, now=None):
         """Find a booked 429 for the model across the exact routing scopes."""
         now = time.time() if now is None else now
-        leg = quota_key(leg)
         status = self.leg_status(leg, now=now)
         if status['state'] == 'limited' or not self.path.exists():
             return status
-        keys = _event_keys(leg, leg.startswith("agy:"))
+        pool_key = quota_key(leg)
+        keys = _event_keys(pool_key, pool_key.startswith("agy:"))
         placeholders = ",".join("?" for _ in keys)
         try:
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
@@ -389,7 +410,7 @@ class LegStateStore:
 
     def last_probe_outcome(self, leg):
         """Newest probe attempt as a reusable single-flight outcome, else None."""
-        leg = quota_key(leg)
+        leg = agy_model_key(leg)
         if not self.path.exists():
             return None
         try:
@@ -402,6 +423,22 @@ class LegStateStore:
             return None
         ok = row['source'] == 'provider-probe'
         return dict(ok=ok, reason='' if ok else (row['body_excerpt'] or 'probe failed'), ts=row['ts'])
+
+
+def _event_evidence(row):
+    evidence = {key: row[key] for key in ("status", "body_excerpt", "reset_at", "ts", "caller")}
+    return dict(evidence, event_id=row['id'])
+
+
+def _pool_booking(rows):
+    """Retain overlapping quota windows until a successful probe or the last reset."""
+    bookings = []
+    for row in rows:
+        if row['source'] == 'provider-probe':
+            break
+        if row['source'] in _LIMIT_SOURCES:
+            bookings.append(row)
+    return max(bookings, key=_limit_end, default=None)
 
 
 def _limit_end(row):

@@ -41,10 +41,12 @@ def test_missing_legs_registered_for_utility(lid, model):
         expected_roles.remove('implement')
     if lid == 'agy-opus-5.5':
         expected_roles.add('research')
-    active = lid != 'opencode-glm-5.3-flash-free'
+    active = lid not in {'opencode-glm-5.3-flash-free', 'agy-gemini-4-neon-medium'}
     assert (leg.model, leg_active(leg), set(leg.roles)) == (model, active, expected_roles)
-    if not active:
+    if lid == 'opencode-glm-5.3-flash-free':
         assert leg.disabled.startswith('D-6310:')
+    if lid == 'agy-gemini-4-neon-medium':
+        assert leg.disabled == 'D-6957 operator cost hold'
     row = next(row for row in DEFAULT_FALLBACK_MODELS if row['id'] == model)
     assert (row['active'], row['family'], row['harness']) == (True, leg.family, leg.harness)
 
