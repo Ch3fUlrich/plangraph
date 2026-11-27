@@ -11,11 +11,11 @@
     },
     "docs/KEEPER.md": {
       "max_changed_lines": 6,
-      "max_final_lines": 714
+      "max_final_lines": 734
     },
     "docs/host-link.md": {
       "max_changed_lines": 6,
-      "max_final_lines": 50
+      "max_final_lines": 60
     },
     "docs/writer-feeder.md": {
       "max_changed_lines": 8,
@@ -26,24 +26,28 @@
       "max_final_lines": 331
     },
     "rust/plangraph-cli/src/feeder/off_alert.rs": {
-      "max_changed_lines": 190,
-      "max_final_lines": 190
+      "max_changed_lines": 230,
+      "max_final_lines": 230
     },
     "rust/plangraph-cli/src/feeder/runtime.rs": {
       "max_changed_lines": 8,
       "max_final_lines": 372
     },
+    "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
+      "max_changed_lines": 45,
+      "max_final_lines": 429
+    },
     "rust/plangraph-cli/src/host_link_bridge.rs": {
       "max_changed_lines": 12,
-      "max_final_lines": 243
+      "max_final_lines": 257
     },
     "rust/plangraph-cli/tests/host_link_bridge.rs": {
       "max_changed_lines": 45,
-      "max_final_lines": 316
+      "max_final_lines": 361
     },
     "rust/worker-core/src/host_link.rs": {
       "max_changed_lines": 45,
-      "max_final_lines": 374
+      "max_final_lines": 464
     },
     "src/plangraph/keeper/config.py": {
       "max_changed_lines": 2,
@@ -62,19 +66,21 @@
       "max_final_lines": 467
     },
     "src/plangraph/keeper/store_read.py": {
-      "max_changed_lines": 30,
-      "max_final_lines": 449
+      "max_changed_lines": 40,
+      "max_final_lines": 459
     },
     "tests/test_keeper_no_progress_alert.py": {
-      "max_changed_lines": 120,
-      "max_final_lines": 120
+      "max_changed_lines": 200,
+      "max_final_lines": 200
     }
   },
   "cards": {
     "LE-NO-PROGRESS-ALARM-FOR-AN-IDLE-FLEET": {
       "outcome": "keeper alerts lists no_progress while no item reached done for no_progress_s and ready p10 work is unclaimed, and a feeder host whose feeder.off is older than the policy limit while a writer slot is free sends one routing alert naming the host.",
       "read_set": [
+        "deploy/systemd/pg-feeder.service",
         "rust/plangraph-cli/src/feeder/sources.rs",
+        "src/plangraph/keeper/events.py",
         "src/plangraph/keeper/store_review.py",
         "src/plangraph/views.py",
         "tests/keeper_util.py",
@@ -89,6 +95,7 @@
         "rust/plangraph-cli/src/feeder/mod.rs",
         "rust/plangraph-cli/src/feeder/off_alert.rs",
         "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
         "rust/plangraph-cli/src/host_link_bridge.rs",
         "rust/plangraph-cli/tests/host_link_bridge.rs",
         "rust/worker-core/src/host_link.rs",
