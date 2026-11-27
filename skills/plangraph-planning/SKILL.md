@@ -131,6 +131,28 @@ Card rules: **relative paths only**, no `..`, no absolute or drive paths; no sec
 paths or token-like strings anywhere in a card. The section 3 contract maps onto card fields:
 Scope -> `write_set` names every edited file, Acceptance -> one `check_cmd`.
 
+### Spec files and spec writer agents (rules 3.114, 3.118)
+
+A spec is three files per item on a spec lane: `docs/specs/<ID>.md` (the section 3 fields, each
+under its own heading: Objective, Decision sources, State and ownership, Call paths, Reuse, Tests,
+Non-goals, Acceptance; header lines plan_source, base commit, card and tree SHA-256),
+`<ID>.card.yaml` (the section 4 card) and `<ID>.tree.tsv` (one row per write_set path).
+Whoever writes specs, the planning session or a spawned agent, follows this list; a brief to a
+spec agent starts with "skills/plangraph-planning/SKILL.md sections 3-5 apply" and names its items:
+1. Read each item through its digest: `pg-ctx context <key>`, until it exists `pg show <key>` plus
+   the rules it names in router/DECISIONS.md on origin/main. The item's Why/How/done is the plan;
+   specs are written in the planning pass, while the plan context is loaded.
+2. Before writing, search for an existing spec of the item on main AND on open lanes
+   (`git log --all -- docs/specs/<ID>.md`); an unmerged reviewed spec is reused, not rewritten.
+3. Every claim is checked in the repository at the base commit (`path:line` or `path::Symbol`);
+   a decision the writer would otherwise take is written as a decision.
+4. Before the push: the public scrub (`tools/split/scrub_check.py --base origin/main --head HEAD .`,
+   no home paths, user@host, digit-mixed tokens) and `tools/ci_commit_gate.py check` (Writer
+   trailer `<model> <run|session id> (note)`); push with a fast-check receipt from a work host.
+5. Design review as in section 5, Work phase step 3: `--role research`, another family, tagged
+   points, the same reviewer session for the next round, at most 3 rounds; then the spec is final
+   and open points go to the implementer.
+
 ### Batch example (loads with `plangraph.planner.service.import_batch` / `card.load_cards_yaml`)
 
 ```yaml
