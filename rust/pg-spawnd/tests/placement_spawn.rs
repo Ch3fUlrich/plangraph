@@ -114,8 +114,7 @@ fn waiting_spawn_does_not_block_second_connection() {
     std::fs::write(f.state.path().join("release"), "").unwrap();
     assert_eq!(payload(thread.join().unwrap())["status"], "completed");
 }
-const HELD_TASK: &str =
-    r#"exec /usr/bin/timeout 30 /bin/sh -c ": > held; while ! test -f release; do /bin/sleep .02; done""#;
+const HELD_TASK: &str = r#"exec /usr/bin/timeout 30 /bin/sh -c ": > held; while ! test -f release; do /bin/sleep .02; done""#;
 
 fn wait_for_fixture(mut ready: impl FnMut() -> bool) {
     use std::time::{Duration, Instant};

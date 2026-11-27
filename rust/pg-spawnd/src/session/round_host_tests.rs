@@ -8,7 +8,7 @@ use super::{
     round_watch::Host,
 };
 use serde_json::json;
-use std::{fs, path::Path};
+use std::fs;
 
 #[test]
 #[rustfmt::skip]
@@ -331,8 +331,7 @@ fn a_command_that_redirects_its_output_when_signalled_is_still_the_owner_and_sti
         host.signal(&owner, &task),
         super::round_watch::Sent::Accepted
     );
-    let redirected = root.join("redirected");
-    wait_for("redirect marker missing", || redirected.is_file());
+    wait_for("missing redirection", || root.join("redirected").is_file());
     assert!(
         shell.try_wait().unwrap().is_none(),
         "the shell survived the signal"
