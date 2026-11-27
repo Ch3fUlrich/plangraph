@@ -6,15 +6,18 @@
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
-    fs,
+    env, fs,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    /// Load the guest's missing Keeper connection settings and host identity.
+    #[serde(default)]
+    pub host_env_defaults: bool,
     /// KEY=VALUE lines (optional `export`, quotes, `#` comments) applied to every step.
     #[serde(default)]
     pub env_file: Option<String>,
@@ -98,6 +101,49 @@ pub fn parse_env_file(text: &str) -> Result<Vec<(String, String)>, String> {
             _ => value,
         };
         pairs.push((key.to_owned(), value.to_owned()));
+    }
+    Ok(pairs)
+}
+
+fn host_env_defaults() -> Result<Vec<(String, String)>, String> {
+    let missing: Vec<_> = [
+        "PG_URL",
+        "PG_TOKEN_FILE",
+        "PLANGRAPH_HOST_NAME",
+        "CLAUDE_CODE_SHELL",
+    ]
+    .into_iter()
+    .filter(|key| env::var_os(key).is_none())
+    .collect();
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = env::var_os("PLANGRAPH_ENV_FILE")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var_os("XDG_CONFIG_HOME")
+                .filter(|root| !root.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+                .map(|root| root.join("plangraph/plangraph.env"))
+        });
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("guest plangraph.env is unreadable".into()),
+    };
+    let mut pairs = parse_env_file(&text)?;
+    pairs.retain(|(key, _)| missing.contains(&key.as_str()));
+    for (key, value) in &pairs {
+        if value.contains('\0')
+            || (key == "PG_TOKEN_FILE" && !Path::new(&expand_home(value)).is_absolute())
+        {
+            return Err("invalid guest plangraph.env value".into());
+        }
     }
     Ok(pairs)
 }
@@ -270,19 +316,29 @@ fn run_action(
 /// Run the plan; the result is the exit code (the first failing step's, else 0).
 /// A step that cannot start or a bad env file counts as code 1 and is reported on stderr.
 pub fn run(plan: &Plan, out: &mut dyn Write) -> i32 {
-    let env = match &plan.env_file {
-        Some(path) => match fs::read_to_string(expand_home(path))
+    let mut env = if plan.host_env_defaults {
+        match host_env_defaults() {
+            Ok(pairs) => pairs,
+            Err(error) => {
+                eprintln!("host environment: {error}");
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if let Some(path) = &plan.env_file {
+        match fs::read_to_string(expand_home(path))
             .map_err(|e| e.to_string())
             .and_then(|text| parse_env_file(&text))
         {
-            Ok(pairs) => pairs,
+            Ok(pairs) => env.extend(pairs),
             Err(error) => {
                 eprintln!("env file: {error}");
                 return 1;
             }
-        },
-        None => Vec::new(),
-    };
+        }
+    }
     let cwd_text = plan.cwd.as_deref().map(expand_home);
     let cwd = cwd_text.as_deref().map(Path::new);
     if let Some(dir) = cwd {

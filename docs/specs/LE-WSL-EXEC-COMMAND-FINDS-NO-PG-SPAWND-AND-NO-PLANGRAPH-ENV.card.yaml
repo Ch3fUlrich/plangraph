@@ -1,0 +1,39 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV": {
+      "outcome": "The remote command for a WSL host finds pg-spawnd and the other host tools and carries the plangraph environment without a hand-installed wrapper; generated host configs never go stale.",
+      "read_set": [
+        "rust/worker-core/src/hosts.rs",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/fleet_sync/genconfig.py",
+        "rust/worker-core/src/host_command.rs"
+      ],
+      "write_set": [
+        "src/plangraph/spawner/remote_ps.py",
+        "tests/test_spawner_remote_ps.py",
+        "tests/test_fleet_sync.py",
+        "changelog.d/LE-WSL-EXEC-COMMAND-FINDS-NO-PG-SPAWND-AND-NO-PLANGRAPH-ENV.md",
+        "rust/worker-core/src/remote_steps.rs",
+        "rust/worker-core/src/host_launch.rs",
+        "rust/pg-spawnd/src/doctor_sources.rs",
+        "rust/pg-spawnd/src/doctor_sources_tests.rs",
+        "rust/pg-spawnd/tests/steps_cli.rs",
+        "rust/plangraph-cli/src/host_sync_release.rs",
+        "rust/plangraph-cli/src/host_sync_release/projections.rs",
+        "rust/plangraph-cli/tests/host_sync_release.rs",
+        "docs/SPAWNER.md",
+        "docs/fleet-sync.md",
+        "docs/host-tools.md"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_spawner_remote_ps.py tests/test_fleet_sync.py tests/test_host_ready.py && cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test steps_cli && cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test host_sync_release",
+      "risk_tags": [
+        "host-exec",
+        "config"
+      ],
+      "estimate_tokens": 50000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_spawner_remote_ps_win.py"
+    }
+  }
+}

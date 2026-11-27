@@ -99,6 +99,7 @@ fn facts() -> HostFacts {
         free_ram_bytes: 8_000_000_000,
         free_disk_bytes: 20_000_000_000,
         quota_remaining_percent: Some(80.0),
+        cpu_pressure_avg300: None,
         observed_at: 1000,
         now: 1001,
         running_writers: 2,

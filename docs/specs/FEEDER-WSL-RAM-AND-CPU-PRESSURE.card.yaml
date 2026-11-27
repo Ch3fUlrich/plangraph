@@ -1,0 +1,30 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FEEDER-WSL-RAM-AND-CPU-PRESSURE": {
+      "outcome": "Admit WSL writers using effective Windows and WSL free memory and refuse new writers above the CPU pressure threshold.",
+      "read_set": [
+        "rust/worker-core/src/host_command.rs",
+        "rust/worker-core/src/host_probe.rs"
+      ],
+      "write_set": [
+        "changelog.d/FEEDER-WSL-RAM-AND-CPU-PRESSURE.md",
+        "deploy/feeder/policy.toml",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/capacity.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
+        "rust/plangraph-cli/src/feeder/windows_ram.rs",
+        "rust/plangraph-cli/tests/feeder.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 120000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder"
+    }
+  }
+}
