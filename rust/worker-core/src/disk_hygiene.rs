@@ -220,6 +220,22 @@ mod hygiene_report {
             }
         }
 
+        pub(crate) fn report_json(&self) -> io::Result<serde_json::Value> {
+            use serde_json::json;
+            let mut report = serde_json::to_value(&self.summary)?;
+            let mut extra = json!({
+                "free_bytes": self.devices.values().filter_map(|row| row.end_free_bytes).min(), "devices": self.devices.values().collect::<Vec<_>>(), "kept": self.kept,
+                "started_at": self.started_at.as_secs(), "time_to_first_removal": self.time_to_first_removal,
+                "first_removal_deadline_missed": self.first_removal_deadline_missed,
+                "stage_durations": self.stage_durations, "budget_exhausted": self.budget_exhausted
+            });
+            report
+                .as_object_mut()
+                .unwrap()
+                .append(extra.as_object_mut().unwrap());
+            Ok(report)
+        }
+
         /// Record a device's final sample. A failed sample contributes no available bytes.
         pub fn sample_end(&mut self, device: u64, free: io::Result<u64>, observed_at: u64) {
             let row = self.devices.get_mut(&device).expect("registered device");

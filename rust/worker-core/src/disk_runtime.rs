@@ -25,6 +25,17 @@ pub fn write_hygiene_report(state: &Path, report: &serde_json::Value) -> io::Res
     Ok(bytes)
 }
 
+#[cfg(target_os = "linux")]
+impl crate::disk_hygiene::HygieneReport {
+    pub fn sample_devices(&mut self, sample: impl Fn(&Path) -> io::Result<u64>) {
+        let ids: Vec<_> = self.devices.keys().copied().collect();
+        for device in ids {
+            let now = UNIX_EPOCH.elapsed().unwrap_or_default();
+            self.sample_end(device, sample(&self.devices[&device].root), now.as_secs());
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct DiskSpace {
     pub free: u64,

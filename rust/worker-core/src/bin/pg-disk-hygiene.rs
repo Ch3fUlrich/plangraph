@@ -239,7 +239,8 @@ fn execute_with(
             roots,
             &shared,
             &scratch,
-            &mut report.summary,
+            &mut report,
+            || (budget.clock)() < end,
         );
     }
     let elapsed = (budget.clock)().duration_since(diagnostic_start);

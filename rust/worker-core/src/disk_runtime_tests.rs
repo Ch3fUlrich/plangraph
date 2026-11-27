@@ -636,3 +636,24 @@ fn failed_final_samples_are_reported_without_pressure_events() {
     assert!(error.contains("fixture sample failed"));
     assert!(!state.join("watchdog/outbox").exists());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn watermark_cutoff_preserves_the_previous_measurement() {
+    use crate::disk_watermark::record_sampled;
+    use std::cell::Cell;
+    let state = tempfile::tempdir().unwrap();
+    let state = state.path();
+    let root = tempfile::tempdir().unwrap();
+    let roots = [root.path()];
+    let path = state.join("disk-watermarks.json");
+    record_sampled(state, roots, 100, |_| Ok((10, 100)), &|| true, &[]).unwrap();
+    let before = fs::read(&path).unwrap();
+    let expired = Cell::new(false);
+    let sample = |_: &Path| {
+        expired.set(true);
+        Ok((5, 100))
+    };
+    record_sampled(state, roots, 200, sample, &|| !expired.get(), &[]).unwrap();
+    assert_eq!(fs::read(path).unwrap(), before);
+}
