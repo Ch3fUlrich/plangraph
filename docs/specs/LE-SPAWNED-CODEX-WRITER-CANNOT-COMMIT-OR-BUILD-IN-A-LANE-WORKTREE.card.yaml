@@ -10,38 +10,50 @@
       "max_final_lines": 16
     },
     "src/plangraph/spawner/git_guard.py": {
-      "max_changed_lines": 50,
-      "max_final_lines": 443
+      "max_changed_lines": 60,
+      "max_final_lines": 453
+    },
+    "src/plangraph/spawner/launch_spec.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 370
     },
     "src/plangraph/spawner/runner.py": {
       "max_changed_lines": 4,
       "max_final_lines": 1157
     },
+    "tests/test_spawner_launch_spec.py": {
+      "max_changed_lines": 40,
+      "max_final_lines": 701
+    },
     "tests/test_writer_sandbox_roots.py": {
-      "max_changed_lines": 150,
-      "max_final_lines": 150
+      "max_changed_lines": 190,
+      "max_final_lines": 190
     }
   },
   "cards": {
     "LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE": {
-      "outcome": "A plain Codex implement or fix spawn runs workspace-write with its worktree git dir, the git common dir, the shared Cargo target and its run directory as added writable roots, and is refused before launch when those roots cannot be resolved or written.",
+      "outcome": "A plain or MCP-prepared Codex implement or fix spawn runs workspace-write with its worktree git dir, the git common dir, the shared Cargo target and its run directory as added writable roots, leg probes stay unchanged, and the spawn is refused before launch when a root cannot be resolved or is not a usable directory.",
       "read_set": [
         ".filesize-baseline",
         "rust/pg-spawnd/src/native_writer_host.rs",
         "rust/pg-spawnd/src/native_writer_sandbox.rs",
+        "rust/pg-spawnd/src/runs.rs",
         "src/plangraph/routing_support/clients.py",
         "src/plangraph/spawner/host_ready.py",
         "src/plangraph/spawner/leg_probe.py",
+        "src/plangraph/spawner/probe_cleanup.py",
         "tests/test_claude_child_env.py"
       ],
       "write_set": [
         "changelog.d/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md",
         "docs/spawner/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md",
         "src/plangraph/spawner/git_guard.py",
+        "src/plangraph/spawner/launch_spec.py",
         "src/plangraph/spawner/runner.py",
+        "tests/test_spawner_launch_spec.py",
         "tests/test_writer_sandbox_roots.py"
       ],
-      "check_cmd": "python3 -m pytest -q tests/test_writer_sandbox_roots.py",
+      "check_cmd": "python3 -m pytest -q tests/test_writer_sandbox_roots.py && python3 -m pytest -q tests/test_spawner_launch_spec.py -k codex_writer_launch_argv",
       "risk_tags": [
         "live-step"
       ],

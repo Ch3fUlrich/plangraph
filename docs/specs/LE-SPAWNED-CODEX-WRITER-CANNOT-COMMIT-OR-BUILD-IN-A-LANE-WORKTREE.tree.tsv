@@ -4,10 +4,14 @@ changelog.d/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md
 docs/spawner/LE-SPAWNED-CODEX-WRITER-CANNOT-COMMIT-OR-BUILD-IN-A-LANE-WORKTREE.md	write	yes	E1	predicted (<= 16 changed lines; <= 16 final lines)
 rust/pg-spawnd/src/native_writer_host.rs	read	yes	E1	observed
 rust/pg-spawnd/src/native_writer_sandbox.rs	read	yes	E1	observed
+rust/pg-spawnd/src/runs.rs	read	yes	E1	observed
 src/plangraph/routing_support/clients.py	read	yes	E1	observed
-src/plangraph/spawner/git_guard.py	write	yes	E1	predicted (<= 50 changed lines; <= 443 final lines)
+src/plangraph/spawner/git_guard.py	write	yes	E1	predicted (<= 60 changed lines; <= 453 final lines)
 src/plangraph/spawner/host_ready.py	read	yes	E1	observed
+src/plangraph/spawner/launch_spec.py	write	yes	E1	predicted (<= 2 changed lines; <= 370 final lines)
 src/plangraph/spawner/leg_probe.py	read	yes	E1	observed
+src/plangraph/spawner/probe_cleanup.py	read	yes	E1	observed
 src/plangraph/spawner/runner.py	write	yes	E1	predicted (<= 4 changed lines; <= 1157 final lines)
 tests/test_claude_child_env.py	read	yes	E1	observed
-tests/test_writer_sandbox_roots.py	write	yes	E1	predicted (<= 150 changed lines; <= 150 final lines)
+tests/test_spawner_launch_spec.py	write	yes	E1	predicted (<= 40 changed lines; <= 701 final lines)
+tests/test_writer_sandbox_roots.py	write	yes	E1	predicted (<= 190 changed lines; <= 190 final lines)
