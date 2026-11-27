@@ -6,10 +6,11 @@ from functools import wraps
 from concurrent.futures import Future, wait
 from itertools import takewhile
 from threading import Lock, RLock
-
-from .errors import Refused
+import logging
 import sys
 import time
+
+from .errors import Refused
 
 clock = time.monotonic
 ns_clock = time.monotonic_ns
@@ -20,6 +21,7 @@ _LATENCY_VERBS = frozenset({"show", "ready", "snapshot", "messages", "close_merg
 _parts = ContextVar("keeper_timing_parts", default=None)
 _request_timer = ContextVar("keeper_request_timer", default=None)
 _io_deadline = ContextVar("keeper_io_deadline", default=None)
+_merge_refresh = ContextVar("keeper_merge_refresh_timing", default=None)
 _MS_NS = 1_000_000
 _LONG_NS = 2_000 * _MS_NS
 _RELEVANT = {"writer", "snapshot", "messages", "merge_refresh"}
@@ -249,6 +251,78 @@ def _output(line):
         print(line, file=sys.stderr, flush=True)
     except Exception:
         pass
+
+
+class MergeRefreshTiming:
+    """One background generation's elapsed time and attempts."""
+
+    _TOP_LEVEL = (
+        "candidate_snapshot", "decision_snapshot", "default_ref", "work_index",
+        "delivery_lookup", "landing_warm", "open_lanes", "deploy_snapshot", "publish_wait",
+    )
+    _STAGES = (*_TOP_LEVEL, "merged_pr_for", "check_runs")
+
+    def __init__(self, started, clock):
+        self.started, self.clock = started, clock
+        self.elapsed = dict.fromkeys(self._STAGES, 0.0)
+        self.attempts = dict.fromkeys(self._STAGES, 0)
+        self.cache_hits = 0
+
+    @contextmanager
+    def active(self):
+        token = _merge_refresh.set(self)
+        try:
+            yield
+        finally:
+            _merge_refresh.reset(token)
+
+    @contextmanager
+    def stage(self, name):
+        self.attempts[name] += 1
+        started = self.clock()
+        try:
+            yield
+        finally:
+            self.elapsed[name] += self.clock() - started
+
+    def emit(self, generation, outcome, published):
+        """Emit one terminal record after the publication lock has been released."""
+        seconds = self.clock() - self.started
+        residual = seconds - sum(self.elapsed[name] for name in self._TOP_LEVEL)
+        repos = ""
+        if published is not None:
+            repos = f" repos={len(published['_warmed'])} failed={len(published['_merge_scan_errors'])}"
+        if outcome in ("budget_exceeded", "scan_error"):
+            prefix = f"merge_index_refresh failed {outcome} seconds={seconds:.1f}{repos}"
+            level = logging.WARNING
+        else:
+            prefix = f"merge_index_refresh{repos} seconds={seconds:.1f}"
+            level = logging.INFO
+        stages = " ".join(
+            f"{name}_ms={_ms(0, self.elapsed[name])} {name}_attempts={self.attempts[name]}"
+            for name in self._STAGES)
+        line = (f"{prefix} generation={generation} outcome={outcome} elapsed_ms={_ms(0, seconds)} "
+                f"{stages} landing_cache_hits={self.cache_hits} residual_ms={_ms(0, residual)}")
+        log = logging.getLogger("plangraph.keeper")
+        if log.isEnabledFor(level):
+            log.log(level, line)
+        else:
+            _output(f"keeper: {line}")
+
+
+def merge_stage_call(name, fn, *args, **kwargs):
+    """Time an existing call only when a background refresh owns the context."""
+    refresh = _merge_refresh.get()
+    if refresh is None:
+        return fn(*args, **kwargs)
+    with refresh.stage(name):
+        return fn(*args, **kwargs)
+
+
+def merge_landing_cache_hit():
+    refresh = _merge_refresh.get()
+    if refresh is not None:
+        refresh.cache_hits += 1
 
 
 def _emit(event, kind, wait, hold, parts):

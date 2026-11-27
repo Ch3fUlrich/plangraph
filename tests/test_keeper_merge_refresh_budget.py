@@ -1,6 +1,17 @@
 """The keeper merge-index refresh: a scan budget, a terminal failed state and resume."""
+import logging
+from threading import Event
+from types import SimpleNamespace
+
 import pytest
-from test_keeper_merge_close_auto import env, set_states  # noqa: F401  (the fixture and the item states)
+
+from door_util import Doors
+from plangraph.keeper import api_routes, context_sources, timing
+from test_keeper_merge_close_auto import env, git, set_states  # noqa: F401  (includes the shared fixture)
+
+
+_REFRESH_PATH = "/v1/close_merged_auto"
+_TERMINAL = "merge_index_refresh "
 
 
 def _await_scan(doors, path):
@@ -9,6 +20,281 @@ def _await_scan(doors, path):
         if thread.name == "keeper-merge-index":
             thread.join(10)
     return doors.http("system", "POST", path, {"refresh": "status"})
+
+
+@pytest.fixture
+def refresh_door(env, tmp_path):
+    doors = Doors(env, tmp_path)
+    try:
+        yield doors
+    finally:
+        doors.close()
+
+
+@pytest.fixture
+def scan_clock(monkeypatch):
+    now_ms = 0
+
+    def advance(ms):
+        nonlocal now_ms
+        now_ms += ms
+
+    def seconds():
+        return now_ms / 1000
+
+    monkeypatch.setattr(api_routes, "monotonic", seconds)
+    return SimpleNamespace(advance=advance, seconds=seconds)
+
+
+def _delay(clock, ms, fn):
+    def delayed(*args, **kwargs):
+        clock.advance(ms)
+        return fn(*args, **kwargs)
+    return delayed
+
+
+def _records(caplog, capsys=None):
+    records = [message for message in caplog.messages if message.startswith(_TERMINAL)]
+    if capsys is not None:
+        records += [line.removeprefix("keeper: ") for line in capsys.readouterr().err.splitlines()
+                    if line.startswith("keeper: " + _TERMINAL)]
+    return records
+
+
+def _fields(record):
+    return dict(field.split("=", 1) for field in record.split() if "=" in field)
+
+
+@pytest.mark.parametrize("info_enabled", [True, False])
+def test_refresh_reports_stage_counters_on_ready_generation(
+        env, refresh_door, scan_clock, monkeypatch, caplog, capsys, info_enabled):
+    caplog.set_level(logging.INFO if info_enabled else logging.WARNING, "plangraph.keeper")
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 84)
+    refresh = refresh_door.server.merge_refresh
+    adapter = env.store.ctx["git"]
+    store = type(env.store)
+    for obj, name, ms in [
+        (refresh, "_read_candidates", 11), (adapter, "scan_projects", 2.6),
+        (store, "_snapshot_landing_decisions", 13), (context_sources, "work_index", 31),
+        (context_sources, "indexed_work", 0.6), (store, "_warm_landings", 17.6),
+        (context_sources, "open_lanes", 19), (store, "_snapshot_deploy", 23),
+    ]:
+        monkeypatch.setattr(obj, name, _delay(scan_clock, ms, getattr(obj, name)))
+    monkeypatch.setattr(store, "_refresh_merged_default_ref",
+                        staticmethod(_delay(scan_clock, 22, store._refresh_merged_default_ref)))
+
+    post = lambda **body: refresh_door.http("system", "POST", _REFRESH_PATH, body)
+    assert post(refresh="start") == (200, {"scan": "running"})
+    assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+    messages = _records(caplog)
+    assert len(messages) == int(info_enabled)
+    record, = _records(caplog, capsys)
+    assert _fields(record) == {
+        "repos": "1", "failed": "0", "seconds": "0.1", "generation": "1", "outcome": "ready",
+        "elapsed_ms": "143", "residual_ms": "3", "landing_cache_hits": "0",
+        "candidate_snapshot_ms": "11", "candidate_snapshot_attempts": "1",
+        "decision_snapshot_ms": "13", "decision_snapshot_attempts": "1",
+        "default_ref_ms": "22", "default_ref_attempts": "1",
+        "work_index_ms": "31", "work_index_attempts": "1",
+        "delivery_lookup_ms": "4", "delivery_lookup_attempts": "7",
+        "landing_warm_ms": "18", "landing_warm_attempts": "1",
+        "open_lanes_ms": "19", "open_lanes_attempts": "1",
+        "deploy_snapshot_ms": "23", "deploy_snapshot_attempts": "1",
+        "publish_wait_ms": "0", "publish_wait_attempts": "1",
+        "merged_pr_for_ms": "0", "merged_pr_for_attempts": "0",
+        "check_runs_ms": "0", "check_runs_attempts": "0",
+    }
+    bundle = refresh._bundle
+    assert bundle and "demo" in bundle["_warmed"]
+    assert env.store.__dict__.get("_warmed") is not bundle["_warmed"]
+    status, result = post(require_seats=False)
+    assert status == 200 and [row["key"] for row in result["closed"]] == ["demo:C"]
+    assert refresh._bundle is None and env.store._warmed is bundle["_warmed"]
+    assert post(refresh="status") == post(refresh="resume") == (200, {"scan": "ready"})
+    assert post(refresh="projects") == (200, {"projects": ["demo"]})
+    assert _records(caplog, capsys) == messages
+
+
+def test_refresh_separates_landing_cache_pr_and_check_calls(
+        env, refresh_door, scan_clock, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, "plangraph.keeper")
+    set_states(env)
+    landings = {}
+    for key, pr in [("C", 84), ("S", 85), ("N", 86)]:
+        head = env.repo.land(key.lower(), f"Plan-Item: demo:{key}", pr)
+        landings[pr] = git(env.repo.root, "rev-parse", "HEAD"), head
+    hits = {"checks": {"verified": True, "detail": "CI green"}}
+    env.store._landings = {("demo", landings[84][0]): (hits, 0)}
+    merged = {sha: {"head": {"sha": head}, "number": pr} for pr, (sha, head) in landings.items()}
+    prs, checks = [], []
+
+    def merged_pr(project, sha, _target):
+        prs.append((project, sha))
+        return merged[sha]
+
+    def check_runs(mode, head):
+        checks.append((mode, head))
+        if head == landings[86][1]:
+            raise RuntimeError("unavailable forge output")
+        return [{"name": "ci", "conclusion": "success"}]
+
+    adapter = env.store.ctx["git"]
+    monkeypatch.setattr(adapter, "scan_projects", _delay(scan_clock, 5.3, adapter.scan_projects))
+    env.store.ctx["ci"] = SimpleNamespace(
+        mode=lambda project: project, merged_pr_for=_delay(scan_clock, 7.6, merged_pr),
+        check_runs=_delay(scan_clock, 11.6, check_runs))
+
+    assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"})[0] == 200
+    assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+    record, = _records(caplog)
+    fields = _fields(record)
+    assert {key: fields[key] for key in (
+        "landing_cache_hits", "landing_warm_attempts", "landing_warm_ms", "merged_pr_for_attempts",
+        "merged_pr_for_ms", "check_runs_attempts", "check_runs_ms", "elapsed_ms", "residual_ms",
+    )} == {
+        "landing_cache_hits": "1", "landing_warm_attempts": "3", "landing_warm_ms": "38",
+        "merged_pr_for_attempts": "2", "merged_pr_for_ms": "15", "check_runs_attempts": "2",
+        "check_runs_ms": "23", "elapsed_ms": "44", "residual_ms": "5",
+    }
+    assert sorted(prs) == sorted(("demo", landings[pr][0]) for pr in (85, 86))
+    assert sorted(checks) == sorted(("demo", landings[pr][1]) for pr in (85, 86))
+    refresh = refresh_door.server.merge_refresh
+    unavailable, _ = refresh._bundle["_landings"]["demo", landings[86][0]]
+    assert unavailable["checks"]["detail"] == "check_runs_unavailable"
+    assert unavailable["checks"]["verified"] is False
+    assert "unavailable forge output" not in record
+    refresh.consume()
+    assert env.store._landing_for("demo", landings[84][0]) == hits
+    assert env.store._landing_for("demo", landings[86][0]) == unavailable
+    assert prs[2:] == [("demo", landings[86][0])] and checks[2:] == [("demo", landings[86][1])]
+    assert _records(caplog) == [record]
+
+
+def test_superseded_refresh_reports_without_publishing(env, refresh_door, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, "plangraph.keeper")
+    refresh = refresh_door.server.merge_refresh
+    store = type(env.store)
+    real_warm = store.warm_merge_scan
+    newer_bundle = {"_warmed": {}}
+
+    def superseded(scan, candidates):
+        real_warm(scan, candidates)
+        with refresh._lock:
+            refresh._generation += 1
+            refresh._bundle = newer_bundle
+            refresh.state = "ready"
+
+    monkeypatch.setattr(store, "warm_merge_scan", superseded)
+    assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"})[0] == 200
+    assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+    assert refresh._bundle is newer_bundle
+    record, = _records(caplog)
+    fields = _fields(record)
+    assert fields["generation"] == "1" and fields["outcome"] == "superseded"
+
+
+@pytest.mark.parametrize("failure", ["budget", "scan_error", "publish_wait"])
+def test_refresh_reports_terminal_failure_without_partial_publication(
+        env, refresh_door, scan_clock, monkeypatch, caplog, capsys, failure):
+    log = logging.getLogger("plangraph.keeper")
+    caplog.set_level(logging.WARNING, log.name)
+    monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=scan_clock.seconds))
+    set_states(env)
+    server = refresh_door.server
+    refresh, store = server.merge_refresh, type(env.store)
+    lock = refresh._lock
+    live = env.store.__dict__.setdefault("_landings", {})
+    private_key = "demo", "a" * 40
+    before = live.copy()
+    lock_states = []
+    handle = log.handle
+
+    def observe(record):
+        if record.getMessage().startswith(_TERMINAL):
+            lock_states.append((lock.locked(), server.lock._is_owned()))
+        handle(record)
+
+    monkeypatch.setattr(log, "handle", observe)
+    post = lambda **body: refresh_door.http("system", "POST", _REFRESH_PATH, body)
+    warming, proceed, waiting = Event(), Event(), Event()
+    real_decisions = store._snapshot_landing_decisions
+
+    def decisions(scan, candidates):
+        real_decisions(scan, candidates)
+        scan._landings[private_key] = (None, 0)
+        scan_clock.advance(9)
+        if failure == "scan_error":
+            raise RuntimeError("private scan output")
+
+    def expires(_git, _project):
+        scan_clock.advance(180_000)
+        timing.check_io_deadline("test default ref")
+
+    real_warm = store.warm_merge_scan
+
+    def warm(scan, candidates):
+        real_warm(scan, candidates)
+        if failure == "publish_wait":
+            warming.set()
+            assert proceed.wait(5)
+
+    # Supply a fresh context manager for each acquisition, including the HTTP controls.
+    class ObservedLock:
+        def __enter__(self):
+            if warming.is_set():
+                waiting.set()
+            return lock.__enter__()
+
+        def __exit__(self, *exc):
+            return lock.__exit__(*exc)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(store, "_snapshot_landing_decisions", decisions)
+        fault.setattr(store, "warm_merge_scan", warm)
+        if failure == "budget":
+            fault.setattr(store, "_refresh_merged_default_ref", staticmethod(expires))
+        if failure == "publish_wait":
+            fault.setattr(refresh, "_lock", ObservedLock())
+        assert post(refresh="start") == (200, {"scan": "running"})
+        if failure == "publish_wait":
+            try:
+                assert warming.wait(5)
+                with lock:
+                    proceed.set()
+                    assert waiting.wait(5)
+                    scan_clock.advance(180_000)
+            finally:
+                proceed.set()
+        assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "failed"})
+
+    record, = _records(caplog)
+    outcome = "scan_error" if failure == "scan_error" else "budget_exceeded"
+    assert record.startswith(f"merge_index_refresh failed {outcome} seconds=")
+    fields = _fields(record)
+    assert fields["generation"] == "1" and fields["outcome"] == outcome
+    assert fields["elapsed_ms"] == ("9" if failure == "scan_error" else "180009")
+    assert fields["decision_snapshot_ms"] == "9" and fields["decision_snapshot_attempts"] == "1"
+    assert fields["default_ref_ms"] == ("180000" if failure == "budget" else "0")
+    assert fields["default_ref_attempts"] == ("0" if failure == "scan_error" else "1")
+    assert fields["publish_wait_ms"] == ("180000" if failure == "publish_wait" else "0")
+    assert fields["publish_wait_attempts"] == "1"
+    if failure != "scan_error":
+        assert (fields["repos"], fields["failed"]) == (("0", "1") if failure == "budget" else ("1", "0"))
+    assert "private scan output" not in record
+    assert lock_states == [(False, False)]
+    assert refresh._bundle is None and env.store._landings is live and live == before
+    status, refused = post(apply=False)
+    assert status == 409 and refused["error"] == "merge_index_failed"
+
+    assert post(refresh="resume") == (200, {"scan": "running"})
+    assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+    failure_record, ready_record = _records(caplog, capsys)
+    assert failure_record == record
+    ready = _fields(ready_record)
+    assert ready["generation"] == "2" and ready["outcome"] == "ready"
+    assert ready["decision_snapshot_ms"] == ready["publish_wait_ms"] == ready["elapsed_ms"] == "0"
+    assert ready["decision_snapshot_attempts"] == ready["publish_wait_attempts"] == "1"
 
 
 def test_refresh_deadline_refuses_close_and_allows_restart(env, tmp_path, monkeypatch):

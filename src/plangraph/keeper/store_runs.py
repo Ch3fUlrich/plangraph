@@ -9,7 +9,7 @@ import contextlib
 import json
 import re
 
-from . import context_sources
+from . import context_sources, timing
 from .errors import Refused
 from .evidence_decisions import close_commit_scope, go_part_entries, go_part_tokens
 from .evidence_git import plan_items
@@ -319,12 +319,13 @@ class RunsMixin:
         scan = getattr(git, "scan_projects", None)
         previous = self.__dict__.get("_deploy_warm", {})
         self.__dict__.update(_warmed={}, _lanes={}, _deploy_warm={}, _merge_scan_errors={})
-        self._snapshot_landing_decisions(candidates)
+        timing.merge_stage_call("decision_snapshot", self._snapshot_landing_decisions, candidates)
         for project in list(scan()) if callable(scan) else []:
             try:
-                if not self._refresh_merged_default_ref(git, project):
+                if not timing.merge_stage_call("default_ref", self._refresh_merged_default_ref, git, project):
                     raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-                index = context_sources.work_index(git, project, fresh=True, incremental=True)
+                index = timing.merge_stage_call(
+                    "work_index", context_sources.work_index, git, project, fresh=True, incremental=True)
                 if index is None or index.get("stale") or index.get("origin_stale"):
                     raise Refused("evidence_unverified", (index or {}).get("reason") or "repository index unavailable")
                 self.__dict__["_warmed"][project] = index
@@ -338,12 +339,14 @@ class RunsMixin:
 
     def _warm_merge_candidates(self, git, project, index, candidates, previous):
         for key, _ in candidates:
-            commits = context_sources.indexed_work(index, key, limit=None)["commits"]
+            commits = timing.merge_stage_call(
+                "delivery_lookup", context_sources.indexed_work, index, key, limit=None)["commits"]
             if commits:
-                self._warm_landings(project, commits)
-                context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"],
-                                          head=index.get("target"), fresh=False)
-                self._snapshot_deploy(key, project, commits, previous.get((project, key)))
+                timing.merge_stage_call("landing_warm", self._warm_landings, project, commits)
+                timing.merge_stage_call("open_lanes", context_sources.open_lanes, git, project, key,
+                                        cache=self.__dict__["_lanes"], head=index.get("target"), fresh=False)
+                timing.merge_stage_call("deploy_snapshot", self._snapshot_deploy,
+                                        key, project, commits, previous.get((project, key)))
 
     def _warm(self, project):
         index = self.__dict__.get("_warmed", {}).get(project)
