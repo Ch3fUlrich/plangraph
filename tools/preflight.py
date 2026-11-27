@@ -485,7 +485,7 @@ def stage_policy_binary(executable, cleanup):
 def reuse_policy(root, cleanup):
     """Stage a policy executable keyed by the exact sources while holding its read lease."""
     try:
-        with cargo_lease():
+        with cargo_lease(wait=0.0):
             if executable := policy_cached_executable(policy_target(root)):
                 return stage_policy_binary(executable, cleanup)
     except OSError:
@@ -597,7 +597,11 @@ def _main(argv, root, cleanup):
         if command[0] != 'cargo':
             return run(command, cwd, command_env)
         # Share the spawner's target, cap checks and cleanup lease.
-        with cargo_lease():
+        try:
+            lease = cargo_lease()
+        except OSError as exc:
+            return 1, f'cargo lease unavailable: {type(exc).__name__}: {exc}\n'
+        with lease:
             return run_cargo(command, cwd, command_env)
 
     def build_train_cli(command_env):

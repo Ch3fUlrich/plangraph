@@ -7,14 +7,17 @@ import socket
 import subprocess
 import time
 from functools import lru_cache
+from dataclasses import asdict
 
 from plangraph.routing_support.leg_state import _down_seconds
 from .env_redact import early_refusal, first_reason, harness_limit_line, unavailable_reason
+from .probe_cleanup import LocalLaunchFault
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
 TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit',
                     'tool_loop', 'stuck', 'disk_run_stopped')
+LOCAL_FAULTS = ('cargo_lease_timeout', 'probe_pre_dispatch_timeout')
 
 
 def without_progress(text):
@@ -57,8 +60,33 @@ def origin_refusal(record):
     return bool(record.get('origin_receipt') and record.get('run_kind') == 'native-codex' and record.get('status') == 'refused')
 
 
+def record_local_fault(record, fault, exit_code=1):
+    record.update(status='failed', exit_code=exit_code, reason=fault.code, error=fault.code,
+                  local_fault=fault.public())
+
+
+def stop_on_probe_fault(record, leg, reason):
+    if not isinstance(reason, LocalLaunchFault):
+        return False
+    record_local_fault(record, reason)
+    record['attempts'].append(dict(leg=asdict(leg), status='failed', skip_reason=reason.code,
+                                   local_fault=record['local_fault']))
+    return True
+
+
+def native_launch_failure(record, exc):
+    record.update(status='failed', exit_code=6, reason='native worker launch failed', ended=time.time())
+    if isinstance(exc, LocalLaunchFault):
+        record_local_fault(record, exc, exit_code=6)
+
+
 def refusal_record(record, job):
     """Persist a safety stop at dispatch, not in the fallthrough classifier."""
+    fault = getattr(job, '_local_launch_fault', None)
+    if isinstance(fault, LocalLaunchFault):
+        record_local_fault(record, fault, job.exit_code or 1)
+        record['events'] = record.get('events', []) + job.events
+        return True
     disk = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'disk_run_stopped'), None)
     if disk is not None and job.status not in ('cancelled', 'stalled', 'timeout'):
         record.update(status='failed', exit_code=job.exit_code or 7,
@@ -241,7 +269,8 @@ def review_no_verdict(text, finish=None, *, toolless=False, require_files=True):
 
 
 def fallthrough_reason(service, chosen, job, record, *, card=None):
-    if any(e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
+    if isinstance(getattr(job, '_local_launch_fault', None), LocalLaunchFault) or any(
+            e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
         refusal_record(record, job)
         return None  # host capacity never books a provider down or launches another leg
     from .question_bridge import question_exit
@@ -349,7 +378,7 @@ def terminal_reason(record, job=None):
     """
     if record.get('status') == 'needs_input':
         return
-    if record.get('reason') == 'kill_incomplete':
+    if record.get('reason') in ('kill_incomplete', *LOCAL_FAULTS):
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()
     special = next((e['event'] for e in events

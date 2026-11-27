@@ -21,6 +21,7 @@ from plangraph.spawner import claude_env, host_ready
 from plangraph.spawner.runner import SpawnerRunner
 
 from registry_route_util import CARD, live_policy  # noqa: F401
+from test_cargo_data_drive_target import isolated_cargo_lease_target  # noqa: F401
 
 #: The policy restated literally.  Widening claude_env.CLAUDE_ENV_ALLOW has to change this list too.
 POLICY = (
@@ -150,6 +151,56 @@ def test_cargo_target_and_shared_lease_at_spawn(monkeypatch, tmp_path, role):
         shared_lease.close.assert_called_once_with()
         assert env['CARGO_TARGET_DIR'] == shared
         assert 'CARGO_BUILD_BUILD_DIR' not in env
+
+
+@pytest.mark.parametrize('render_target', [True, False], ids=['rendered-target', 'configured-target'])
+def test_writer_cargo_lease_lasts_until_verified_exit(monkeypatch, tmp_path, render_target):
+    from plangraph.spawner.host_ready import cargo_lease
+    from test_leg_probe_w1 import _child_runner
+
+    if not render_target:
+        def without_target(env, *, pin_configured, target=None):
+            return {key: value for key, value in env.items() if key != 'CARGO_TARGET_DIR'}
+        monkeypatch.setattr(host_ready, 'cargo_child_env', without_target)
+    runner = _child_runner(tmp_path, monkeypatch, 'import time; time.sleep(60)', 'claude')
+
+    async def exercise():
+        job = await runner.spawn('test task', 'claude-haiku-5-5', role='implement',
+                                 client='claude', cwd=str(tmp_path))
+        child = runner._processes[job.job_id]
+        assert child.returncode is None
+        with pytest.raises(OSError):
+            cargo_lease(exclusive=True)
+        await runner.cancel(job.job_id)
+        assert child.returncode is not None and not job.survivors
+        with cargo_lease(exclusive=True):
+            pass
+
+    asyncio.run(exercise())
+
+
+def test_native_writer_keeps_local_lease_failure(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from plangraph.spawner import host_ready, overflow
+    from plangraph.spawner.service import SpawnService
+
+    monkeypatch.setattr('plangraph.fleet_snapshot._projection_binary', lambda: 'pg-spawnd')
+    monkeypatch.setattr(overflow, 'lane_admit', lambda service, card, prompt: card)
+    tools = AsyncMock(returncode=0)
+    tools.communicate.return_value = (b'{"tool_path":"fixture","resolved_tools":{},"sandbox_ok":true}', b'')
+    factory = AsyncMock(side_effect=[tools])
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', factory)
+    service = SpawnService(state=tmp_path / 'state')
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item='project:item')
+    lease = host_ready.cargo_lease
+    with lease(exclusive=True):
+        monkeypatch.setattr(host_ready, 'cargo_lease', lambda: lease(wait=0.025))
+        reply = asyncio.run(overflow.native_spawn(service, card, dict(prompt='test task')))
+    record = service.result(reply['run_id'])
+    assert (record['status'], record['exit_code'], record['reason']) == ('failed', 6, 'cargo_lease_timeout')
+    assert record['local_fault']['contention_observed'] is True
+    assert record['item_key'] == 'project:item'
+    assert factory.await_count == 1  # Only the sandbox capability check reached exec.
 
 
 @pytest.mark.parametrize('cache_mode', ['configured', 'blank-discovered', 'blank-unavailable'])
