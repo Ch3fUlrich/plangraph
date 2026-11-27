@@ -1,10 +1,14 @@
 use super::*;
 use std::{
-    io::{Read, Write},
-    net::TcpListener,
+    io::{BufRead, BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
     os::unix::fs::OpenOptionsExt,
     thread,
 };
+
+const TIMEOUT_CASE: Duration = Duration::from_millis(100);
+const PATIENT: Duration = Duration::from_secs(10);
+const QUERY_OK: &str = r#"{"graphCommitId":"before","results":[]}"#;
 
 #[test]
 fn loopback_validation_accepts_only_local_hosts() {
@@ -21,8 +25,15 @@ fn loopback_validation_accepts_only_local_hosts() {
     assert!(!loopback(&std::net::Ipv4Addr::UNSPECIFIED.to_string()));
 }
 
-fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value, Error> {
+fn exercise(
+    status: &str,
+    body: &str,
+    delay: Duration,
+    timeout: Duration,
+    write: bool,
+) -> Result<Value, Error> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let retry_watch = listener.try_clone().unwrap();
     let base = format!("http://{}/graphs/local", listener.local_addr().unwrap());
     let path = std::env::temp_dir().join(format!(
         "og-http-{}-{:?}",
@@ -37,28 +48,14 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
         .unwrap();
     file.write_all(format!("local-{}", std::process::id()).as_bytes())
         .unwrap();
-    let client = Http::new(&base, &path, Duration::from_millis(100)).unwrap();
+    let client = Http::new(&base, &path, timeout).unwrap();
     assert!(client.agent.config().proxy().is_none());
     std::fs::remove_file(path).unwrap();
     let status = status.to_owned();
     let body = body.to_owned();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        let header_end = loop {
-            let mut byte = [0];
-            stream.read_exact(&mut byte).unwrap();
-            bytes.push(byte[0]);
-            if bytes.ends_with(b"\r\n\r\n") {
-                break bytes.len();
-            }
-        };
-        let headers = String::from_utf8(bytes[..header_end].to_vec())
-            .unwrap()
-            .to_lowercase();
+        let (headers, mut reader) = access_headers(&mut stream);
         assert!(headers.contains("omnigraph-http-api: 0.13\r\n"));
         assert!(headers.contains(&format!(
             "authorization: bearer local-{}\r\n",
@@ -71,7 +68,7 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
             .parse()
             .unwrap();
         let mut payload = vec![0; length];
-        stream.read_exact(&mut payload).unwrap();
+        reader.read_exact(&mut payload).unwrap();
         let payload: Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(payload["params"]["project"], "global");
         assert_eq!(payload["params"]["count"], 1);
@@ -81,9 +78,7 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
         } else {
             assert!(headers.starts_with("post /graphs/local/query "));
         }
-        if delay {
-            thread::sleep(Duration::from_millis(200));
-        }
+        thread::sleep(delay);
         if !status.is_empty() {
             let _ = write!(
                 stream,
@@ -91,15 +86,6 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
                 body.len()
             );
         }
-        drop(stream);
-        // Watch beyond the client's entire timeout budget, not just response dispatch.
-        thread::sleep(Duration::from_millis(150));
-        listener.set_nonblocking(true).unwrap();
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock,
-            "must not retry"
-        );
     });
     #[derive(Serialize)]
     struct Params {
@@ -119,20 +105,29 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
         client.query(&request)
     };
     server.join().unwrap();
+    // The server accepted the first connection; any synchronous retry is now queued.
+    retry_watch.set_nonblocking(true).unwrap();
+    assert_eq!(
+        retry_watch.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "must not retry"
+    );
     result
 }
 
 #[test]
 fn conditional_412_is_conflict_without_retry() {
+    let status = "412 Precondition Failed";
     assert!(matches!(
-        exercise("412 Precondition Failed", "{}", false, true),
+        exercise(status, "{}", Duration::ZERO, PATIENT, true),
         Err(Error::Conflict)
     ));
 }
 #[test]
 fn timeout_is_unknown_without_retry() {
+    let delay = Duration::from_millis(200);
     assert!(matches!(
-        exercise("200 OK", "{}", true, true),
+        exercise("200 OK", "{}", delay, TIMEOUT_CASE, true),
         Err(Error::Unknown)
     ));
 }
@@ -141,7 +136,8 @@ fn success_preserves_publication_receipt() {
     let result = exercise(
         "200 OK",
         r#"{"commit":{"graphCommitId":"after"}}"#,
-        false,
+        Duration::ZERO,
+        PATIENT,
         true,
     )
     .unwrap();
@@ -149,25 +145,27 @@ fn success_preserves_publication_receipt() {
 }
 #[test]
 fn query_sends_typed_params_and_bearer_header() {
-    assert!(exercise(
-        "200 OK",
-        r#"{"graphCommitId":"before","results":[]}"#,
-        false,
-        false
-    )
-    .is_ok());
+    assert!(exercise("200 OK", QUERY_OK, Duration::ZERO, PATIENT, false).is_ok());
+}
+#[test]
+fn success_survives_a_slow_server() {
+    let delay = Duration::from_millis(300);
+    assert!(exercise("200 OK", QUERY_OK, delay, PATIENT, false).is_ok());
 }
 #[test]
 fn malformed_write_response_is_unknown() {
     assert!(matches!(
-        exercise("200 OK", "invalid", false, true),
+        exercise("200 OK", "invalid", Duration::ZERO, PATIENT, true),
         Err(Error::Unknown)
     ));
 }
 
 #[test]
 fn lost_write_response_is_unknown_without_retry() {
-    assert!(matches!(exercise("", "", false, true), Err(Error::Unknown)));
+    assert!(matches!(
+        exercise("", "", Duration::ZERO, PATIENT, true),
+        Err(Error::Unknown)
+    ));
 }
 
 fn assert_constructor_rejected(base: &str, timeout: Duration) {
@@ -210,7 +208,7 @@ fn constructor_rejects_zero_timeout() {
 #[test]
 fn malformed_status_is_unknown_without_retry() {
     assert!(matches!(
-        exercise("invalid", "", false, true),
+        exercise("invalid", "", Duration::ZERO, PATIENT, true),
         Err(Error::Unknown)
     ));
 }
@@ -219,11 +217,11 @@ fn malformed_status_is_unknown_without_retry() {
 fn non_success_statuses_never_succeed() {
     for status in ["302 Found", "401 Unauthorized", "500 Internal Server Error"] {
         assert!(matches!(
-            exercise(status, "{}", false, true),
+            exercise(status, "{}", Duration::ZERO, PATIENT, true),
             Err(Error::Unknown)
         ));
         assert!(matches!(
-            exercise(status, "{}", false, false),
+            exercise(status, "{}", Duration::ZERO, PATIENT, false),
             Err(Error::Outage)
         ));
     }
@@ -231,6 +229,7 @@ fn non_success_statuses_never_succeed() {
 
 #[test]
 fn access_checks_health_and_authenticated_project_hub() {
+    use AccessError::{HealthTimeout, ReadTimeout};
     const OK: &str = r#"{"graph_commit_id":"fixture","row_count":1,"rows":[{"slug":"plangraph"}]}"#;
     const EMPTY: &str = r#"{"graph_commit_id":"fixture","row_count":0,"rows":[]}"#;
     for (graph, health_status, reply, expected) in [
@@ -290,11 +289,16 @@ fn access_checks_health_and_authenticated_project_hub() {
             .open(&path)
             .unwrap();
         write!(file, "local-{}", std::process::id()).unwrap();
-        let client = Http::new(&base, &path, Duration::from_millis(300)).unwrap();
+        let timeout = if matches!(expected, Err(HealthTimeout | ReadTimeout)) {
+            Duration::from_millis(300)
+        } else {
+            PATIENT
+        };
+        let client = Http::new(&base, &path, timeout).unwrap();
         std::fs::remove_file(path).unwrap();
         let server = thread::spawn(move || {
             let (mut health, _) = listener.accept().unwrap();
-            let headers = access_headers(&mut health);
+            let (headers, _) = access_headers(&mut health);
             assert!(headers.starts_with("get /healthz "));
             assert!(!headers.contains("authorization:"));
             if health_status.is_empty() {
@@ -320,7 +324,7 @@ fn access_checks_health_and_authenticated_project_hub() {
                         Err(_) => panic!("fake server accept failed"),
                     }
                 };
-                let headers = access_headers(&mut query);
+                let (headers, mut reader) = access_headers(&mut query);
                 assert!(headers.starts_with("post /graphs/plangraph/query "));
                 assert!(headers.contains("authorization: bearer "));
                 assert!(headers.contains("omnigraph-http-api: 0.13"));
@@ -331,7 +335,7 @@ fn access_checks_health_and_authenticated_project_hub() {
                     .parse()
                     .unwrap();
                 let mut payload = vec![0; length];
-                query.read_exact(&mut payload).unwrap();
+                reader.read_exact(&mut payload).unwrap();
                 let request: Value = serde_json::from_slice(&payload).unwrap();
                 assert_eq!(request["params"]["slug"], "plangraph");
                 if status.is_empty() {
@@ -351,15 +355,15 @@ fn access_checks_health_and_authenticated_project_hub() {
     }
 }
 
-fn access_headers(stream: &mut std::net::TcpStream) -> String {
+fn access_headers(stream: &mut TcpStream) -> (String, BufReader<&mut TcpStream>) {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+    let mut stream = BufReader::new(stream);
     let mut headers = Vec::new();
     while !headers.ends_with(b"\r\n\r\n") {
-        let mut byte = [0];
-        stream.read_exact(&mut byte).unwrap();
-        headers.push(byte[0]);
+        assert_ne!(stream.read_until(b'\n', &mut headers).unwrap(), 0);
     }
-    String::from_utf8(headers).unwrap().to_ascii_lowercase()
+    let headers = String::from_utf8(headers).unwrap().to_ascii_lowercase();
+    (headers, stream)
 }
