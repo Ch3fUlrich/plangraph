@@ -82,7 +82,7 @@ def shared_cargo_target():
 
 
 def cargo_child_env(env, *, pin_configured=False, target=None):
-    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or _physical_cargo_target(shared_cargo_target())))
+    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or shared_cargo_target()))
     if target is not None:
         result['CARGO_BUILD_BUILD_DIR'] = str(target)
     if pin_configured:

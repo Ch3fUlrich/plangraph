@@ -106,12 +106,18 @@ def test_shared_readers_and_ancestor_aliases_use_one_lock(tmp_path, monkeypatch)
             pytest.skip('Windows symlink privilege unavailable')
         raise
     target = real / 'target'
-    with h._cargo_lease_for(target), h._cargo_lease_for(alias / 'target'):
+    configured = alias / 'target'
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(configured))
+    assert h.cargo_child_env({})['CARGO_TARGET_DIR'] == str(h.shared_cargo_target()) == str(configured)
+    with h._cargo_lease_for(target), h.cargo_lease():
         with pytest.raises(OSError) as blocked:
             h._cargo_lease_for(target, exclusive=True)
         assert not isinstance(blocked.value, h.CargoLeaseTimeout)
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(alias / 'target'))
-    assert h.cargo_child_env({})['CARGO_TARGET_DIR'] == str(target.resolve())
+    with h._cargo_lease_for(target, exclusive=True):
+        with pytest.raises(h.CargoLeaseTimeout) as failure:
+            h.cargo_lease(wait=0)
+        assert failure.value.evidence['lock_path'] == str(target.with_suffix('.plangraph-lock').resolve())
+        assert failure.value.evidence['contention_observed']
     target.mkdir()
     leaf = tmp_path / 'leaf'
     leaf.symlink_to(target, target_is_directory=True)
