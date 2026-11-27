@@ -1,24 +1,30 @@
 path	disposition	required	row IDs	label
-changelog.d/NATIVE-CARGO-COMMAND-LEASE.md	write	yes	E1 E2 E3	predicted
-docs/SPAWNER.md	write	yes	E1 E2 E3	predicted
-rust/pg-spawnd/tests/native_evidence.rs	write	yes	E2	predicted
-rust/plangraph-cli/src/fast_check_target.rs	read	yes	E1 E2	predicted
-rust/worker-core/src/cargo_cache.rs	read	yes	E1 E2	predicted
+CONTRIBUTING.md	write	yes	E1 E4	predicted
+changelog.d/NATIVE-CARGO-COMMAND-LEASE.md	write	yes	E1 E2 E3 E4	predicted
+docs/SPAWNER.md	write	yes	E2 E3	predicted
+rust/pg-spawnd/tests/native_evidence.rs	read	yes	E4	predicted
+rust/plangraph-cli/src/fast_check_target.rs	read	yes	E1 E4	predicted
+rust/plangraph-cli/src/fast_checks.rs	read	yes	E1 E4	predicted
+rust/worker-core/src/cargo_cache.rs	read	yes	E1 E4	predicted
+rust/worker-core/src/cargo_pool.rs	read	yes	E1 E4	predicted
 src/plangraph/routing_support/leg_state.py	read	yes	E3	predicted
 src/plangraph/spawner/exit_outcome.py	write	yes	E2 E3	predicted
-src/plangraph/spawner/host_ready.py	write	yes	E1 E2 E3	predicted
-src/plangraph/spawner/host_ready_source.py	read	yes	E1	predicted
+src/plangraph/spawner/host_ready.py	write	yes	E1 E2 E3 E4	predicted
+src/plangraph/spawner/host_ready_source.py	read	yes	E1 E4	predicted
 src/plangraph/spawner/leg_probe.py	write	yes	E3	predicted
-src/plangraph/spawner/overflow.py	write	yes	E2	predicted
-src/plangraph/spawner/probe_cleanup.py	write	yes	E3	predicted
+src/plangraph/spawner/overflow.py	write	yes	E2 E4	predicted
+src/plangraph/spawner/probe_cleanup.py	write	yes	E2 E3	predicted
+src/plangraph/spawner/proc_kill.py	read	yes	E2 E3 E4	predicted
 src/plangraph/spawner/run_watchdog_limits.py	read	yes	E2 E3	predicted
 src/plangraph/spawner/runner.py	write	yes	E2 E3	predicted
+src/plangraph/spawner/seat_spawn.py	read	yes	E2	predicted
 src/plangraph/spawner/service.py	read	yes	E2 E3	predicted
-tests/test_cargo_data_drive_target.py	write	yes	E1 E2	predicted
+tests/test_cargo_data_drive_target.py	write	yes	E1 E2 E4	predicted
+tests/test_cargo_target_trim.py	read	yes	E1 E4	predicted
 tests/test_claude_child_env.py	write	yes	E2	predicted
 tests/test_leg_probe_budget.py	write	yes	E2 E3	predicted
-tests/test_leg_probe_w1.py	read	yes	E3	predicted
+tests/test_leg_probe_w1.py	write	yes	E3	predicted
 tests/test_preflight_policy_prebuild.py	write	yes	E1	predicted
 tests/test_review_probe_opencode_limit.py	read	yes	E3	predicted
 tests/test_spawn_cancel_outcomes.py	read	yes	E2 E3	predicted
-tools/preflight.py	write	yes	E1	predicted
+tools/preflight.py	write	yes	E1 E4	predicted
