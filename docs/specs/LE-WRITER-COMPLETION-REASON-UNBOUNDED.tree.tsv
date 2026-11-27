@@ -1,12 +1,13 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md	write	yes	E1 E2	predicted (<= 3 changed lines; <= 3 final lines)
-docs/spawner/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md	write	yes	E1 E2	predicted (<= 14 changed lines; <= 14 final lines)
+docs/spawner/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md	write	yes	E1 E2	predicted (<= 18 changed lines; <= 18 final lines)
 rust/pg-spawnd/src/lib.rs	write	yes	E1	predicted (<= 1 changed lines; <= 23 final lines)
-rust/pg-spawnd/src/native_writer.rs	read	yes	E1	observed
+rust/pg-spawnd/src/native_writer.rs	write	yes	E1	predicted (<= 3 changed lines; <= 629 final lines)
+rust/pg-spawnd/src/native_writer_commands.rs	read	yes	E1	observed
 rust/pg-spawnd/src/native_writer_host.rs	write	yes	E1	predicted (<= 8 changed lines; <= 558 final lines)
-rust/pg-spawnd/src/native_writer_host_reason_tests.rs	write	yes	E1	predicted (<= 60 changed lines; <= 60 final lines)
+rust/pg-spawnd/src/native_writer_host_reason_tests.rs	write	yes	E1	predicted (<= 130 changed lines; <= 130 final lines)
 rust/pg-spawnd/src/native_writer_host_tests.rs	read	yes	E1	observed
-rust/pg-spawnd/src/reason_bound.rs	write	yes	E1	predicted (<= 115 changed lines; <= 115 final lines)
+rust/pg-spawnd/src/reason_bound.rs	write	yes	E1	predicted (<= 140 changed lines; <= 140 final lines)
 rust/pg-spawnd/src/record_file.rs	read	yes	E1	observed
 rust/worker-core/src/run/lifecycle.rs	read	yes	E1	observed
 rust/worker-core/src/run/record_io.rs	read	yes	E1	observed
@@ -14,8 +15,9 @@ src/plangraph/routing_support/private_io.py	read	yes	E2	observed
 src/plangraph/spawner/exit_outcome.py	read	yes	E2	observed
 src/plangraph/spawner/notify.py	read	yes	E2	observed
 src/plangraph/spawner/output_keep.py	read	yes	E2	observed
+src/plangraph/spawner/overflow.py	read	yes	E2	observed
 src/plangraph/spawner/runner.py	read	yes	E2	observed
 src/plangraph/spawner/service.py	write	yes	E2	predicted (<= 4 changed lines; <= 638 final lines)
-src/plangraph/spawner/stderr_capture.py	write	yes	E2	predicted (<= 42 changed lines; <= 75 final lines)
+src/plangraph/spawner/stderr_capture.py	write	yes	E2	predicted (<= 60 changed lines; <= 93 final lines)
 tests/test_spawner_exit_stderr_capture.py	read	yes	E2	observed
-tests/test_spawner_reason_bound.py	write	yes	E2	predicted (<= 90 changed lines; <= 90 final lines)
+tests/test_spawner_reason_bound.py	write	yes	E2	predicted (<= 140 changed lines; <= 140 final lines)

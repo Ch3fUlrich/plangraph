@@ -6,43 +6,47 @@
       "max_final_lines": 3
     },
     "docs/spawner/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md": {
-      "max_changed_lines": 14,
-      "max_final_lines": 14
+      "max_changed_lines": 18,
+      "max_final_lines": 18
     },
     "rust/pg-spawnd/src/lib.rs": {
       "max_changed_lines": 1,
       "max_final_lines": 23
+    },
+    "rust/pg-spawnd/src/native_writer.rs": {
+      "max_changed_lines": 3,
+      "max_final_lines": 629
     },
     "rust/pg-spawnd/src/native_writer_host.rs": {
       "max_changed_lines": 8,
       "max_final_lines": 558
     },
     "rust/pg-spawnd/src/native_writer_host_reason_tests.rs": {
-      "max_changed_lines": 60,
-      "max_final_lines": 60
+      "max_changed_lines": 130,
+      "max_final_lines": 130
     },
     "rust/pg-spawnd/src/reason_bound.rs": {
-      "max_changed_lines": 115,
-      "max_final_lines": 115
+      "max_changed_lines": 140,
+      "max_final_lines": 140
     },
     "src/plangraph/spawner/service.py": {
       "max_changed_lines": 4,
       "max_final_lines": 638
     },
     "src/plangraph/spawner/stderr_capture.py": {
-      "max_changed_lines": 42,
-      "max_final_lines": 75
+      "max_changed_lines": 60,
+      "max_final_lines": 93
     },
     "tests/test_spawner_reason_bound.py": {
-      "max_changed_lines": 90,
-      "max_final_lines": 90
+      "max_changed_lines": 140,
+      "max_final_lines": 140
     }
   },
   "cards": {
     "LE-WRITER-COMPLETION-REASON-UNBOUNDED": {
-      "outcome": "A terminal run record keeps reason and completion.reason within 4096 bytes plus a marker that names reason.log, which keeps at most the first and last 512 KiB of the failure text in the run directory.",
+      "outcome": "A terminal run record keeps reason and completion.reason within 4096 bytes plus a marker that names its bounded log file (reason.log, or completion_reason.log for a distinct completion reason), which keeps at most the first and last 512 KiB of the text in the run directory.",
       "read_set": [
-        "rust/pg-spawnd/src/native_writer.rs",
+        "rust/pg-spawnd/src/native_writer_commands.rs",
         "rust/pg-spawnd/src/native_writer_host_tests.rs",
         "rust/pg-spawnd/src/record_file.rs",
         "rust/worker-core/src/run/lifecycle.rs",
@@ -51,6 +55,7 @@
         "src/plangraph/spawner/exit_outcome.py",
         "src/plangraph/spawner/notify.py",
         "src/plangraph/spawner/output_keep.py",
+        "src/plangraph/spawner/overflow.py",
         "src/plangraph/spawner/runner.py",
         "tests/test_spawner_exit_stderr_capture.py"
       ],
@@ -58,6 +63,7 @@
         "changelog.d/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md",
         "docs/spawner/LE-WRITER-COMPLETION-REASON-UNBOUNDED.md",
         "rust/pg-spawnd/src/lib.rs",
+        "rust/pg-spawnd/src/native_writer.rs",
         "rust/pg-spawnd/src/native_writer_host.rs",
         "rust/pg-spawnd/src/native_writer_host_reason_tests.rs",
         "rust/pg-spawnd/src/reason_bound.rs",
