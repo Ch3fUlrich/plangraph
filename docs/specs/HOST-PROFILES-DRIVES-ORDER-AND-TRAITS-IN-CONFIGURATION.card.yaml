@@ -1,14 +1,138 @@
 {
   "project": "plangraph",
+  "line_caps": {
+    "changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md": {
+      "max_changed_lines": 15,
+      "max_final_lines": 15
+    },
+    "configuration/hosts/coding.toml": {
+      "max_changed_lines": 40,
+      "max_final_lines": 40
+    },
+    "configuration/hosts/dell.toml": {
+      "max_changed_lines": 50,
+      "max_final_lines": 50
+    },
+    "configuration/hosts/workstation.toml": {
+      "max_changed_lines": 50,
+      "max_final_lines": 50
+    },
+    "deploy/host-ready/host-ready.service": {
+      "max_changed_lines": 1,
+      "max_final_lines": 13
+    },
+    "deploy/systemd/pg-disk-hygiene.service": {
+      "max_changed_lines": 1,
+      "max_final_lines": 11
+    },
+    "deploy/systemd/pg-feeder.service": {
+      "max_changed_lines": 1,
+      "max_final_lines": 14
+    },
+    "deploy/systemd/pg-worktree-sweep.service": {
+      "max_changed_lines": 1,
+      "max_final_lines": 8
+    },
+    "deploy/watchdog/watchdog.service": {
+      "max_changed_lines": 1,
+      "max_final_lines": 10
+    },
+    "docs/operations/host-profiles.md": {
+      "max_changed_lines": 120,
+      "max_final_lines": 120
+    },
+    "docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md": {
+      "max_changed_lines": 40,
+      "max_final_lines": 40
+    },
+    "rust/plangraph-cli/src/feeder/capacity.rs": {
+      "max_changed_lines": 20,
+      "max_final_lines": 230
+    },
+    "rust/plangraph-cli/src/feeder/runtime/live_tests.rs": {
+      "max_changed_lines": 50,
+      "max_final_lines": 434
+    },
+    "rust/plangraph-cli/src/host_sync.rs": {
+      "max_changed_lines": 12,
+      "max_final_lines": 519
+    },
+    "rust/plangraph-cli/src/host_sync_profile.rs": {
+      "max_changed_lines": 250,
+      "max_final_lines": 250
+    },
+    "rust/plangraph-cli/src/host_sync_release/projections.rs": {
+      "max_changed_lines": 10,
+      "max_final_lines": 50
+    },
+    "rust/plangraph-cli/tests/host_sync_profile.rs": {
+      "max_changed_lines": 250,
+      "max_final_lines": 250
+    },
+    "rust/plangraph-cli/tests/host_sync_release.rs": {
+      "max_changed_lines": 40,
+      "max_final_lines": 384
+    },
+    "rust/worker-core/src/bin/pg-host-readiness.rs": {
+      "max_changed_lines": 40,
+      "max_final_lines": 300
+    },
+    "rust/worker-core/src/cargo_build_target.rs": {
+      "max_changed_lines": 80,
+      "max_final_lines": 600
+    },
+    "rust/worker-core/src/cargo_pool.rs": {
+      "max_changed_lines": 15,
+      "max_final_lines": 500
+    },
+    "rust/worker-core/src/host_profile.rs": {
+      "max_changed_lines": 420,
+      "max_final_lines": 420
+    },
+    "rust/worker-core/src/lib.rs": {
+      "max_changed_lines": 2,
+      "max_final_lines": 151
+    },
+    "rust/worker-core/src/work_disks.rs": {
+      "max_changed_lines": 90,
+      "max_final_lines": 330
+    },
+    "rust/worker-core/tests/host_profile.rs": {
+      "max_changed_lines": 300,
+      "max_final_lines": 300
+    },
+    "rust/worker-core/tests/work_disks.rs": {
+      "max_changed_lines": 160,
+      "max_final_lines": 420
+    },
+    "src/plangraph/spawner/overflow.py": {
+      "max_changed_lines": 70,
+      "max_final_lines": 785
+    },
+    "src/plangraph/spawner/run_refusal.py": {
+      "max_changed_lines": 50,
+      "max_final_lines": 175
+    },
+    "src/plangraph/spawner/seat_spawn.py": {
+      "max_changed_lines": 8,
+      "max_final_lines": 797
+    },
+    "tests/test_spawner_overflow.py": {
+      "max_changed_lines": 80,
+      "max_final_lines": 660
+    }
+  },
   "cards": {
     "HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION": {
-      "outcome": "Each work host has one schema-checked profile in configuration/hosts/<host>.toml naming its drives with roles, order and selection rule, its traits and its caps; host sync generates the unit environment from it, the build pool and worktrees pick drives by its rule, placement filters and ranks by its traits, and host readiness reports drift.",
+      "outcome": "Each work host has one schema-checked profile in configuration/hosts/<host>.toml naming its drives with roles, order and selection rule, its traits and its caps; host sync generates the unit environment from it, the build pool and worktrees pick drives by its rule, the feeder caps writers by it, placement filters and ranks by its traits, and host readiness reports drift.",
       "read_set": [
         "deploy/feeder/policy.toml",
         "docs/operations/worker-disks.md",
         "rust/plangraph-cli/src/host_sync_env.rs",
+        "rust/plangraph-cli/src/host_sync_release.rs",
         "rust/worker-core/src/disk_runtime.rs",
-        "rust/worker-core/src/hosts.rs"
+        "rust/worker-core/src/hosts.rs",
+        "tools/check_file_size.py"
       ],
       "write_set": [
         "changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md",
@@ -22,10 +146,15 @@
         "deploy/watchdog/watchdog.service",
         "docs/operations/host-profiles.md",
         "docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md",
+        "rust/plangraph-cli/src/feeder/capacity.rs",
+        "rust/plangraph-cli/src/feeder/runtime/live_tests.rs",
         "rust/plangraph-cli/src/host_sync.rs",
         "rust/plangraph-cli/src/host_sync_profile.rs",
+        "rust/plangraph-cli/src/host_sync_release/projections.rs",
         "rust/plangraph-cli/tests/host_sync_profile.rs",
+        "rust/plangraph-cli/tests/host_sync_release.rs",
         "rust/worker-core/src/bin/pg-host-readiness.rs",
+        "rust/worker-core/src/cargo_build_target.rs",
         "rust/worker-core/src/cargo_pool.rs",
         "rust/worker-core/src/host_profile.rs",
         "rust/worker-core/src/lib.rs",
@@ -33,15 +162,17 @@
         "rust/worker-core/tests/host_profile.rs",
         "rust/worker-core/tests/work_disks.rs",
         "src/plangraph/spawner/overflow.py",
-        "tests/test_overflow_traits.py"
+        "src/plangraph/spawner/run_refusal.py",
+        "src/plangraph/spawner/seat_spawn.py",
+        "tests/test_spawner_overflow.py"
       ],
       "check_cmd": "cargo test --manifest-path rust/Cargo.toml --locked -p pg-worker-core --test host_profile",
       "risk_tags": [
         "live-step"
       ],
-      "estimate_tokens": 200000,
+      "estimate_tokens": 220000,
       "window_class": "256k",
-      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test host_sync_profile --test host_sync && cargo test --manifest-path rust/Cargo.toml --locked -p pg-worker-core --test work_disks && python3 -m pytest -q tests/test_overflow_traits.py"
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test host_sync_profile --test host_sync_release && cargo test --manifest-path rust/Cargo.toml --locked -p pg-worker-core --test work_disks && cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --lib feeder::runtime && python3 -m pytest -q tests/test_spawner_overflow.py tests/test_admission_overflow.py"
     }
   }
 }

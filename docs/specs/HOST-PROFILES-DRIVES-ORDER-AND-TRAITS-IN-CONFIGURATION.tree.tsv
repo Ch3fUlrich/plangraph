@@ -1,24 +1,31 @@
 path	disposition	required	row IDs	label
-changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E1	predicted
-configuration/hosts/coding.toml	write	yes	E1	predicted
-configuration/hosts/dell.toml	write	yes	E1	predicted
-configuration/hosts/workstation.toml	write	yes	E1	predicted
-deploy/host-ready/host-ready.service	write	yes	E2	observed
-deploy/systemd/pg-disk-hygiene.service	write	yes	E2	observed
-deploy/systemd/pg-feeder.service	write	yes	E2	observed
-deploy/systemd/pg-worktree-sweep.service	write	yes	E2	observed
-deploy/watchdog/watchdog.service	write	yes	E2	observed
-docs/operations/host-profiles.md	write	yes	E1	predicted
-docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E4	predicted
-rust/plangraph-cli/src/host_sync.rs	write	yes	E2	observed
-rust/plangraph-cli/src/host_sync_profile.rs	write	yes	E2	predicted
-rust/plangraph-cli/tests/host_sync_profile.rs	write	yes	E2	predicted
-rust/worker-core/src/bin/pg-host-readiness.rs	write	yes	E5	observed
-rust/worker-core/src/cargo_pool.rs	write	yes	E3	observed
-rust/worker-core/src/host_profile.rs	write	yes	E1 E5	predicted
-rust/worker-core/src/lib.rs	write	yes	E1	observed
-rust/worker-core/src/work_disks.rs	write	yes	E3	observed
-rust/worker-core/tests/host_profile.rs	write	yes	E1 E5	predicted
-rust/worker-core/tests/work_disks.rs	write	yes	E3	observed
-src/plangraph/spawner/overflow.py	write	yes	E4	observed
-tests/test_overflow_traits.py	write	yes	E4	predicted
+changelog.d/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E1	predicted (<= 15 changed lines; <= 15 final lines)
+configuration/hosts/coding.toml	write	yes	E1	predicted (<= 40 changed lines; <= 40 final lines)
+configuration/hosts/dell.toml	write	yes	E1	predicted (<= 50 changed lines; <= 50 final lines)
+configuration/hosts/workstation.toml	write	yes	E1	predicted (<= 50 changed lines; <= 50 final lines)
+deploy/host-ready/host-ready.service	write	yes	E2	observed (<= 1 changed lines; <= 13 final lines)
+deploy/systemd/pg-disk-hygiene.service	write	yes	E2	observed (<= 1 changed lines; <= 11 final lines)
+deploy/systemd/pg-feeder.service	write	yes	E2	observed (<= 1 changed lines; <= 14 final lines)
+deploy/systemd/pg-worktree-sweep.service	write	yes	E2	observed (<= 1 changed lines; <= 8 final lines)
+deploy/watchdog/watchdog.service	write	yes	E2	observed (<= 1 changed lines; <= 10 final lines)
+docs/operations/host-profiles.md	write	yes	E1 E2 E3 E5	predicted (<= 120 changed lines; <= 120 final lines)
+docs/spawner/HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION.md	write	yes	E4	predicted (<= 40 changed lines; <= 40 final lines)
+rust/plangraph-cli/src/feeder/capacity.rs	write	yes	E3	observed (<= 20 changed lines; <= 230 final lines)
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E3	observed (<= 50 changed lines; <= 434 final lines)
+rust/plangraph-cli/src/host_sync.rs	write	yes	E2	observed (<= 12 changed lines; <= 519 final lines)
+rust/plangraph-cli/src/host_sync_profile.rs	write	yes	E2	predicted (<= 250 changed lines; <= 250 final lines)
+rust/plangraph-cli/src/host_sync_release/projections.rs	write	yes	E2	observed (<= 10 changed lines; <= 50 final lines)
+rust/plangraph-cli/tests/host_sync_profile.rs	write	yes	E2	predicted (<= 250 changed lines; <= 250 final lines)
+rust/plangraph-cli/tests/host_sync_release.rs	write	yes	E2	observed (<= 40 changed lines; <= 384 final lines)
+rust/worker-core/src/bin/pg-host-readiness.rs	write	yes	E5	observed (<= 40 changed lines; <= 300 final lines)
+rust/worker-core/src/cargo_build_target.rs	write	yes	E3	predicted (<= 80 changed lines; <= 600 final lines)
+rust/worker-core/src/cargo_pool.rs	write	yes	E3	observed (<= 15 changed lines; <= 500 final lines)
+rust/worker-core/src/host_profile.rs	write	yes	E1 E5	predicted (<= 420 changed lines; <= 420 final lines)
+rust/worker-core/src/lib.rs	write	yes	E1	observed (<= 2 changed lines; <= 151 final lines)
+rust/worker-core/src/work_disks.rs	write	yes	E3	observed (<= 90 changed lines; <= 330 final lines)
+rust/worker-core/tests/host_profile.rs	write	yes	E1 E5	predicted (<= 300 changed lines; <= 300 final lines)
+rust/worker-core/tests/work_disks.rs	write	yes	E3	observed (<= 160 changed lines; <= 420 final lines)
+src/plangraph/spawner/overflow.py	write	yes	E4	observed (<= 70 changed lines; <= 785 final lines)
+src/plangraph/spawner/run_refusal.py	write	yes	E4	observed (<= 50 changed lines; <= 175 final lines)
+src/plangraph/spawner/seat_spawn.py	write	yes	E4	observed (<= 8 changed lines; <= 797 final lines)
+tests/test_spawner_overflow.py	write	yes	E4	observed (<= 80 changed lines; <= 660 final lines)
