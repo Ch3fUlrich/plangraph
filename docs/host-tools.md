@@ -56,16 +56,16 @@ the build environment warns once and Cargo continues without a wrapper.
 The shared target cap defaults to 32 GiB per root. A valid
 `PLANGRAPH_CARGO_TARGET_CAP_GB` value takes precedence over the host file
 `cargo-target-cap-gb` in `$XDG_CONFIG_HOME/plangraph` (default
-`~/.config/plangraph`). Both take a nonnegative GiB value. Under disk pressure
-or above the cap, cleanup removes oldest idle incremental sessions and stale
+`~/.config/plangraph`). Both take a nonnegative GiB value. Post-run trimming
+removes the oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
 Candidates must be idle over one hour; recent, unknown and sole variants survive.
-`pg-disk-hygiene --repo` also reports a main checkout's own `rust/target` and removes it once idle for an hour, identified by cargo's `CACHEDIR.TAG` or `.rustc_info.json`, with no cargo running.
-The cap is a reclamation trigger, not a hard size limit: protected/newest data may
-exceed it. Build dependencies and other cached artifacts remain rebuildable but
-are retained. Each removal rechecks processes and eligibility; a live Cargo
-process anywhere defers cleanup, including when its cwd is outside the target.
-Process discovery fails closed; symlinked cache roots and children are refused.
+`pg-disk-hygiene --repo` also checks the main checkout's own `rust/target` once
+idle for an hour, identified by Cargo's `CACHEDIR.TAG` or `.rustc_info.json`.
+The cap triggers reclamation. Protected artifacts may keep usage above it.
+The timer checks each candidate's owning path against process references and
+rechecks protection under its lease immediately before removal. A live build
+protects its own target while unrelated idle candidates can be reclaimed.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
 `cap_sys_ptrace=ep` (operator installation: `install -o root -g root -m 0755`
@@ -78,12 +78,10 @@ emits only the resolved paths. It never starts children.
 `PG_PROCESS_CWD_READER` can select an absolute path to an equivalent authoritative
 reader. The legacy modes return `[absolute_cwd_paths, build_running_boolean]`.
 Install the updated helper first and verify both legacy modes and the new mode
-before deploying the delivery bridge and per-path hygiene binary. The helper is
-used only when direct discovery is denied. An absent/failed reader still blocks
-cleanup; a denied cwd is never silently ignored, including a foreign or root-owned
-proc entry. Inode ownership is not used to waive process protection. Inspect a dry run after install. Cache cleanup
-is deferred while Cargo, rustc or other recognized build tools run. Build
-processes must not be launched concurrently with a host maintenance apply run.
+before deploying the delivery bridge and per-path hygiene binary. The helper
+serves as the fallback after denied direct access and is authoritative in
+reader mode. An unavailable inventory blocks every candidate. Inspect the dry
+run after the bridge and binary are installed and before enabling apply.
 
 Every invocation with a usable state destination replaces
 `~/.local/state/plangraph/disk-hygiene.json` and appends `disk-hygiene.ndjson`.

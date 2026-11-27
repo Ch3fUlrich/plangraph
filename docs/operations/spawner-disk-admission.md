@@ -54,18 +54,18 @@ Use a dedicated cache directory, never a source directory.
 The shared lock contract is a sibling file named `<target>.plangraph-lock`,
 where `<target>` is the expanded, absolute shared target path. Both
 `host_ready.py:cargo_lease` and `pg-disk-hygiene` use this exact name and POSIX
-flock: runs hold shared leases; reclaim holds a nonblocking exclusive lease
-through scanning and deletion. Hygiene reports and skips a root when its lease
-is held. The lock file stays in place after release.
+flock. Runs hold shared leases. Timer ranking takes an exclusive lease for
+each slice, and the selected candidate keeps its lease through the final proof
+and removal. Hygiene reports a held lease and keeps the candidate. The lock
+file stays in place after release.
 
 Hygiene resolves `PLANGRAPH_CARGO_TARGET_DIR` with the same home expansion and
 absolute-path rules as `host_ready.shared_cargo_target`, defaulting to
 `~/.cache/plangraph/cargo-target`; it also checks `~/.cache/pg-target-po`.
 Its alarm triggers at 75% used or under 5 GiB free. Cleanup starts at 80% used
 or under 10 GB (decimal) free.
-`pg-disk-hygiene` reclaims ignored `target`, `rust/target`, `node_modules`, and
-nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
-Other ignored data, tracked cache files, dirty trees and protection records
+`pg-disk-hygiene` checks ignored build caches in eligible idle worktrees.
+Tracked cache files and protection records
 prevent reclaim. Hygiene also removes detached `*-fast` worktrees after
 two hours without writes, including on disks above the cleanup threshold.
 It checks process references again before removing a tree and requires its
@@ -83,12 +83,12 @@ targets. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 
 Worktree cache cleanup requires a clean worktree idle for over 24 hours.
-Hygiene additionally reclaims Cargo-marked private targets under host scratch and /tmp (two levels)
-and ignored, untracked rust/target directories in registered worktrees under
---root after 30 minutes without writes. This cleanup runs without disk pressure;
-shared targets, pinned/live paths, active builds, process cwds, foreign ownership,
-leases and symlinks prevent deletion. Worktree source dirtiness alone does not
-protect ignored build artifacts in this narrower cleanup.
+Under pressure the timer can reclaim Cargo-marked private targets in approved
+cache and scratch locations and ignored, untracked `rust/target` directories
+in registered worktrees after 30 minutes without writes. Pins, live run records,
+process references, foreign ownership, leases and mount boundaries protect
+individual candidates. Admission and post-run trimming retain their existing
+host-wide build checks.
 
 ## Dell data-drive handoff (D-5122)
 

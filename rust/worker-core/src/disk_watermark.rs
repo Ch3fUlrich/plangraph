@@ -241,6 +241,7 @@ impl HygieneReport {
         host: impl FnOnce() -> io::Result<String>,
     ) -> (io::Result<Vec<u8>>, io::Result<()>) {
         let alerts = self.pressure_events();
+        self.summary.alarm |= self.summary.error.is_some();
         self.summary.freed_bytes = self
             .devices
             .values()
