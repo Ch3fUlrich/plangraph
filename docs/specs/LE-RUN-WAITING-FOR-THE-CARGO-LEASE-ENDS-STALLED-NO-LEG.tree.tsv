@@ -1,0 +1,13 @@
+path	disposition	required	row IDs	label
+.filesize-baseline	read	yes	E1 E2	observed
+changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2	predicted (<= 3 changed lines; <= 3 final lines)
+docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md	write	yes	E1 E2	predicted (<= 16 changed lines; <= 16 final lines)
+src/plangraph/spawner/exit_outcome.py	read	yes	E1	observed
+src/plangraph/spawner/host_ready.py	read	yes	E1	observed
+src/plangraph/spawner/probe_cleanup.py	write	yes	E1	predicted (<= 60 changed lines; <= 275 final lines)
+src/plangraph/spawner/runner.py	write	yes	E1	predicted (<= 2 changed lines; <= 1157 final lines)
+src/plangraph/spawner/service.py	read	yes	E1	observed
+src/plangraph/spawner/stall_watchdog.py	write	yes	E2	predicted (<= 2 changed lines; <= 548 final lines)
+tests/test_cargo_data_drive_target.py	read	yes	E1	observed
+tests/test_cargo_lease_queue.py	write	yes	E1 E2	predicted (<= 140 changed lines; <= 140 final lines)
+tests/test_stall_watchdog.py	read	yes	E2	observed

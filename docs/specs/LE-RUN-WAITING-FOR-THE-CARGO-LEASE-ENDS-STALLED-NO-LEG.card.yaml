@@ -1,0 +1,57 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md": {
+      "max_changed_lines": 3,
+      "max_final_lines": 3
+    },
+    "docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md": {
+      "max_changed_lines": 16,
+      "max_final_lines": 16
+    },
+    "src/plangraph/spawner/probe_cleanup.py": {
+      "max_changed_lines": 60,
+      "max_final_lines": 275
+    },
+    "src/plangraph/spawner/runner.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 1157
+    },
+    "src/plangraph/spawner/stall_watchdog.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 548
+    },
+    "tests/test_cargo_lease_queue.py": {
+      "max_changed_lines": 140,
+      "max_final_lines": 140
+    }
+  },
+  "cards": {
+    "LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG": {
+      "outcome": "A spawned run whose launch finds the shared Cargo lease held records queued_on with the lock path and holder PID, keeps waiting up to a queue bound, starts when the lease frees and is never ended stalled_no_leg while it waits.",
+      "read_set": [
+        ".filesize-baseline",
+        "src/plangraph/spawner/exit_outcome.py",
+        "src/plangraph/spawner/host_ready.py",
+        "src/plangraph/spawner/service.py",
+        "tests/test_cargo_data_drive_target.py",
+        "tests/test_stall_watchdog.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md",
+        "docs/spawner/LE-RUN-WAITING-FOR-THE-CARGO-LEASE-ENDS-STALLED-NO-LEG.md",
+        "src/plangraph/spawner/probe_cleanup.py",
+        "src/plangraph/spawner/runner.py",
+        "src/plangraph/spawner/stall_watchdog.py",
+        "tests/test_cargo_lease_queue.py"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_cargo_lease_queue.py",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 45000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_cargo_data_drive_target.py tests/test_leg_probe_budget.py tests/test_stall_watchdog.py"
+    }
+  }
+}
