@@ -358,15 +358,43 @@ fn pressure_keeps_leases_mounts_source_and_late_references() {
 #[cfg(target_os = "linux")]
 #[test]
 fn variant_fallback_keeps_the_newest_and_obeys_its_deadline() {
-    use crate::{cargo_pool::hygiene_variants, disk_hygiene::Candidate};
+    use crate::{
+        cargo_pool::hygiene_variants,
+        disk_hygiene::{
+            reclaim, Budget, Candidate, Device, HygieneReport, ReclaimChecks, Thresholds,
+        },
+        shared_target::PoolCap,
+    };
+    use std::time::Instant;
     let tmp = tempfile::tempdir().unwrap();
     let (slot, old) = review_slot(&primary(tmp.path()), "test");
-    let mut profile = Candidate::new(slot.join("debug"), slot.clone(), SystemTime::now()).unwrap();
+    let cutoff = SystemTime::now() - Duration::from_secs(3600);
+    let mut profile = Candidate::new(slot.join("debug"), slot.clone(), cutoff).unwrap();
     profile.scope = slot.clone();
-    profile.lease_root = slot;
+    profile.lease_root = slot.clone();
     let found = hygiene_variants(&profile, || true);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].path, old);
     assert!(found[0].variant);
     assert!(hygiene_variants(&profile, || false).is_empty());
+
+    profile.maintenance = true;
+    profile.cap = Some(PoolCap(1, 1, vec![slot.clone()].into()));
+    let debug = profile.path.clone();
+    let id = profile.identity.0;
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    report.devices.insert(
+        id,
+        Device::new(id, slot, Some(u64::MAX), Thresholds::default()),
+    );
+    let mut budget = Budget::new(Instant::now(), &Instant::now);
+    budget.rank_entries = 0;
+    let checks = ReclaimChecks {
+        inventory: &|_| Ok(Default::default()),
+        space: &|_| Ok(u64::MAX),
+        protection: &|_, _| Ok(None),
+    };
+    assert!(reclaim(&mut report, vec![profile], &budget, &checks));
+    assert!(debug.join("build/foo-2222222222222222").exists());
+    assert!(!old.exists(), "{report:?}");
 }

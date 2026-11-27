@@ -231,7 +231,8 @@ pub fn reclaim(
     let mut scanned = Duration::ZERO;
     let mut attempted = Duration::ZERO;
     let mut removed = BTreeSet::new();
-    for (first, maintenance) in [(true, false), (false, false), (false, true)] {
+    // Revisit maintenance after its profile proofs have made more variants eligible.
+    for (first, maintenance) in [(true, false), (false, false), (false, true), (false, true)] {
         if !usable {
             break;
         }
