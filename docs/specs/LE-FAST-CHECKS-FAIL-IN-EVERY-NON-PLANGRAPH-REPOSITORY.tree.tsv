@@ -1,10 +1,12 @@
 path	disposition	required	row IDs	label
 changelog.d/LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY.md	write	yes	E1 E2	new (<= 4 final lines)
 docs/contributing/LE-FAST-CHECKS-FAIL-IN-EVERY-NON-PLANGRAPH-REPOSITORY.md	write	yes	E1 E2	new (<= 8 final lines)
+rust/pg-spawnd/src/native_writer_host.rs	read	yes	E2	observed
 rust/plangraph-cli/src/fast_check_target.rs	read	yes	E2	observed
 rust/plangraph-cli/src/fast_check_worktree.rs	read	yes	E2	observed
-rust/plangraph-cli/src/fast_checks.rs	write	yes	E1 E2	observed (<= 45 added lines; <= 545 final lines)
+rust/plangraph-cli/src/fast_checks.rs	write	yes	E1 E2	observed (<= 70 added lines; <= 570 final lines)
 rust/plangraph-cli/tests/fast_checks.rs	read	yes	E1	observed
-rust/plangraph-cli/tests/fast_checks_foreign_repo.rs	write	yes	E1 E2	new (<= 170 final lines)
-rust/pg-spawnd/src/native_writer_host.rs	read	yes	E2	observed
+rust/plangraph-cli/tests/fast_checks_foreign_repo.rs	write	yes	E1 E2	new (<= 260 final lines)
 rust/worker-core/src/cargo_cache.rs	read	yes	E2	observed
+rust/worker-core/src/fast_check_stamp.rs	read	yes	E2	observed
+tools/check_new_code_lang.py	read	yes	E2	observed
