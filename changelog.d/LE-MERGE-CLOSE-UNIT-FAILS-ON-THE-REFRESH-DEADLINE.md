@@ -3,3 +3,7 @@ The scheduled merge-close pass ends a keeper index refresh that is still running
 Keeper now reports one payload-free `merge_index_refresh` record per completed
 background generation. Stage durations and attempts, nested forge call counts
 and landing cache hits let operators attribute slow refreshes from the journal.
+
+Background refreshes now overlap up to four pinned deploy reads with the
+landing and lane lookups. The refresh thread records the results and the journal
+reports summed stage work with residual wall time.

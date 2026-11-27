@@ -352,9 +352,14 @@ Each of `candidate_snapshot`, `decision_snapshot`, `default_ref`, `work_index`,
 `publish_wait` has a `_ms` duration and an `_attempts` count. Attempts include
 calls that raise, and unvisited stages show zero. The `merged_pr_for` and
 `check_runs` durations and attempts, along with `landing_cache_hits`, describe
-work inside `landing_warm`. The `residual_ms` field is elapsed time minus the
-nine top-level durations, calculated before rounding to integer milliseconds.
-It includes project enumeration and work inside the publication mutex.
+forge work during the scan. Up to four deploy workers read pinned history and
+diffs alongside the refresh thread's landing and lane lookups. The refresh
+thread handles explicit named revisions and collects worker results into its
+private caches. All workers share the generation's deadline.
+
+Stage durations sum work across threads, so they can exceed elapsed wall time.
+`residual_ms` subtracts the wall time covered by any top-level stage before
+rounding. It includes project enumeration and work inside the publication mutex.
 
 For a production readback, save the queries and their exact UTC bounds.
 Collect the preceding six hours of unit receipts before the approved restart.
@@ -376,9 +381,11 @@ unclassified. Compare terminal passes, pending streaks and service failures by
 reason with the baseline. Report separate sample counts, stage shares and
 attempt counts for successful generations and slow generations
 (`budget_exceeded` or confidently matched to a pending unit pass). Report the
-nested forge counters separately and leave the residual unclassified. Name a
-dominant stage only when a single top-level stage accounts for at least half
-the total measured elapsed time across the slow group. With no slow samples,
+nested forge counters separately and leave the residual unclassified. For
+concurrent generations, use summed top-level work to calculate stage shares
+and elapsed wall time to compare against the budget. Name a dominant stage
+only when one top-level stage accounts for at least half the comparison total
+across the slow group. With no slow samples,
 incomplete coverage, a tie or no dominant stage, report the readback as
 inconclusive.
 

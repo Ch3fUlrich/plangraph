@@ -2,25 +2,30 @@
   "project": "plangraph",
   "cards": {
     "LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE": {
-      "outcome": "Identify the dominant stage in slow Keeper merge-index refreshes from per-generation production counters.",
+      "outcome": "Fit the measured Keeper merge-index refresh workload inside its 180-second budget while publishing identical results and retaining per-generation stage counters.",
       "read_set": [
         ".docs-map",
+        "docs/TESTING.md",
         "rust/plangraph-cli/src/merge_close.rs",
         "rust/plangraph-cli/src/merge_close_unit.rs",
         "rust/plangraph-cli/tests/merge_close_scheduled.rs",
         "src/plangraph/keeper/context_sources.py",
-        "src/plangraph/keeper/store_close.py",
         "tests/door_util.py",
         "tests/test_keeper_merge_close_auto.py"
       ],
       "write_set": [
         "changelog.d/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.md",
         "docs/KEEPER.md",
+        "docs/specs/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.card.yaml",
+        "docs/specs/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.md",
+        "docs/specs/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.tree.tsv",
         "src/plangraph/keeper/api_routes.py",
         "src/plangraph/keeper/evidence_pr.py",
+        "src/plangraph/keeper/store_close.py",
         "src/plangraph/keeper/store_context.py",
         "src/plangraph/keeper/store_runs.py",
         "src/plangraph/keeper/timing.py",
+        "tests/test_keeper_deploy_gate_paths.py",
         "tests/test_keeper_merge_refresh_budget.py"
       ],
       "exports": [
@@ -29,7 +34,7 @@
         "RunsMixin.warm_merge_scan",
         "landing_record"
       ],
-      "check_cmd": "python3 -m pytest -q tests/test_keeper_merge_refresh_budget.py tests/test_keeper_merge_close_auto.py",
+      "check_cmd": "python3 -m pytest -q tests/test_keeper_merge_refresh_budget.py tests/test_keeper_merge_close_auto.py tests/test_keeper_deploy_gate_paths.py",
       "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test merge_close_scheduled",
       "check_kind": "change",
       "risk_tags": [
