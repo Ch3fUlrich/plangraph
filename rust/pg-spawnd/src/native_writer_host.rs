@@ -299,6 +299,46 @@ impl Host {
             .map(|kb| kb / (1024 * 1024))
             .ok_or_else(|| "disk probe failed".into())
     }
+    #[rustfmt::skip]
+    fn fast_checks_with_scrub(&mut self, head: &str, scrub: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        if self.git(&["rev-parse", "HEAD"])? != head {
+            return Err(format!("worktree is not at {head}").into());
+        }
+        let stamp = self.stamp(head)?;
+        match fs::remove_file(&stamp) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)?;
+        self.session_excerpt(&stamp)?;
+        let (mut log, _) = self.checks_run(scrub)?;
+        let shared = self.fast_checks_command().current_dir(&self.cwd).output()?;
+        let [stdout, stderr] = [&shared.stdout, &shared.stderr].map(|bytes| String::from_utf8_lossy(bytes));
+        let block = format!("== plangraph fast-checks --owned-worktree ({})\nstdout:\n{stdout}{}stderr:\n{stderr}",
+            shared.status, if stdout.ends_with('\n') { "" } else { "\n" });
+        log.push_str(&block);
+        pg_worker_core::run::record_io::atomic_write_private(&stamp.with_extension("log"), log.as_bytes())?;
+        if !shared.status.success() {
+            return Err(block.into());
+        }
+        let receipt = pg_worker_core::worktree::fast_check_stamp(&self.cwd, head)?;
+        let text = fs::read_to_string(receipt).map_err(|e| format!("no shared receipt: {e}"))?;
+        if !pg_worker_core::fast_check_stamp::text_is_green(&text, head) {
+            return Err(format!("shared receipt of {head} is not green").into());
+        }
+        let skips = review::native_skips(&stdout, &stderr);
+        fs::write(stamp, format!("{}\n{skips}", text.trim_end_matches('\n'))).map_err(Into::into)
+    }
+}
+#[rustfmt::skip]
+fn receipt_text(text: &str) -> &str {
+    let Some((receipt, block)) = text.rsplit_once("\nskips ") else { return text };
+    let mut rows = block.lines();
+    let count = rows.next().and_then(|n| n.parse::<usize>().ok());
+    let actual = rows.try_fold(0, |n, row| row.strip_prefix("skip ")?.split_once(" reason=").map(|_| n + 1));
+    if actual.is_some() && actual == count { receipt } else { text }
 }
 impl Driver for Host {
     fn disk_gb(&mut self) -> Result<u64, String> {
@@ -389,61 +429,29 @@ impl Driver for Host {
         .map(|commits| !commits.is_empty())
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
-        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        if self.git(&["rev-parse", "HEAD"])? != head {
-            return Err(format!("worktree is not at {head}"));
-        }
-        let stamp = self.stamp(head)?;
-        fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
-            .map_err(|e| e.to_string())?;
         // The turns up to this head are bound to it before the gates run, so a head whose gate
         // fails keeps its own output and the next head starts after it.
-        self.session_excerpt(&stamp)?;
-        let (mut log, _) = self.checks_run()?;
         // The shared exact-head fast checks (affected tests, lints, formatting): the same command
         // a human writer runs, and the only producer of the receipt a lane push needs.
-        let shared = self
-            .fast_checks_command()
-            .current_dir(&self.cwd)
-            .output()
-            .map_err(|e| format!("plangraph fast-checks: {e}"))?;
-        log.push_str(&format!(
-            "== plangraph fast-checks --owned-worktree ({})\n{}{}\n",
-            shared.status,
-            String::from_utf8_lossy(&shared.stdout),
-            String::from_utf8_lossy(&shared.stderr)
-        ));
         // The exact-head gate output, named in the review brief next to the stamp.
-        fs::write(stamp.with_extension("log"), &log).map_err(|e| e.to_string())?;
-        if !shared.status.success() {
-            return Err(format!(
-                "plangraph fast-checks failed ({}):\n{}",
-                shared.status,
-                String::from_utf8_lossy(&shared.stderr).trim()
-            ));
-        }
-        // The worktree's own stamp holds the shared receipt's text for the review gate.
-        let receipt = pg_worker_core::worktree::fast_check_stamp(&self.cwd, head)
-            .map_err(|e| e.to_string())?;
-        let text = fs::read_to_string(receipt).map_err(|e| format!("no shared receipt: {e}"))?;
-        if !pg_worker_core::fast_check_stamp::text_is_green(&text, head) {
-            return Err(format!("shared receipt of {head} is not green"));
-        }
-        fs::write(&stamp, text).map_err(|e| e.to_string())
+        self.fast_checks_with_scrub(head, review::scrub_words().as_deref())
+            .map_err(|e| e.to_string())
     }
     fn stamped(&mut self, head: &str) -> bool {
+        let Ok(_guard) = crate::writer_control::mutation_guard(&self.record_path) else {
+            return false;
+        };
         self.stamp(head).is_ok_and(|stamp| {
-            fs::read_to_string(stamp)
-                .is_ok_and(|text| pg_worker_core::fast_check_stamp::text_is_green(&text, head))
+            fs::read_to_string(stamp).is_ok_and(|text| {
+                pg_worker_core::fast_check_stamp::text_is_green(receipt_text(&text), head)
+            })
         })
     }
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
         self.review_run(head, previous)
     }
     fn gates(&mut self) -> Result<(), String> {
-        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
-        self.git(&["diff", "--exit-code", "HEAD", "--"])?;
-        self.checks().map(|_| ())
+        self.gates_with_scrub(review::scrub_words().as_deref())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {

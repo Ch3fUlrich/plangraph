@@ -524,11 +524,15 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.
     fs::write(dir.path().join("gate-red"), "").unwrap();
     assert!(host
-        .fast_checks(&head)
+        .fast_checks_with_scrub(&head, None)
         .unwrap_err()
+        .to_string()
         .starts_with("ci_commit_gate.py"));
     assert!(!host.stamped(&head));
-    assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
+    assert!(host
+        .gates_with_scrub(None)
+        .unwrap_err()
+        .starts_with("ci_commit_gate.py"));
     fs::remove_file(dir.path().join("gate-red")).unwrap();
     // The writer session log of the turns that produced this head (cargo runs included).
     fs::write(
@@ -536,11 +540,11 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         "cargo test: 3 passed\n",
     )
     .unwrap();
-    host.fast_checks(&head).unwrap();
+    host.fast_checks_with_scrub(&head, None).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
     super::review_tests::assert_shared_receipt_and_push(&mut host, dir.path(), &head);
-    host.gates().unwrap();
+    host.gates_with_scrub(None).unwrap();
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
     assert_eq!(runs.lines().filter(|l| *l == expected).count(), 4, "{runs}");

@@ -314,7 +314,7 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     }
     fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
     fs::write(tools.join("affected_tests.py"),
-        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
+        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nprint('fixture-owned-stdout')\nprint('fixture-owned-stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "base"]);
     let base = git(root, &["rev-parse", "HEAD"]);
@@ -337,6 +337,12 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         let commit = git(root, &["rev-parse", "HEAD"]);
         let output = run(fail);
         assert_eq!(output.status.success(), fail == "0", "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == "fixture-owned-stdout"));
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "fixture-owned-stderr"));
         // Every outcome leaves a receipt for the head; only a passing run leaves a green one.
         let receipt =
             fs::read_to_string(root.join(".git/plangraph-state/fast-checks").join(&commit))
