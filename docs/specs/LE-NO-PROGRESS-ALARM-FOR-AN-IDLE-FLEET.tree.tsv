@@ -1,0 +1,23 @@
+path	disposition	required	row IDs	label
+changelog.d/LE-NO-PROGRESS-ALARM-FOR-AN-IDLE-FLEET.md	write	yes	E1 E2	new (<= 2 changed lines; <= 2 final lines)
+deploy/feeder/policy.toml	write	yes	E2	predicted (<= 3 changed lines; <= 25 final lines)
+docs/KEEPER.md	write	yes	E1	predicted (<= 6 changed lines; <= 714 final lines)
+docs/host-link.md	write	yes	E2	predicted (<= 6 changed lines; <= 50 final lines)
+docs/writer-feeder.md	write	yes	E2	predicted (<= 8 changed lines; <= 270 final lines)
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E2	predicted (<= 6 changed lines; <= 331 final lines)
+rust/plangraph-cli/src/feeder/off_alert.rs	write	yes	E2	new (<= 190 changed lines; <= 190 final lines)
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E2	predicted (<= 8 changed lines; <= 372 final lines)
+rust/plangraph-cli/src/host_link_bridge.rs	write	yes	E2	predicted (<= 12 changed lines; <= 243 final lines)
+rust/plangraph-cli/tests/host_link_bridge.rs	write	yes	E2	predicted (<= 45 changed lines; <= 316 final lines)
+rust/worker-core/src/host_link.rs	write	yes	E2	predicted (<= 45 changed lines; <= 374 final lines)
+src/plangraph/keeper/config.py	write	yes	E1	predicted (<= 2 changed lines; <= 288 final lines)
+src/plangraph/keeper/daemon.py	write	yes	E1	predicted (<= 1 changed lines; <= 263 final lines)
+src/plangraph/keeper/fmt.py	write	yes	E1	predicted (<= 4 changed lines; <= 442 final lines)
+src/plangraph/keeper/store.py	write	yes	E1	predicted (<= 3 changed lines; <= 467 final lines)
+src/plangraph/keeper/store_read.py	write	yes	E1	predicted (<= 30 changed lines; <= 449 final lines)
+tests/test_keeper_no_progress_alert.py	write	yes	E1	new (<= 120 changed lines; <= 120 final lines)
+rust/plangraph-cli/src/feeder/sources.rs	read	yes	E2	observed
+src/plangraph/keeper/store_review.py	read	yes	E1	observed
+src/plangraph/views.py	read	yes	E1	observed
+tests/keeper_util.py	read	yes	E1	observed
+tests/test_keeper_lease_cfg.py	read	yes	E1	observed

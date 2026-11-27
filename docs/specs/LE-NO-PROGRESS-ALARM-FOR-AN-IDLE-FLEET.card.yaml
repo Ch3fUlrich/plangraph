@@ -1,0 +1,111 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-NO-PROGRESS-ALARM-FOR-AN-IDLE-FLEET.md": {
+      "max_changed_lines": 2,
+      "max_final_lines": 2
+    },
+    "deploy/feeder/policy.toml": {
+      "max_changed_lines": 3,
+      "max_final_lines": 25
+    },
+    "docs/KEEPER.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 714
+    },
+    "docs/host-link.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 50
+    },
+    "docs/writer-feeder.md": {
+      "max_changed_lines": 8,
+      "max_final_lines": 270
+    },
+    "rust/plangraph-cli/src/feeder/mod.rs": {
+      "max_changed_lines": 6,
+      "max_final_lines": 331
+    },
+    "rust/plangraph-cli/src/feeder/off_alert.rs": {
+      "max_changed_lines": 190,
+      "max_final_lines": 190
+    },
+    "rust/plangraph-cli/src/feeder/runtime.rs": {
+      "max_changed_lines": 8,
+      "max_final_lines": 372
+    },
+    "rust/plangraph-cli/src/host_link_bridge.rs": {
+      "max_changed_lines": 12,
+      "max_final_lines": 243
+    },
+    "rust/plangraph-cli/tests/host_link_bridge.rs": {
+      "max_changed_lines": 45,
+      "max_final_lines": 316
+    },
+    "rust/worker-core/src/host_link.rs": {
+      "max_changed_lines": 45,
+      "max_final_lines": 374
+    },
+    "src/plangraph/keeper/config.py": {
+      "max_changed_lines": 2,
+      "max_final_lines": 288
+    },
+    "src/plangraph/keeper/daemon.py": {
+      "max_changed_lines": 1,
+      "max_final_lines": 263
+    },
+    "src/plangraph/keeper/fmt.py": {
+      "max_changed_lines": 4,
+      "max_final_lines": 442
+    },
+    "src/plangraph/keeper/store.py": {
+      "max_changed_lines": 3,
+      "max_final_lines": 467
+    },
+    "src/plangraph/keeper/store_read.py": {
+      "max_changed_lines": 30,
+      "max_final_lines": 449
+    },
+    "tests/test_keeper_no_progress_alert.py": {
+      "max_changed_lines": 120,
+      "max_final_lines": 120
+    }
+  },
+  "cards": {
+    "LE-NO-PROGRESS-ALARM-FOR-AN-IDLE-FLEET": {
+      "outcome": "keeper alerts lists no_progress while no item reached done for no_progress_s and ready p10 work is unclaimed, and a feeder host whose feeder.off is older than the policy limit while a writer slot is free sends one routing alert naming the host.",
+      "read_set": [
+        "rust/plangraph-cli/src/feeder/sources.rs",
+        "src/plangraph/keeper/store_review.py",
+        "src/plangraph/views.py",
+        "tests/keeper_util.py",
+        "tests/test_keeper_lease_cfg.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-NO-PROGRESS-ALARM-FOR-AN-IDLE-FLEET.md",
+        "deploy/feeder/policy.toml",
+        "docs/KEEPER.md",
+        "docs/host-link.md",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/off_alert.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/host_link_bridge.rs",
+        "rust/plangraph-cli/tests/host_link_bridge.rs",
+        "rust/worker-core/src/host_link.rs",
+        "src/plangraph/keeper/config.py",
+        "src/plangraph/keeper/daemon.py",
+        "src/plangraph/keeper/fmt.py",
+        "src/plangraph/keeper/store.py",
+        "src/plangraph/keeper/store_read.py",
+        "tests/test_keeper_no_progress_alert.py"
+      ],
+      "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_no_progress_alert.py && cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder::off_alert && cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --lib host_link && cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test host_link_bridge",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 70000,
+      "window_class": "128k",
+      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_lease_cfg.py tests/test_keeper_api.py && cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder"
+    }
+  }
+}
