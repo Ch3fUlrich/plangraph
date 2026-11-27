@@ -1,0 +1,38 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT": {
+      "outcome": "The feeder claims only items whose spec card on main names a write set, gives the writer exactly those files and its lane branch, and releases every claim of a run that ends without a commit.",
+      "read_set": [
+        "deploy/feeder/house-rules.md",
+        "docs/PLANNER-KIT.md",
+        "rust/pg-spawnd/src/native_writer_host.rs",
+        "rust/plangraph-cli/tests/feeder_transport.rs",
+        "rust/worker-core/src/host_command.rs"
+      ],
+      "write_set": [
+        "changelog.d/LE-FEEDER-WRITERS-GET-NO-FILES-AND-A-DETACHED-CHECKOUT.md",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/adapters.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/selection.rs",
+        "rust/plangraph-cli/src/feeder/sources.rs",
+        "rust/plangraph-cli/src/feeder/spec.rs",
+        "rust/plangraph-cli/src/feeder/workflow.rs",
+        "rust/plangraph-cli/tests/feeder.rs",
+        "rust/plangraph-cli/tests/feeder_batches.rs",
+        "rust/plangraph-cli/tests/feeder_contracts.rs",
+        "rust/plangraph-cli/tests/feeder_slots.rs",
+        "rust/plangraph-cli/tests/feeder_support/mod.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test feeder",
+      "risk_tags": [
+        "live-step"
+      ],
+      "estimate_tokens": 90000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --test feeder_batches --test feeder_contracts --test feeder_slots --test feeder_transport && cargo test --manifest-path rust/Cargo.toml --locked -p plangraph-cli --lib feeder"
+    }
+  }
+}
