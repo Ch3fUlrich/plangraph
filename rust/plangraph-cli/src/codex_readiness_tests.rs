@@ -1,4 +1,85 @@
 use super::*;
+
+#[test]
+fn workspace_write_commit_uses_fixture_sandbox_and_cleans_up() {
+    const NODE: &str =
+        "codex_readiness::tests::workspace_write_commit_uses_fixture_sandbox_and_cleans_up";
+    const CHILD: &str = "PG_READINESS_SANDBOX_FIXTURE";
+    if let Some(root) = std::env::var_os(CHILD).map(PathBuf::from) {
+        let parent = root.join("checkout");
+        let repo = parent.join("repo");
+        let host = Host {
+            repo: repo.clone(),
+            mode: "workspace-write".into(),
+        };
+        assert!(host.commit().is_ok());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 1);
+        let log = root.join("argv");
+        let argv = std::fs::read_to_string(&log).unwrap();
+        let mut lines = argv.lines();
+        let cwd = Path::new(lines.next().unwrap());
+        assert_eq!(cwd.parent(), Some(parent.as_path()));
+        assert_eq!(
+            lines.collect::<Vec<_>>(),
+            [
+                "sandbox",
+                "-c",
+                "sandbox_mode=\"workspace-write\"",
+                "--",
+                "git",
+                "-C",
+                cwd.join("work").to_str().unwrap(),
+                "commit",
+                "--allow-empty",
+                "-m",
+                "readiness probe",
+            ]
+        );
+        assert!(!cwd.exists());
+        std::fs::write(root.join("refuse"), "").unwrap();
+        assert!(host.commit().is_err());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 1);
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("checkout/repo")).unwrap();
+    for dir in ["bin", "home", "codex-home"] {
+        std::fs::create_dir(root.path().join(dir)).unwrap();
+    }
+    std::os::unix::fs::symlink("/usr/bin/git", root.path().join("bin/git")).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        root.path().join("bin/codex"),
+        r#"#!/bin/sh
+test "$#" -eq 11 && test "$1:$2:$3:$4:$5" = 'sandbox:-c:sandbox_mode="workspace-write":--:git' || exit 2
+printf '%s\n' "$PWD" "$@" > "$PG_READINESS_SANDBOX_FIXTURE/argv"
+test ! -f "$PG_READINESS_SANDBOX_FIXTURE/refuse" || exit 1
+shift 4
+exec "$@"
+"#,
+    );
+    let executable = std::env::current_exe().unwrap();
+    let child = Command::new(&executable)
+        .args(["--exact", NODE])
+        .env(CHILD, root.path())
+        .env("PATH", root.path().join("bin"))
+        .env("HOME", root.path().join("home"))
+        .env("CODEX_HOME", root.path().join("codex-home"))
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&child.stdout)
+    );
+    let ignored = Command::new(executable)
+        .args(["--ignored", "--list"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&ignored.stdout).lines().any(|line| {
+        line == "codex_readiness::tests::workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start: test"
+    }), "the real Codex probe must be explicitly selected");
+}
+
 #[test]
 fn scratch_commit_is_isolated_from_inherited_git_metadata() {
     const CHILD: &str = "PG_READINESS_TEST_CHILD";
@@ -111,27 +192,23 @@ fn read_only_mode_skips_the_commit_point_but_writable_modes_probe_it() {
     assert!(host.check("commit").is_err());
 }
 #[test]
+#[ignore = "live host check requiring a working Codex sandbox"]
 fn workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start() {
     // Under HOME, not /tmp, which the sandbox always allows to write, and not
     // the crate dir, where a killed run would leave a repository in the source tree.
-    let Some(home) = std::env::var_os("HOME") else {
-        eprintln!("skipped: HOME is not set");
-        return;
-    };
+    let home = std::env::var_os("HOME").expect("the live Codex sandbox test requires HOME");
     let parent = tempfile::Builder::new()
         .prefix(".pg-readiness-test-")
         .tempdir_in(home)
-        .unwrap();
+        .expect("the live Codex sandbox test requires a writable directory in HOME");
     let repo = parent.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     let mut host = Host {
         repo,
         mode: "workspace-write".into(),
     };
-    if host.check("sandbox").is_err() {
-        eprintln!("skipped: sandbox cannot start on this host");
-        return;
-    }
+    host.check("sandbox")
+        .expect("the live Codex sandbox test requires a working Codex sandbox");
     host.commit().unwrap();
     assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
 }
