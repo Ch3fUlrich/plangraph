@@ -72,6 +72,112 @@ def test_fast_requests_report_verb_and_distinguish_io_from_lock_hold(meter):
     assert "verb=show total_ms=5 query_ms=2 snapshot_write_ms=0" in line
 
 
+def test_whoami_accounts_for_auth_wait_and_actual_holder(tmp_path, monkeypatch, capsys):
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import Mock
+    from test_keeper_api import call
+    from test_keeper_snapshot_writer import _server, _until
+
+    world = World(tmp_path, backend="sqlite")
+    seed(world, [("A", [])])
+    server = _server(tmp_path, world, debounce=0.02)
+    lock, publication, writer = server.lock, server.snapshot_publication, server.snapshot_writer
+    auth_wait, reacquire, publishing, release = (threading.Event() for _ in range(4))
+    tick, waiting, captured = [0], {}, []
+    acquire, publish = lock.acquire, snapshot_io._publish
+    auth = Mock(wraps=api.auth.authenticate)
+
+    def watch(*args, **kwargs):
+        phase = kwargs.get("phase")
+        if phase == "reacquire" and publishing.is_set():
+            assert not publication.capture.locked() and not publication.lock.locked()
+        if phase == "auth" or (phase == "reacquire" and publishing.is_set()):
+            waiting[threading.get_ident()] = auth_wait if phase == "auth" else reacquire
+        return acquire(*args, **kwargs)
+
+    def clock():
+        value = tick[0]
+        barrier = waiting.pop(threading.get_ident(), None)
+        if barrier is not None:
+            barrier.set()
+        return value
+
+    def stall_publish(*args):
+        if not publishing.is_set():
+            publishing.set()
+            assert release.wait(3)
+        publish(*args)
+
+    monkeypatch.setattr(timing, "ns_clock", clock)
+    monkeypatch.setattr(api.auth, "authenticate", auth)
+    monkeypatch.setattr(lock, "acquire", watch)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool, monkeypatch.context() as patch:
+            with timing.RequestTimer(lock, event="writer_timing"):
+                future = pool.submit(call, server, "/v1/whoami", token=world.tok("reader"))
+                assert auth_wait.wait(2) and not auth.called
+                tick[0] = 2_500_000_000
+            assert future.result(2)[0] == 200
+            assert pool.submit(call, server, "/v1/whoami", token="PRIVATE_SENTINEL").result(2)[0] == 401
+            writer.mark()
+            assert _until(lambda: (captured.append(capsys.readouterr().err) or "snapshot_build" in captured[-1]))
+            monkeypatch.setattr(snapshot_io, "_publish", stall_publish)
+            monkeypatch.setattr(writer, "debounce_s", 30)
+            patch.setattr(server, "snapshot_writer", None)
+            claim = pool.submit(call, server, "/v1/claim", method="POST", token=world.tok("l1main"), body={"key": "demo:A"})
+            assert publishing.wait(2)
+            with timing.lock_scope(lock, "cancel"):
+                writer.mark()
+                release.set()
+                assert reacquire.wait(2)
+                pool.submit(writer.flush).result(2)
+                tick[0] += 2_500_000_000
+            assert claim.result(2)[0] == 200
+        with lock:
+            writer.mark()
+            before = writer._gen, writer._written, writer._first, lock.depth()
+            for operation in (writer.flush, writer.stop, lambda: snapshot_io.write_snapshot(server, server.system)):
+                with pytest.raises(RuntimeError):
+                    operation()
+                assert not writer._halt and (writer._gen, writer._written, writer._first, lock.depth()) == before
+        with timing.RequestTimer(lock), lock, pytest.raises(RuntimeError):
+            snapshot_io.write_snapshot(server, server.system)
+        with timing.RequestTimer(lock), world.store._write(), pytest.raises(RuntimeError):
+            snapshot_io.write_snapshot(server, server.system)
+        err = "".join(captured) + capsys.readouterr().err
+        assert "keeper: lock_hold holder=writer hold_ms=2500\n" in err
+        assert ("keeper: lock_wait phase=auth waiter=whoami wait_ms=2500 covered_ms=2500 "
+                "coverage_bp=10000 overflow=0 holder=writer overlaps=writer:2500\n") in err
+        assert ("keeper: lock_wait phase=auth waiter=whoami wait_ms=0 covered_ms=0 "
+                "coverage_bp=10000 overflow=0 holder=none overlaps=-\n") in err
+        assert ("keeper: lock_wait phase=reacquire waiter=claim wait_ms=2500 covered_ms=2500 "
+                "coverage_bp=10000 overflow=0 holder=cancel overlaps=cancel:2500\n") in err
+        assert re.search(r"^keeper: snapshot_build mode=automatic outcome=ok elapsed_ms=\d+ lock_hold_ms=0$",
+                         err, re.M)
+        assert "PRIVATE_SENTINEL" not in err
+    finally:
+        server.shutdown()
+        server.server_close()
+        world.close()
+
+
+@pytest.mark.parametrize("missing_ns,covered,bp,overflow,holder", [
+    (200_000_000, 1800, 9000, 0, "tie"),
+    (200_900_003, 1799, 8995, 1, "cancel"),
+])
+def test_lock_wait_coverage_and_reported_millisecond_ties(missing_ns, covered, bp, overflow, holder):
+    end = 2_000_900_000
+    middle = missing_ns + 900_900_000
+    evicted = 1 if overflow else 0
+    spans = [(0, missing_ns - 2, "unclassified"), (missing_ns - 2, missing_ns, "read_audit"),
+             (missing_ns, middle, "cancel"), (middle, end, "snapshot")]
+    actual = timing._lock_wait_line("auth", "whoami", 0, end, spans, evicted)
+    last = 900 if holder == "tie" else 899
+    assert actual == (f"keeper: lock_wait phase=auth waiter=whoami wait_ms=2000 covered_ms={covered} "
+                      f"coverage_bp={bp} overflow={overflow} holder={holder} "
+                      f"overlaps=cancel:900,read_audit:0,snapshot:{last}")
+
+
 @pytest.mark.parametrize("method", ["GET", "POST"])
 def test_api_hold_includes_encode_write_and_no_payload(method, meter, monkeypatch, tmp_path):
     clock, out = meter
@@ -144,7 +250,9 @@ def test_snapshot_bytes_writer_parts_and_closed_stderr(meter, tmp_path, monkeypa
 
         monkeypatch.setattr(snapshot_io, "_atomic_write", write)
         writer = snapshot_writer.SnapshotWriter(server, 0, 0)
-        assert writer._write_locked()
+        writer.mark()
+        writer._attempt()
+        assert writer._written == writer._gen == 1
         expected = server.config.snapshot.read_bytes()
         assert any("writer_timing" in line and "write_ms=20" in line for line in lines(out))
         assert not any("snapshot_timing" in line for line in lines(out))
@@ -152,7 +260,9 @@ def test_snapshot_bytes_writer_parts_and_closed_stderr(meter, tmp_path, monkeypa
         snapshot_io.write_snapshot(server, server.system)
         assert server.config.snapshot.read_bytes() == expected
         monkeypatch.setattr(timing, "_emit", lambda *a: (_ for _ in ()).throw(RuntimeError()))
-        assert writer._write_locked()
+        writer.mark()
+        writer._attempt()
+        assert writer._written == writer._gen == 2
         assert server.config.snapshot.read_bytes() == expected
         def broken_write(*args):
             raise OSError("original write")

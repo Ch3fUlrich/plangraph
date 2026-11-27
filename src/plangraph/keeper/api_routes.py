@@ -11,12 +11,13 @@ import logging
 import os
 import re
 import threading
-from copy import copy
+from contextlib import nullcontext
+from copy import copy, deepcopy
 from time import monotonic
 import urllib.parse
 
 from ..inbox import routes as _inbox
-from . import timing
+from . import auth, timing
 from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
@@ -53,6 +54,22 @@ WRITE_VERBS |= {"post_message", "land", "write_receipt", "admit_seat_verdict", "
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
+
+
+def dispatch_label(name, body):
+    return "merge_refresh" if name == "close_merged_auto" and isinstance(body, dict) and "refresh" in body else name
+
+
+def committed_messages(server, principal):
+    return getattr(server, "read_path", None) and not isinstance(principal, auth.OversightPrincipal)
+
+
+def send_messages(handler, principal, query):
+    from .messages_poll import read_messages
+    run_gate(principal, "messages")
+    with timing.RequestTimer(handler.server.lock, "read", verb="messages", unlocked=True):
+        payload = timing.measured(part="query_ms")(read_messages)(handler.server, principal, query, committed=True)
+    handler._json(200, payload)
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
 #: is ``fmt.<name>_text``.
@@ -357,22 +374,34 @@ class MergeRefresh:
     # the paged close inside the index age; the client waits less (WAIT) so a slow scan is
     # continued by the next scheduled pass instead of failing the unit.
     SCAN_BUDGET_SECONDS = 180
+    _FIELDS = ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors", "_landings",
+               "_named_landings", "_landing_decisions")
 
     def __init__(self, server):
         self.server = server
         self.state = "idle"
         self.used = False
         self.expires_at = 0.0
+        self._lock = threading.Lock()
+        self._generation = 0
+        self._bundle = None
 
     def control(self, action):
         server = self.server
         if action == "projects":
-            projects = sorted({project for _, project in server.store.merge_candidates()})
-            if not projects and self.state == "ready":
-                self.used = True
+            with timing.outside_request_lock(server.lock) if getattr(server, "read_path", None) else nullcontext():
+                candidates, _ = self._read_candidates()
+            projects = sorted({project for _, project in candidates})
+            with self._lock:
+                if not projects and self.state == "ready":
+                    self.used = True
             return {"projects": projects}
         if action not in ("start", "status", "resume"):
             raise Refused("validation", "refresh must be start, resume, status or projects")
+        with self._lock:
+            return self._control(action)
+
+    def _control(self, action):
         if action != "status" and self.state != "running":
             now = monotonic()
             fresh = self.state == "ready" and now < self.expires_at
@@ -382,10 +411,16 @@ class MergeRefresh:
                 # Bound reuse from the beginning of the scan, when it starts fetching default refs.
                 self.expires_at = now + self.MAX_AGE_SECONDS
                 self.state, self.used = "running", False
-                threading.Thread(target=self._build, name="keeper-merge-index", daemon=True).start()
+                self._generation += 1
+                threading.Thread(target=self._build, args=(self._generation, now),
+                                 name="keeper-merge-index", daemon=True).start()
         return {"scan": self.state}
 
     def consume(self):
+        with self._lock:
+            self._consume()
+
+    def _consume(self):
         if self.state == "running":
             raise Refused("merge_index_running", "merge index refresh is running")
         if self.state == "failed":
@@ -394,39 +429,48 @@ class MergeRefresh:
             if monotonic() >= self.expires_at:
                 raise Refused("merge_index_expired", "merge index expired; start a refresh")
             self.used = True
+            if self._bundle is not None:
+                self.server.store.__dict__.update(self._bundle)
+                self._bundle = None
 
-    def _build(self):
+    def _read_candidates(self):
         server = self.server
-        started = monotonic()
-        with timing.io_budget(self.SCAN_BUDGET_SECONDS):
-            try:
-                with server.lock:
-                    scan = copy(server.store)
-                    # The copy shares the live landing cache: the scan fills its own, published
-                    # only with the rest of the scan.
-                    scan.__dict__["_landings"] = dict(server.store.__dict__.get("_landings", {}))
-                    candidates = scan.merge_candidates()
-                scan.warm_merge_scan(candidates)
-                published = {field: scan.__dict__[field] for field in
-                             ("_warmed", "_lanes", "_deploy_warm", "_merge_scan_errors", "_landings",
-                              "_landing_decisions")}
-            except Exception as exc:
-                published = dict(_warmed={}, _lanes={}, _deploy_warm={},
-                                 _merge_scan_errors={"*": f"merge_scan_failed: {type(exc).__name__}"},
-                                 _landing_decisions=None)
+        if getattr(server, "read_path", None):
+            with server.read_store(defer_audit=True) as scan:
+                candidates = scan.merge_candidates()
+        else:
             with server.lock:
-                # Per-repository handlers absorb deadline refusals and the lock may have been
-                # waited for, so the budget is read once more under the lock that publishes.
-                over = timing.io_timeout(1) <= 0
-                if over:
-                    self.state = "failed"
-                else:
-                    server.store.__dict__.update(published)
-                    self.state = "ready"
+                scan = copy(server.store)
+                candidates = scan.merge_candidates()
+        scan.conn = None
+        scan.__dict__.pop("_frozen_lanes", None)
+        return candidates, scan
+
+    def _build(self, generation, started):
+        deadline = started + self.SCAN_BUDGET_SECONDS
+        with timing.io_budget(max(0, deadline - monotonic())):
+            try:
+                candidates, scan = self._read_candidates()
+                # Warm reuses these inputs. Take owned copies so a failed scan cannot leak changes.
+                for field in self._FIELDS:
+                    value = scan.__dict__.get(field)
+                    if isinstance(value, dict):
+                        scan.__dict__[field] = deepcopy(value.copy())
+                scan.warm_merge_scan(candidates)
+                published = {field: scan.__dict__[field] for field in self._FIELDS}
+            except Exception:
+                published = None
+            with self._lock:
+                if generation != self._generation:
+                    return
+                over = monotonic() >= deadline or timing.io_timeout(1) <= 0
+                self._bundle = None if over else published
+                self.state = "ready" if self._bundle is not None else "failed"
         log = logging.getLogger("plangraph.keeper")
         seconds = monotonic() - started
-        if over:
-            log.warning("merge_index_refresh failed budget_exceeded seconds=%.1f", seconds)
+        if over or published is None:
+            log.warning("merge_index_refresh failed %s seconds=%.1f",
+                        "budget_exceeded" if over else "scan_error", seconds)
         else:
             log.info("merge_index_refresh repos=%d failed=%d seconds=%.1f",
                      len(published["_warmed"]), len(published["_merge_scan_errors"]), seconds)

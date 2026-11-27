@@ -1,0 +1,1 @@
+- Pytest clears inherited fast-check base refs so temporary Git repositories use their own history in policy and pre-push tests. The language-gate fixtures reuse the fast checks' source-keyed policy executable when available.

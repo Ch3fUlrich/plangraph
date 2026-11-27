@@ -19,7 +19,14 @@ def git(root, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
+    if (target := os.environ.get("CARGO_TARGET_DIR")) and not os.environ.get("PG_POLICY_BIN"):
+        from test_preflight import preflight
+
+        # Fast checks already built the policy from these sources before pytest.
+        key = preflight.policy_target(CHECKER.parents[1], Path(target).resolve())
+        if binary := preflight.policy_cached_executable(key):
+            monkeypatch.setenv("PG_POLICY_BIN", str(binary))
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.name", "Gate Test")
     git(tmp_path, "config", "user.email", "gate@example.invalid")
@@ -47,6 +54,22 @@ def check(repo, files):
     return subprocess.run([sys.executable, str(CHECKER)], cwd=root,
                           env={**os.environ, "NEWCODE_BASE": base},
                           capture_output=True, text=True)
+
+
+def test_fixture_repo_reuses_the_policy_gate_artifact(tmp_path, monkeypatch, request):
+    from test_preflight import preflight
+
+    target = tmp_path / "shared"
+    key = preflight.policy_target(CHECKER.parents[1], target)
+    binary = key / "debug/pg-policy"
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target))
+    monkeypatch.delenv("PG_POLICY_BIN", raising=False)
+    monkeypatch.setattr(preflight, "policy_cached_executable",
+                        lambda directory: binary if directory == key else None)
+
+    request.getfixturevalue("repo")
+
+    assert os.environ.get("PG_POLICY_BIN") == str(binary)
 
 
 @pytest.mark.parametrize("suffix", ["py", "sh", "js", "ts", "mjs", "cjs", "tsx",

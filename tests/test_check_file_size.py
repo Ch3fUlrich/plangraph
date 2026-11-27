@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_check_file_size.py — the 800-line gate's own tests (AO-400LOC, moved D-3198).
-
-Every case drives `tools/check_file_size.py` the way production runs it: a
-subprocess whose cwd is a repository, so the checker resolves its checkout
-through `git rev-parse --show-toplevel` exactly as the CI step and the pre-push
-gate do (Principle 9 — never verify a branch production does not take).
-Fixture repos are real git repos carrying their own identity, so the tests
-also pass on CI's identity-less runners.
-
-Run directly:
-
-    python3 tests/test_check_file_size.py
-"""
+"""Drive the 800-line gate as a subprocess from real Git fixture repositories."""
 import os
 import re
 import shutil

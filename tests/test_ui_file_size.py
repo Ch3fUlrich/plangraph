@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 import test_check_file_size as file_size
 
@@ -38,3 +43,18 @@ class Operator800LineLimitTests(file_size.RepoFixture):
         self.baseline('legacy.py 900\nold.py 600\n')
         self.assertPasses(self.check('--update-baseline'))
         self.assertEqual(self.baseline_map(), {})
+
+
+@pytest.mark.parametrize("base", ["origin/main", "f" * 40])
+def test_fixture_repos_ignore_parent_policy_base(base):
+    nodes = [
+        "tests/test_check_file_size.py::LineLimitTests::test_a_800_line_file_passes",
+        "tests/test_ui_file_size.py::Operator800LineLimitTests::test_800_line_boundary",
+        "tests/test_hooks_prepush.py::test_hook_passes_a_clean_push",
+        "tests/test_hooks_prepush_refs.py::test_hook_passes_safe_ref_updates[True]",
+    ]
+    env = dict(os.environ, FILESIZE_REQUIRE_BASE=base, NEWCODE_BASE=base, CHANGELOG_BASE=base,
+               CLASS_SEARCH_BASE=base, PYTEST_ADDOPTS="", PYTEST_SHARD="", PYTEST_SHARD_DURATIONS_OUT="")
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", *nodes], cwd=ROOT,
+                            env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and "4 passed" in result.stdout, result.stdout + result.stderr

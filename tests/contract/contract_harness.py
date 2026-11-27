@@ -110,6 +110,18 @@ class Keeper:
     runs_dir: Path | None = None
     proc: object = None
 
+    @property
+    def stderr_path(self):
+        return self.dir / "keeper.stderr.log"
+
+    def _stderr_tail(self, limit=6000):
+        if self.proc is not None and self.proc.stderr is not None:
+            return self.proc.stderr.read()[-limit:].decode(errors="replace")
+        with self.stderr_path.open("rb") as log:
+            end = log.seek(0, os.SEEK_END)
+            log.seek(max(0, end - limit))
+            return log.read().decode(errors="replace")
+
     # ------------------------------------------------------------- HTTP
     def call(self, method, path, who=None, body=None, raw_body=None,
              token=None, headers=None):
@@ -180,7 +192,7 @@ class Keeper:
                 os.kill(self.proc.pid, signal.SIGABRT)
                 self.proc.wait(timeout=10)
                 lines.append("[contract-diag] keeper stderr after SIGABRT:\n"
-                             + self.proc.stderr.read().decode(errors="replace")[-6000:])
+                             + self._stderr_tail())
             except Exception as exc:
                 lines.append(f"[contract-diag] abort failed: {type(exc).__name__}: {exc}")
         print("\n".join(lines), file=sys.stderr)
@@ -297,17 +309,20 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
     env = {name: value for name, value in _env({"PYTHONFAULTHANDLER": "1"}).items()
            if not name.startswith("GIT_")}
     env.update(git_env)
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
-         "--host", "127.0.0.1", "--port", "0", "--ready-file", str(ready_file)],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     keeper = Keeper("", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
-                    batch_dir, runs_dir, proc)
+                    batch_dir, runs_dir)
+    # The fixture lives for a suite. An unread pipe fills with request timings
+    # and blocks the daemon, including its timeout diagnostics.
+    with keeper.stderr_path.open("wb") as log:
+        keeper.proc = subprocess.Popen(
+            [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
+             "--host", "127.0.0.1", "--port", "0", "--ready-file", str(ready_file)],
+            env=env, stdout=subprocess.DEVNULL, stderr=log)
     deadline = time.time() + _start_timeout()
     while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError("keeper exited: " + proc.stderr.read().decode()[:500])
+        if keeper.proc.poll() is not None:
+            raise RuntimeError("keeper exited: " + keeper._stderr_tail(500))
         try:
             if ready_file.exists():
                 endpoint = json.loads(ready_file.read_text(encoding="utf-8"))
