@@ -92,3 +92,19 @@ Each slice writes its tests first; on the base they fail to compile or fail (no 
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 12, wrong 2
+WRONG .md:19 | src/plangraph/spawner/overflow.py:183,206–213 | Tie order is alphabetical in ordinary overflow and configured host order in remote-first mode. In local comparison, local wins an otherwise equal tie.
+WRONG .md:20 | tools/check_file_size.py:47–50 | Cite line 47 for the 800-line cap. Line 49 describes documentation headroom.
+ROUND 1: Registry citation, release hook, writer cap, build resolver and plain-path parsing, and D7 budgets and Python test placement fixed. D2 admission proof and D5 local trait enforcement remain open.
+FIT AND ARTIFACTS: The three profiles, four drive roles, cap, traits and drift remain in scope. All 30 tree writes match the card. Both digests and current-head line budgets check out.
+POINTS: D2 | .md:25,67,76 | rust/pg-spawnd/src/native_writer_commands.rs:116–123 | An unset-list selector test can pass by returning `None` without proving coding can launch. Add a native admission test using coding’s generated environment and assert the resulting worktree is under the default run directory. BLOCKS
+POINTS: D8 | .md:35,66,75 | rust/plangraph-cli/src/host_sync.rs:114–128,256–270 | Ordinary sync exits early when tools are present and otherwise resolves a private data checkout. Specify how it finds the Plangraph checkout and runs generation before the early return. Assert generation through ordinary sync, fresh install and `SAME release`. BLOCKS
+POINTS: D9 | .md:35–36,46 | src/plangraph/spawner/overflow.py:470–472,507–510; src/plangraph/spawner/host_ready_source.py:351–367 | Loading `profile.env` in the listed units leaves SSH/WSL launches and probes using the registry env file alone. Specify target-side loading before operator overrides and test the environment received by a remote launch and probe. BLOCKS
+POINTS: D10 | .md:24,31–36,67 | rust/worker-core/src/work_disks.rs:49–50,82–90; docs/operations/worker-disks.md:50–53 | The schema offers selection for tmp and cache, but generation only defines build/worktree selection and emits a TMPDIR whose directory may be absent. Define the supported tmp/cache rules and consumers, document who provisions and verifies the writable worktree and tmp directories, and test the generated paths. BLOCKS
+POINTS: D5 | .md:38,69,78 | src/plangraph/spawner/overflow.py:277–298; src/plangraph/spawner/seat_spawn.py:338–366,375–397 | Specify how local and remote registry IDs resolve tokens from `host-profiles.json`. Feed a missing local trait into shared local health so compare-local also refuses when `decide` returns no host. Test that case alongside the shortcut and queue retry. BLOCKS

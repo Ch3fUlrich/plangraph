@@ -75,3 +75,18 @@ Not in the lane: rust/plangraph-cli/src/feeder/adapters.rs (D3 rival scope, D6 c
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 17, wrong 1
+WRONG .md:19 | src/plangraph/spawner/overflow.py:627–643; src/plangraph/spawner/stall_watchdog.py:151–159,187–194 | Native launch stores the card in `native-request.json`. Local `ps` reads `record.json`, which lacks the card.
+ROUND 1: Both original citation corrections and D6 budgets fixed. D3’s renderer-compatible design is fixed, with rendered-output proof still open. D1’s rejection resolves local/remote divergence only. D2, D4 and D5 remain open.
+FIT AND ARTIFACTS: Spec-backed admission and lane instructions remain in scope. Release moves from receipts to run evidence, and the explicit release-transport retry test was dropped. All 14 tree writes match the card. Both digests and current-head line budgets check out.
+POINTS: D1 | .md:23,41,49,64 | rust/pg-spawnd/src/native_writer_base.rs:78–94 | A fast-forward between admission and launch can change or delete the spec. Verify that the native writer’s actual pinned base has the same spec blob before the writer turn, compensate and retry on mismatch, and test an intervening fast-forward. BLOCKS
+POINTS: D2 | .md:25,43,51 | src/plangraph/spawner/remote_ps.py:23–28,461–478; rust/plangraph-cli/src/feeder/adapters.rs:274–302 | Remote `ps` omits launch files and a new tick’s spec can shrink a rival’s admitted scope. Persist the claim-time files where rivals can read them, use them for active-run and rival checks, and test a spec change after a cross-host claim. BLOCKS
+POINTS: D3 | .md:42,50 | rust/pg-spawnd/src/batch_writer_brief.rs:164–183 | X3 names item briefs but does not require the rendered writer prompt. Assert the lane and files in the production renderer’s output against `push_ref` for both singles and batches. BLOCKS
+POINTS: D4 | .md:27,44,52 | rust/pg-spawnd/src/native_writer.rs:453–487,495–512 | A writer can commit, fail fast checks and exhaust no-progress resumes with the proposed zero-commit reason and zero reviews. Persist whether a writer commit was ever observed before checks or rebasing. Test both this failure and push repair retaining their claims. BLOCKS
+POINTS: D5 | .md:28,44,52 | src/plangraph/spawner/overflow.py:640–643; rust/plangraph-cli/src/feeder/sources.rs:189–213 | A lost receipt leaves no `row.card.claims` to release. Read epochs from the matching private native request and test restart recovery from the actual spawner record shape, including a release transport failure followed by retry. BLOCKS
