@@ -91,3 +91,16 @@ Final line caps are in the card. Additions: `mod.rs` <= 70, `runtime.rs` <= 60, 
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 12, wrong 1
+WRONG spec:17, rust/plangraph-cli/src/feeder/adapters.rs:265-274. A member with no files skips the rival snapshot.
+ROUND 1: PowerShell and Keeper citations corrected. D2’s stale-quota reason and stop-row propagation are specified, and X6/X8 are in the card command. D3 and D7–D8 remain open.
+ITEM FIT: Adds refusal reporting, readback, host-history pacing, and tick deadlines. Readback and compensation still have gaps in their production paths.
+POINTS: D3, spec:26,57,65,84, rust/plangraph-cli/src/feeder/capacity.rs:73-80 and runtime/live_tests.rs:120-129,148-160. The design probes PowerShell twice, and the fixture starts with dry already true and calls decide directly. Sample once, propagate the live error even when cache is absent, and drive both probe outcomes through --readback without --dry-run while asserting zero writes. BLOCKS
+POINTS: D7–D8, spec:30-31,63-64,86, rust/plangraph-cli/src/feeder/sources.rs:166-180,259-265 and windows_ram.rs:42-55. Roster, mount, and RAM probes retain independent timeouts. Give each the remaining work budget and specify file-backed capture or concurrent draining for the new subprocess helper. Test a late discovery probe and output larger than a pipe buffer. BLOCKS
+POINTS: D8, spec:31,63, rust/plangraph-cli/src/feeder/adapters.rs:195-208 and workflow.rs:273-287. A launch can exhaust the compensation window, and the current error branch releases claims even when the spawner may have started. End launch waits before the compensation deadline, retain claims after an ambiguous start, and make X10 exercise a real deadline transition and release through the adapter. BLOCKS

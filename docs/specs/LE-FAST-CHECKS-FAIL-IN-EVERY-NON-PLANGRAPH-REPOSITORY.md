@@ -80,3 +80,13 @@ All tests are in the new file `rust/plangraph-cli/tests/fast_checks_foreign_repo
 ## Open points for design approval
 
 None.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 8, wrong 0
+ROUND 1: D1–D3 still open. D4 and D5 fixed with selector-only leasing and owned receipt cases for both foreign modes.
+ITEM FIT: Adds a declared check or diff fallback for foreign repositories and preserves the plangraph lease. Trusted gate selection remains incomplete.
+POINTS: D1–D3, spec:21-27,45,58, rust/plangraph-cli/src/fast_checks.rs:120-132. The checkout selector still takes precedence over a base-declared script, and the head’s selector still supplies required-suite booleans. Choose execution mode from the pinned base, preserve the base’s required suites, and confine checkout-only detection to interactive planning without a resolvable base. Add a case where the head adds a selector over a failing base-declared check. BLOCKS

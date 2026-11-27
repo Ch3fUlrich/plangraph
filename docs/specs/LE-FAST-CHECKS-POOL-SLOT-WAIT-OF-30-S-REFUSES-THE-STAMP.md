@@ -91,3 +91,14 @@ Write X1-X7 and X9 first. On the base they fail to compile (new symbols) or show
 ## Open points for design approval
 
 None. The planner dropped How point 3 (slot count from RAM and cores) on the keeper item on 2026-11-27 18:40Z (plan-roadmap-0969): slot counts are disk-bound on all three hosts, per-host counts belong to HOST-PROFILES-DRIVES-ORDER-AND-TRAITS-IN-CONFIGURATION (D6).
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 10, wrong 0
+ROUND 1: D1 and D4 fixed. D2’s pid= format is fixed. X9’s output assertions still need to match the timeout behavior.
+ITEM FIT: Adds bounded caller-configured waiting, holder reporting, busy exit without a new receipt, and same-head retry. The spec records withdrawal of RAM/core slot sizing. Independent keeper confirmation is UNVERIFIED.
+POINTS: D2, spec:23,40,57, rust/plangraph-cli/src/fast_check_target.rs:131-145. D2 prints holder lines on initial contention and timeout. X9 expects one per slot. Assert one per slot in each report and the final busy error separately. NOTE
+POINTS: D1, spec:70 and card.yaml:28-30, rust/plangraph-cli/src/fast_checks.rs:330-426. The cumulative cap assumes FOREIGN adds 45 lines, but its card allows 70. Budget 615 final lines for POOL after FOREIGN, or reduce the combined allowed growth to 90 lines, then update the tree and digests. BLOCKS

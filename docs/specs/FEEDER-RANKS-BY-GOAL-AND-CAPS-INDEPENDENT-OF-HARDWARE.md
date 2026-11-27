@@ -87,3 +87,15 @@ The planner recorded this scope split on the keeper item on 2026-11-27 18:40Z (p
 - New item, keeper work: a fleet-wide writer cap and an hourly token budget enforced atomically at the keeper claim. The claim is refused with `fleet_cap` or `token_budget`, computed from the keeper's own claim and attempt records under the claim transaction. A host-local feeder cannot reserve a shared allowance (`feeder/runtime.rs:200-214`), and attempts exist only after a run ends (`store_card_updates.py:41-43`). The feeder then only reports the keeper's refusal code. Its test must have two hosts contend for the last allowance.
 - Done points (1) "a speed item outranks an other item of equal priority" and (6) "needs_spec counts by category" move to plangraph:ITEM-CATEGORY-RANKED and to a follow-up of plangraph:LE-ITEMS-ACCEPTED-AND-CLAIMED-WITHOUT-A-SPEC.
 - Add the keeper dependency edge from this item to plangraph:LE-FEEDER-LIVE-FAULTS-HIDDEN-BEHIND-KILL-SWITCH.
+
+## Open review points for the implementer (round 2, final under rule 3.119, D-7092)
+
+The spec is final after two design review rounds (gpt-6.2-sol-high). The points below were still open; the implementer resolves them inside the write set or reports why not.
+
+VERDICT: DESIGN-CHANGE
+CITATIONS: checked 10, wrong 1
+WRONG spec:15, rust/plangraph-cli/src/feeder/adapters.rs:265-274. Only claimed members with files trigger a rival snapshot.
+ROUND 1: Conditional admission snapshot citation, X1, and X4–X6 fixed. D2–D3, D6, and D7 resolved by the recorded scope split. D4 partially fixed.
+ITEM FIT: Keeps the host cap, landing backlog, barren-family filter, and start-row category. Moves fleet and token limits, category ranking, and needs_spec counts to other items. Independent keeper confirmation is UNVERIFIED.
+POINTS: D4, spec:46,59, rust/plangraph-cli/src/feeder/adapters.rs:265-278. X8 checks the admission read only. Extend the counting fixture through a live claim for a member with files and return a different snapshot after the claim. Assert that the rival check uses the later response. BLOCKS
+POINTS: D5, spec:3,26,45, rust/plangraph-cli/src/feeder/workflow.rs:312-324. The outcome promises category on every decision, while acceptance covers starts. Align the outcome and card with start-row reporting. NOTE
