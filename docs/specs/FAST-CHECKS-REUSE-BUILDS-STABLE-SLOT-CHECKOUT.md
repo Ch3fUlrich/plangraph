@@ -3,7 +3,7 @@
 Outcome. Reuse warm Rust build outputs in leased fast-check slots and keep shared writer caches warm between turns.
 
 - plan_source. Keeper brief for plangraph:FAST-CHECKS-REUSE-BUILDS-STABLE-SLOT-CHECKOUT, priority 10, operator order 2026-11-27 14:36Z, rules 3.114 and 3.115 (D-7053 and D-7070).
-- base commit. 506c0cf41b72cb3e5aab7a08a11dec45b8b6ed64
+- base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. 98e8488b473e769e6321be347bfb40a15a0caac18147327160dd2274650609b8
 - tree SHA-256. e5cef7c58b657836d8254bae233ecf9b07e69abd56a3932e54b6751a083a2ba3
 - evidence_after_deploy. After approved workstation deployment, compare 20 successful consecutive runs of the same ordered head transitions with the retained 2026-11-27 workstation baseline. Use the same check selection, toolchain, slot assignment policy for each version, wrapper mode, hardware and warm-up convention. Report UTC windows, both code revisions, included heads, excluded runs and reasons, median end-to-end wall seconds, median Linux write bytes and the number of checkout creations. For 20 samples the median is the mean of the two middle values. Acceptance requires both medians to fall. Use comparable retained baseline measurements only. Record missing baseline measurements as unavailable and leave live acceptance pending if either metric lacks 20 comparable pairs. After deployment also record compatible sccache version and active bases on each fast-check host by role. This evidence belongs to rollout, outside the writer's gate.
