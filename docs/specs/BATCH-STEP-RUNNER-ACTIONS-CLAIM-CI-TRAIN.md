@@ -50,7 +50,7 @@ Outcome. Compose keeper claims, exact-head CI classification evidence and verifi
 ## Scope and reuse
 
 - R1. Only the production adapters and fixture side of missing interfaces are implemented here. Reuse the existing keeper CLI client's authentication, claim idempotency, lease checks and release fencing. Keep the runner's stored rows and stages as the evidence consumer.
-- R2. Record the provider and claim contract in `docs/operations/batch-step-runner-actions.md` and add the item changelog. Keep provider values and credentials out of checked-in examples. `docs/SPAWNER.md` stays at its cap.
+- R2. Record the provider and claim contract in `docs/operations/batch-step-runner-actions.md` and add the item changelog. Keep provider values and secrets out of checked-in examples. `docs/SPAWNER.md` stays at its cap.
 - N1. Outside scope are the provider implementations, CI autofix, draft promotion, workflow changes, settlement, keeper API changes and live feeder dispatch.
 
 ## Line budgets
