@@ -1,0 +1,68 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "changelog.d/LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN.md": {
+      "max_changed_lines": 2,
+      "max_final_lines": 2
+    },
+    "docs/KEEPER.md": {
+      "max_changed_lines": 6,
+      "max_final_lines": 714
+    },
+    "src/plangraph/keeper/api_routes.py": {
+      "max_changed_lines": 6,
+      "max_final_lines": 518
+    },
+    "src/plangraph/keeper/context_sources.py": {
+      "max_changed_lines": 6,
+      "max_final_lines": 796
+    },
+    "src/plangraph/keeper/errors.py": {
+      "max_changed_lines": 14,
+      "max_final_lines": 49
+    },
+    "src/plangraph/keeper/store_input.py": {
+      "max_changed_lines": 14,
+      "max_final_lines": 281
+    },
+    "src/plangraph/keeper/store_runs.py": {
+      "max_changed_lines": 3,
+      "max_final_lines": 796
+    },
+    "src/plangraph/keeper/store_waiver.py": {
+      "max_changed_lines": 4,
+      "max_final_lines": 775
+    },
+    "tests/test_keeper_malformed_key.py": {
+      "max_changed_lines": 140,
+      "max_final_lines": 140
+    }
+  },
+  "cards": {
+    "LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN": {
+      "outcome": "Define refuses a malformed or redacted item id, one malformed stored key no longer fails the merge scan of every repository, and a merge_scan_failed names the exception module and line in the reply and the keeper journal.",
+      "read_set": [
+        "src/plangraph/keeper/store_close.py",
+        "tests/keeper_util.py",
+        "tests/test_keeper_credential_guard.py",
+        "tests/test_keeper_merge_close_auto.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-KEEPER-REDACTED-ITEM-KEY-BREAKS-MERGE-SCAN.md",
+        "docs/KEEPER.md",
+        "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/context_sources.py",
+        "src/plangraph/keeper/errors.py",
+        "src/plangraph/keeper/store_input.py",
+        "src/plangraph/keeper/store_runs.py",
+        "src/plangraph/keeper/store_waiver.py",
+        "tests/test_keeper_malformed_key.py"
+      ],
+      "check_cmd": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_malformed_key.py",
+      "risk_tags": [],
+      "estimate_tokens": 45000,
+      "window_class": "128k",
+      "heldout_check": "PYTHONPATH=src python3 -m pytest -q tests/test_keeper_merge_close_auto.py tests/test_keeper_credential_guard.py tests/test_keeper_create_fold.py"
+    }
+  }
+}
