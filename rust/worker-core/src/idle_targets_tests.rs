@@ -45,7 +45,7 @@ fn hygiene_discovery_finds_nested_targets_and_excludes_every_pool() {
     let unreadable = cache.join("unreadable");
     fs::create_dir(&unreadable).unwrap();
     let permissions = unreadable.metadata().unwrap().permissions();
-    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
     let denied = unreadable.read_dir().is_err();
     symlink(
         nested.join(".rustc_info.json"),
