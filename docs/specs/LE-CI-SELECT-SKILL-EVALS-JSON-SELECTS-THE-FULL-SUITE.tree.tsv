@@ -1,0 +1,9 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E1	observed
+changelog.d/LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE.md	write	yes	E1	new (<= 4 final lines)
+docs/contributing/LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE.md	write	yes	E1	new (<= 6 final lines)
+tests/test_ci_select.py	write	yes	E1	observed (<= 40 added lines)
+tests/test_planning_skill_token.py	read	yes	E1	observed
+tests/test_skill_evals.py	read	yes	E1	observed
+tools/check_changelog_docs.py	read	yes	E1	observed
+tools/ci_select.py	write	yes	E1	observed (<= 8 added lines; <= 798 final lines)

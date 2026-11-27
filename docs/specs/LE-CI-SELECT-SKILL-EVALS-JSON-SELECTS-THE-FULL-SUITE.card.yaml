@@ -1,0 +1,31 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "tools/ci_select.py": {
+      "max_changed_lines": 12,
+      "max_final_lines": 798
+    }
+  },
+  "cards": {
+    "LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE": {
+      "outcome": "A change to skills/<name>/evals/<file>.json selects the skill tests (pytest only), like a skill page, instead of the full suite.",
+      "read_set": [
+        ".docs-map",
+        "tests/test_planning_skill_token.py",
+        "tests/test_skill_evals.py",
+        "tools/check_changelog_docs.py"
+      ],
+      "write_set": [
+        "changelog.d/LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE.md",
+        "docs/contributing/LE-CI-SELECT-SKILL-EVALS-JSON-SELECTS-THE-FULL-SUITE.md",
+        "tests/test_ci_select.py",
+        "tools/ci_select.py"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_ci_select.py",
+      "risk_tags": [],
+      "estimate_tokens": 30000,
+      "window_class": "128k",
+      "heldout_check": "python3 -m pytest -q tests/test_ci_select_rust_inputs.py tests/test_skill_evals.py"
+    }
+  }
+}
