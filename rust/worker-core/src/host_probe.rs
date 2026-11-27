@@ -143,19 +143,39 @@ pub fn probe_load_optional(
     host_id: &str,
     proc_root: &std::path::Path,
 ) -> Result<HostProbe, HostProbeError> {
+    probe_with(host_id, optional_capacity(proc_root)?)
+}
+
+/// Like `probe_load_optional`, with CPU count and timestamp supplied by the caller.
+pub fn probe_load_optional_at(
+    host_id: &str,
+    proc_root: &std::path::Path,
+    cpus: usize,
+    ts_ms: u64,
+) -> Result<HostProbe, HostProbeError> {
+    Ok(with_capacity(
+        host_id,
+        optional_capacity(proc_root)?,
+        cpus,
+        ts_ms,
+    ))
+}
+
+fn optional_capacity(
+    proc_root: &std::path::Path,
+) -> Result<(MemInfo, [Option<f64>; 3]), HostProbeError> {
     #[cfg(target_os = "linux")]
-    let capacity = capacity_at(proc_root, false)?;
+    return capacity_at(proc_root, false);
     #[cfg(not(target_os = "linux"))]
-    let capacity = {
+    {
         let _ = proc_root;
-        capacity()?
-    };
-    probe_with(host_id, capacity)
+        capacity()
+    }
 }
 
 fn probe_with(
     host_id: &str,
-    (mem, [load1, load5, load15]): (MemInfo, [Option<f64>; 3]),
+    capacity: (MemInfo, [Option<f64>; 3]),
 ) -> Result<HostProbe, HostProbeError> {
     let cpus = std::thread::available_parallelism()?.get();
     let ts_ms = SystemTime::now()
@@ -164,7 +184,16 @@ fn probe_with(
         .as_millis()
         .try_into()
         .map_err(|_| HostProbeError::Clock)?;
-    Ok(HostProbe {
+    Ok(with_capacity(host_id, capacity, cpus, ts_ms))
+}
+
+fn with_capacity(
+    host_id: &str,
+    (mem, [load1, load5, load15]): (MemInfo, [Option<f64>; 3]),
+    cpus: usize,
+    ts_ms: u64,
+) -> HostProbe {
+    HostProbe {
         host_id: host_id.to_owned(),
         os: std::env::consts::OS.to_owned(),
         mem_total_mb: mem.mem_total_mb,
@@ -176,7 +205,7 @@ fn probe_with(
         load5,
         load15,
         ts_ms,
-    })
+    }
 }
 
 #[cfg(test)]

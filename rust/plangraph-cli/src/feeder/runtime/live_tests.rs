@@ -82,14 +82,14 @@ fn no_free_ram_above_the_floor_gives_no_slot_whatever_the_load() {
     );
 }
 
-/// Fixtures that drive `decide` with a Linux `/proc` directory and a stub quota adapter.
+/// Fixtures that drive `decide` with private proc counters and a fixed tick.
 #[cfg(target_os = "linux")]
 mod proc_fixture {
     use super::*;
 
     /// A live decision on a fixture host: 16 000 000 kB available (3 slots above the 3 GB floor
-    /// at 4 GB each), one eligible item and a fresh codex quota row. The quota adapter is a
-    /// `python3` stub on the fixture's own PATH, so the decision can end in `would_spawn`.
+    /// at 4 GB each), one eligible item and a fresh codex quota row.
+    const TICK: i64 = 1_800_000_000;
     struct Live {
         dir: tempfile::TempDir,
         env: Env,
@@ -110,9 +110,6 @@ mod proc_fixture {
             fs::write(at("rules.md"), "rules").unwrap();
             let bin = at("bin");
             fs::create_dir_all(&bin).unwrap();
-            let row = json!([{"provider":"codex","window_key":"w","remaining_percentage":80,
-                "created_at":chrono::Utc::now().timestamp()}]);
-            write_local_quota_stub(&bin, &row);
             let env = Env::from([
                 ("PLANGRAPH_HOST_NAME".into(), host.into()),
                 ("PATH".into(), bin.to_string_lossy().into()),
@@ -126,6 +123,19 @@ mod proc_fixture {
                 repo: dir.path().to_path_buf(),
                 proc: at("proc"),
                 open_psi: capacity::open_psi,
+                clock: || TICK,
+                cpu_count: || Ok(12),
+                disk_usage: |path| {
+                    assert!(path.join("proc/meminfo").is_file());
+                    Ok(20_000_000_000)
+                },
+                local_quota: |_, repo| {
+                    assert!(repo.join("proc/meminfo").is_file());
+                    Ok(
+                        json!([{"provider":"codex","window_key":"w","remaining_percentage":80,
+                        "created_at":TICK}]),
+                    )
+                },
             };
             let ready = json!({"items":[{"key":"plangraph:X","title":"x","priority":5,
                 "created_at":"2026-01-01T00:00:00Z","state":"open","files":[]}]});
@@ -162,30 +172,19 @@ mod proc_fixture {
     }
     const SATURATED: &str = "1000000.0 1000000.0 1000000.0 1/2 3\n";
 
-    fn write_local_quota_stub(bin: &Path, rows: &Value) {
-        let stub = bin.join("python3");
-        pg_worker_core::executable_test_support::write_executable(
-            &stub,
-            format!("#!/bin/sh\nprintf '%s' '{rows}'\n"),
-        );
-        // Wait for any concurrent fork holding the stub's write descriptor to exec.
-        pg_worker_core::executable_test_support::spawn(
-            std::process::Command::new(&stub).stdout(std::process::Stdio::null()),
-        )
-        .and_then(|mut child| child.wait())
-        .unwrap();
-    }
-
     #[test]
     fn center_quota_drives_live_admission_and_preserves_capacity_when_stale() {
         let mut live = Live::new("dell", "[max_writers]\ndell = 5\n");
-        write_local_quota_stub(&live.dir.path().join("bin"), &json!([]));
+        live.options.local_quota = |_, repo| {
+            assert!(repo.join("center-quota.json").is_file());
+            Ok(json!([]))
+        };
         let path = live.dir.path().join("center-quota.json");
         live.env.insert(
             "PLANGRAPH_QUOTA_FACTS".into(),
             path.to_string_lossy().into(),
         );
-        let now = chrono::Utc::now().timestamp();
+        let now = TICK;
         let write = |envelope_at, row_at| {
             fs::write(&path, json!({"observed_at":envelope_at, "rows":[
                 {"provider":"codex:fixture","windowKey":"week","remainingPct":63,"timestamp":row_at}
@@ -203,23 +202,39 @@ mod proc_fixture {
         let fresh = decide();
         assert_eq!(fresh["decision"], "would_spawn", "{fresh}");
         assert_eq!(fresh["capacity"]["quota_remaining_percent"], 63.0);
+        assert_eq!(fresh["capacity"]["observed_at"], now);
+        assert_eq!(fresh["capacity"]["free_disk_bytes"], 20_000_000_000u64);
+        assert_eq!(fresh["capacity"]["cpus"], 12);
         assert_eq!(fresh["capacity"]["running_writers"], 1);
         assert_eq!(fresh["capacity"]["free_ram_bytes"], 12_384_000_000u64);
 
-        for (envelope_at, row_at) in [(now - 950, now - 20), (now - 10, now - 11_000)] {
-            write(envelope_at, row_at);
+        for (envelope_age, row_age, cause) in [
+            (950, 20, "outside its freshness window"),
+            (10, 11_000, "no usable codex observation"),
+        ] {
+            write(now - envelope_age, now - row_age);
             let stale = decide();
             assert_eq!(stale["decision"], "refused", "{stale}");
             let reason = stale["reason"].as_str().unwrap();
             assert!(reason.starts_with("quota_stale:"), "{reason}");
             assert!(
-                reason.contains("snapshot age") && reason.contains("codex observation age"),
+                reason.contains(cause)
+                    && reason.contains(&format!("snapshot age {envelope_age}s"))
+                    && reason.contains(&format!("codex observation age {row_age}s")),
                 "{reason}"
             );
             for key in ["running_writers", "free_ram_bytes", "slots_by_ram"] {
                 assert_eq!(stale["capacity"][key], fresh["capacity"][key]);
             }
         }
+        write(now - 10, now - 20);
+        live.options.clock = || TICK + 900;
+        let later = live.decision_with_runs(&running).unwrap();
+        assert_eq!(later["decision"], "refused", "{later}");
+        assert!(later["reason"]
+            .as_str()
+            .unwrap()
+            .contains("snapshot age 910s"));
     }
 
     #[test]
@@ -373,7 +388,7 @@ mod proc_fixture {
         fs::write(
             &live.options.facts,
             json!({"host":"mystery","free_ram_bytes":86_000_000_000u64,
-                "free_disk_bytes":20_000_000_000u64,"observed_at":chrono::Utc::now().timestamp()})
+                "free_disk_bytes":20_000_000_000u64,"observed_at":TICK})
             .to_string(),
         )
         .unwrap();
