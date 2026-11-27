@@ -1,6 +1,5 @@
 path	disposition	required	row IDs	label
 .docs-map	read	yes	E4	predicted
-rust/pg-spawnd/src/launch_tests.rs	read	yes	E3	predicted
 rust/pg-spawnd/src/prompt.rs	read	yes	E2 E3	predicted
 rust/pg-spawnd/src/review_retry.rs	read	yes	E3	predicted
 rust/pg-spawnd/src/review_split.rs	read	yes	E2 E3	predicted
@@ -10,6 +9,7 @@ rust/pg-spawnd/tests/mimo_output_cap.rs	read	yes	E2 E4	predicted
 rust/pg-spawnd/tests/review_diff_split.rs	read	yes	E2	predicted
 src/plangraph/planner/route_policy.py	read	yes	E1	predicted
 src/plangraph/routing_support/clients.py	read	yes	E2	predicted
+src/plangraph/spawner/cli.py	read	yes	E4	predicted
 src/plangraph/spawner/context_pack.py	read	yes	E2	predicted
 src/plangraph/spawner/gateway_witness.py	read	yes	E4	predicted
 src/plangraph/spawner/inline_diff.py	read	yes	E2	predicted
@@ -25,6 +25,7 @@ changelog.d/MIMO-BATCH-CAPACITY-D6357.md	write	yes	E4	predicted
 docs/SPAWNER.md	write	yes	E2 E4	predicted
 docs/operations/spawner-mimo-seats.md	write	yes	E2 E4	predicted
 docs/routing.md	write	yes	E1 E4	predicted
+rust/pg-spawnd/src/launch_tests.rs	write	yes	E1	predicted
 rust/pg-spawnd/src/spawn.rs	write	yes	E3	predicted
 src/plangraph/planner/legs.py	write	yes	E1 E2	predicted
 src/plangraph/planner/route_policy.json	write	yes	E1	predicted
@@ -33,7 +34,7 @@ src/plangraph/spawner/launch_spec.py	write	yes	E2 E3	predicted
 src/plangraph/spawner/runner.py	write	yes	E2	predicted
 src/plangraph/spawner/seat_spawn.py	write	yes	E2	predicted
 src/plangraph/spawner/service.py	write	yes	E2	predicted
-tests/test_opencode_isolation_go.py	write	yes	E2 E4	predicted
+tests/test_opencode_isolation_go.py	write	yes	E2	predicted
 tests/test_route_free_first.py	write	yes	E1	predicted
 tests/test_route_policy_review_choice.py	write	yes	E1	predicted
 tests/test_spawner_launch_spec.py	write	yes	E2 E3	predicted

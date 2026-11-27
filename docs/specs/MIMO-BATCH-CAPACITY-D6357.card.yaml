@@ -5,7 +5,6 @@
       "outcome": "Admit a witnessed MiMo Pro inline diff verdict after Hydrogen-high within the review request bound.",
       "read_set": [
         ".docs-map",
-        "rust/pg-spawnd/src/launch_tests.rs",
         "rust/pg-spawnd/src/prompt.rs",
         "rust/pg-spawnd/src/review_retry.rs",
         "rust/pg-spawnd/src/review_split.rs",
@@ -15,6 +14,7 @@
         "rust/pg-spawnd/tests/review_diff_split.rs",
         "src/plangraph/planner/route_policy.py",
         "src/plangraph/routing_support/clients.py",
+        "src/plangraph/spawner/cli.py",
         "src/plangraph/spawner/context_pack.py",
         "src/plangraph/spawner/gateway_witness.py",
         "src/plangraph/spawner/inline_diff.py",
@@ -32,6 +32,7 @@
         "docs/SPAWNER.md",
         "docs/operations/spawner-mimo-seats.md",
         "docs/routing.md",
+        "rust/pg-spawnd/src/launch_tests.rs",
         "rust/pg-spawnd/src/spawn.rs",
         "src/plangraph/planner/legs.py",
         "src/plangraph/planner/route_policy.json",

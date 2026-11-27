@@ -7,7 +7,7 @@ Restore a witnessed MiMo Pro review after Hydrogen-high using the exact reviewed
 - D1. D-7019 sets the GPT-head order. D-7020 assigns one GPT-6.2-sol-high writer and authorizes the inline fallback when repository tools do not fit. The signed D-7065 relay at fleet row 1024 selects that fallback.
   Design predecessor `d00f43163d8a93884628000dcaff92a6bebe24ca`. Protected source base `506c0cf41b72cb3e5aab7a08a11dec45b8b6ed64`.
 - D2. Keep MIMO-BATCH-CAPACITY-D6357 and SPAWNER-REVIEW-TOOLS in this lane under plan-order. D-7022 keeps RL28 and generic launch hardening separate. Writer run-15b64367 reported that OpenCode v2.2.5 omitted its broker tools on the first standalone request and connected the stdio endpoint with Unix sockets where the prior broker required pipes. Use the existing tool-denied inline profile. The broker, runtime upgrade and tool renderer changes leave this write set.
-- D3. Card SHA-256 `a9b0376bf9b49f7babf243c564f75e42321a0cb7c6b3565ed11d654d78544a81`. Tree SHA-256 `eb0a8ceedcf6ea4a9d01c114f194c1d1ce4a07b2592e4ba231b3d7e7017c5c47`. Keep exact lane receipt and fresh other-family DESIGN-OK for this revision. Plan-order publishes, seats the design revision and resumes the same writer after acceptance and protected D-7065 publication.
+- D3. Card SHA-256 `5d4c4852c26849dbcc1f14782ad53dbeb1a25aa31ff8b4efe70a650959a4881e`. Tree SHA-256 `c27c2ff7d407c64ad144ecd297fb0adafec2ef3e15209fd806845d0e7644cd3c`. Keep exact lane receipt and fresh other-family DESIGN-OK for this revision. Plan-order publishes, seats the design revision and resumes the same writer after acceptance and protected D-7065 publication.
 - D4. Preserve protected D-7057 for `rust/pg-spawnd/src/spawn.rs` and one writer-selected launch regression. The map pins spawn.rs. D-7057 separately covers the one test whose concrete path the writer records and plan-order names in GO-REQ. Preserve its other-family implementation review, exact checks and GO.
 
 ## Routing and launch
@@ -27,15 +27,24 @@ Restore a witnessed MiMo Pro review after Hydrogen-high using the exact reviewed
 | I2 | E3 | In the one D-7057 native regression, a MiMo launch refusal advances the existing routed review request to an eligible seat with the same diff. Verify no duplicate launch or stale seat reservation, and preserve the queue fallback behavior. |
 | S1 | E4 | On the protected live gate, one serving MiMo Pro inline seat returns a response-side witnessed verdict at the exact bounded real head. Record the separate required check evidence. No served model, missing verdict or an unavailable route remains a named blocker. |
 
-- X1. Run the pg-spawnd binary review_route test and the mapped Python route tests. Test no diff, a repository-required card, an ordinary GPT-head diff and the gated Sonnet case. Keep unrelated role and family ordering coverage.
+- X1. Run the pg-spawnd binary review_route test and the mapped Python route tests. Update the existing E1 route-policy test in launch_tests.rs to admit the bounded ordinary GPT-head diff and retain the missing-material and required-tools exclusions. Keep unrelated role and family ordering coverage and the gated Sonnet case. This test is in the existing E1 scope. The one D-7057 launch-refusal regression remains X3.
 - X2. Use the mapped inline, launch-spec and isolation fixtures for exact material, dry-run, cap boundaries, provider overlay and denied tools. Run the existing gateway witness, seat-tag, native diff-split and MiMo output-cap tests. Check that invalid material produces no provider attempt and that the gateway verdict remains bound to the actual head.
 - X3. Run the single native D-7057 launch regression chosen by the writer and record its full command and path for plan-order.
-- X4. Use the live MiMo fixture only under the protected live gate. A skipped fixture or an inline verdict without verified identity cannot satisfy S1.
+- X4. After protected S1 authorization and deployment, use the existing spawner review entry point on an admitted host. Set `S1_CARD` to the review card with the exact published repository, base and head in `diff_ref` and the item's existing card fields. Set `S1_WRITER_RUN` to that GPT writer's recorded run, `S1_PROMPT` to the first seat's review brief and `S1_CHECKOUT` to the admitted checkout. Run the single live seat with the same diff and scope:
+
+  ```sh
+  python3 -m plangraph.spawner.cli spawn --card "@${S1_CARD}" --role review \
+    --review-of "${S1_WRITER_RUN}" --leg mimo-v2.6-pro --no-fallthrough \
+    --override-reason "Protected D-7065 MiMo inline S1" \
+    --cwd "${S1_CHECKOUT}" --prompt-file "${S1_PROMPT}" --json
+  ```
+
+  Record the exact refs, request size and cap, deny profile, gateway witness and canonical verdict under E4. Keep the required tools-capable and tested seat evidence on its own run records. The automated isolation tests remain E2 coverage. A skipped or unserved live run or an unwitnessed verdict leaves S1 open.
 
 ## Scope and evidence
 
 - R1. The one existing OpenCode renderer supplies the deny profile. Keep broker, sandbox, provider credentials, service settings and runtime upgrade outside the lane. Keep general launch-hardening and RL28 ownership separate.
 - R2. Keep routing.py at 800 lines or fewer and runner.py within its existing baseline. Update the existing SPAWNER.md description in place within its 668-line documentation headroom. Use existing Python files for fixes and Rust for new code. The only native fallback behavior added under D-7057 is the named review-seat refusal.
-- R3. At the pinned source base, the mapped existing files total 829968 bytes across 38 paths. Plan for about 276656 estimated input tokens at three bytes per token before brief overhead. The card reserves 310000 tokens in the existing 1m class. Confirm the whole pack fits the same Sol-high writer and record the selected D-7057 test.
+- R3. At the pinned source base, the mapped existing files total 865069 bytes across 39 paths. Plan for about 288357 estimated input tokens at three bytes per token before brief overhead. The card reserves 310000 tokens in the existing 1m class. Confirm the whole pack fits the same Sol-high writer and record the selected D-7057 test.
 - N1. The inline fallback is the implementation selected by D-7065 for this lane. Preserve the exact scope, independent design and implementation review, GO and protected release requirements.
 - Live. Capture the witnessed S1 receipt after the authorized release. Plan-order checks required part evidence before requesting settlement.
