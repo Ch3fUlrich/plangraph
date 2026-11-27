@@ -125,16 +125,99 @@ fn record_validation_error(
     save(state, host, record, status)?;
     Ok(())
 }
-/// Starts the two fallback review seats (DeepSeek and GLM) of a seat the smart leg could not take,
-/// and answers with their seat group.
+/// Queues retain the specialist pair. A refused launch advances the admitted route.
 fn fallback_seats(
     state: &Path,
     args: &Args,
     host: &str,
     runs: &crate::runs::Runs,
     role: &Value,
+    refused: Option<(Value, ToolError)>,
 ) -> Result<Value, ToolError> {
-    cover_with_fallback(state, args, host, runs, role, &[], 0, None)
+    let Some((mut plan, mut error)) = refused else {
+        return cover_with_fallback(state, args, host, runs, role, &[], 0, None);
+    };
+    let mut retry_args = args.clone();
+    retry_args.remove(crate::seat_admission::TOKEN_FIELD);
+    let legs = plan["legs"].as_array().cloned().unwrap_or_default();
+    let refused_id = plan["first_leg"]["id"].clone();
+    let mut remaining = legs
+        .iter()
+        .enumerate()
+        .skip_while(|(_, leg)| leg["id"] != refused_id)
+        .skip(1);
+    // Keep the failed attempt separately when the adapter refused before a run id existed.
+    loop {
+        let reason = review_host_refusal(&error).expect("named launch refusal");
+        let leg = &plan["first_leg"];
+        let diff = &args["card"]["diff_ref"];
+        let refusal = save(
+            state,
+            host,
+            json!({
+                "role":role,"status":"failed","reason":"not_served_on_host","exit_code":1,
+                "plan":plan,"chosen_leg":null,"writer_family":leg["family"],
+                "card_hash":crate::pyjson::card_hash(&args["card"]),
+                "head_sha":diff.get("head_sha").or_else(|| diff.get("head")),
+                "review_base":diff.get("base_sha").or_else(|| diff.get("base")),
+                "attempts":[{"leg":leg,"status":"failed","skip_reason":reason,
+                             "served_model":"unwitnessed","served_family":"unwitnessed",
+                             "served_witness_reason":"leg refused before launch"}]
+            }),
+            Status::Failed,
+        )?;
+        push_route_skip(&mut plan, "not_served_on_host", refusal["run_id"].clone());
+        let (index, slot) = loop {
+            let Some((index, leg)) = remaining.next() else {
+                return Err(error);
+            };
+            plan["first_leg"] = leg.clone();
+            match crate::seat_admission::reserve_now(state, leg, &plan["seat_admission"]) {
+                Ok(slot) => break (index, slot),
+                Err(skip) => {
+                    push_route_skip(&mut plan, &skip.into_error_data().message, Value::Null)
+                }
+            }
+        };
+        plan["legs"] = json!(legs[index..]);
+        if let Some(slot) = &slot {
+            retry_args.insert(
+                crate::seat_admission::TOKEN_FIELD.into(),
+                json!(slot.token()),
+            );
+        }
+        let result = runs.spawn(state, &retry_args, host, role.clone(), plan.clone());
+        drop(slot);
+        retry_args.remove(crate::seat_admission::TOKEN_FIELD);
+        match result {
+            Err(next) if review_host_refusal(&next).is_some() => error = next,
+            result => return result,
+        }
+    }
+}
+
+fn push_route_skip(plan: &mut Value, reason: &str, refusal_run: Value) {
+    let skip = json!({"leg":plan["first_leg"]["id"],"reason":reason,"refusal_run":refusal_run});
+    if !plan["skipped"].is_array() {
+        plan["skipped"] = json!([]);
+    }
+    plan["skipped"].as_array_mut().unwrap().push(skip);
+}
+
+fn review_host_refusal(error: &ToolError) -> Option<&str> {
+    let ToolError::Refused {
+        kind: crate::errors::RefusalKind::Spawn,
+        message,
+        ..
+    } = error
+    else {
+        return None;
+    };
+    let reason = message
+        .strip_prefix("unavailable: ")
+        .or_else(|| message.strip_prefix("render_refused: "))
+        .unwrap_or(message);
+    (reason == "not_served_on_host" || reason.starts_with("not_served_on_host:")).then_some(reason)
 }
 
 /// The fallback pair over `paths` next to the runs already `started` (see `seat_fallback::cover`).
@@ -213,7 +296,7 @@ pub(crate) fn spawn(
         ) {
             Ok(taken) => taken,
             Err(error) if crate::seat_admission::is_queue_refusal(&error) => {
-                return fallback_seats(state, args, host, runs, &role);
+                return fallback_seats(state, args, host, runs, &role, None);
             }
             Err(error) => return Err(error),
         }
@@ -234,6 +317,15 @@ pub(crate) fn spawn(
         None => args,
     };
     match runs.spawn(state, args, host, role.clone(), plan.clone()) {
+        Err(error)
+            if role == "review"
+                && args.get("dry_run") != Some(&json!(true))
+                && args.get("no_fallthrough") != Some(&json!(true))
+                && review_host_refusal(&error).is_some() =>
+        {
+            drop(slot);
+            fallback_seats(state, args, host, runs, &role, Some((plan, error)))
+        }
         Err(error) => {
             let named = ["prompt_too_large", "stdin_prompt_flag_missing"];
             let reason = match &error {

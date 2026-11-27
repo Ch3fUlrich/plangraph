@@ -414,7 +414,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
     from .legs import (CLIENT_MISSING, LOW_RISK_ONLY_LEGS, REVIEW_AGY_SONNET, REVIEW_ARGON,
-                       REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_ORDER, REVIEW_REQUIRED, REVIEW_SONNET,
+                       REVIEW_ARGON_LOW, REVIEW_GPT, REVIEW_HYDROGEN, REVIEW_MIMO_PRO, REVIEW_ORDER, REVIEW_REQUIRED, REVIEW_SONNET,
                        review_route_pool)
     if native_review:
         legs = review_route_pool(legs)
@@ -650,7 +650,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "low_risk_only"
         elif role == "review" and card.get("repository_review_required") and not has_repository_review_tools(leg):
             reason = "repository_review_tools_unavailable"
-        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card and not delta_document:
+        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card and (
+                not delta_document or leg.id == REVIEW_MIMO_PRO):
             reason = "inline_only_needs_diff"
         elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
                 low_risk and leg.id in LOW_RISK_ONLY_LEGS):
@@ -738,11 +739,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        # Argon is last of the whole route (rule 3.61), behind the non-order extras too.
+        gpt_diff = "openai" in writer_set and bool(card.get("diff_ref"))
+        if gpt_diff and {REVIEW_HYDROGEN, REVIEW_MIMO_PRO}.intersection(l.id for l in ordered) and any(l.id == review_sonnet for l in ordered):
+            skipped.append(dict(leg=review_sonnet, reason="review_route_excluded", evidence=None))
+            ordered = [l for l in ordered if l.id != review_sonnet]
         ordered.sort(key=lambda leg: len(REVIEW_ORDER) + 2 + REVIEW_ORDER.index(leg.id) if leg.id in (REVIEW_ARGON_LOW, REVIEW_ARGON)
                      else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
-        if sensitive_review:
+        if sensitive_review and not gpt_diff:
             ordered.sort(key=lambda leg: leg.id != review_sonnet)
         source = "operator-order"
     ordered.sort(key=lambda leg: role in ("orchestrate", "research") and leg.claude_family)  # D-4812/D-297: Claude last

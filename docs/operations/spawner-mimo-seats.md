@@ -2,6 +2,31 @@
 
 Moved out of [SPAWNER.md](../SPAWNER.md) to keep it under its line cap (`tools/check_file_size.py`, `DOC_CAPS`).
 
+## MiMo Pro inline reviews
+
+The GPT-head route keeps the required repository-capable seats and orders Hydrogen-high
+before MiMo Pro. MiMo Pro reviews an exact, nonempty base/head diff with OpenCode's
+isolated tool-denied profile. Routing skips it for a repository-tools-required review
+or a missing diff. Explicit real launches need the same material. A dry run can preview
+the inline seat with no diff.
+
+A MiMo Pro review request is limited to three characters per estimated token, with
+a ceiling of 200,000 tokens (600,000 characters). A smaller provider limit takes
+precedence. The count includes the brief, context pack, diff and all framing.
+Oversized requests are refused or split by the native review path. Each split
+request has the same limit and the aggregate verdict needs full path coverage.
+The `opencode_tools_denied` event records the rendered request size and token limit.
+For a native review refused with `not_served_on_host` before dispatch, the
+spawner records the refusal, releases that seat's reservation and tries the
+next eligible seat from the existing route with the same diff. An explicit
+`no_fallthrough` request reports the refusal immediately.
+
+For the supervised S1 run, record the published base and head, the request size and
+cap, the final tool-denial event, the gateway response-side MiMo Pro identity and
+the canonical verdict. Use the first seat's brief and diff. Attach the required
+repository-capable seat verdicts and exact-head test evidence from their own runs.
+See [the protected live procedure](../specs/MIMO-BATCH-CAPACITY-D6357.md#acceptance).
+
 ## MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets

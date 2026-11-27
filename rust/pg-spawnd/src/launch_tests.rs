@@ -389,30 +389,153 @@ fn which_python() -> std::path::PathBuf {
 }
 
 #[test]
-fn review_route_skips_mimo_pro_with_tools_denied_reason() {
+fn review_route_admits_bounded_mimo_pro_inline() {
     let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let (dir, _, request) = repo_with_writer_trailer(Some("codex"));
     let script = r#"
-from pathlib import Path
-from plangraph.planner.legs import DEFAULT_LEGS
+import json, sys
+from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_HYDROGEN, REVIEW_MIMO_PRO
 from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
 from plangraph.planner.routing import plan_spawn
 policy = load_route_policy(DEFAULT_POLICY_PATH)
-card = dict(estimate_tokens=2000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD~1', head='HEAD'))
-pro = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
-plan = plan_spawn(card, role='review', writer_families=('gpt',), policy=policy,
-    catalog_rows=(), leg_reader=lambda *args, **kwargs: dict(state='available', evidence=None))
-assert pro.id not in {leg.id for leg in (*plan.legs, *plan.review_seats)}
-assert any(row['leg'] == pro.id and row['reason'] == 'opencode_tools_denied' for row in plan.skipped), plan.skipped
-assert policy.skip_reason(pro, 'implement') is None
+ref = json.loads(sys.argv[1])
+def route(**card):
+    return plan_spawn(dict(estimate_tokens=2000, **card), role='review', writer_families=('gpt',),
+        policy=policy, catalog_rows=(), leg_reader=lambda *a, **k: dict(state='available', evidence=None))
+plan = route(diff_ref=ref)
+ids = [leg.id for leg in plan.legs]
+assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO), ids
+assert plan.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == 'inline-only'
+assert plan.legs[ids.index(REVIEW_MIMO_PRO)].max_request_tokens == 200_000
+assert any(row['leg'] == REVIEW_MIMO_PRO and row['reason'] == 'inline_only_needs_diff' for row in route().skipped)
+assert any(row['leg'] == REVIEW_MIMO_PRO and row['reason'] == 'repository_review_tools_unavailable'
+    for row in route(diff_ref=ref, repository_review_required=True).skipped)
+pro = next(leg for leg in DEFAULT_LEGS if leg.id == REVIEW_MIMO_PRO)
+assert policy.skip_reason(pro, 'implement') is None and policy.skip_reason(pro, 'review') is None
 "#;
+    let registered = &request["card"]["diff_ref"];
+    let reference =
+        json!({"repo":dir.0,"base":registered["base_sha"],"head":registered["head_sha"]});
     let output = std::process::Command::new(which_python())
         .args(["-c", script])
+        .arg(reference.to_string())
         .env("PYTHONPATH", sources)
         .output()
         .unwrap();
     assert!(
         output.status.success(),
         "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn review_route_mimo_not_served_on_host_advances_to_next_seat() {
+    const CHILD: &str = "PG_TEST_MIMO_HOST_REFUSAL";
+    if let Some(root) = std::env::var_os(CHILD) {
+        use pg_worker_core::run::{
+            group::Confinement, supervise::Config, supervisor::SupervisorCfg,
+        };
+        let root = std::path::PathBuf::from(root);
+        let state = root.join("state");
+        let args: crate::placement::Args =
+            serde_json::from_slice(&std::fs::read(root.join("args")).unwrap()).unwrap();
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            pg_worker_core::run::supervisor::Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let result = crate::spawn::spawn(&state, &args, "fixture", &runs)
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_eq!(result["chosen_leg"]["id"], "next", "{result}");
+        let requests: Vec<Value> = std::fs::read_to_string(root.join("requests"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["leg"]["id"], "mimo-v2.6-pro");
+        assert_eq!(requests[1]["leg"]["id"], "next");
+        assert!(requests
+            .iter()
+            .all(|request| request["card"]["diff_ref"] == args["card"]["diff_ref"]));
+        let rows = crate::records::list_runs(&state);
+        let failed = rows
+            .iter()
+            .find(|row| row["reason"] == "not_served_on_host")
+            .unwrap();
+        assert_eq!(failed["attempts"][0]["leg"]["id"], "mimo-v2.6-pro");
+        assert_eq!(failed["head_sha"], args["card"]["diff_ref"]["head"]);
+        assert_eq!(failed["review_base"], args["card"]["diff_ref"]["base"]);
+        assert_eq!(
+            result["plan"]["skipped"][0]["refusal_run"],
+            failed["run_id"]
+        );
+        return;
+    }
+    let (dir, _, request) = repo_with_writer_trailer(Some("codex"));
+    let refs = &request["card"]["diff_ref"];
+    let args = json!({"prompt":"fixture","role":"review","writer_families":["gpt"],"wait_seconds":2,
+        "card":{"estimate_tokens":1000,"diff_ref":{"repo":dir.0,"base":refs["base_sha"],"head":refs["head_sha"]}}});
+    std::fs::write(dir.join("args"), args.to_string()).unwrap();
+    let mimo = json!({"id":"mimo-v2.6-pro","model":"mimo/mimo-v2.6-pro","harness":"opencode","family":"mimo","tool_mode":"inline-only"});
+    let next = json!({"id":"next","model":"fixture/next","harness":"opencode","family":"deepseek","tool_mode":"tools"});
+    let plan = json!({"first_leg":mimo,"legs":[mimo,next],"skipped":[],
+        "seat_admission":{"legs":{"mimo-v2.6-pro":1,"next":1}}});
+    std::fs::write(dir.join("plan"), plan.to_string()).unwrap();
+    let route = dir.join("route");
+    let launch = dir.join("launch");
+    pg_worker_core::executable_test_support::write_private_executable(
+        &route,
+        "#!/bin/sh\ncat plan\n",
+    );
+    let python = which_python();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &launch,
+        format!(
+            r#"#!{}
+import json, pathlib, sys
+request = json.load(sys.stdin)
+with open('requests', 'a') as output:
+    output.write(json.dumps(request) + '\n')
+slots = pathlib.Path('state/seat-slots/mimo-v2_6-pro')
+held = [p.name for p in slots.iterdir() if p.name != 'admission.lock']
+if request['leg']['id'] == 'mimo-v2.6-pro':
+    assert len(held) == 1, held
+    print('unavailable: not_served_on_host: fixture', file=sys.stderr)
+    sys.exit(2)
+assert not held, held
+assert len([p for p in pathlib.Path('state/seat-slots/next').iterdir() if p.name != 'admission.lock']) == 1
+print(json.dumps(dict(argv=['/bin/echo', 'VERDICT: PASS\nFILES READ: f'], cwd=request['cwd'],
+                      env={{}}, stdin=request['prompt'], prompt=request['prompt'])))
+"#,
+            python.display()
+        ),
+    );
+    let test_name = format!(
+        "{}::review_route_mimo_not_served_on_host_advances_to_next_seat",
+        module_path!()
+    )
+    .split_once("::")
+    .unwrap()
+    .1
+    .to_owned();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .current_dir(&*dir)
+        .args(["--exact", &test_name, "--nocapture"])
+        .env(CHILD, &dir.0)
+        .env("PG_SPAWND_ADAPTER", route)
+        .env("PG_SPAWND_LAUNCH_CMD", launch)
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
