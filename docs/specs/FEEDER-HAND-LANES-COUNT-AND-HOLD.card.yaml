@@ -1,0 +1,33 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "FEEDER-HAND-LANES-COUNT-AND-HOLD": {
+      "outcome": "Count each live fleet-launch writer once on its host and hold every item key on its card.",
+      "read_set": [
+        "rust/pg-spawnd/src/session/external_run.rs",
+        "rust/pg-spawnd/src/session/storage.rs",
+        "rust/plangraph-cli/src/feeder/selection.rs"
+      ],
+      "write_set": [
+        "changelog.d/FEEDER-HAND-LANES-COUNT-AND-HOLD.md",
+        "docs/SPAWNER.md",
+        "docs/writer-feeder.md",
+        "rust/plangraph-cli/src/feeder/lanes.rs",
+        "rust/plangraph-cli/src/feeder/lanes/tests.rs",
+        "rust/plangraph-cli/src/feeder/mod.rs",
+        "rust/plangraph-cli/src/feeder/runtime.rs",
+        "rust/plangraph-cli/src/feeder/sources.rs",
+        "src/plangraph/spawner/remote_ps.py",
+        "tests/test_spawner_remote_ps.py"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --lib feeder && PYTHONPATH=src python3 -m pytest -q tests/test_spawner_remote_ps.py",
+      "risk_tags": [
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 120000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p plangraph-cli --test feeder_transport"
+    }
+  }
+}

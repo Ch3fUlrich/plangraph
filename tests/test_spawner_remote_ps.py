@@ -708,6 +708,13 @@ def test_remote_rows_carry_batch_member_keys_and_refuse_malformed_ones(tmp_path,
         assert rows[0]['status'] == 'unknown' and 'item_keys' not in rows[0], bad
 
 
+def test_fleet_session_rows_keep_run_kind_for_the_feeder_card_split(tmp_path, monkeypatch):
+    config(tmp_path, monkeypatch, [dict(name='node-a', target='private-a')])
+    row = dict(run_id='run-a', host='node-a', status='running', role='implement',
+               run_kind='fleet-session', item_key='plangraph:A plangraph:B')
+    assert remote_ps.list_runs([], transport=lambda *args: json.dumps({'runs': [row]})) == [row]
+
+
 def test_batch_card_keys_land_on_the_run_record():
     from plangraph.spawner.item_key import annotate_item
     record = {}

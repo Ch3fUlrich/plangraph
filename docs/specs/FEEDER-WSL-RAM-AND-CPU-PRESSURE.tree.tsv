@@ -1,0 +1,12 @@
+path	disposition	required	row IDs	label
+changelog.d/FEEDER-WSL-RAM-AND-CPU-PRESSURE.md	write	yes	E1 E2	observed
+deploy/feeder/policy.toml	write	yes	E1 E2	observed
+docs/writer-feeder.md	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/capacity.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/mod.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/src/feeder/windows_ram.rs	write	yes	E1 E2	observed
+rust/plangraph-cli/tests/feeder.rs	write	yes	E1 E2	observed
+rust/worker-core/src/host_command.rs	read	yes	E1 E2	observed
+rust/worker-core/src/host_probe.rs	read	yes	E1 E2	observed
