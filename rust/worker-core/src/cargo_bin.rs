@@ -58,7 +58,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
-        let path = OsString::from("/usr/bin:/bin");
+        let path = env::join_paths(["/usr/bin", "/bin"]).unwrap(); // `;` on Windows, `:` elsewhere
         let found = path_with_cargo(Some(&path), None, Some(&os(&home))).unwrap();
         let dirs: Vec<PathBuf> = env::split_paths(&found).collect();
         assert_eq!(dirs[0], home.join(".cargo/bin"));
