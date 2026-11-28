@@ -38,7 +38,7 @@ The lander checks dependencies before merging. When settlement verifies a merge 
 priority, source, note, description, host, corrects, state, epoch, claimed_by, delegate, lease_until, reviewer, model, created_at, updated_at)` ·
 `edges(src, dst, rel CHECK rel IN ('depends_on'))` (`corrects` lives on the item; `src` depends on `dst`) ·
 `events(seq INTEGER PK AUTOINCREMENT, ts, actor, role, model, key, type, payload json, prev_hash, hash)` append-only ·
-`evidence(id PK, key, epoch, kind, ref json, verified, detail, at)` ·
+`evidence(id PK, key, epoch, kind, ref json, verified, detail, at)` (a train deploy records `pg evidence KEY --kind deploy --ref <JSON>`) ·
 `audit_log(id PK, ts, actor, role, action, key, ok, code, msg)` — **every** attempt incl. refused ones; never locked ·
 `audit_findings(id PK, ts, key, code, msg)`.
 Event types: `item_created, item_defined, claimed, delegated, released, lease_expired, evidence_added, submitted,
