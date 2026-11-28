@@ -1,0 +1,1 @@
+- The native writer driver reruns the fast checks on the same head, with backoff and no writer turn, while they fail only on an infrastructure refusal (cargo pool slot or lease busy, disk floor); after four reruns the run ends BLOCKED `gate_unavailable` instead of `no_commit`, and a resume checks that head again.

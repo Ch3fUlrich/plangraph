@@ -104,6 +104,19 @@ def windows_cargo_lease(path, exclusive):
     return os.fdopen(fd, 'rb')
 
 
+def lease_holders_note(target, locks='/proc/locks'):
+    """'; lease held by pid N[, M]' for the flock holders of the target's lease file, else ''."""
+    try:
+        info = os.stat(target.with_name(target.name + '.plangraph-lock'))
+        rows = Path(locks).read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError):
+        return ''
+    key = f'{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}:{info.st_ino}'
+    # Holder rows: `N: FLOCK ADVISORY READ|WRITE <pid> <maj:min:inode> 0 EOF`; waiters carry `->`.
+    pids = dict.fromkeys(f[4] for f in map(str.split, rows) if len(f) > 5 and f[1] == 'FLOCK' and f[5] == key)
+    return '; lease held by pid ' + ', '.join(pids) if pids else ''
+
+
 def legacy_cache_roots():
     """Per-user caches of earlier layouts, held under the same cap as the shared target."""
     return [(Path.home() / rel).expanduser().absolute()

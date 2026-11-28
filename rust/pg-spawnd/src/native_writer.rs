@@ -37,6 +37,12 @@ pub(crate) trait Driver {
     fn record_quota(&mut self, _limit: &quota::Limit) -> Result<(), String> {
         Ok(())
     }
+    /// Back off before fast-check rerun `attempt` (1-based) after an infrastructure refusal.
+    fn infra_wait(&mut self, attempt: u32) {
+        std::thread::sleep(std::time::Duration::from_secs(
+            30 << attempt.saturating_sub(1).min(3),
+        ));
+    }
     fn save(&mut self, record: &Value) -> Result<(), String>;
     fn pending_steer(&self, _record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
         Ok(Vec::new())
@@ -66,6 +72,65 @@ const FAST_CHECK_FIXES: usize = 2;
 const PUSH_FIXES: usize = 2;
 /// Resumes after turns that left no commit beyond the base before the run fails.
 const NO_COMMIT_RESUMES: usize = 2;
+/// Fast-check reruns on the same head after infrastructure refusals before the run ends
+/// BLOCKED `gate_unavailable` (resumable; never `no_commit`).
+const INFRA_RERUNS: u32 = 4;
+/// Refusals of the build infrastructure, not of the change: a cargo pool slot or the cargo
+/// lease stayed busy, or the disk is below its floor.
+const INFRA_MARKERS: &[&str] = &[
+    "cargo pool slots are busy",
+    "cargo lease unavailable",
+    "CargoLeaseTimeout",
+    "cache lease held",
+    "disk_low",
+];
+/// Failures of the change itself; a fast-check output carrying one goes to the writer.
+const CHANGE_MARKERS: &[&str] = &[
+    "error[",
+    "FAILED",
+    "panicked at",
+    "could not compile",
+    "Diff in ",
+];
+/// The infrastructure cause of a fast-check failure whose only errors are infrastructure refusals.
+pub(crate) fn infra_cause(failure: &str) -> Option<&'static str> {
+    if CHANGE_MARKERS.iter().any(|m| failure.contains(m)) {
+        return None;
+    }
+    INFRA_MARKERS.iter().copied().find(|m| failure.contains(m))
+}
+/// Fast checks on `head`, rerun on the same head with backoff while they fail only on an
+/// infrastructure refusal; no writer turn runs in between.
+fn fast_checks_through_infra(
+    driver: &mut impl Driver,
+    record: &mut Value,
+    head: &str,
+) -> Result<Result<(), String>, (i32, String)> {
+    let mut attempt = 0;
+    loop {
+        let checked = driver.fast_checks(head);
+        let cause = match &checked {
+            Err(error) if error == STOPPED => return Err((10, STOPPED.into())),
+            Err(failure) => infra_cause(failure),
+            Ok(()) => None,
+        };
+        let (Some(cause), Err(failure)) = (cause, &checked) else {
+            return Ok(checked);
+        };
+        if attempt >= INFRA_RERUNS {
+            record["fast_checks"] =
+                json!({"head":head, "status":"unavailable", "cause":cause, "output":failure});
+            return Err((
+                4,
+                format!("gate_unavailable: {cause} on {head} after {attempt} reruns: {failure}"),
+            ));
+        }
+        attempt += 1;
+        record["fast_check_infra_reruns"] =
+            json!(record["fast_check_infra_reruns"].as_u64().unwrap_or(0) + 1);
+        driver.infra_wait(attempt);
+    }
+}
 /// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
 /// round so far: the round progress rule of `round_progress`, applied to the round just
 /// finished. The one seam a later stop rule replaces.
@@ -432,8 +497,10 @@ fn writer_attempt(
         // Older resume receipts can lack the admitted SHA.
         None => driver.head().map_err(|e| (6, e))?,
     };
+    // A head whose checks could not run (gate_unavailable) is checked again on resume.
     let mut checked_head = record["fast_checks"]["head"]
         .as_str()
+        .filter(|_| record["fast_checks"]["status"] != "unavailable")
         .or_else(|| record["review"]["head"].as_str())
         .map(str::to_owned);
     let session = if let Some(session) = saved_session {
@@ -497,11 +564,9 @@ fn writer_attempt(
         record["fast_checks"] = json!({"head":head,"status":"running"});
         driver.save(record).map_err(|e| (6, e))?;
         let started = stage::now();
-        let checked = driver.fast_checks(&head);
-        if matches!(&checked, Err(error) if error == STOPPED) {
-            return Err((10, STOPPED.into()));
-        }
+        let checked = fast_checks_through_infra(driver, record, &head);
         stage::record(record, "fast_checks", &head, started);
+        let checked = checked?;
         if let Err(failure) = checked {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;
@@ -619,6 +684,9 @@ fn writer_attempt(
         resume(driver, record, &session, &format!("The review of your head {head} requests changes. Fix every confirmed HIGH and MED finding with a test that fails without the fix, or refute it with evidence in your final message; commit and end your turn; keep this session.\n----- review -----\n{text}\n----- end of review -----"))?;
     }
 }
+#[cfg(test)]
+#[path = "native_writer_infra_tests.rs"]
+mod infra_tests;
 #[cfg(test)]
 #[path = "native_writer_lane_tests.rs"]
 mod lane_tests;

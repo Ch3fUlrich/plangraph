@@ -1,0 +1,1 @@
+- The feeder admits only items whose spec card (`docs/specs/<KEY>.card.yaml`) names a write set: the writer card and brief carry that write set as files, the single-item brief names the lane branch the accepted head is pushed to, and an item without one is skipped as `no_spec` before any claim.

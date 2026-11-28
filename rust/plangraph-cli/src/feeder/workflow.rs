@@ -182,7 +182,11 @@ const WRITER_TRAILER: &str = "Writer: codex/gpt-6.2-sol-medium (native-codex spa
 /// worker enforces its own fast-check and review policy; the values here are the brief's text.
 fn batch_brief(items: &[Task], rules: &str, status: &str) -> String {
     if items.len() == 1 {
-        return brief(&items[0], rules);
+        return format!(
+            "{}\nLane branch: lane/{} - the native worker pushes your accepted head there; commit on the run worktree's detached HEAD and push nothing yourself.\n",
+            brief(&items[0], rules).trim_end(),
+            run_name(&items[0].key)
+        );
     }
     let named: Vec<Value> = items
         .iter()

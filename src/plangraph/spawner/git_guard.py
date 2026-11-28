@@ -391,3 +391,35 @@ def writer_launch(prompt, role, model, run_id):
              'GIT_AUTHOR_EMAIL': email,
              'GIT_COMMITTER_NAME': name,
              'GIT_COMMITTER_EMAIL': email})
+
+
+def codex_writer_dirs(client, role, cwd, extra=()):
+    """Writable roots a Codex writer needs beyond its cwd, checked before launch.
+
+    workspace-write keeps everything outside the cwd read-only: a lane worktree's index and refs
+    live in the git common dir of the main checkout, and cargo writes the shared target, its
+    `-pool` slots and the lease lock files beside them.  Returns ``extra`` plus the git common
+    dir of ``cwd`` and the parent of the shared cargo target; refuses the spawn when one of them
+    is not writable, so no model turn starts in a sandbox that cannot commit or build.
+    """
+    if client != 'codex' or role == 'review':
+        return tuple(extra)
+    from .host_ready import shared_cargo_target
+    dirs = [str(d) for d in extra]
+    try:
+        git = subprocess.run(['git', '-C', str(cwd), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                             capture_output=True, text=True, timeout=15, env=checkout_env())
+    except (OSError, subprocess.SubprocessError):
+        git = None
+    if git is not None and git.returncode == 0 and git.stdout.strip():
+        dirs.append(git.stdout.strip())
+    cargo_root = shared_cargo_target().parent
+    try:
+        cargo_root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # the writability check below refuses it
+    dirs.append(str(cargo_root))
+    for d in dirs:
+        if not os.access(d, os.W_OK):
+            raise SpawnRefused(f'codex writer sandbox: {d} is not writable')
+    return tuple(dict.fromkeys(dirs))

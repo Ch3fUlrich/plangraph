@@ -203,6 +203,51 @@ def test_native_writer_keeps_local_lease_failure(monkeypatch, tmp_path):
     assert factory.await_count == 1  # Only the sandbox capability check reached exec.
 
 
+def test_an_idle_native_run_supervisor_holds_no_cargo_lease_and_a_trim_then_runs(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+    from plangraph.spawner import overflow
+    from plangraph.spawner.service import SpawnService
+
+    monkeypatch.setattr('plangraph.fleet_snapshot._projection_binary', lambda: 'pg-spawnd')
+    monkeypatch.setattr(overflow, 'lane_admit', lambda service, card, prompt: card)
+    tools = AsyncMock(returncode=0)
+    tools.communicate.return_value = (b'{"tool_path":"fixture","resolved_tools":{},"sandbox_ok":true}', b'')
+
+    async def exercise():
+        writer_done = asyncio.Event()
+        writer = AsyncMock(returncode=0, pid=os.getpid())
+
+        async def communicate():
+            await writer_done.wait()   # the native writer between cargo steps
+            return b'', b''
+        writer.communicate.side_effect = communicate
+        monkeypatch.setattr(asyncio, 'create_subprocess_exec', AsyncMock(side_effect=[tools, writer]))
+        monkeypatch.setattr('plangraph.spawner.proc_kill.root_identity', lambda pid: None)
+        service = SpawnService(state=tmp_path / 'state')
+        card = dict(run_kind='native-codex', repo=str(tmp_path), item='project:item')
+        reply = await overflow.native_spawn(service, card, dict(prompt='test task', wait_seconds=0.01))
+        assert service.tasks[reply['run_id']].done() is False
+        with host_ready.cargo_lease(exclusive=True, wait=0):   # what a post-run trim takes
+            pass
+        writer_done.set()
+        await service.tasks[reply['run_id']]
+
+    asyncio.run(exercise())
+
+
+def test_a_cargo_cap_refusal_names_the_pid_holding_the_lease(monkeypatch, tmp_path):
+    target = host_ready.shared_cargo_target()
+    target.mkdir(parents=True)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '1')
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(host_ready, 'cargo_target_size_gb', lambda path: 3.0)
+    with host_ready.cargo_lease():
+        reason = host_ready.running_disk_refusal(str(tmp_path))
+    assert reason.startswith('cargo_target_cap: measured 3.00 GB')
+    if sys.platform.startswith('linux'):
+        assert reason.endswith(f'; lease held by pid {os.getpid()}'), reason
+
+
 @pytest.mark.parametrize('cache_mode', ['configured', 'blank-discovered', 'blank-unavailable'])
 def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path, cache_mode):
     monkeypatch.setenv('RUSTC_WRAPPER', 'sccache')

@@ -20,7 +20,7 @@ from .host_ready_source import (
     checkout_floor, admission_shortfall, work_drive_checkouts,
     configured_work_drives as _configured_work_drives,
     select_drive,
-    legacy_cache_roots as _legacy_cache_roots,
+    legacy_cache_roots as _legacy_cache_roots, lease_holders_note,
     pool_slot_roots as _pool_slot_roots,
     record_disk_floor_alarm as _record_disk_floor_alarm,
     windows_cargo_lease as _windows_cargo_lease,
@@ -532,7 +532,7 @@ def local_disk_admission(worktree, service, role='implement', movable=False, *, 
             active = sum(cargo_run_busy(row) for row in runs)
             limit = cap * (1 + active) if native else cap
             if size >= limit:
-                measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {limit:g} GB'
+                measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {limit:g} GB' + lease_holders_note(target)
                 if active:
                     return None, measured + '; busy'
                 if configured_target.is_symlink():
@@ -652,7 +652,7 @@ def running_disk_refusal(worktree, role='implement'):
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:
-            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
+            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB' + lease_holders_note(target)
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
     return None
