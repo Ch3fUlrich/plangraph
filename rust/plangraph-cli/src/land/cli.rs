@@ -10,7 +10,10 @@ use std::process::Command;
 
 const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
   plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
-  plangraph land-train deploy-plan --repo DIR --manifest FILE --authorized-hosts A,B --probe-cmd CMD [--declared FILE] [--blockers-out FILE]\n\
+  plangraph land-train deploy-plan --repo DIR (--manifest FILE | --base SHA --head SHA) [--role-hosts H=R+R,..] [--hosts FILE] [--authorized-hosts A,B] [--probe-cmd CMD | --probe hosts] [--declared FILE] [--blockers-out FILE] [--plan-out FILE]\n\
+  plangraph land-train deploy-apply --plan FILE --landed-head SHA --state FILE [--mode dry-run|apply] [--hosts FILE] [--row-cmd TEMPLATE] [--repo DIR] [--repo-id ID]\n\
+  plangraph land-train deploy-host --op check|install|read|disable --unit UNIT --repo CHECKOUT --rev SHA\n\
+  plangraph land-train deploy-train --base SHA --merge SHA --train-head SHA [--repo DIR] [--state-dir DIR] (PG_LAND_DEPLOY=apply|off)\n\
   plangraph land-train go-verify --evidence FILE\n\
   plangraph land-train cut-check --repo DIR --base REV --head REV\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
@@ -151,7 +154,10 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
     match run_inner(home, args, &python) {
         Ok(lines) => {
             lines.iter().for_each(|l| println!("{l}"));
-            0
+            // The host install dry run exits 1 when it found something missing.
+            let missing = args.first().is_some_and(|c| c == "deploy-host")
+                && lines.iter().any(|l| l.starts_with("MISSING "));
+            i32::from(missing)
         }
         Err(e) => {
             eprintln!("{e}");
@@ -189,7 +195,16 @@ pub(super) fn run_inner(
         return Ok(vec![format!("pushed {branch}")]);
     }
     if cmd == "deploy-plan" {
-        return super::deploy::run_cli(&flags);
+        return super::deploy_plan_cli::run_cli(&flags);
+    }
+    if cmd == "deploy-apply" {
+        return super::deploy_apply::run_cli(&flags);
+    }
+    if cmd == "deploy-host" {
+        return super::deploy_host::run_cli(&flags);
+    }
+    if cmd == "deploy-train" {
+        return super::deploy_train::run_cli(&flags);
     }
     if cmd == "go-verify" {
         return super::go_verify::run_cli(&flags);

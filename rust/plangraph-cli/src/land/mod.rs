@@ -11,6 +11,14 @@ mod cut_gate;
 mod cut_preflight_tests;
 pub mod delta;
 pub mod deploy;
+pub mod deploy_apply;
+#[cfg(test)]
+mod deploy_apply_tests;
+pub mod deploy_derive;
+#[cfg(test)]
+mod deploy_derive_tests;
+pub mod deploy_host;
+mod deploy_plan_cli;
 pub mod deploy_post;
 #[cfg(test)]
 mod deploy_post_cleanup_tests;
@@ -20,6 +28,7 @@ mod deploy_probe;
 pub mod deploy_run;
 #[cfg(test)]
 mod deploy_tests;
+pub mod deploy_train;
 pub mod git;
 pub mod go_verify;
 #[cfg(test)]
