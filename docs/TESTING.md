@@ -63,13 +63,13 @@ priority to policy checks, changed tests and direct consumers. A changed package
 initializer selects local tests that explicitly import the package or a changed
 export. Local selection stops at re-export boundaries. The selector reports
 additional files deferred to CI. Workflow-only changes select CI regression
-tests in local preflight and the affected PR tier. The batch tier runs the full
+tests in local preflight and the affected PR tier. Only the merge candidate into main (a train head or a `ci-full` pull request) runs the full
 suite.
 Outside file-only local preflight, conftest/shared helpers, config, and deleted or unmapped files can
 select the full suite. AST cannot establish arbitrary runtime, plugin, or filesystem dependencies.
 Request full verification when changing behavior with those dependencies.
 
-Run the full suite on **merge to main and nightly**, not routinely in writer loops:
+CI runs the full suite once, on the **merge candidate into main**, not routinely in writer loops (docs/ci-gate.md):
 
 ```sh
 python3 -m pytest -n auto tests

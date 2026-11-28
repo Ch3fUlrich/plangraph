@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from test_ci_job_names import _runs
 import json
+import shutil
 import subprocess
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ci_select.py"
@@ -425,8 +426,8 @@ def test_ready_or_draft_lane_pr_to_main_gets_the_selection():
     assert not full_run_required("pull_request", "main", "lane/some-item", [])
 
 
-def test_batch_head_gets_the_full_suite():
-    assert full_run_required("pull_request", "main", "batch/batch9", [])
+def test_batch_head_gets_the_affected_selection():
+    assert not full_run_required("pull_request", "main", "batch/batch9", [])
 
 
 def test_go_labelled_head_gets_the_full_suite():
@@ -438,9 +439,13 @@ def test_label_does_not_matter_off_main_and_stacked_batch_is_selection():
     assert not full_run_required("pull_request", "lane/base", "batch/x", [])
 
 
-@pytest.mark.parametrize("event", ["push", "merge_group", "workflow_dispatch", "schedule"])
-def test_record_and_queue_events_run_full(event):
-    assert full_run_required(event)
+@pytest.mark.parametrize("event", ["push", "merge_group", "schedule"])
+def test_push_queue_and_schedule_events_run_the_selection(event):
+    assert not full_run_required(event)
+
+
+def test_a_manual_dispatch_runs_full():
+    assert full_run_required("workflow_dispatch")
 
 
 def _selection_only_needs():
@@ -457,14 +462,15 @@ def test_gate_refuses_a_candidate_that_ran_only_the_selection():
         "select: merge candidate ran the affected selection, not the full suite"]
 
 
-def test_cli_select_event_picks_full_for_batch_head_and_selection_for_lane(capsys, monkeypatch):
+def test_cli_select_event_picks_full_for_train_head_and_selection_for_batch_and_lane(capsys, monkeypatch):
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     args = ["select", "--event", "pull_request", "--base-ref", "main", "--labels", "[]",
             "--files", ".github/workflows/tests.yml"]
-    assert main(args + ["--head-ref", "batch/x"]) == 0
+    assert main(args + ["--head-ref", "land/train-x"]) == 0
     assert "full=true" in capsys.readouterr().out
-    assert main(args + ["--head-ref", "lane/x"]) == 0
-    assert "full=true" not in capsys.readouterr().out
+    for head in ("batch/x", "lane/x"):
+        assert main(args + ["--head-ref", head]) == 0
+        assert "full=true" not in capsys.readouterr().out
 
 
 def test_cli_gate_event_requires_full_for_a_go_labelled_head(capsys):
@@ -485,6 +491,7 @@ def test_workflow_routes_the_decision_through_ci_select():
     wf = yaml.safe_load((MODULE_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text())
     triggers = wf[True] if True in wf else wf["on"]
     assert "labeled" in triggers["pull_request"]["types"] and "merge_group" in triggers
+    assert "schedule" not in triggers   # a nightly run would be a second full run
     step = [s for s in wf["jobs"]["select"]["steps"] if s.get("id") == "sel"][0]
     assert "--event" in step["run"] and "draft" not in step["run"]
     assert "--event" in [s for s in wf["jobs"]["ci-gate"]["steps"] if s.get("name") == "Gate"][0]["run"]
@@ -503,7 +510,7 @@ def test_undraft_starts_no_run_and_a_label_run_never_cancels_a_running_one():
 # LAND-PART-ENTRY-CHECKS: a part runs the affected selection, the train and the merge candidate run everything.
 def test_a_labelled_part_on_a_batch_head_runs_the_affected_selection():
     assert not full_run_required("pull_request", "main", "batch/part-x", [ci_select.PART_LABEL])
-    assert full_run_required("pull_request", "main", "batch/batch9", [])      # the hand-built candidate
+    assert full_run_required("pull_request", "main", "batch/batch9", [ci_select.FULL_LABEL])  # labelled at merge
 
 
 def test_a_train_runs_everything_whatever_its_labels():
@@ -538,3 +545,121 @@ def test_the_windows_job_runs_whenever_rust_is_selected():
     import yaml
     jobs = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text())["jobs"]
     assert jobs["rust-windows"]["if"] == "needs.select.outputs.rust == 'true'"
+
+
+# CI-RUN-ONCE-AT-MERGE: every event but the merge candidate selects from its own diff, Rust by crate.
+def _repo(root, base_files, files):
+    """A repository with base_files committed, then files on top: (root, base sha, head sha)."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(root), "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                               *args], check=True, capture_output=True, text=True).stdout.strip()
+    root.mkdir(parents=True, exist_ok=True)
+    git("init", "-q", "-b", "main")
+    shas = []
+    for step in (base_files, files):
+        for name, text in step.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        git("add", "-A")
+        git("commit", "-qm", "step")
+        shas.append(git("rev-parse", "HEAD"))
+    return root, *shas
+
+
+def _select_out(capsys, monkeypatch, root, *argv):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.chdir(root)
+    assert main(["select", *argv]) == 0
+    return dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+
+
+def _workflow():
+    import yaml
+    return yaml.safe_load((MODULE_PATH.parents[1] / ".github/workflows/tests.yml").read_text())
+
+
+CRATES = {
+    "rust/Cargo.toml": '[workspace]\nmembers = ["a", "b", "c"]\nresolver = "2"\n',
+    "rust/a/Cargo.toml": '[package]\nname = "a"\nversion = "0.1.0"\nedition = "2021"\n',
+    "rust/a/src/lib.rs": "",
+    "rust/b/Cargo.toml": '[package]\nname = "b"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\na = { path = "../a" }\n',
+    "rust/b/src/lib.rs": "",
+    "rust/c/Cargo.toml": '[package]\nname = "c"\nversion = "0.1.0"\nedition = "2021"\n',
+    "rust/c/src/lib.rs": "",
+    "src/plangraph/__init__.py": "", "src/plangraph/thing.py": "X = 1\n", "docs/x.md": "x\n",
+}
+PR = ["--event", "pull_request", "--base-ref", "main", "--labels", "[]"]
+
+
+def test_a_pull_request_touching_one_module_runs_the_affected_tests_not_the_full_suite(tmp_path, capsys, monkeypatch):
+    root, base, head = _repo(tmp_path, CRATES, {"src/plangraph/thing.py": "X = 2\n"})
+    out = _select_out(capsys, monkeypatch, root, *PR, "--head-ref", "lane/x", "--base", base, "--head", head)
+    assert out["full"] == "false" and out["pytest"] == "true" and out["rust"] == "false"
+    jobs = _workflow()["jobs"]
+    for job, name in (("pytest", "pytest"), ("pytest-postgres", "pytest (contract suite + keeper storage tests on Postgres)")):
+        step = next(s for s in jobs[job]["steps"] if s.get("name") == name)
+        command = step["with"]["command"]
+        # Every non-full event, a push included, runs the file-level affected selection from the select base.
+        assert 'if [ "${{ needs.select.outputs.full }}" != "true" ]; then' in command
+        assert "github.event_name" not in command
+        assert 'python tools/affected_tests.py --base "$BASE_SHA"' in command
+        assert step["env"]["BASE_SHA"] == "${{ needs.select.outputs.base }}"
+
+
+def test_a_batch_head_is_not_full_and_a_train_head_into_main_is(tmp_path, capsys, monkeypatch):
+    root, base, head = _repo(tmp_path, CRATES, {"src/plangraph/thing.py": "X = 2\n"})
+    diff = ["--base", base, "--head", head]
+    assert _select_out(capsys, monkeypatch, root, *PR, *diff, "--head-ref", "batch/b1")["full"] == "false"
+    assert _select_out(capsys, monkeypatch, root, *PR, *diff, "--head-ref", "land/train-20261128-1")["full"] == "true"
+
+
+def test_a_push_to_main_is_not_full_and_selects_from_before_to_after(tmp_path, capsys, monkeypatch):
+    root, before, after = _repo(tmp_path, CRATES, {"docs/x.md": "y\n"})
+    out = _select_out(capsys, monkeypatch, root, "--event", "push", "--base", before, "--head", after)
+    assert out["full"] == "false" and not any(out[s] == "true" for s in SUITES)
+    root, before, after = _repo(tmp_path / "py", CRATES, {"src/plangraph/thing.py": "X = 2\n"})
+    out = _select_out(capsys, monkeypatch, root, "--event", "push", "--base", before, "--head", after)
+    assert out["full"] == "false" and out["pytest"] == "true" and out["rust"] == "false"
+    step = next(s for s in _workflow()["jobs"]["select"]["steps"] if s.get("id") == "sel")
+    assert step["env"]["BASE_SHA"].endswith("|| github.event.before }}")
+    assert step["env"]["HEAD_SHA"].endswith("|| github.sha }}")
+    assert 'echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"' in step["run"]
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="the crate picker needs cargo on PATH")
+def test_a_change_in_one_crate_selects_that_crate_and_its_dependents_only(tmp_path, capsys, monkeypatch):
+    root, base, head = _repo(tmp_path, CRATES, {"rust/a/src/lib.rs": "// x\n"})
+    out = _select_out(capsys, monkeypatch, root, *PR, "--head-ref", "lane/x", "--base", base, "--head", head)
+    assert out["rust"] == "true" and out["full"] == "false"
+    assert out["rust-packages"] == "a b"
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="the crate picker needs cargo on PATH")
+def test_a_rust_input_outside_rust_or_a_full_run_tests_the_whole_workspace(tmp_path, capsys, monkeypatch):
+    root, base, head = _repo(tmp_path, {**CRATES, "src/plangraph/settings.py": ""},
+                             {"rust/a/src/lib.rs": "// x\n", "src/plangraph/settings.py": "# x\n"})
+    diff = ["--base", base, "--head", head]
+    out = _select_out(capsys, monkeypatch, root, *PR, *diff, "--head-ref", "lane/x")
+    assert out["rust"] == "true" and "rust-packages" not in out
+    out = _select_out(capsys, monkeypatch, root, *PR, *diff, "--head-ref", "land/train-1")
+    assert out["full"] == "true" and "rust-packages" not in out
+
+
+def test_rust_jobs_test_the_selected_crates_and_the_whole_workspace_without_a_list():
+    jobs = _workflow()["jobs"]
+    assert jobs["select"]["outputs"]["rust-packages"] == "${{ steps.sel.outputs.rust-packages }}"
+    steps = {s.get("name"): s for s in jobs["rust"]["steps"]}
+    for name, cargo in (("cargo clippy", 'cargo clippy "${packages[@]}" --all-targets'),
+                        ("cargo test", 'cargo test "${packages[@]}"')):
+        assert steps[name]["env"]["RUST_PACKAGES"] == "${{ needs.select.outputs.rust-packages }}"
+        assert cargo in steps[name]["run"]
+        script = steps[name]["run"].splitlines()[0] + '\nprintf "%s|" "${packages[@]}"'
+        for listed, expected in (("", "|"), ("a b", "-p|a|-p|b|")):
+            got = subprocess.run(["bash", "-c", script], env={"PATH": "/usr/bin:/bin", "RUST_PACKAGES": listed},
+                                 capture_output=True, text=True, check=True).stdout
+            assert got == expected, (listed, got)
+    windows = {s.get("name"): s for s in jobs["rust-windows"]["steps"]}
+    for crate in ("pg-spawnd", "pg-worker-core"):
+        cond = windows[f"cargo test -p {crate}"]["if"]
+        assert cond.startswith("needs.select.outputs.rust-packages == '' ||") and f"' {crate} '" in cond

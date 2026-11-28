@@ -126,11 +126,17 @@ def test_a_non_candidate_that_selects_no_rust_runs_no_windows_job(tmp_path, monk
     assert transport.calls == []
 
 
-def test_a_docs_only_batch_candidate_still_runs_windows_because_ci_runs_the_full_suite(tmp_path, monkeypatch):
+def test_a_docs_only_batch_head_runs_no_windows_job_until_it_is_the_ci_full_candidate(tmp_path, monkeypatch):
+    """A batch/* head runs the affected selection; labelled ci-full at merge time it is the candidate: full."""
     root, base, head = docs_only(tmp_path, "batch/docs")
     monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "ws-build")
     transport = Transport(0, "test result: ok\n")
-    line = land.windows_gate(state(root, base, head, "batch/docs"), WORKFLOW, transport=transport)
+    assert land.windows_gate(state(root, base, head, "batch/docs"), WORKFLOW, transport=transport) is None
+    assert transport.calls == []
+    monkeypatch.setattr(util, "gh_json", lambda *a, **k: {"labels": [{"name": "ci-full"}]})
+    st = state(root, base, head, "batch/docs")
+    st.update(pr=5, repo="o/p")
+    line = land.windows_gate(st, WORKFLOW, transport=transport)
     assert line and line.startswith("windows ok")
     assert transport.calls
 
