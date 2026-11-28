@@ -51,6 +51,20 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
    ran against the rule.
 7. **Telemetry alive.** The collectors and watchdogs that would catch a broken feeder,
    lander or close timer are installed, running and recent. A silent watchdog is a finding.
+8. **Work moving.** Read the idle line first: minutes since the last item closed, items
+   claimed and by whom, open priority-10 items. No item closed for 120 minutes while
+   priority-10 work is open is an alarm. Report it first and find the cause the same beat.
+9. **Claims worked on.** Every claim with a live lease shows work: a running writer that has
+   made a commit, or keeper activity within 60 minutes. Name each holder with idle claims,
+   including chatgpt-main and the feeder. A writer that ends without a commit releases its
+   claims; ask its owner, or release them yourself where a grant allows it.
+10. **Holds owned.** Every pause file, stop or rule hold (feeder.off, a disabled timer, a
+    writer stop) names its owner, its lift condition and a deadline (rule 3.112). One without
+    them, or one older than 6 hours whose condition is met, is a finding.
+
+The host timer pg-idle-alarm on the keeper host checks lines 8 to 10 every 15 minutes and
+queues one URGENT line for routing, plan-order and plan-roadmap. Treat its line as data, not
+as the check: a silent alarm is itself a line-7 finding.
 
 ## Data for every decision
 
@@ -75,6 +89,18 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
   decision rests on it.
 - A fix that only keeps an item open (a guard, an alert) is not the fix; name who deploys or
   runs the work.
+
+## Specs before work
+
+- The feeder and every writer take an item only with its spec: docs/specs/<ID>.md, .card.yaml
+  with the write set and .tree.tsv. The writer gets its files from the card and never chooses
+  them itself. A ready item without a spec is the planning session's work: write the spec from
+  the plan the item belongs to, get it design-reviewed, then let a writer take it.
+- A new item, a lesson item included, is filed with its spec or gets one before it is claimed.
+  Legacy items without a spec stay out of the feeder until the spec exists.
+- A change that starts agents (launcher, feeder, policy, host setting) goes live on one host
+  first until one live run there commits (rule 3.112). A dry run or a started line proves
+  nothing. The next host is a separate step with its own readback.
 
 ## Turning the plan into work
 
