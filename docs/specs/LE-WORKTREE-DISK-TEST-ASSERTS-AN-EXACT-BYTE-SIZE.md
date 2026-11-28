@@ -6,13 +6,13 @@ Outcome. The shared Cargo cache cap test accepts the filesystem's allocation sla
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. f924fd45392a73db2a79f464dabaf211062dd827e12fdde095e8b143d6394941
 - tree SHA-256. aebcfb75eff9fbacb4890087add06707bbc86b11d381a75006d9e1592e77cd30
-- evidence_after_deploy. No deployment (test-only). Over 7 days, record that fast-check logs on coding.vm, dell and the workstation show no `pg-worker-core/test` failure of `worktree::disk::tests::parallel_writers_are_stopped_at_shared_cap_and_idle_cache_is_reclaimed`.
+- evidence_after_deploy. No deployment (test-only). Over 7 days, record that fast-check logs on every build host show no `pg-worker-core/test` failure of `worktree::disk::tests::parallel_writers_are_stopped_at_shared_cap_and_idle_cache_is_reclaimed`.
 
 ## Checked against base
 
 - The test asserts `result["size"] == 12.0 / 1024.0` GiB exactly (`rust/worker-core/src/worktree_disk_tests.rs:165`). The size comes from `plangraph.spawner.host_ready.cargo_target_size_gb` (`rust/worker-core/src/worktree_disk_tests.rs:118`).
 - `cargo_target_size_gb` walks the target without following symlinked directories. For every non-symlink file entry it adds `st_blocks * 512` (allocated bytes), or `st_size` where the platform has no `st_blocks`, and it counts a repeated hard link once (`src/plangraph/spawner/host_ready.py:150-174`). It does not check that an entry is a regular file. On the Linux and WSL hosts `st_blocks` exists, so the cap measures allocated bytes. That production measure stays.
-- The test starts 3 writer processes (`worktree_disk_tests.rs:84`), and each writes one 4 MiB file (`worktree_disk_tests.rs:177`, `disk_test_writer_process`), so the apparent total is 12 MiB = 12,582,912 bytes. The coding.vm failure measured 0.011730194091796877 GiB = 12,595,200 bytes: 12,288 bytes (4 KiB per file) of block allocation above the apparent size.
+- The test starts 3 writer processes (`worktree_disk_tests.rs:84`), and each writes one 4 MiB file (`worktree_disk_tests.rs:177`, `disk_test_writer_process`), so the apparent total is 12 MiB = 12,582,912 bytes. The dev-host failure measured 0.011730194091796877 GiB = 12,595,200 bytes: 12,288 bytes (4 KiB per file) of block allocation above the apparent size.
 - Class search over Rust tests that compare a measured disk size: `rust/worker-core/src/disk_watermark.rs` and `cargo_pool_trim.rs` sum `blocks() * 512`, but their tests compare slot orders and injected sizes, not a measured total. `worktree_disk_cap_tests.rs` and `worktree_disk_reap_tests.rs` assert no size. This test is the only exact comparison on a measured allocation.
 
 ## Decisions
@@ -30,7 +30,7 @@ Outcome. The shared Cargo cache cap test accepts the filesystem's allocation sla
 
 | Row | Entry | Observable result | Evidence |
 | --- | --- | --- | --- |
-| B1 | E1 | A measured cache of 12 MiB plus 12 KiB (the coding.vm reading) and of exactly 12 MiB both pass. | X1 X2 |
+| B1 | E1 | A measured cache of 12 MiB plus 12 KiB (the dev-host reading) and of exactly 12 MiB both pass. | X1 X2 |
 | B2 | E1 | 8 MiB (one writer missing), 16 MiB (one file counted twice) and 12 MiB minus 4 KiB fail. | X1 |
 | B3 | E1 | Statuses, refusal reasons, busy and idle results and reclaim assertions are unchanged. | X2 |
 

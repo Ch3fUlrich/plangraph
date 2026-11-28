@@ -6,7 +6,7 @@ Outcome. The og-memory HTTP tests give a short client timeout only to the cases 
 - base commit. 443bf493af86a2ccd1d2859fb4e1d52eceea522d
 - card SHA-256. 6157dc5ae7597aea34d2bb5a45c73dc579bf7febc1e5231353a5da17053bd6a2
 - tree SHA-256. 3745b180dfec390987a9afe631541fa938cd664772bd37f0a9ec013dab1466b6
-- evidence_after_deploy. No deployment (test-only). Over 7 days, record that fast-check logs on coding.vm, dell and the workstation show no `og-memory/test` failure of `http::tests::*`.
+- evidence_after_deploy. No deployment (test-only). Over 7 days, record that fast-check logs on every build host show no `og-memory/test` failure of `http::tests::*`.
 
 ## Checked against base
 
