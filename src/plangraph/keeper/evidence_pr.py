@@ -221,6 +221,60 @@ def landed_go_part(index, head, token, pr):
             todo.extend(graph.get(sha, ((), None))[0])
 
 
+def tagged_deploy(git, project, item):
+    """Read the item's tagged commits at the pinned default tip."""
+    from .context_sources import plan_item_commits
+
+    repo, head = git.repo_path(project), item["_close_head"]
+    commits = plan_item_commits(git, project, item["key"], fetch=False, limit=None, head=head)
+    if commits is None:
+        raise RuntimeError("commit history unreadable")
+    return repo, frozenset(commit["sha"] for commit in commits)
+
+
+def unnamed_deploy(git, project, item):
+    """Read an ordinary delivery's deploy proof, with no Store cache access."""
+    repo, tagged = tagged_deploy(git, project, item)
+    try:
+        return deploy_landed_changes(git, repo, item, tagged, None)
+    except Exception:  # A diff failure still records the absence of a named landing.
+        return None, None
+
+
+def deploy_landed_changes(git, repo, item, tagged, named):
+    """Read the pinned deployment diff and part hosts."""
+    from .evidence import deploy_hosts, deploy_targets
+
+    key, head = item["key"], item["_close_head"]
+    landed = tagged | {named} if named else tagged
+    changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, key)}
+    per_unit = (_part_deploy_hosts(git, repo, landed, head, key)
+                if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
+                else {})
+    return (head, tagged, per_unit), changes
+
+
+def _part_deploy_hosts(git, repo, landed, head, key):
+    from .evidence import deploy_host_names, deploy_targets
+
+    def declarations(commit):
+        values = [value for name, value in git.trailers(repo, commit).items() if name.lower() == "deploy"]
+        return deploy_host_names(value for group in values for value in ([group] if isinstance(group, str) else group))
+
+    parts = {}
+    for sha in landed:
+        for part, merge, paths in git.deploy_part_changes(repo, sha, head, key):
+            parts[merge] = (part, paths)
+    per_unit = {}
+    for merge, (part, paths) in parts.items():
+        units = deploy_targets(paths)
+        if units:
+            hosts = declarations(merge) or declarations(part)
+            for unit in units:
+                per_unit.setdefault(unit, set()).update(hosts)
+    return per_unit
+
+
 def landed_deploy_work(git, repo, parent, tip, merge, key, *, train):
     """Use the landed diff because a topic's first-parent diff can include main syncs."""
     names = {key, key.rsplit(":", 1)[-1]}

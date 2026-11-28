@@ -337,17 +337,6 @@ class RunsMixin:
                 self.__dict__["_warmed"].pop(project, None)
                 self.__dict__["_merge_scan_errors"][project] = f"merge_scan_failed: {type(exc).__name__}"
 
-    def _warm_merge_candidates(self, git, project, index, candidates, previous):
-        for key, _ in candidates:
-            commits = timing.merge_stage_call(
-                "delivery_lookup", context_sources.indexed_work, index, key, limit=None)["commits"]
-            if commits:
-                timing.merge_stage_call("landing_warm", self._warm_landings, project, commits)
-                timing.merge_stage_call("open_lanes", context_sources.open_lanes, git, project, key,
-                                        cache=self.__dict__["_lanes"], head=index.get("target"), fresh=False)
-                timing.merge_stage_call("deploy_snapshot", self._snapshot_deploy,
-                                        key, project, commits, previous.get((project, key)))
-
     def _warm(self, project):
         index = self.__dict__.get("_warmed", {}).get(project)
         if index is None:

@@ -7,6 +7,7 @@ import pytest
 from plangraph.keeper import context_sources
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
+from plangraph.keeper.evidence_pr import tagged_deploy
 from test_keeper_close_merged_scan import HEADER, _git, merged_repo
 from test_keeper_merge_close_auto import auto, env, git  # noqa: F401 - env is a fixture
 from test_keeper_close_merged import unseated_w, w  # noqa: F401 - the manual-close world fixtures
@@ -134,7 +135,7 @@ def test_a_failed_history_read_is_not_an_empty_deploy_scan(env, monkeypatch):  #
 
     def history(git_, project, key, **kw):
         # Only the deploy scan's own read fails; the close's proof of the merge still sees the commits.
-        scan = sys._getframe(1).f_code.co_name == "_deploy_changes"
+        scan = sys._getframe(1).f_code is tagged_deploy.__code__
         return None if scan else real(git_, project, key, **kw)
 
     monkeypatch.setattr(context_sources, "plan_item_commits", history)

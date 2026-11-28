@@ -30,6 +30,7 @@ import bisect
 import json
 import re
 import time
+from collections import deque
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -49,6 +50,7 @@ __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
 STALE_DAYS = 7
 _CLAIM_INDEX_WORKERS = 4
+_MERGE_DEPLOY_WORKERS = 4
 #: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
@@ -642,6 +644,38 @@ class ContextMixin:
         """Ask the forge for each landing of *commits*, outside the keeper lock."""
         for commit in commits:
             self._landing_for(project, (commit.get("merge") or {}).get("sha") or commit.get("sha"))
+
+    def _warm_merge_candidates(self, git, project, index, candidates, previous):
+        refresh = timing.merge_refresh_timing()
+        workers = _MERGE_DEPLOY_WORKERS if refresh else 0
+        executor = ThreadPoolExecutor(workers, thread_name_prefix="keeper-merge-deploy") if workers else nullcontext()
+        pending = deque()
+
+        def submit(read, *args):
+            def timed_read():
+                with refresh.stage("deploy_snapshot", attempt=False):
+                    return read(*args)
+            return pool.submit(copy_context().run, timed_read)
+
+        with executor as pool:
+            try:
+                for key, _ in candidates:
+                    commits = timing.merge_stage_call("delivery_lookup", src.indexed_work, index, key, limit=None)["commits"]
+                    if not commits:
+                        continue
+                    timing.merge_stage_call("landing_warm", self._warm_landings, project, commits)
+                    timing.merge_stage_call("open_lanes", src.open_lanes, git, project, key,
+                                            cache=self.__dict__["_lanes"], head=index.get("target"), fresh=False)
+                    finish = timing.merge_stage_call("deploy_snapshot", self._snapshot_deploy,
+                                                     key, project, commits, previous.get((project, key)),
+                                                     submit=submit if workers else None)
+                    if finish is not None:
+                        pending.append(finish)
+                        if len(pending) == workers:
+                            pending.popleft()()
+            finally:
+                for finish in pending:
+                    finish()
 
     def _decision_snapshot(self, keys):
         """The decisions the landing evidence reads, captured once: ``None`` when unreadable.

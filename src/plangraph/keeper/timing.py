@@ -267,6 +267,8 @@ class MergeRefreshTiming:
         self.elapsed = dict.fromkeys(self._STAGES, 0.0)
         self.attempts = dict.fromkeys(self._STAGES, 0)
         self.cache_hits = 0
+        self._lock = Lock()
+        self._intervals = []
 
     @contextmanager
     def active(self):
@@ -277,18 +279,30 @@ class MergeRefreshTiming:
             _merge_refresh.reset(token)
 
     @contextmanager
-    def stage(self, name):
-        self.attempts[name] += 1
+    def stage(self, name, *, attempt=True):
         started = self.clock()
         try:
             yield
         finally:
-            self.elapsed[name] += self.clock() - started
+            ended = self.clock()
+            with self._lock:
+                self.attempts[name] += attempt
+                self.elapsed[name] += ended - started
+                if name in self._TOP_LEVEL:
+                    self._intervals.append((started, ended))
+
+    def _covered_time(self):
+        """Wall time in any top-level stage, including overlapping worker reads."""
+        covered, right = 0.0, self.started
+        for start, end in sorted(self._intervals):
+            covered += max(0, end - max(start, right))
+            right = max(right, end)
+        return covered
 
     def emit(self, generation, outcome, published):
         """Emit one terminal record after the publication lock has been released."""
         seconds = self.clock() - self.started
-        residual = seconds - sum(self.elapsed[name] for name in self._TOP_LEVEL)
+        residual = seconds - self._covered_time()
         repos = ""
         if published is not None:
             repos = f" repos={len(published['_warmed'])} failed={len(published['_merge_scan_errors'])}"
@@ -310,6 +324,11 @@ class MergeRefreshTiming:
             _output(f"keeper: {line}")
 
 
+def merge_refresh_timing():
+    """Return the current background generation's counters, if any."""
+    return _merge_refresh.get()
+
+
 def merge_stage_call(name, fn, *args, **kwargs):
     """Time an existing call only when a background refresh owns the context."""
     refresh = _merge_refresh.get()
@@ -322,7 +341,8 @@ def merge_stage_call(name, fn, *args, **kwargs):
 def merge_landing_cache_hit():
     refresh = _merge_refresh.get()
     if refresh is not None:
-        refresh.cache_hits += 1
+        with refresh._lock:
+            refresh.cache_hits += 1
 
 
 def _emit(event, kind, wait, hold, parts):

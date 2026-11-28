@@ -1,11 +1,11 @@
 # LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE
 
-Outcome. Identify the dominant stage in slow Keeper merge-index refreshes from per-generation production counters.
+Outcome. Fit the measured Keeper merge-index refresh workload inside 180 seconds while preserving its published results and per-generation counters.
 
 - plan_source. Protected D-7068 (data PR #836), signed fleet rows 1027, 1028 and plan-order assignment 1033.
-- base commit. 506c0cf41b72cb3e5aab7a08a11dec45b8b6ed64
-- card SHA-256. b7ca87e465796217990f537ddcd0cda5325c95ae4adf054d8b16e20af975f631
-- tree SHA-256. 977605364e30dc502f2126fa28dff06c44eba8349f703a542623755037b294a7
+- Slice 1 base commit. 506c0cf41b72cb3e5aab7a08a11dec45b8b6ed64
+- Slice 1 card SHA-256. b7ca87e465796217990f537ddcd0cda5325c95ae4adf054d8b16e20af975f631
+- Slice 1 tree SHA-256. 977605364e30dc502f2126fa28dff06c44eba8349f703a542623755037b294a7
 
 ## Decisions and ownership
 
@@ -37,3 +37,12 @@ Outcome. Identify the dominant stage in slow Keeper merge-index refreshes from p
 | X4 | Existing close and unit regression gates | Run the card's complete focused pytest check and the existing merge-close Rust tests as the independent check. Record exact-head and review receipts. After authorized restart, report the six-hour journal window, the known pending policy and any deviations. Keep item closure with its protected evidence owner. |
 
 Plan-order can hand the scoped packet to the writer only after independent DESIGN-OK. Result is a reviewed exact implementation head and the production readback described above.
+
+## Slice 2 (D-7107)
+
+Comparison planned at 2026-11-27 22:19 UTC. Compare serial and concurrent background generations on the same fixture and use elapsed wall seconds per generation as the primary metric. Require equal published bundles, exact stage attempt counts and a maximum of four in-flight deploy reads. The supplied production baseline is one generation in the 21:50–22:00 UTC window on 2026-11-27 with 98 candidate visits and a 180.3 s budget failure (five successful repositories, nine failed). The raw journal is unavailable here. The fixture comparison is prospective and the production estimate is retrospective, with one baseline sample and no post-change production sample. Work left unfinished at the deadline, repository mix, concurrent load and git or forge latency may affect the production result.
+
+- S2.1. Run ordinary deploy history and diff reads on at most four workers per background generation. Keep one bounded queue per repository, copy the refresh timing and I/O deadline into each job, and collect completions on the refresh thread. The refresh thread continues landing and lane lookups in candidate order and records all cache writes. Explicit named revisions retain their existing lookup and cache ordering on that thread. Reuse the existing deploy proof logic and the existing `previous` path. Synchronous warming stays serial.
+- S2.2. Sum elapsed work and count each stage attempt once, including failed reads. Compute residual using the union of top-level stage intervals since deploy reads overlap each other and the owner's stages. Keep the existing 180 s budget, deadline check, freshness, atomic publication and consume behavior.
+- S2.3. At the baseline load, four equally loaded workers would reduce the 109.6 s deploy stage to roughly 27.4 s of elapsed work, with the journal still reporting about 109.6 s of summed deploy work. Landing warm (43.5 s, including nested forge reads), lanes (13.0 s) and other measured stages (about 14 s) are expected to carry similar work. A first-order estimate is 71–99 s end to end depending on overlap, plus serial named work and straggler or contention overhead. The estimate assumes the bulk of deploy time is ordinary reads. Confirm the 180 s target with a comparable post-restart production generation.
+- S2.4. Use the existing HTTP refresh fixture and real small git history to compare full bundles at serial and concurrent settings, including named landings, explicit repository hints and unreadable deploy diffs. A fake slow adapter checks that deploy reads overlap landing work, use the shared deadline, and stay within the worker bound. A controlled-clock test checks additive concurrent duration, attempts on exception and residual. Run the focused Python checks, the bounded selector in `docs/TESTING.md` and the scheduled Rust regression tests.

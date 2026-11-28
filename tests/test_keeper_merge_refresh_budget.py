@@ -1,13 +1,15 @@
 """The keeper merge-index refresh: a scan budget, a terminal failed state and resume."""
 import logging
-from threading import Event
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Lock, current_thread, local
+from time import sleep
 from types import SimpleNamespace
 
 import pytest
 
 from door_util import Doors
-from plangraph.keeper import api_routes, context_sources, timing
-from test_keeper_merge_close_auto import env, git, set_states  # noqa: F401  (includes the shared fixture)
+from plangraph.keeper import api_routes, context_sources, store_context, timing
+from test_keeper_merge_close_auto import Repo, env, git, set_states  # noqa: F401  (includes the shared fixture)
 
 
 _REFRESH_PATH = "/v1/close_merged_auto"
@@ -65,6 +67,142 @@ def _fields(record):
     return dict(field.split("=", 1) for field in record.split() if "=" in field)
 
 
+def test_deploy_reads_overlap_landing_work_with_a_bounded_pool(
+        env, refresh_door, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, "plangraph.keeper")
+    landings = {}
+    for pr, key in enumerate("ABCPSNH", 81):
+        head = env.repo.land(key.lower(), f"Plan-Item: demo:{key}", pr)
+        sha = git(env.repo.root, "rev-parse", "HEAD")
+        landings[sha] = {"head": {"sha": head}, "number": pr}
+        if key == "C":
+            named = sha
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:C'", (f"Merge-Repo: demo {named}",))
+    git_adapter = env.store.ctx["git"]
+    read_diff = git_adapter.deploy_changes
+    lock, overlap, first_deploy = Lock(), Event(), Event()
+    first_wave = Barrier(4, timeout=5)
+    workers, named_readers, budgets = set(), set(), []
+    active = peak = 0
+    concurrent = False
+
+    def deploy(repo, sha, target, key):
+        nonlocal active, peak
+        thread = current_thread().name
+        if key == "demo:C":
+            named_readers.add(thread)
+        elif thread != "keeper-merge-index":
+            with lock:
+                workers.add(thread)
+                budgets.append(timing.io_timeout(1000))
+                first = len(budgets) <= 4
+                active += 1
+                peak = max(peak, active)
+                first_deploy.set()
+            try:
+                if first:
+                    first_wave.wait()
+                sleep(0.08)
+            finally:
+                with lock:
+                    active -= 1
+        else:
+            sleep(0.08)
+        if key == "demo:N":
+            raise RuntimeError("unreadable diff")
+        return read_diff(repo, sha, target, key)
+
+    def merged_pr(_project, sha, _ref):
+        if concurrent and sha == named:
+            assert first_deploy.wait(5)
+        with lock:
+            if active:
+                overlap.set()
+        return landings[sha]
+
+    monkeypatch.setattr(git_adapter, "deploy_changes", deploy)
+    env.store.ctx["ci"] = SimpleNamespace(
+        mode=lambda project: project, merged_pr_for=merged_pr,
+        check_runs=lambda _project, _sha: [{"name": "ci", "conclusion": "success"}])
+    server = refresh_door.server
+
+    def scan():
+        assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"}) == (
+            200, {"scan": "running"})
+        assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+        return server.merge_refresh._bundle
+
+    with monkeypatch.context() as serial:
+        serial.setattr(store_context, "_MERGE_DEPLOY_WORKERS", 0, raising=False)
+        expected = scan()
+    concurrent = True
+    server.merge_refresh = api_routes.MergeRefresh(server)
+    actual = scan()
+
+    assert actual == expected
+    assert actual["_deploy_warm"]["demo", "demo:N"]["changes"] is None
+    target = actual["_warmed"]["demo"]["target"]
+    assert actual["_named_landings"]["demo:C", target] == named
+    assert ("demo:N", target) in actual["_named_landings"]
+    assert peak == len(workers) == 4
+    assert len(budgets) == 6 and all(0 < left <= 180 for left in budgets)
+    assert named_readers == {"keeper-merge-index"}
+    assert overlap.is_set()
+    record = _fields(_records(caplog)[-1])
+    assert record["landing_warm_attempts"] == record["open_lanes_attempts"] == "7"
+    assert record["deploy_snapshot_attempts"] == "7"
+    assert record["merged_pr_for_attempts"] == record["check_runs_attempts"] == "7"
+    assert int(record["deploy_snapshot_ms"]) >= 6 * 80
+
+
+def test_deploy_worker_keeps_an_explicit_repository_hint(env, refresh_door, tmp_path):
+    checkout = tmp_path / "other"
+    checkout.mkdir()
+    Repo(checkout).land("other-work", "Plan-Item: demo:A", 81)
+    env.store.ctx["git"]._repos["other"] = str(checkout)
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", ("Merge-Repo: demo",))
+
+    assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"})[0] == 200
+    assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+    bundle = refresh_door.server.merge_refresh._bundle
+    assert bundle["_deploy_warm"]["other", "demo:A"]["changes"] is None
+    assert ("demo:A", bundle["_warmed"]["other"]["target"]) not in bundle["_named_landings"]
+
+
+def test_refresh_timing_sums_concurrent_work_and_subtracts_only_covered_wall_time(caplog):
+    caplog.set_level(logging.INFO, "plangraph.keeper")
+    clock = local()
+    counters = timing.MergeRefreshTiming(0, lambda: clock.seconds)
+    all_started = Barrier(3, timeout=5)
+
+    def deploy(start, end, fails=False):
+        clock.seconds = start
+        with counters.stage("deploy_snapshot"):
+            all_started.wait()
+            clock.seconds = end
+            if fails:
+                raise RuntimeError("unreadable diff")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(deploy, 0.010, 0.050)
+        second = pool.submit(deploy, 0.020, 0.080, True)
+        clock.seconds = 0.030
+        with counters.stage("landing_warm"):
+            all_started.wait()
+            clock.seconds = 0.045
+        first.result()
+        with pytest.raises(RuntimeError, match="unreadable diff"):
+            second.result()
+
+    clock.seconds = 0.100
+    counters.emit(1, "ready", None)
+    record = _fields(_records(caplog)[-1])
+    assert record["deploy_snapshot_attempts"] == "2"
+    assert record["deploy_snapshot_ms"] == "100"
+    assert record["landing_warm_ms"] == "15"
+    assert record["elapsed_ms"] == "100" and record["residual_ms"] == "30"
+
+
 @pytest.mark.parametrize("info_enabled", [True, False])
 def test_refresh_reports_stage_counters_on_ready_generation(
         env, refresh_door, scan_clock, monkeypatch, caplog, capsys, info_enabled):
@@ -74,6 +212,14 @@ def test_refresh_reports_stage_counters_on_ready_generation(
     refresh = refresh_door.server.merge_refresh
     adapter = env.store.ctx["git"]
     store = type(env.store)
+    read_candidates = refresh._read_candidates
+
+    def landed_last():
+        # Complete the owner's clock advances before the worker reads the clock.
+        candidates, scan = read_candidates()
+        return sorted(candidates, key=lambda candidate: candidate[0] == "demo:C"), scan
+
+    monkeypatch.setattr(refresh, "_read_candidates", landed_last)
     for obj, name, ms in [
         (refresh, "_read_candidates", 11), (adapter, "scan_projects", 2.6),
         (store, "_snapshot_landing_decisions", 13), (context_sources, "work_index", 31),

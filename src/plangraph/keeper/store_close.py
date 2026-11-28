@@ -40,10 +40,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from functools import partial
 
 from . import context_sources, timing
 from .errors import Refused
-from .evidence import deploy_host_names, deploy_hosts, deploy_missing, deploy_targets
+from .evidence import deploy_hosts, deploy_missing, deploy_targets
+from .evidence_pr import deploy_landed_changes, tagged_deploy, unnamed_deploy
 from .evidence_repo import repo_key
 from .evidence_types import valid_commit_ref
 
@@ -477,42 +479,14 @@ class CloseMixin:
     def _deploy_changes(self, item):
         """Tagged commits and landed diffs at the same default commit as the merge proofs."""
         git, project = self._adapter("git"), self._merge_project(item)
-        repo, head = git.repo_path(project), item["_close_head"]
-        commits = context_sources.plan_item_commits(
-            git, project, item["key"], fetch=False, limit=None, head=head)
-        if commits is None:
-            raise RuntimeError("commit history unreadable")
-        tagged = frozenset(commit["sha"] for commit in commits)
+        repo, tagged = tagged_deploy(git, project, item)
         named = self._named_merge_proof(item)
         # The close floor reads the named landing from here: the frozen close resolves nothing itself.
-        self._named_landings[(item["key"], head)] = named["landed"] if named else None
+        landed = named["landed"] if named else None
+        self._named_landings[item["key"], item["_close_head"]] = landed
         if named:
-            self._landing_for(project, named["landed"])   # a squash's forge record, asked outside the lock
-        landed = tagged | {named["landed"]} if named else tagged
-        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
-        per_unit = (self._part_deploy_hosts(git, repo, landed, head, item["key"])
-                    if deploy_targets(changes) and not deploy_hosts(item) and hasattr(git, "deploy_part_changes")
-                    else {})
-        return (head, tagged, per_unit), changes
-
-    @staticmethod
-    def _part_deploy_hosts(git, repo, landed, head, key):
-        def declarations(commit):
-            values = [value for name, value in git.trailers(repo, commit).items() if name.lower() == "deploy"]
-            return deploy_host_names(value for group in values for value in ([group] if isinstance(group, str) else group))
-
-        parts = {}
-        for sha in landed:
-            for part, merge, paths in git.deploy_part_changes(repo, sha, head, key):
-                parts[merge] = (part, paths)
-        per_unit = {}
-        for merge, (part, paths) in parts.items():
-            units = deploy_targets(paths)
-            if units:
-                hosts = declarations(merge) or declarations(part)
-                for unit in units:
-                    per_unit.setdefault(unit, set()).update(hosts)
-        return per_unit
+            self._landing_for(project, landed)   # a squash's forge record, asked outside the lock
+        return deploy_landed_changes(git, repo, item, tagged, landed)
 
     def _merged_go_deploy_changes(self, item, head):
         git, project = self._adapter("git"), self._merge_project(item)
@@ -537,13 +511,14 @@ class CloseMixin:
     def _merge_text(item):
         return f"{item.get('description') or ''}\n{item.get('note') or ''}"
 
-    def _snapshot_deploy(self, key, project, commits, previous):
+    def _snapshot_deploy(self, key, project, commits, previous, *, submit=None):
         """Reuse an unchanged delivery's immutable diffs across default-tip advances."""
         item = self.__dict__.get("_deploy_inputs", {}).get(key)
         if item is None:
             return
         text = self._merge_text(item)
         index = self.__dict__["_warmed"][project]
+        pending = None
         try:
             hinted, revision = self._merge_repository(item)
             if (hinted != item["project"] or revision is not None) and hinted != project:
@@ -555,12 +530,26 @@ class CloseMixin:
             if (revision is None and previous and previous["changes"] is not None
                     and previous["text"] == text and previous["commits"] == commits):
                 token, changes = (head, *previous["token"][1:]), previous["changes"]
+            elif revision is None and submit is not None:
+                pending = submit(unnamed_deploy, self._adapter("git"), self._merge_project(tagged),
+                                 dict(tagged, _close_head=head))
+                token, changes = None, None
             else:
                 token, changes = self._deploy_changes(dict(tagged, _close_head=head))
         except Exception:  # noqa: BLE001 - recorded as unreadable
             token, changes = None, None
-        self.__dict__["_deploy_warm"][project, key] = {
-            "text": text, "token": token, "commits": commits, "changes": changes}
+        snapshot = {"text": text, "token": token, "commits": commits, "changes": changes}
+        self.__dict__["_deploy_warm"][project, key] = snapshot
+        if pending is not None:
+            return partial(self._finish_unnamed_deploy, key, head, snapshot, pending)
+
+    def _finish_unnamed_deploy(self, key, head, snapshot, pending):
+        try:
+            token, changes = pending.result()
+        except Exception:  # Unreadable tagged history leaves both caches as they stand.
+            return
+        self._named_landings[key, head] = None
+        snapshot.update(token=token, changes=changes)
 
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""
