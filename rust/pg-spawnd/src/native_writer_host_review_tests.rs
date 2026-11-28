@@ -327,7 +327,14 @@ fn failing_shared_checks_preserve_streams_and_green_stamp_lists_skips() {
             assert!(text.contains(row), "missing {row} in {text}");
         }
     }
-    assert!(log.contains(words.to_str().unwrap()));
+    // The scrub stub prints the resolved --words path; compare canonical paths, since the
+    // printed form differs from the tempdir path on Windows (short names, case, prefix).
+    let canonical = fs::canonicalize(&words).unwrap();
+    assert!(
+        log.lines()
+            .any(|line| fs::canonicalize(line.trim()).is_ok_and(|p| p == canonical)),
+        "missing scrub words path in {log}"
+    );
     assert!(!host.stamped(&head));
     fs::remove_file(&red).unwrap();
     fs::write(host.cwd.join("fixture-skips"), "").unwrap();
