@@ -607,12 +607,10 @@ def _rust_changed_tests(root, fork, head, kind, source, path):
 
 def _postgres_test(root, head, path):
     rel = Path(path).relative_to("tests")
-    if rel.parts[0] == "contract":
+    if rel.parts[0] == "contract" or (len(rel.parts) == 1 and rel.name in _PG_TESTS):
         return True
     if len(rel.parts) > 1:
         return False
-    if rel.name in _PG_TESTS:
-        return True
     text = git("show", f"{head}:{path}", cwd=root).stdout
     return "sqlite3" not in text and bool(re.search(r"keeper_util|door_util|plangraph\.keeper|from plangraph import", text))
 
@@ -675,7 +673,8 @@ def _read_replay(head, environment):
 
 
 def replay_facts(root, base, head):
-    """Read receipts for the part's exact own-base and head inventory."""
+    """Read receipts for the part's inventory at its fork point from ``base``: a later ``base`` keeps them valid."""
+    base = git("merge-base", base, head, cwd=root).stdout.strip()
     inventory = replay_inventory(root, base, head)
     return {"replay_base": base, "replay_head": head, "replay_inventory": inventory,
             "replay_receipts": {env: _read_replay(head, env) for env in inventory}}
@@ -755,7 +754,8 @@ def entry_replay(root, base, head, environment):
         raise MergeBatchError(f"the {environment} replay needs a Linux host")
     if environment == "postgres" and not os.environ.get("PG_DSN"):
         raise MergeBatchError("the postgres replay needs PG_DSN for its isolated test database server")
-    base, head = (git("rev-parse", "--verify", f"{ref}^{{commit}}", cwd=root).stdout.strip() for ref in (base, head))
+    head = git("rev-parse", "--verify", f"{head}^{{commit}}", cwd=root).stdout.strip()
+    base = git("merge-base", base, head, cwd=root).stdout.strip()  # the fork point, as replay_facts reads it
     selected = replay_inventory(root, base, head).get(environment)
     if not selected:
         return None

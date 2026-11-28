@@ -519,12 +519,27 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, n
 
 
 def test_independent_part_replay_requires_the_fetched_protected_base(env):
-    old_base = env.git("rev-parse", "origin/main")
+    """The receipt base is the part's fork point from the fetched protected base: when main moves on, the part (now
+    BEHIND) is merged into the train as its writer pushed it, with no update from main and no second replay first."""
+    fork = env.git("rev-parse", "origin/main")
     head = env.branch_pr(1, {"tests/test_part.py": "def test_part():\n    assert True\n"})
+    env.branch_pr(2, {"b.txt": "b\n"})
     env.seed({"docs/advance.md": "Advance main after the PR was opened.\n"})
-    base = env.git("rev-parse", "origin/main")
-    assert base != old_base
-    result = env.run("build", "--name", "new-base", "--prs", "1")
+    tip = env.git("rev-parse", "origin/main")
+    assert tip != fork
+    result = env.run("build", "--name", "new-base", "--prs", "1,2")
     assert result.returncode == 1
-    assert f"PR #1: replay receipt default missing for base {base} and head {head}" in result.stderr
+    assert f"PR #1: replay receipt default missing for base {fork} and head {head}" in result.stderr
     assert not env.state_file("new-base").exists()
+    receipt = env.home / ".local/share/plangraph/telemetry/entry-replay" / head / "default.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({
+        "base": fork, "head": head, "environment": "default", "runs": 5, "ok": True,
+        "inventory": {"python": ["tests/test_part.py"], "rust": []},
+        "observations": {"tests/test_part.py::test_part": ["pass"] * 5}}))
+    result = env.run("build", "--name", "new-base", "--prs", "1,2")
+    assert result.returncode == 0, result.stderr
+    state = read(env, "new-base")
+    assert state["base_head"] == tip and [rec["head"] for rec in state["merged"]][0] == head
+    assert env.git("rev-parse", "lane/p1", cwd=env.origin) == head  # the part branch was not updated from main
+    assert env.git("rev-parse", "HEAD~2", cwd=wt_of(env, "new-base")) == tip  # the train merges main once

@@ -14,7 +14,7 @@ from pathlib import Path
 from merge_batch_build import (
     check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
     landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
-    require_tested_ff_evidence, run_timing_import, seats_acknowledged, wait_marked_merged,
+    require_tested_ff_evidence, require_train, run_timing_import, seats_acknowledged, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
@@ -562,7 +562,7 @@ def land_with_lease(args, lease, st, mode):
     check_approval(args.approval, st["head"])
     st = active_train(st, st["head"])
     if mode == "single-pr" and len(st["merged"]) != 1:
-        raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
+        raise MergeBatchError(f"single-pr mode lands one pull request alone: batch {st['name']!r} has "
                               f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
     require_part_seats(st)
     fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
@@ -570,14 +570,14 @@ def land_with_lease(args, lease, st, mode):
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
                               f"{short(st['head'])} saved at push; review and push again")
-    train = None
-    reruns = []
+    train, reruns = None, []
     already = mode == TESTED_FF and in_history(st, st["head"], main_tip(st))
     if pr["state"] == "OPEN" and not already:
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
+        require_train(repo, st["base"], [part["pr"] for part in st["merged"]])
         require_migration_go(st, args.go_row)
         batch_key = landing_batch_key(st) if lease else None
         reruns = require_full_run(repo, st["head"], st["branch"], batch_key)
