@@ -48,7 +48,8 @@ before every merge produced almost no progress. Ship; do not report.
   and returns counts; you apply the actions.
 - Review: let the spawner route pick a seat of another family (`plangraph_agent_route`, role
   review). When it finds none, a fresh-context Claude subagent with the diff and the done
-  criteria in the prompt reviews; say which in the report.
+  criteria in the prompt reviews; say which in the report. MiMo Pro reviews with read-only
+  tools but makes about one tool call per minute: give it one area of a few files per run.
 
 ## Tests
 
