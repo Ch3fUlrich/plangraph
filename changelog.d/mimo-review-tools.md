@@ -1,0 +1,1 @@
+MiMo Pro reviews with the bounded read-only repository tools (read, glob, grep, list, allowlisted git and test shell commands) instead of the inline tool-denied profile; implement and orchestrate stay inline-only. OmniRoute's `testStatus: "active"` counts as a healthy provider connection, so its providers are no longer all `provider_inactive`.

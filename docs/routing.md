@@ -259,7 +259,7 @@ required OpenCode seats (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-f
 mode with checkout reads) ahead of every other leg, each outside the diff's writer families,
 and plans two seats on every head. The Claude review seat serves only for credential,
 authentication and secrets diffs or when both required seats are out of the route.
-For an exact GPT-head diff, Hydrogen-high and bounded inline MiMo Pro precede
+For an exact GPT-head diff, Hydrogen-high and MiMo Pro (bounded repository tools) precede
 Sonnet. Sonnet becomes eligible when those two are unavailable and the existing
 credential or required-seat gate admits it. D-6952 selects `agy-claude-sonnet-5-5-high` for that seat. The Claude subscription
 `claude-sonnet-5-5-high` follows it in the order and serves when the Antigravity

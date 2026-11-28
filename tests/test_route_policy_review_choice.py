@@ -12,7 +12,7 @@ from plangraph.routing_errors import SpawnRefused
 REQUIRED_MODELS = {leg.model for leg in DEFAULT_LEGS if leg.id in REVIEW_REQUIRED}
 
 
-def test_gpt_exact_diff_mimo_inline_fallback(tmp_path):
+def test_gpt_exact_diff_mimo_repository_seat(tmp_path):
     from plangraph.planner.legs import (REVIEW_AGY_SONNET, REVIEW_HYDROGEN, REVIEW_MIMO_PRO,
                                         REVIEW_SONNET)
     from plangraph.planner.route_policy import DEFAULT_POLICY_PATH
@@ -33,12 +33,12 @@ def test_gpt_exact_diff_mimo_inline_fallback(tmp_path):
     ids = [leg.id for leg in ordinary.legs]
     assert ids[:2] == list(REVIEW_REQUIRED)
     assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO)
-    assert ordinary.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == "inline-only"
+    assert ordinary.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == "tools"
     assert all(not leg.claude_family for leg in ordinary.legs)
-    assert {row["leg"]: row["reason"] for row in plan({}).skipped}[REVIEW_MIMO_PRO] == "inline_only_needs_diff"
-    assert {row["leg"]: row["reason"] for row in plan(
-        {"diff_ref": diff, "repository_review_required": True}).skipped}[
-            REVIEW_MIMO_PRO] == "repository_review_tools_unavailable"
+    # MiMo Pro reads the checkout itself: no diff needed, repository reviews admitted.
+    assert REVIEW_MIMO_PRO in {leg.id for leg in plan({}).legs}
+    assert REVIEW_MIMO_PRO in {leg.id for leg in plan(
+        {"diff_ref": diff, "repository_review_required": True}).legs}
 
     for extra, down in (({"risk_tags": ["auth"]}, set()), ({}, REQUIRED_MODELS)):
         card = dict(diff_ref=diff, **extra)
@@ -50,6 +50,23 @@ def test_gpt_exact_diff_mimo_inline_fallback(tmp_path):
         fallback = without_hydrogen | {models[REVIEW_MIMO_PRO]}
         assert REVIEW_AGY_SONNET in {leg.id for leg in plan(card, fallback).legs}
         assert REVIEW_SONNET in {leg.id for leg in plan(card, fallback | {"agy/" + REVIEW_SONNET}).legs}
+
+
+def test_mimo_pro_reviews_with_repository_tools_not_inline():
+    from plangraph.planner.legs import REVIEW_MIMO_PRO, mimo_pro_review, role_leg
+    from plangraph.planner.route_policy import has_repository_review_tools, opencode_repository_review
+    registered = next(l for l in DEFAULT_LEGS if l.id == REVIEW_MIMO_PRO)
+    # Implement and orchestrate keep the inline-only leg; only the review role gets tools.
+    assert registered.tool_mode == "inline-only"
+    assert role_leg(registered, "implement") is registered
+    leg = role_leg(registered, "review")
+    assert opencode_repository_review(leg) and has_repository_review_tools(leg)
+    assert not mimo_pro_review(leg, "review")
+    assert mimo_pro_review(registered, "review")
+    plan = plan_spawn(dict(estimate_tokens=1000), role="review", writer_families=("anthropic",),
+                      catalog_rows=(), installed=lambda _: True,
+                      leg_reader=lambda model, **_: {"state": "available", "evidence": None})
+    assert REVIEW_MIMO_PRO in {l.id for l in plan.legs}
 
 
 def test_qoder_off_for_review_even_with_old_active_leg():
@@ -213,7 +230,7 @@ def test_native_review_route_requires_repository_tools():
     assert plan.first_leg.id == "opencode-go-deepseek-v4-flash"
     assert all(leg.tool_mode == "tools" for leg in plan.legs)
     assert {leg.id for leg in plan.legs if leg.harness == "opencode"} == {
-        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "mimo-v2.6-pro",
     }
 
 
@@ -230,7 +247,7 @@ def test_native_review_cli_preview_retains_opencode_repository_legs(tmp_path, mo
                  "--json", "--card", json.dumps(card)]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert {leg["id"] for leg in plan["legs"]} == {
-        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "mimo-v2.6-pro",
     }
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"

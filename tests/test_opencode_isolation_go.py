@@ -335,7 +335,8 @@ def test_real_models_probe(tmp_path):
     assert not job.exists()
 
 
-@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'])
+@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+                                    'mimo-v2.6-pro'])
 def test_tools_review_launch_preserves_checkout_and_enables_read_and_tests(tmp_path, monkeypatch, leg_id):
     from plangraph.planner.legs import DEFAULT_LEGS
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
@@ -356,4 +357,9 @@ def test_tools_review_launch_preserves_checkout_and_enables_read_and_tests(tmp_p
     assert cfg['permission']['bash']['cargo test *'] == 'allow'
     assert cfg['permission']['edit'] == 'deny'
     assert cfg['permission']['external_directory'] == 'deny'
+    # Read-only review: shell is deny-by-default, no write, web or agent tools.
+    assert cfg['permission']['bash']['*'] == 'deny'
+    assert all(cfg['permission'][tool] == 'deny' for tool in ('webfetch', 'websearch', 'task', 'todowrite'))
+    assert not any(event.get('event') == 'opencode_tools_not_denied' and job.status == 'refused'
+                   for event in job.events)
     assert cfg['mcp'] == {} and cfg['plugin'] == []

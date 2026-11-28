@@ -50,6 +50,7 @@ def invoke(req):
 
 
 def test_explicit_mimo_real_launch_requires_a_diff(request_data, monkeypatch):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
     request_data['leg'] = {'id': 'mimo-v2.6-pro', 'explicit': True}
     async def unexpected(*args, **kwargs):
         pytest.fail('invalid review material reached host admission')
@@ -67,6 +68,7 @@ def test_explicit_mimo_real_launch_requires_a_diff(request_data, monkeypatch):
 
 @pytest.mark.parametrize('context,cap', [(1_000_000, 200_000), (181_072, 50_000)])
 def test_mimo_uses_effective_inline_payload_limit(request_data, tmp_path, monkeypatch, context, cap):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
     from plangraph.routing_support import opencode_overlay
     from registry_route_util import _repo
 
@@ -107,6 +109,7 @@ def test_mimo_uses_effective_inline_payload_limit(request_data, tmp_path, monkey
 
 
 def test_mimo_rejects_an_override_after_gateway_tagging(request_data, monkeypatch):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
     from plangraph.spawner import gateway_witness
 
     original = gateway_witness.tag_session

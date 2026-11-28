@@ -447,7 +447,7 @@ fn which_python() -> std::path::PathBuf {
 }
 
 #[test]
-fn review_route_admits_bounded_mimo_pro_inline() {
+fn review_route_admits_bounded_mimo_pro_repository_tools() {
     let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
     let (dir, _, request) = repo_with_writer_trailer(Some("codex"));
     let script = r#"
@@ -463,11 +463,10 @@ def route(**card):
 plan = route(diff_ref=ref)
 ids = [leg.id for leg in plan.legs]
 assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO), ids
-assert plan.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == 'inline-only'
+assert plan.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == 'tools'
 assert plan.legs[ids.index(REVIEW_MIMO_PRO)].max_request_tokens == 200_000
-assert any(row['leg'] == REVIEW_MIMO_PRO and row['reason'] == 'inline_only_needs_diff' for row in route().skipped)
-assert any(row['leg'] == REVIEW_MIMO_PRO and row['reason'] == 'repository_review_tools_unavailable'
-    for row in route(diff_ref=ref, repository_review_required=True).skipped)
+assert REVIEW_MIMO_PRO in [leg.id for leg in route().legs]
+assert REVIEW_MIMO_PRO in [leg.id for leg in route(diff_ref=ref, repository_review_required=True).legs]
 pro = next(leg for leg in DEFAULT_LEGS if leg.id == REVIEW_MIMO_PRO)
 assert policy.skip_reason(pro, 'implement') is None and policy.skip_reason(pro, 'review') is None
 "#;

@@ -468,8 +468,9 @@ class SpawnService(SeatSpawnMixin):
                 raise SpawnRefused('web_access_unavailable: ' + chosen.id)
             require_available(chosen, self.leg_reader, card)
             if role in ('implement', 'review'):
+                from plangraph.planner.legs import role_leg
                 from plangraph.planner.route_policy import codex_leg_effort
-                chosen = codex_leg_effort(chosen, card)
+                chosen = codex_leg_effort(role_leg(chosen, role), card)
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if role == 'review' and card.get('repository_review_required'):

@@ -5,10 +5,14 @@ Moved out of [SPAWNER.md](../SPAWNER.md) to keep it under its line cap (`tools/c
 ## MiMo Pro inline reviews
 
 The GPT-head route keeps the required repository-capable seats and orders Hydrogen-high
-before MiMo Pro. MiMo Pro reviews an exact, nonempty base/head diff with OpenCode's
-isolated tool-denied profile. Routing skips it for a repository-tools-required review
-or a missing diff. Explicit real launches need the same material. A dry run can preview
-the inline seat with no diff.
+before MiMo Pro. For the review role MiMo Pro runs in tools mode (`legs.role_leg`,
+`REVIEW_TOOLS_LEGS`) with the bounded repository profile of the OpenCode review seats:
+read, glob, grep and list allowed, shell deny-by-default except the allowlisted
+`git diff/show/status/log/rev-parse`, `cargo test` and `pytest` commands, and edit,
+web, task, external-directory, MCP and plugin tools denied. Implement and orchestrate
+keep the inline-only leg. The inline path below serves an inline-only MiMo Pro review leg:
+it reviews an exact, nonempty base/head diff with OpenCode's isolated tool-denied profile,
+and routing skips it for a repository-tools-required review or a missing diff.
 
 A MiMo Pro review request is limited to three characters per estimated token, with
 a ceiling of 200,000 tokens (600,000 characters). A smaller provider limit takes

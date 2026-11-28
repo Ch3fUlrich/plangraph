@@ -42,7 +42,7 @@ def opencode_repository_review(leg):
     return (getattr(leg, 'tool_mode', None) == 'tools'
             and getattr(leg, 'harness', None) == 'opencode'
             and getattr(leg, 'id', None) in {
-                'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'})
+                'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'mimo-v2.6-pro'})
 
 
 def has_repository_review_tools(leg):

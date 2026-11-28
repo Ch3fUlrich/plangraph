@@ -16,7 +16,7 @@ import shutil
 import tempfile
 import time
 
-from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, mimo_pro_review, opencode_counterpart
+from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, mimo_pro_review, opencode_counterpart, role_leg
 from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
@@ -143,7 +143,7 @@ def build(request: dict) -> dict:
     try:
         admit_leg(leg)
         if request['role'] in ('implement', 'review'):
-            leg = codex_leg_effort(leg, request['card'])
+            leg = codex_leg_effort(role_leg(leg, request['role']), request['card'])
     except SpawnRefused as exc:
         reason = str(exc)
         raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None

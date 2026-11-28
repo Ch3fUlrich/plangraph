@@ -143,6 +143,13 @@ def test_connections_keep_winning_row_metadata():
     assert not state.available and state.reason == "inactive"
 
 
+@pytest.mark.parametrize("status", ["ok", "success", "active"])
+def test_healthy_status(status):
+    # OmniRoute reports a tested, working connection as "active".
+    state = Harness(payload(row(testStatus=status))).reader.snapshot()["p"]
+    assert state.available and state.reason == "" and not state.stale
+
+
 @pytest.mark.parametrize("status", ["error", "failed", "unavailable"])
 def test_unavailable_status(status):
     state = Harness(payload(row(testStatus=status))).reader.snapshot()["p"]
