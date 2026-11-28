@@ -1,0 +1,3 @@
+path	disposition	required	row IDs	label
+rust/worker-core/src/worktree_disk_tests.rs	write	yes	E1	observed (<= 30 added lines; <= 430 final lines)
+src/plangraph/spawner/host_ready.py	read	yes	E1	observed
