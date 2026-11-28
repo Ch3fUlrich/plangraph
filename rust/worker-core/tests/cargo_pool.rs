@@ -1,9 +1,9 @@
 #![cfg(unix)]
 use pg_worker_core::{
     cargo_pool::{
-        acquire_slot, configured_slot_count, count_cargo_lock_waits, enforce_pool,
-        enforce_pool_cap, existing_pool_slots, pool_slots, reap_stale_leases, record_lock_wait,
-        slot_count, summarize_lock_waits, LockWaitSample, LockWaitTracker,
+        acquire_check_slot, acquire_slot, configured_slot_count, count_cargo_lock_waits,
+        enforce_pool, enforce_pool_cap, existing_pool_slots, pool_slots, reap_stale_leases,
+        record_lock_wait, slot_count, summarize_lock_waits, LockWaitSample, LockWaitTracker,
     },
     disk_hygiene::{scan, Report},
 };
@@ -280,4 +280,57 @@ fn config_file_is_read_from_the_config_home() {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "48\n").unwrap();
     assert_eq!(configured_cap_bytes(), 48 << 30);
+}
+
+#[test]
+fn a_check_run_leases_an_own_pool_slot_before_the_writers_primary() {
+    use pg_worker_core::cargo_cache::{try_exclusive_lease, try_shared_lease};
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("cache/cargo-target");
+    let slots = pool_slots(&primary, 3).unwrap();
+
+    let first = acquire_check_slot(&primary, 3, "check-1", None).unwrap();
+    let second = acquire_check_slot(&primary, 3, "check-2", None).unwrap();
+    assert_eq!(
+        (first.path.as_path(), first.exclusive()),
+        (slots[1].as_path(), true)
+    );
+    assert_eq!(second.path, slots[2]);
+    // Writers keep their shared lease of the primary while both checks run.
+    assert!(try_shared_lease(&primary).unwrap().is_some());
+
+    // With every pool slot taken, a third check shares the primary with the writers.
+    let third = acquire_check_slot(&primary, 3, "check-3", None).unwrap();
+    assert_eq!(
+        (third.path.as_path(), third.exclusive()),
+        (primary.as_path(), false)
+    );
+    let writer = try_shared_lease(&primary).unwrap();
+    assert!(writer.is_some(), "a writer proceeds beside the check");
+    assert!(
+        try_exclusive_lease(&primary).unwrap().is_none(),
+        "reclaim waits"
+    );
+    let fourth = acquire_check_slot(&primary, 3, "check-4", None).unwrap();
+    assert_eq!(fourth.slot_index, 0);
+    drop((third, fourth, writer));
+    assert!(try_exclusive_lease(&primary).unwrap().is_some());
+}
+
+#[test]
+fn a_check_run_on_a_one_slot_pool_never_holds_the_primary_exclusively() {
+    use pg_worker_core::cargo_cache::try_shared_lease;
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("cache/cargo-target");
+    let lease = acquire_check_slot(&primary, 1, "check", None).unwrap();
+    assert_eq!((lease.slot_index, lease.exclusive()), (0, false));
+    assert!(try_shared_lease(&primary).unwrap().is_some());
+    assert!(!primary.with_file_name("cargo-target.lease.json").exists());
+    drop(lease);
+
+    // Reclaim holding the primary is the one state that makes a check wait.
+    let reclaim = acquire_slot(&primary, 1, "reclaim", None).unwrap();
+    let busy = acquire_check_slot(&primary, 1, "check", None).unwrap_err();
+    assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+    drop(reclaim);
 }

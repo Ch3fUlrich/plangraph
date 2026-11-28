@@ -191,6 +191,19 @@ def test_build_clean(env):
     assert env.run("status", cwd=wt).stdout.startswith("b1  built")  # state is found from the worktree too
 
 
+def test_fold_adds_a_later_pr_as_a_recorded_part(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A", title="add a")
+    assert env.run("build", "--name", "f1", "--prs", "1").returncode == 0
+    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B", title="add b")
+    res = env.run("fold", "--name", "f1", "--prs", "2,1")  # a part already in the batch is not merged twice
+    assert res.returncode == 0, res.stderr
+    wt = env.tmp / "repo-worktrees" / "batch-f1"
+    assert first_parent(env, "batch/f1", wt) == ["Merge PR #2: add b", "Merge PR #1: add a", "seed"]
+    st = json.loads(env.state_file("f1").read_text())
+    assert st["status"] == "built" and st["head"] == env.git("rev-parse", "batch/f1")
+    assert [(m["pr"], m["items"]) for m in st["merged"]] == [(1, ["plangraph:ITEM-A"]), (2, ["plangraph:ITEM-B"])]
+
+
 def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")

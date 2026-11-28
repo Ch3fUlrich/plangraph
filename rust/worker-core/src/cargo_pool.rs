@@ -1,6 +1,6 @@
 //! Leased fixed-size pool of Cargo target directories with a per-slot size cap.
 use crate::{
-    cargo_cache::{try_exclusive_lease, ExclusiveLease},
+    cargo_cache::{try_exclusive_lease, try_shared_lease, ExclusiveLease},
     disk_hygiene::Report,
     run::record_io::atomic_write_private,
     sweep_runs,
@@ -41,13 +41,23 @@ pub struct SlotLease {
     pub slot_index: usize,
     pub path: PathBuf,
     pub run_id: String,
-    lease_file: PathBuf,
+    /// The record of an exclusive lease; a shared lease of the primary writes none.
+    lease_file: Option<PathBuf>,
     _flock: ExclusiveLease,
+}
+
+impl SlotLease {
+    /// True when the slot is held exclusively, false for the shared lease of the primary.
+    pub fn exclusive(&self) -> bool {
+        self.lease_file.is_some()
+    }
 }
 
 impl Drop for SlotLease {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.lease_file);
+        if let Some(path) = &self.lease_file {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -395,7 +405,50 @@ pub fn acquire_slot(
 ) -> io::Result<SlotLease> {
     let slots = pool_slots(primary, count)?;
     reap_stale_leases(&slots, state)?;
-    for (slot_index, slot) in slots.iter().enumerate() {
+    lease_idle_slot(&slots, 0, run_id)?.ok_or_else(|| all_busy(slots.len()))
+}
+
+/// Lease a target for a check run without holding writers off the primary (slot 0, the
+/// writers' shared target): an idle slot of `1..count` exclusively, else the primary under the
+/// shared lease writers take. Cargo's build-directory lock keeps two cargo processes from writing
+/// the primary at once; the shared lease keeps reclaim away. WouldBlock only while reclaim holds
+/// the primary and every other slot is leased.
+pub fn acquire_check_slot(
+    primary: &Path,
+    count: usize,
+    run_id: &str,
+    state: Option<&Path>,
+) -> io::Result<SlotLease> {
+    let slots = pool_slots(primary, count)?;
+    reap_stale_leases(&slots, state)?;
+    if let Some(lease) = lease_idle_slot(&slots, 1, run_id)? {
+        return Ok(lease);
+    }
+    if let Some(parent) = primary.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let Some(flock) = try_shared_lease(primary)? else {
+        return Err(all_busy(slots.len()));
+    };
+    fs::create_dir_all(primary)?;
+    Ok(SlotLease {
+        slot_index: 0,
+        path: primary.to_path_buf(),
+        run_id: run_id.to_owned(),
+        lease_file: None,
+        _flock: flock,
+    })
+}
+
+fn all_busy(count: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        format!("all {count} cargo pool slots are busy"),
+    )
+}
+
+fn lease_idle_slot(slots: &[PathBuf], first: usize, run_id: &str) -> io::Result<Option<SlotLease>> {
+    for (slot_index, slot) in slots.iter().enumerate().skip(first) {
         if let Some(parent) = slot.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -411,16 +464,13 @@ pub fn acquire_slot(
         };
         let payload = serde_json::to_vec(&record).map_err(io::Error::other)?;
         atomic_write_private(&lease_file, &payload)?;
-        return Ok(SlotLease {
+        return Ok(Some(SlotLease {
             slot_index,
             path: slot.clone(),
             run_id: run_id.to_owned(),
-            lease_file,
+            lease_file: Some(lease_file),
             _flock: flock,
-        });
+        }));
     }
-    Err(io::Error::new(
-        io::ErrorKind::WouldBlock,
-        format!("all {} cargo pool slots are busy", slots.len()),
-    ))
+    Ok(None)
 }

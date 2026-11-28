@@ -134,6 +134,39 @@ def test_hook_restores_user_cargo_path(repo, monkeypatch):
     assert os.environ['PATH'].split(os.pathsep)[0] == str(cargo_bin)
 
 
+def test_cargo_path_prefers_cargo_home_and_is_idempotent(repo):
+    from pgtest import cargo_path
+    cargo_home = repo / 'cargo-home'
+    (cargo_home / 'bin').mkdir(parents=True)
+    (repo / '.cargo/bin').mkdir(parents=True)
+    env = {'PATH': '/usr/bin', 'HOME': str(repo), 'CARGO_HOME': str(cargo_home)}
+    found = cargo_path(env)
+    assert found.split(os.pathsep) == [str(cargo_home / 'bin'), '/usr/bin']
+    assert cargo_path({**env, 'PATH': found}) == found
+    assert cargo_path({'PATH': '/usr/bin', 'HOME': str(repo / 'absent')}) == '/usr/bin'
+
+
+def test_placement_tests_find_cargo_in_the_rustup_bin(repo, monkeypatch, capsys):
+    from test_affected_tests import selector
+    from types import SimpleNamespace
+    test = repo / 'tests/test_placement_example.py'
+    test.parent.mkdir()
+    test.write_text('def test_example(): pass\n')
+    cargo = repo / '.cargo/bin/cargo'
+    cargo.parent.mkdir(parents=True)
+    cargo.write_text('#!/bin/sh\n')
+    cargo.chmod(0o755)
+    monkeypatch.setenv('PATH', str(repo / 'empty-bin'))
+    module = selector()
+    # Stop right after the cargo check: the next step is the test environment.
+    monkeypatch.setattr(module, 'test_environment', lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
+                                   'tests/test_placement_example.py', '--run'])
+    assert module.main(root=repo) == 1
+    err = capsys.readouterr().err
+    assert 'CARGO FAIL' not in err and 'FAIL test-env' in err
+
+
 def test_missing_cargo_stops_selected_placement_tests(repo, monkeypatch, capsys):
     from test_affected_tests import selector
     from types import SimpleNamespace

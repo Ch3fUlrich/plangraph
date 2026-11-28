@@ -473,6 +473,23 @@ def cmd_continue(args):
     return run_pending(st, args.skip_conflicts or st.get("skip_conflicts", False))
 
 
+def cmd_fold(args):
+    """Fold more pull requests into a built batch: the build's merge, conflict stop and part record, in the batch
+    worktree or --worktree (a checkout of the batch branch), without the plan and entry rules."""
+    st = load_state(args.name)
+    if st["status"] not in ("built", "pushed"):
+        raise MergeBatchError(f"batch {st['name']!r} is {st['status']}: fold needs a built batch")
+    if args.worktree:
+        st["worktree"] = str(Path(args.worktree).resolve())
+    nums = [num for num in parse_prs(args.prs) if str(num) not in st["prs"]]
+    infos = {num: fetch_pr(st["repo"], num) for num in nums}
+    fetch_heads(st["name"], st["base"], nums, infos, st["repo"])
+    for num in nums:
+        st["prs"][str(num)] = {k: infos[num][k] for k in ("title", "head", "ref", "base")}
+    st.update(status="building", pending=nums)
+    return run_pending(st, args.skip_conflicts)
+
+
 def _jobs_of_part(repo, pr, head):
     """Jobs of the latest completed Tests run for this part PR and head."""
     runs = [r for r in tests_runs(repo, pr, head, gh_json) if r.get("status") == "completed"]

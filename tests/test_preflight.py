@@ -47,6 +47,7 @@ def repo(tmp_path, monkeypatch):
                     "-c", "user.email=test@example.invalid", "commit", "-q",
                     "--allow-empty", "-m", "initial"], check=True)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CARGO_HOME", raising=False)
     monkeypatch.delenv("PLANGRAPH_SCRUB_WORDS", raising=False)
     return tmp_path
 

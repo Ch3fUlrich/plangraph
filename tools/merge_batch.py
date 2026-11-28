@@ -19,6 +19,8 @@
             lines of such a path, because a union keeps the old text beside the new.
   continue  resume after the resolution commit, or after a crash: the state is saved before the
             worktree and before each merge, so a merge that was made is recorded, not lost.
+  fold      merge more PRs into a built batch (its worktree or --worktree) and record them as parts, so the
+            pre-push open-PR check accepts them; no plan or entry rules.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
   review    record a keeper-bound review by run id, or a supplementary review file.
@@ -255,6 +257,11 @@ def parser():
                           "for append-only ledgers such as CHANGELOG.md (repeatable)")
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
+    cmd.add_argument("--skip-conflicts", action="store_true")
+    cmd = add("fold", build.cmd_fold, "merge more PRs into a built batch and record them as parts")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
+    cmd.add_argument("--worktree", help="checkout of the batch branch (default: the batch worktree)")
     cmd.add_argument("--skip-conflicts", action="store_true")
     cmd = add("push", land.cmd_push, "push batch/NAME and open the batch PR")
     cmd.add_argument("--name", required=True)
