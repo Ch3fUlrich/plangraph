@@ -14,10 +14,39 @@ fn remove_path(path: &Path) -> io::Result<()> {
     if path.is_symlink() || path.is_file() {
         fs::remove_file(path)
     } else if path.is_dir() {
-        fs::remove_dir_all(path)
+        fs::remove_dir_all(path).or_else(|error| {
+            if error.kind() != io::ErrorKind::PermissionDenied {
+                return Err(error);
+            }
+            // Read-only directories (a test fixture's) keep their entries: open them, retry.
+            grant_write(path)?;
+            fs::remove_dir_all(path)
+        })
     } else {
         Ok(())
     }
+}
+
+#[cfg(not(unix))]
+fn grant_write(_: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// Add owner write and search permission to `dir` and every real directory below it.
+#[cfg(unix)]
+fn grant_write(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::symlink_metadata(dir)?.permissions().mode();
+    if mode & 0o300 != 0o300 {
+        fs::set_permissions(dir, fs::Permissions::from_mode(mode | 0o700))?;
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            grant_write(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// Refuses a path with a mount point at it, beneath it or between `boundary` and it. The mount
@@ -116,6 +145,7 @@ mod artifact_walk {
             cutoff: SystemTime,
             dev: u64,
             uid: u32,
+            fixtures: bool,
         ) -> Result<(), &'static str> {
             let path = if self.seen.is_empty() {
                 root.to_path_buf()
@@ -147,11 +177,15 @@ mod artifact_walk {
             }
             if let Some((_, git)) = self.dirs.last_mut() {
                 git.observe(path.file_name().unwrap(), kind);
-                if git.is_repository() {
+                if git.is_repository() && !fixtures {
                     return Err("unsafe");
                 }
             }
-            if meta.modified().map_err(|_| "probe_unavailable")? >= cutoff {
+            let modified = meta.modified().map_err(|_| "probe_unavailable")?;
+            // Test fixtures may carry mtimes far in the future; no live writer makes those.
+            let future =
+                fixtures && modified > SystemTime::now() + std::time::Duration::from_secs(60);
+            if modified >= cutoff && !future {
                 return Err("young");
             }
             let bytes = meta.blocks().saturating_mul(512);

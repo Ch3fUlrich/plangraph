@@ -197,6 +197,10 @@ pub struct Candidate {
     pub(crate) identity: (u64, u64),
     pub(crate) maintenance: bool,
     pub(crate) selector_scratch: bool,
+    /// Pytest run scratch: a repository inside is a test fixture, not a source tree.
+    pub(crate) fixtures: bool,
+    /// Targets nested in the scope: a process reference inside one does not hold this one.
+    pub(crate) nested: std::sync::Arc<[PathBuf]>,
     pub(crate) variant: bool,
     pub(crate) cap: Option<PoolCap>,
 }
@@ -218,6 +222,8 @@ impl Candidate {
             identity,
             maintenance: false,
             selector_scratch: false,
+            fixtures: false,
+            nested: Vec::new().into(),
             variant: false,
             cap: None,
         })

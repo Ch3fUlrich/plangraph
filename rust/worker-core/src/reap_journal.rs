@@ -238,40 +238,16 @@ pub(crate) fn with_inventory<T>(fixture: Option<Vec<PathBuf>>, run: impl FnOnce(
 /// Every mount point the kernel lists for this process. A bind mount may share a device
 /// number, so metadata alone cannot tell a mount from a directory.
 pub(crate) fn mount_points() -> io::Result<Vec<PathBuf>> {
-    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
-
     #[cfg(test)]
     if let Some(fixture) = INVENTORY.with(|inventory| inventory.borrow().clone()) {
         return fixture.ok_or_else(|| io::Error::other("mount inventory unreadable"));
     }
-    let mut points = Vec::new();
-    for line in fs::read("/proc/self/mountinfo")?
-        .split(|b| *b == b'\n')
-        .filter(|l| !l.is_empty())
-    {
-        let mount = line
-            .split(|b| *b == b' ')
-            .nth(4)
-            .ok_or_else(|| io::Error::other("invalid mount inventory"))?;
-        let mut bytes = Vec::with_capacity(mount.len());
-        let mut remaining = mount;
-        while let Some((&byte, tail)) = remaining.split_first() {
-            if byte == b'\\' {
-                let escaped = tail
-                    .get(..3)
-                    .and_then(|s| std::str::from_utf8(s).ok())
-                    .and_then(|s| u8::from_str_radix(s, 8).ok())
-                    .ok_or_else(|| io::Error::other("invalid mount escape"))?;
-                bytes.push(escaped);
-                remaining = &tail[3..];
-            } else {
-                bytes.push(byte);
-                remaining = tail;
-            }
-        }
-        points.push(PathBuf::from(OsString::from_vec(bytes)));
-    }
-    Ok(points)
+    Ok(
+        crate::proc_mounts::parse(&fs::read("/proc/self/mountinfo")?)?
+            .into_iter()
+            .map(|mount| mount.point)
+            .collect(),
+    )
 }
 
 /// Refuses a path that is, or holds, a mount point.

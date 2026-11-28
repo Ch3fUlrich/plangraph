@@ -42,7 +42,7 @@ pub(crate) fn invalid_inventory() -> io::Error {
 #[cfg(target_os = "linux")]
 mod inventory {
     use super::*;
-    use std::{collections::BTreeSet, ffi::OsStr, os::unix::ffi::OsStrExt};
+    use std::{collections::BTreeSet, ffi::OsStr, os::unix::ffi::OsStrExt, path::PathBuf};
 
     /// Versioned process paths. Byte arrays preserve paths that are not UTF-8.
     #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -51,6 +51,9 @@ mod inventory {
         pub(crate) cwds: BTreeSet<Vec<u8>>,
         pub(crate) open_paths: BTreeSet<Vec<u8>>,
         pub(crate) cargo_targets: BTreeSet<Vec<u8>>,
+        /// Set when the inventory came from the own-process fallback: the reader fault, once per run.
+        #[serde(skip)]
+        pub degraded: Option<String>,
     }
 
     fn paths(bytes: &BTreeSet<Vec<u8>>) -> impl Iterator<Item = &Path> {
@@ -66,6 +69,7 @@ mod inventory {
                 cwds: BTreeSet::new(),
                 open_paths: BTreeSet::new(),
                 cargo_targets: BTreeSet::new(),
+                degraded: None,
             }
         }
     }
@@ -110,10 +114,21 @@ mod inventory {
         }
 
         pub(crate) fn blocks_except(&self, scope: &Path, lease: &Path) -> bool {
+            self.blocks_outside(scope, lease, &[])
+        }
+
+        /// A reference in `scope` outside every `nested` target (and other than the `lease`
+        /// file) protects the scope.
+        pub(crate) fn blocks_outside(
+            &self,
+            scope: &Path,
+            lease: &Path,
+            nested: &[PathBuf],
+        ) -> bool {
             paths(&self.cwds)
                 .chain(self.cargo_targets())
                 .chain(paths(&self.open_paths).filter(|path| *path != lease))
-                .any(|path| path.starts_with(scope))
+                .any(|path| path.starts_with(scope) && !nested.iter().any(|n| path.starts_with(n)))
         }
     }
 }
@@ -205,6 +220,8 @@ mod hygiene_report {
         pub first_removal_deadline_missed: bool,
         pub stage_durations: BTreeMap<&'static str, f64>,
         pub budget_exhausted: bool,
+        /// The process reader fault of a run whose inventory fell back to own processes.
+        pub process_reader: Option<String>,
     }
 
     impl HygieneReport {
@@ -227,7 +244,8 @@ mod hygiene_report {
                 "free_bytes": self.devices.values().filter_map(|row| row.end_free_bytes).min(), "devices": self.devices.values().collect::<Vec<_>>(), "kept": self.kept,
                 "started_at": self.started_at.as_secs(), "time_to_first_removal": self.time_to_first_removal,
                 "first_removal_deadline_missed": self.first_removal_deadline_missed,
-                "stage_durations": self.stage_durations, "budget_exhausted": self.budget_exhausted
+                "stage_durations": self.stage_durations, "budget_exhausted": self.budget_exhausted,
+                "process_reader": self.process_reader
             });
             report
                 .as_object_mut()

@@ -412,6 +412,7 @@ fn hygiene_generic_cache_probe_refuses_committed_artifacts() {
         shared: &[],
         home: repo,
         cache: None,
+        shm: None,
         cap: 0,
     };
     assert_eq!(

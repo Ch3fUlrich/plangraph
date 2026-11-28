@@ -372,6 +372,7 @@ fn rebuildable_classes_keep_only_protected_paths() {
         shared: &shared,
         home: &home_link,
         cache: Some(&cache),
+        shm: None,
         cap: 1024,
     };
     let start = Instant::now();
@@ -419,4 +420,130 @@ fn rebuildable_classes_keep_only_protected_paths() {
         assert_eq!(row.map(|row| row.reason), Some(reason), "{name}");
         assert!(path.exists());
     }
+}
+
+/// Age `path` and everything below it to `at`, files before their directories.
+fn age_tree(path: &Path, at: SystemTime) {
+    for entry in fs::read_dir(path).unwrap().flatten() {
+        if entry.file_type().unwrap().is_dir() {
+            age_tree(&entry.path(), at);
+        } else {
+            fs::File::open(entry.path())
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        }
+    }
+    fs::File::open(path).unwrap().set_modified(at).unwrap();
+}
+
+#[test]
+fn idle_sweep_removes_idle_targets_and_dead_shm_runs_keeping_busy_ones_and_caps_the_rest() {
+    use pg_worker_core::{disk_hygiene::Layout, disk_runtime::DiskSpace};
+    let (tmp, repo, trees) = support::fixture();
+    let home = tmp.path();
+    let primary = home.join("cache/cargo-target");
+    let nested = |name: &str| primary.join(name);
+    let hours = |n: u64| SystemTime::now() - Duration::from_secs(n * 3600);
+    // The shared root's own profile: a build in a nested target does not hold it.
+    super::tests::slot(&primary);
+    fs::write(primary.join("debug/libroot.rlib"), vec![0u8; 256 * 1024]).unwrap();
+    age_tree(&primary.join("debug"), hours(48));
+    for name in ["idle", "busy", "young"] {
+        fs::create_dir_all(nested(name).join("debug/deps")).unwrap();
+        fs::write(nested(name).join(".rustc_info.json"), "{}").unwrap();
+        fs::write(nested(name).join("debug/deps/libx.rlib"), [0u8; 4096]).unwrap();
+        age_tree(&nested(name), hours(if name == "young" { 2 } else { 7 }));
+    }
+    // Over its cap while in use within the sweep age: its stale profile goes, the target stays.
+    let big = nested("big");
+    super::tests::slot(&big);
+    fs::create_dir_all(big.join("debug/deps")).unwrap();
+    fs::write(big.join("debug/deps/libbig.rlib"), vec![0u8; 256 * 1024]).unwrap();
+    age_tree(&big, hours(48));
+    fs::write(big.join("note"), "fresh").unwrap();
+    // Pytest run dirs in the shm root: a dead pid's (with a fixture repository and a file
+    // dated in the future) and a live one.
+    let shm = home.join("shm");
+    let dead = shm.join("pg999999999-dead");
+    let live = shm.join(format!("pg{}-live", std::process::id()));
+    fs::create_dir_all(dead.join("fixture/.git")).unwrap();
+    fs::write(dead.join("fixture/.git/HEAD"), "").unwrap();
+    fs::write(dead.join("fixture/later"), "x").unwrap();
+    fs::create_dir_all(&live).unwrap();
+    for run in [&dead, &live] {
+        age_tree(run, hours(7));
+    }
+    let later = SystemTime::now() + Duration::from_secs(30 * 86_400);
+    fs::File::open(dead.join("fixture/later"))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    // A fixture that made its repository read-only.
+    use std::os::unix::fs::PermissionsExt;
+    let read_only = fs::Permissions::from_mode(0o555);
+    fs::set_permissions(dead.join("fixture/.git"), read_only).unwrap();
+    let shared = [primary.clone()];
+    let layout = Layout {
+        repo: &repo,
+        roots: &[trees],
+        scratch: &[],
+        shared: &shared,
+        home,
+        cache: Some(&home.join("no-cache")),
+        shm: Some(&shm),
+        cap: 100_000,
+    };
+    let start = Instant::now();
+    let clock = || start;
+    let budget = Budget::new(start, &clock);
+    let mut report = HygieneReport::new(Duration::ZERO, false);
+    let thresholds = Thresholds {
+        alarm_free_bytes: 1,
+        cleanup_free_bytes: 1,
+    };
+    let sample = |_: &Path| {
+        Ok(DiskSpace {
+            free: 100,
+            total: 100,
+        })
+    };
+    let found = layout
+        .discover(&mut report, &budget, thresholds, sample, None)
+        .unwrap();
+    // A live Cargo build names the busy target in its environment.
+    let held = nested("busy").into_os_string().into_encoded_bytes();
+    let rows = serde_json::json!({"version":1,"cwds":[],"open_paths":[],"cargo_targets":[held]});
+    let inventory = |_| serde_json::from_value(rows.clone()).map_err(io::Error::other);
+    let protection = |item: &Candidate, end| layout.protection(item, home, end);
+    let checks = ReclaimChecks {
+        inventory: &inventory,
+        protection: &protection,
+        space: &|_| Ok(100),
+    };
+    assert!(reclaim(&mut report, found, &budget, &checks));
+    let reason = |path: &Path| {
+        let row = report.kept.iter().find(|row| row.path == path);
+        row.map(|row| row.reason)
+    };
+    assert!(!nested("idle").exists(), "{report:?}");
+    assert!(!dead.exists(), "{report:?}");
+    assert_eq!(reason(&nested("busy")), Some("busy"));
+    assert_eq!(reason(&nested("young")), Some("young"));
+    assert!(
+        nested("young/debug/deps/libx.rlib").exists(),
+        "under its cap"
+    );
+    assert!(live.exists() && nested("busy/debug").exists());
+    assert!(big.join("note").exists() && !big.join("debug/deps/libbig.rlib").exists());
+    assert!(!primary.join("debug/libroot.rlib").exists(), "{report:?}");
+    let evicted = |name: &str| {
+        let path = format!("{}/debug ", nested(name).display());
+        report
+            .summary
+            .actions
+            .iter()
+            .any(|action| action.contains("pool_evict") && action.contains(&path))
+    };
+    assert!(evicted("big"));
 }
