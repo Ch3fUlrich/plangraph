@@ -267,3 +267,55 @@ def test_a_crlf_terminated_denial_is_still_a_probe_defect(tmp_path, monkeypatch)
     assert any(e.get('event') == 'sandbox_denied' for job in runner.jobs.values() for e in job.events)
     assert result['ok'] is False and result['infra'] is True and 'sandbox' in result['reason'], result
     assert store.leg_status('gpt-6.2-sol-medium')['state'] != 'down'
+
+
+def _lane_worktree(tmp_path):
+    main = tmp_path / 'main'
+    subprocess.run(['git', 'init', '-q', str(main)], check=True)
+    subprocess.run(['git', '-C', str(main), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q',
+                    '--allow-empty', '-m', 'base'], check=True)
+    lane = tmp_path / 'lane'
+    subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-q', '-b', 'lane/x', str(lane)], check=True)
+    return main, lane
+
+
+def _spawn_writer(monkeypatch, lane):
+    monkeypatch.setattr('plangraph.routing_support.clients.resolve_codex_client', lambda *a, **k: ('codex', None))
+    seen = []
+
+    async def factory(exe, *args, **kwargs):
+        seen.append(list(args))
+        return await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass', **kwargs)
+
+    async def go():
+        runner = SpawnerRunner(process_factory=factory)
+        await runner.spawn(prompt='p', role='implement', model_or_combo='gpt-6.2-sol-medium',
+                           client='codex', cwd=str(lane))
+        await asyncio.gather(*runner._tasks.values(), return_exceptions=True)
+    asyncio.run(go())
+    return seen
+
+
+def test_a_plain_implement_spawn_in_a_lane_worktree_grants_the_git_common_dir_and_cargo_pool(tmp_path, monkeypatch):
+    main, lane = _lane_worktree(tmp_path)
+    target = tmp_path / 'cache' / 'cargo-target'
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    argv = _spawn_writer(monkeypatch, lane)[0]
+    assert argv[argv.index('--sandbox') + 1] == 'workspace-write'
+    granted = {Path(argv[i + 1]).resolve() for i, a in enumerate(argv) if a == '--add-dir'}
+    assert granted == {(main / '.git').resolve(), target.parent.resolve()}, argv
+
+
+@requires_unprivileged_posix
+def test_the_preflight_refuses_an_unwritable_cargo_pool_before_launch(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    _, lane = _lane_worktree(tmp_path)
+    cache = tmp_path / 'cache'
+    cache.mkdir()
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(cache / 'cargo-target'))
+    cache.chmod(0o555)
+    try:
+        with pytest.raises(SpawnRefused, match='not writable'):
+            _spawn_writer(monkeypatch, lane)
+    finally:
+        cache.chmod(0o755)

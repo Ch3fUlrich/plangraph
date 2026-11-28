@@ -1,0 +1,1 @@
+- A spawned Codex writer (any role but review) gets `--sandbox workspace-write` with the git common dir of its cwd and the parent of the shared cargo target as `--add-dir` roots, so a lane worktree can commit and build; the spawn is refused before launch when one of them is not writable.

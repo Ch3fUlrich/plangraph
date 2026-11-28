@@ -39,7 +39,7 @@ _keeper_unconfigured_last_warned = None
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
 from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, origin_refusal, refusal_record, release_attempts, stop_on_probe_fault, terminal_reason
-from .git_guard import prepare_worktree, writer_launch
+from .git_guard import codex_writer_dirs, prepare_worktree, writer_launch
 from .base_fresh import admit_base
 from . import opencode_isolation as _opencode_isolation
 from .opencode_isolation import (
@@ -269,7 +269,7 @@ class SpawnerRunner:
             gateway=gateway,
             gateway_online=gateway_online,
             headers=envelope_headers,
-            client=client, writable_dirs=writable_dirs,
+            client=client, writable_dirs=codex_writer_dirs(client, role, work_dir, writable_dirs),
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
