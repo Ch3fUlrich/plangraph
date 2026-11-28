@@ -16,7 +16,7 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
+from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, cargo_path, keeper_postgres_files, postgres_bin, report_batches,
                     run_flag_in, run_keeper_postgres, test_environment, with_result_line)
 
 
@@ -703,7 +703,7 @@ def _main(root=None):
         placement = any('placement' in Path(path).name or
                         (root / path).is_dir() and any((root / path).rglob('*placement*.py'))
                         for path in plan['tests'])
-        if placement and not shutil.which('cargo'):
+        if placement and not shutil.which('cargo', path=cargo_path(os.environ)):
             print('CARGO FAIL: cargo is required for selected placement tests', file=sys.stderr)
             return 1
         try:
@@ -711,6 +711,7 @@ def _main(root=None):
         except (OSError, subprocess.SubprocessError):
             print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
             return 1
+        env["PATH"] = cargo_path(env)
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
