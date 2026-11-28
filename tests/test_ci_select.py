@@ -231,8 +231,26 @@ def test_gate_all_selected_success():
         "rust-spike": {"result": "success"},
         "browser": {"result": "success"},
         "rust-windows": {"result": "success"},
+        "rust-test": {"result": "success"},
     }
     assert gate(needs) == []
+
+
+@pytest.mark.parametrize("shards,problem", [("failure", "rust-test: failure"), ("skipped", "rust-test: skipped"),
+                                            (None, "rust-test: missing"), ("success", None)])
+def test_gate_requires_every_rust_test_shard_when_rust_is_selected(shards, problem):
+    """A matrix job's result is success only when every shard succeeded; the gate requires it with rust."""
+    outputs = {"pytest": "false", "pytest-postgres": "false", "rust": "true", "rust-worker": "false",
+               "browser": "false", "rust-spike": "false"}
+    needs = {"select": {"result": "success", "outputs": outputs},
+             **{job: {"result": "success"} for job in ("scrub", "file-size", "new-code-lang", "changelog-docs",
+                                                       "rust", "rust-windows")}}
+    if shards:
+        needs["rust-test"] = {"result": shards}
+    assert gate(needs) == ([problem] if problem else [])
+    needs.pop("rust-test", None)
+    needs.pop("rust-windows")
+    assert gate({**needs, "select": {"result": "success", "outputs": {**outputs, "rust": "false"}}}) == []
 
 
 def test_gate_selected_suite_skipped():
@@ -651,7 +669,7 @@ def test_rust_jobs_test_the_selected_crates_and_the_whole_workspace_without_a_li
     assert jobs["select"]["outputs"]["rust-packages"] == "${{ steps.sel.outputs.rust-packages }}"
     steps = {s.get("name"): s for s in jobs["rust"]["steps"]}
     for name, cargo in (("cargo clippy", 'cargo clippy "${packages[@]}" --all-targets'),
-                        ("cargo test", 'cargo test "${packages[@]}"')):
+                        ("cargo nextest archive", 'cargo nextest archive --profile ci "${packages[@]}"')):
         assert steps[name]["env"]["RUST_PACKAGES"] == "${{ needs.select.outputs.rust-packages }}"
         assert cargo in steps[name]["run"]
         script = steps[name]["run"].splitlines()[0] + '\nprintf "%s|" "${packages[@]}"'

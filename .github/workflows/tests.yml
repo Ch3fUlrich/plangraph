@@ -521,10 +521,14 @@ jobs:
             python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
               tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
 
+  # Builds every test binary once into a nextest archive (rust/.config/nextest.toml) that the job rust-test runs.
   rust:
     name: 'Rust workspace on Linux: fmt, clippy, tests'
     needs: select
     if: needs.select.outputs.rust == 'true'
+    outputs:
+      target-dir: ${{ steps.archive.outputs.target-dir }}
+      workspace: ${{ steps.archive.outputs.workspace }}
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     defaults:
       run:
@@ -549,7 +553,8 @@ jobs:
           CI_CARGO_PERSIST: ${{ (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) && '1' || '0' }}
         run: |
           set -euo pipefail
-          # Only pushes to the default branch share a persistent target dir ($HOME/cargo-target/<repository>/<job>/<key>, key = hash of Cargo.lock and manifests); every other run builds into an empty per-run dir under RUNNER_TEMP, so a pull request never plants artifacts that later runs execute.
+          # Only pushes to the default branch share a persistent target dir ($HOME/cargo-target/<repository>/<job>/<key>/target, key = hash of Cargo.lock and manifests); every other run builds into an empty per-run dir under RUNNER_TEMP, so a pull request never plants artifacts that later runs execute.
+          # The dir is named target: the job rust-test extracts the test archive at the same path.
           cap="${CI_CARGO_TARGET_CAP_GB:-40}"
           case "$cap" in ''|*[!0-9]*) cap=40 ;; esac
           if [ "$CI_CARGO_PERSIST" = "1" ]; then
@@ -558,9 +563,9 @@ jobs:
             mkdir -p "$root"
             find "$root" -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} +
             if [ "$(du -sk "$root" | cut -f1)" -gt $((cap * 1024 * 1024)) ]; then rm -rf "$root"; mkdir -p "$root"; fi
-            target="$root/$key"
+            target="$root/$key/target"
           else
-            target=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cargo-target.XXXXXX")
+            target="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/cargo-target.XXXXXX")/target"
           fi
           echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
           # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
@@ -574,7 +579,9 @@ jobs:
             ~/.cargo/git
             rust/target
           # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
-          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+          # A changed lock file restores the newest cache of the same toolchain: only changed dependencies rebuild.
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+          restore-keys: rust-dev-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: cargo fmt --check
         run: cargo fmt --check
       # RUST_PACKAGES names the changed crates and their dependents; empty runs the whole workspace.
@@ -589,19 +596,104 @@ jobs:
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+      - uses: ./.github/actions/setup-nextest
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
-      - name: cargo test
+      # Test binaries hold absolute paths of the target directory (env!), so the shards extract the archive at the
+      # same path: the directory must be named target.
+      - name: cargo nextest archive
+        id: archive
         env:
           RUST_PACKAGES: ${{ needs.select.outputs.rust-packages }}
         run: |
           packages=(); for p in $RUST_PACKAGES; do packages+=(-p "$p"); done
-          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test "${packages[@]}"
+          target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"
+          case "$target" in /*/target) ;; *) echo "target dir $target is not an absolute path ending in /target" >&2; exit 1 ;; esac
+          cargo nextest archive --profile ci "${packages[@]}" --archive-file "$RUNNER_TEMP/rust-tests.tar.zst"
+          echo "target-dir=$target" >> "$GITHUB_OUTPUT"
+          echo "workspace=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-tests
+          path: ${{ runner.temp }}/rust-tests.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      # Nextest runs no doc tests: they run here, for the selected crates that have a library.
+      - name: cargo test --doc
+        env:
+          RUST_PACKAGES: ${{ needs.select.outputs.rust-packages }}
+        run: |
+          libraries=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"] if any("lib" in t["kind"] for t in p["targets"])))')
+          packages=(); for p in $RUST_PACKAGES; do if grep -Fxq "$p" <<< "$libraries"; then packages+=(-p "$p"); fi; done
+          if [ -n "$RUST_PACKAGES" ] && [ ${#packages[@]} -eq 0 ]; then echo "no selected crate has a library"; exit 0; fi
+          cargo test --doc "${packages[@]}"
+
+  # The archive of the job rust in three slices of the whole test list; each slice is a required leg of ci-gate.
+  rust-test:
+    name: "Rust workspace tests (shard ${{ matrix.shard }} of 3)"
+    needs: [select, rust]
+    if: needs.select.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CI_SELF_HOSTED_RUN: ${{ (vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && '1' || '0' }}
+      TARGET_DIR: ${{ needs.rust.outputs.target-dir }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/setup-nextest
+      - uses: actions/download-artifact@v4
+        with:
+          name: rust-tests
+          path: ${{ runner.temp }}/rust-tests
+      - name: Test settings
+        env:
+          BUILD_WORKSPACE: ${{ needs.rust.outputs.workspace }}
+        run: |
+          case "$TARGET_DIR" in /*/target) ;; *) echo "target dir $TARGET_DIR is not an absolute path ending in /target" >&2; exit 1 ;; esac
+          # Test binaries also hold the checkout path of the build (env!("CARGO_MANIFEST_DIR")).
+          if [ "$BUILD_WORKSPACE" != "$GITHUB_WORKSPACE" ]; then
+            echo "the archive was built in $BUILD_WORKSPACE; this runner checks out in $GITHUB_WORKSPACE" >&2; exit 1
+          fi
+          mkdir -p "$(dirname "$TARGET_DIR")"
+          # Self-hosted builds use a target dir outside the checkout, which tests read from CARGO_TARGET_DIR.
+          if [ "$CI_SELF_HOSTED_RUN" = 1 ]; then
+            echo "CARGO_TARGET_DIR=$TARGET_DIR" >> "$GITHUB_ENV"
+            # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
+            echo "NEXTEST_TEST_THREADS=8" >> "$GITHUB_ENV"
+          fi
       - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: cargo nextest run
+        run: |
+          PG_JAIL_BIN="$TARGET_DIR/debug/pg-jail" cargo nextest run --profile ci --no-tests=warn \
+            --archive-file "$RUNNER_TEMP/rust-tests/rust-tests.tar.zst" --workspace-remap . \
+            --extract-to "$(dirname "$TARGET_DIR")" --extract-overwrite --partition "slice:${{ matrix.shard }}/3"
+      - name: Upload per-test durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-junit-shard-${{ matrix.shard }}
+          # The nextest store dir (target/nextest) is relative to the workspace root, also with CARGO_TARGET_DIR.
+          path: ${{ github.workspace }}/rust/target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/setup-python@v5
+        if: matrix.shard == 1 && (needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd '))
         with: {python-version: "3.14"}
       - name: Native writer lifecycle (Python 3.14)
-        if: needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd ')
-        run: cargo test -p pg-spawnd --test native_writer
+        if: matrix.shard == 1 && (needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd '))
+        run: |
+          cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/rust-tests/rust-tests.tar.zst" --workspace-remap . \
+            --extract-to "$(dirname "$TARGET_DIR")" --extract-overwrite -E 'package(pg-spawnd) & binary(native_writer)'
 
   rust-windows:
     name: 'Rust spawner and worker core tests on Windows'
@@ -759,7 +851,7 @@ jobs:
   ci-gate:
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.base && (github.event.changes.body || github.event.changes.title) && 'ci-pr-description' || 'ci-gate' }}
     runs-on: ubuntu-24.04
-    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
+    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-test, rust-worker, rust-spike, rust-windows, browser]
     if: ${{ always() }}
     permissions:
       contents: read

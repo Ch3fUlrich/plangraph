@@ -57,7 +57,7 @@ def test_push_skips_heavy_jobs_only_for_a_text_only_merge(tmp_path, monkeypatch,
     assert {out[s] for s in cs.SUITES} == ({"false"} if skipped else {"true"})
     assert (out.get("tested"), out["full"]) == (("true", "false") if skipped else (None, "true"))
     needs = {"select": {"result": "success", "outputs": out}} | {j: {"result": "success"} for j in cs.ALWAYS}
-    needs |= {s: {"result": "success"} for s in (*cs.SUITES, "rust-windows")} if not skipped else {}
+    needs |= {s: {"result": "success"} for s in (*cs.SUITES, *cs.FOLLOWERS)} if not skipped else {}
     assert cs.gate(needs, require_full=True) == []
 
 

@@ -225,6 +225,11 @@ def assert_verified_downloads(document):
                 assert script.index(check) > script.index("https://temporal.download/")
                 assert "temporalio/cli/releases/download/" in script
                 assert "||" in script
+            elif "cargo-nextest" in script:
+                assert cache["with"]["key"] == "cargo-nextest-${{ runner.os }}-${{ runner.arch }}-0.9.152"
+                assert "/releases/download/cargo-nextest-0.9.152" in script
+                assert '> "$dir/checks.sha256"' in script and "grep -E" in script
+                assert script.index("sha256sum -c checks.sha256") < script.index("tar -xzf")
             else:
                 assert "gitleaks-" in cache["with"]["key"]
                 assert "8.30.1" in cache["with"]["key"]
@@ -249,7 +254,7 @@ def test_every_temporal_download_step_has_fallback_and_verification():
     paths = list((ROOT / ".github/workflows").glob("*.y*ml"))
     paths += list((ROOT / ".github/actions").rglob("action.y*ml"))
     assert sum(assert_verified_downloads(yaml.safe_load(path.read_text()))
-               for path in paths) == 2
+               for path in paths) == 3
 
 
 @pytest.mark.parametrize("source", [

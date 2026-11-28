@@ -27,7 +27,7 @@ WIN_CONDITION = ("vars.CI_SELF_HOSTED_WIN == '1' && "
 
 def test_workstation_runners_require_opt_in_and_trusted_pr_with_hosted_fallback():
     workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
-    expected = {'pytest', 'rust', 'rust-worker', 'rust-spike', 'rust-windows'}
+    expected = {'pytest', 'rust', 'rust-test', 'rust-worker', 'rust-spike', 'rust-windows'}
     actual = set()
     for name, job in workflow['jobs'].items():
         runner = job['runs-on']
