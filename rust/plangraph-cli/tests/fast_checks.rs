@@ -155,6 +155,53 @@ fn fast_checks_keeps_external_rust_inputs_in_a_mixed_diff() {
 }
 
 #[test]
+#[cfg(unix)]
+fn worker_fast_checks_execute_with_fixture_mode_and_visible_output() {
+    use pg_worker_core::executable_test_support::write_script;
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    git(root, &["init", "-q"]);
+    git(root, &["commit", "--allow-empty", "-qm", "base"]);
+    for (path, name) in [
+        ("rust/worker", "pg-worker"),
+        ("rust/spikes/temporal-spike", "temporal-spike"),
+    ] {
+        let dir = root.join(path);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = format!("[package]\nname = '{name}'\n");
+        fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+    }
+    fs::write(root.join("rust/Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let selector = "#!/bin/sh\ncase \"$1\" in tools/ci_select.py) echo rust-worker=true;; esac\n";
+    let cargo = r#"#!/bin/sh
+[ "$1" = run ] || exit 0
+test "${PG_FAST_CHECK_FIXTURES_ONLY-}|${PG_RECORD_DIR+x}|${PG_TEMPORAL_CLI+x}" = '1||' || exit 7
+prefix='[run][--manifest-path][rust/Cargo.toml][-p][pg-spawnd][--bin][ci-temporal][--]'
+test "$(printf '[%s]' "$@")" = "$prefix"'[cargo][test][--manifest-path][rust/worker/Cargo.toml][-p][pg-worker][--][--show-output]' || exit 8
+echo worker-fixture-command-verified
+"#;
+    write_script(bin.path(), "python3", selector);
+    write_script(bin.path(), "cargo", cargo);
+    let mut path = bin.path().as_os_str().to_owned();
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(root)
+        .args(["fast-checks", "--base", "HEAD"])
+        .env("PATH", path)
+        .env("PLANGRAPH_CARGO_TARGET_DIR", bin.path().join("target"))
+        .env("PLANGRAPH_STATE_DIR", bin.path().join("state"))
+        .env("PG_FAST_CHECK_FIXTURES_ONLY", "0")
+        .env("PG_RECORD_DIR", "inherited-recording")
+        .env("PG_TEMPORAL_CLI", "inherited-temporal")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("worker-fixture-command-verified"));
+}
+
+#[test]
 fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     let dir = tempfile::tempdir().unwrap();
     let cargo_cache = tempfile::tempdir().unwrap();
@@ -314,7 +361,7 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     }
     fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
     fs::write(tools.join("affected_tests.py"),
-        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
+        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nprint('fixture-owned-stdout')\nprint('fixture-owned-stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "base"]);
     let base = git(root, &["rev-parse", "HEAD"]);
@@ -337,6 +384,12 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         let commit = git(root, &["rev-parse", "HEAD"]);
         let output = run(fail);
         assert_eq!(output.status.success(), fail == "0", "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == "fixture-owned-stdout"));
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "fixture-owned-stderr"));
         // Every outcome leaves a receipt for the head; only a passing run leaves a green one.
         let receipt =
             fs::read_to_string(root.join(".git/plangraph-state/fast-checks").join(&commit))

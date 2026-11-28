@@ -11,6 +11,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(super) fn scrub_words() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(|home| Path::new(&home).join(".config/plangraph/scrub-words.txt"))
+        .filter(|path| path.is_file())
+}
+#[rustfmt::skip]
+pub(super) fn native_skips(stdout: &str, stderr: &str) -> String {
+    const CODEX: [&str; 3] = [
+        "codex_readiness::tests::workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start",
+        "native_writer_sandbox::tests::a_write_outside_the_named_roots_is_refused_in_a_fixture_run",
+        "native_writer_sandbox::tests::a_writer_worktree_can_commit_with_the_named_git_directories",
+    ];
+    const WORKER: &str = "sigkill_mid_attempt_and_mid_timer_stays_pinned reason=requires_temporal_deployment_fixture";
+    let rows: std::collections::BTreeSet<_> = stdout.lines().chain(stderr.lines()).filter_map(|line| {
+        if line.strip_prefix("PG_FAST_CHECK_SKIP ") == Some(WORKER) {
+            return Some(format!("skip {WORKER}\n"));
+        }
+        let node = line.strip_prefix("test ")?.strip_suffix(" ... ignored, live host check requiring a working Codex sandbox")?;
+        CODEX.contains(&node).then(|| format!("skip {node} reason=requires_real_codex_sandbox\n"))
+    }).collect();
+    format!("skips {}\n{}", rows.len(), rows.into_iter().collect::<String>())
+}
+
 /// The diff base of a review card: the previous review's head when the head moved on, else
 /// the batch base. A re-review of the same head (after a refuted finding) would otherwise
 /// ask for the empty delta head..head.
@@ -85,12 +108,19 @@ impl Host {
     /// The repository's seconds-fast gates present in the checkout: file size, new-code
     /// language, changelog/docs, commit trailers and, with a words file, the private scrub;
     /// the result is their combined output.
+    #[cfg(test)]
     pub(super) fn checks(&self) -> Result<String, String> {
-        self.checks_run().map(|(log, _)| log)
+        self.checks_run(None).map(|(log, _)| log)
+    }
+    pub(super) fn gates_with_scrub(&mut self, scrub: Option<&Path>) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
+        self.git(&["diff", "--exit-code", "HEAD", "--"])?;
+        self.checks_run(scrub).map(|_| ())
     }
     /// The gates' output and one receipt check per gate that ran (a failing gate is an error).
     pub(super) fn checks_run(
         &self,
+        words: Option<&Path>,
     ) -> Result<(String, Vec<pg_worker_core::fast_check_stamp::Check>), String> {
         let mut log = String::new();
         let mut ran = Vec::new();
@@ -107,9 +137,6 @@ impl Host {
             ("check_changelog_docs.py", vec![]),
             ("ci_commit_gate.py", range(&["check"])),
         ];
-        let words = std::env::var_os("HOME")
-            .map(|home| Path::new(&home).join(".config/plangraph/scrub-words.txt"))
-            .filter(|path| path.is_file());
         if let Some(words) = words {
             let mut args = range(&[]);
             args.extend(["--words".into(), words.to_string_lossy().into_owned()]);

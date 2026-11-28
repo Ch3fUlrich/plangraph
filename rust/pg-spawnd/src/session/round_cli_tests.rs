@@ -1,5 +1,5 @@
 use super::{
-    round_cli::{run, transcript_path},
+    round_cli::{run_with_host, transcript_path},
     round_host::LocalHost,
     round_store,
     round_time_tests::{Transcript, MIN, T0},
@@ -48,6 +48,9 @@ impl World {
             _dir: dir,
         };
         fs::create_dir_all(world.routing.join("launch/sessions")).unwrap();
+        fs::create_dir(root.join("proc")).unwrap();
+        std::os::unix::fs::symlink("/proc/stat", root.join("proc/stat")).unwrap();
+        stub_claude(&root);
         world
     }
 
@@ -87,16 +90,23 @@ impl World {
     }
 
     pub(super) fn run(&self, at: i64) -> Vec<Value> {
-        run(
+        run_with_host(
             &self.state,
             &self.routing,
             &self.home,
             "ws",
             self.origin + at,
             true,
+            |id| self.host(id),
         )
     }
-
+    pub(super) fn host(&self, id: &str) -> LocalHost {
+        let root = self._dir.path();
+        let mut host = LocalHost::new(self.state.clone(), id.into());
+        host.roots.proc = root.join("proc");
+        host.claude_bin = Some(root.join("claude-stub"));
+        host
+    }
     pub(super) fn rows(&self) -> Vec<Value> {
         round_store::read(&self.state.join("round-telemetry/rows.jsonl"))
     }
@@ -187,19 +197,73 @@ pub(super) fn command_shell(
     session_id: &str,
     task: &str,
     command: &str,
-) -> std::process::Child {
+) -> FixtureChild {
+    let script = format!("exec /bin/{command}");
+    fixture_shell(root, session_id, task, &script, true)
+}
+
+pub(super) fn wait_for(description: &str, mut ready: impl FnMut() -> bool) {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready() {
+        assert!(Instant::now() < deadline, "{description}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+pub(super) struct FixtureChild(std::process::Child);
+impl std::ops::Deref for FixtureChild {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for FixtureChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for FixtureChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+pub(super) fn fixture_shell(
+    root: &Path,
+    session_id: &str,
+    task: &str,
+    command: &str,
+    exec_sleep: bool,
+) -> FixtureChild {
     use std::os::unix::process::CommandExt;
     let tasks = root.join("tasks");
     fs::create_dir_all(&tasks).unwrap();
     let output = fs::File::create(tasks.join(format!("{task}.output"))).unwrap();
     let mut shell = std::process::Command::new("/bin/sh");
     shell
-        .args(["-c", &format!("{command}; true")])
+        .args(["-c", command])
+        .current_dir(root)
         .env("CLAUDE_CODE_SESSION_ID", session_id)
+        .stdin(std::process::Stdio::piped())
         .stdout(output.try_clone().unwrap())
         .stderr(output)
         .process_group(0);
-    shell.spawn().unwrap()
+    let child = FixtureChild(shell.spawn().unwrap());
+    let process = std::path::PathBuf::from(format!("/proc/{}", child.id()));
+    if exec_sleep {
+        wait_for("fixture did not exec sleep", || {
+            fs::read_link(process.join("exe")).is_ok_and(|path| path.ends_with("sleep"))
+        });
+    } else {
+        let ready = root.join("trap-ready");
+        wait_for("fixture trap was not installed", || ready.is_file());
+    }
+    let proc = root.join("proc");
+    fs::create_dir_all(&proc).unwrap();
+    std::os::unix::fs::symlink(process, proc.join(child.id().to_string())).unwrap();
+    child
 }
 
 /// The start of a background task as the transcript records it, with the real output path.
@@ -243,7 +307,7 @@ fn stub_claude(root: &Path) -> std::path::PathBuf {
         root,
         "claude-stub",
         &format!(
-            "#!/bin/sh\n[ \"$1\" = stop ] && echo \"$@\" >> {}\nexit 0\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
             log.display()
         ),
     )
@@ -254,7 +318,6 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     let world = World::live();
     let id = "sess-e2e-0001";
     let root = world.state.parent().unwrap().to_path_buf();
-    std::env::set_var("PLANGRAPH_CLAUDE_BIN", stub_claude(&root));
     let stop_log = root.join("stop.log");
 
     let secret_command = "sleep 301 # DEPLOY_TOKEN=hunter2hunter2hunter2";
@@ -280,7 +343,7 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
             launched_to_ms: world.origin + 5_000,
         }
     };
-    let probe = LocalHost::new(world.state.clone(), id.into());
+    let probe = world.host(id);
     assert_eq!(
         probe.resolve_owner("writer-5", &task("bgA")).map(|o| o.pid),
         Some(first.id())
@@ -371,7 +434,10 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
     assert_eq!(rules(world.run(37 * MIN)), ["round-session-ended"]);
-    assert_eq!(fs::read_to_string(&stop_log).unwrap(), "stop sess-e2e\n");
+    assert_eq!(
+        fs::read_to_string(&stop_log).unwrap(),
+        "stop sess-e2e\nagents --json\n"
+    );
 
     // The writer keeps talking after the close: none of it is booked into the round, and
     // the silent wait up to the close is.
@@ -389,7 +455,7 @@ fn the_scheduled_pass_ends_one_task_blocks_the_second_wait_and_ends_the_session_
     );
     assert_eq!(
         fs::read_to_string(&stop_log).unwrap(),
-        "stop sess-e2e\n",
+        "stop sess-e2e\nagents --json\n",
         "ended once"
     );
     twin.kill().unwrap();
@@ -406,6 +472,7 @@ fn a_review_or_planning_session_with_an_open_wait_is_not_measured_or_stopped() {
     launch(&mut t, &root, 2_000, "u1", "bgR", "sleep 303");
     wait_call(&mut t, 4_000, "w1", "bgR");
     world.session_as("review", "review-3", "sess-rev", "/w/rev", Some(&t));
+    world.session_as("planning", "plan-3", "sess-rev", "/w/plan", Some(&t));
     assert!(world.run(MIN).is_empty());
     assert!(world.run(60 * MIN).is_empty());
     assert!(
@@ -413,6 +480,7 @@ fn a_review_or_planning_session_with_an_open_wait_is_not_measured_or_stopped() {
         "the review's command is untouched"
     );
     assert!(world.rows().is_empty());
+    assert!(!root.join("stop.log").exists());
     shell.kill().unwrap();
     let _ = shell.wait();
 }

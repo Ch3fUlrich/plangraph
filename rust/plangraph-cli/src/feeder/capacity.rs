@@ -1,5 +1,6 @@
+use super::runtime::Options;
 use super::{windows_ram, writer_limit, Env, HostFacts, Policy};
-use pg_worker_core::{disk_runtime, host_probe};
+use pg_worker_core::host_probe;
 use std::io::Read;
 use std::path::Path;
 
@@ -48,17 +49,20 @@ pub(super) fn sample(
     host: &str,
     disk_root: &Path,
     env: &Env,
-    proc_root: &Path,
-    open: OpenPsi,
+    options: &Options,
     policy: &Policy,
     state: &Path,
-    dry: bool,
+    now: i64,
 ) -> Result<(HostFacts, Measured), String> {
-    let metrics = host_probe::probe_load_optional(host, proc_root)
+    let proc_root = &options.proc;
+    let cpus = (options.cpu_count)().map_err(|e| format!("capacity probe: {e}"))?;
+    let ts_ms = u64::try_from(now)
+        .map_err(|_| "capacity probe: invalid tick time")?
+        .saturating_mul(1000);
+    let metrics = host_probe::probe_load_optional_at(host, proc_root, cpus, ts_ms)
         .map_err(|e| format!("capacity probe: {e}"))?;
-    let disk = |path: &Path| {
-        disk_runtime::disk_usage(path).map_err(|e| format!("capacity disk probe: {e}"))
-    };
+    let disk =
+        |path: &Path| (options.disk_usage)(path).map_err(|e| format!("capacity disk probe: {e}"));
     let mut free_disk_bytes = disk(disk_root)?;
     if let Some(target) = env
         .get("CARGO_TARGET_DIR")
@@ -67,7 +71,7 @@ pub(super) fn sample(
     {
         free_disk_bytes = free_disk_bytes.min(disk(target)?);
     }
-    let observed_at = (metrics.ts_ms / 1000) as i64;
+    let observed_at = now;
     let wsl_free_ram_bytes = metrics.mem_available_mb.saturating_mul(1024 * 1024);
     let version = std::fs::read_to_string(proc_root.join("version")).unwrap_or_default();
     let windows = if windows_ram::is_wsl(&version, env.get("WSL_INTEROP").map(String::as_str)) {
@@ -76,12 +80,12 @@ pub(super) fn sample(
             state,
             observed_at,
             policy.facts_max_age_seconds,
-            dry,
+            options.dry,
         )?)
     } else {
         None
     };
-    let psi = open(&proc_root.join("pressure/cpu"));
+    let psi = (options.open_psi)(&proc_root.join("pressure/cpu"));
     let has_psi = psi_present(&psi);
     let cpu_pressure_avg300 = psi.ok().and_then(|mut file| {
         let mut text = String::new();

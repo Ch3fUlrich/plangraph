@@ -64,6 +64,20 @@ pub fn run(
     now_ms: i64,
     act: bool,
 ) -> Vec<Value> {
+    run_with_host(state, routing, home, host, now_ms, act, |id| {
+        LocalHost::new(state.to_path_buf(), id.to_owned())
+    })
+}
+
+pub(super) fn run_with_host(
+    state: &Path,
+    routing: &Path,
+    home: &Path,
+    host: &str,
+    now_ms: i64,
+    act: bool,
+    local_host: impl Fn(&str) -> LocalHost,
+) -> Vec<Value> {
     let mut log = Vec::new();
     for spec in sessions(routing) {
         let (Some(id), Some(cwd)) = (spec["session_id"].as_str(), spec["cwd"].as_str()) else {
@@ -75,7 +89,7 @@ pub fn run(
         };
         let path = round_watch::state_file(state, name);
         if act {
-            let local = LocalHost::new(state.to_path_buf(), id.to_owned());
+            let local = local_host(id);
             match tick(name, &text, now_ms, &path, &local) {
                 Ok(actions) => log.extend(actions.iter().map(|a| event(name, a))),
                 Err(error) => log.push(
