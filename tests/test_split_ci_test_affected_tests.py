@@ -176,6 +176,7 @@ def test_three_shards_cover_only_affected_selection(tmp_path, request, durations
     assert conftest is not None
     hooks = vars(conftest)
     source = 'import os, sys, hashlib, pytest\nfrom pathlib import Path\n_PG = False\n'
+    source += "_COMMITTED_QUARANTINE = Path('quarantine.json')  # absent in tmp_path: no ledger applies\n"
     source += '\n'.join(inspect.getsource(hooks[name]) for name in (
         'shard_items', 'pytest_collection_modifyitems', 'pytest_sessionfinish'))
     source += '\ndef pytest_runtest_logreport(report):\n    if report.when == "call":\n        with Path(os.environ["SHARD_TRACE"]).open("a") as stream:\n            stream.write(report.nodeid + "\\n")\n'
