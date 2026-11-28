@@ -1,14 +1,18 @@
-//! Lands a batch on a router GO row: merge, MERGED line, close-merged dry run. No other trigger lands.
+//! Lands a batch (a train) on one GO row for its head: merge, MERGED line, close-merged dry run. No other
+//! trigger lands.
 //!
-//! A row is one line with the tokens `GO`, `D-<id>`, a batch pull request (`#<n>` or `<n>`), the full
-//! 40-hex head and any number of `plangraph:<KEY>` item keys. A pass reads the row file once, skips the
-//! rows the done file already holds and handles each new row exactly once: the head is unmoved, behind 0,
-//! the required checks are green, then `Landing::land` merges and the result goes to routing. A moved
-//! head or a red check posts `BLOCKED <reason>` and lands nothing.
+//! A row is one line with the tokens `GO`, the approval (a router decision `D-<id>` or an approver
+//! `by:<name>`, such as the operator or his attended session), a batch pull request (`#<n>` or `<n>`),
+//! the full 40-hex head and any number of `plangraph:<KEY>` item keys. The train's parts need no row of
+//! their own: they close as merged through the train. A pass reads the row file once, skips the rows the
+//! done file already holds and handles each new row exactly once: the head is unmoved (the tested head),
+//! behind 0, the required checks are green, then `Landing::land` merges and the result goes to routing.
+//! A moved head or a red check posts `BLOCKED <reason>` and lands nothing.
 use std::{collections::BTreeSet, io::Write, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoRow {
+    /// The one approval of the head: `D-<id>` or `by:<name>`.
     pub decision: String,
     pub pr: u64,
     pub head: String,
@@ -34,6 +38,11 @@ pub(crate) fn parse_row(line: &str) -> Option<GoRow> {
     let decision = one(&|t| {
         t.strip_prefix("D-")
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            || t.strip_prefix("by:").is_some_and(|n| {
+                !n.is_empty()
+                    && n.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+            })
     })?;
     let pr = one(&|t| {
         let n = t.strip_prefix('#').unwrap_or(t);
@@ -112,8 +121,13 @@ pub(crate) fn handle(row: &GoRow, landing: &dyn Landing) -> (String, Vec<String>
             "close-merged dry run skipped {}: the row names no plangraph: key",
             row.decision
         ));
+    } else if !row.decision.starts_with("D-") {
+        lines.push(format!(
+            "close-merged dry run skipped {}: no router decision; merge-close closes the parts",
+            row.decision
+        ));
     }
-    for key in &row.keys {
+    for key in row.keys.iter().filter(|_| row.decision.starts_with("D-")) {
         lines.push(match landing.close_merged_dry_run(key, &row.decision) {
             Ok(result) => format!("close-merged dry run {key} {}: {result}", row.decision),
             Err(e) => format!("close-merged dry run {key} {} refused: {e}", row.decision),

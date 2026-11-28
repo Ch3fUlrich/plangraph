@@ -124,7 +124,9 @@ Audit of what a full run executes (no job was merged or re-wired; that needs a r
 
 `python3 tools/merge_batch.py build` requires five consistent observations of each applicable changed test in addition
 to the part's hosted Tests run and successful `ci-gate`. Use the declared parent head as a stacked part's comparison
-base. Use the fetched protected-branch head for an independent part. Generate separate receipts on the hosts and in
+base. Use the fetched protected-branch head for an independent part. The receipt records the fork point
+(`git merge-base BASE PART_SHA`), so it stays valid when main moves on: a part behind main is neither re-merged nor
+replayed again before it enters a train. Generate separate receipts on the hosts and in
 the environments selected by the part's changes.
 
 ```sh

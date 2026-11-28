@@ -16,11 +16,11 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_plan import high_patterns, plan_batches, replay_facts, runner_wide_receipts, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
-                              add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
-                              orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key,
+from merge_batch_plan import exclusions, high_patterns, plan_batches, replay_facts, runner_wide_receipts, set_problems, stack_parents, stack_sorted
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, PR_FIELDS, REMOTE, TESTED_FF, MergeBatchError, norm_pr,
+                              refresh_diff, run, add_label, check_name, drop_refs, fetch_pr, git, items_in, load_state,
+                              parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
+                              workflow_gate, gh, gh_json, landing_now, landing_batch_key,
                               keeper_landing_configured, landing_receipt_inputs, non_test_tests_run)
 
 
@@ -473,41 +473,6 @@ def cmd_continue(args):
     return run_pending(st, args.skip_conflicts or st.get("skip_conflicts", False))
 
 
-def cmd_abort(args):
-    """Drop a batch: its worktree, branch, PR-head refs and state. Without a state file the leftovers of a
-    build are found by branch name (batch/NAME), but only when the build's PR-head refs mark them as ours."""
-    name = check_name(args.name)
-    if state_path(name).exists():
-        st = load_state(name)
-    elif name in orphan_names():
-        st = {"name": name, "branch": f"batch/{name}", "worktree": "", "pr": None}
-        print(f"batch {name!r} has no state file: removing what its build left", file=sys.stderr)
-    else:
-        raise MergeBatchError(f"no batch {name!r} in progress (merge_batch.py status lists them)")
-    if st.get("pr") and keeper_landing_configured():
-        with landing_lease(st["repo"]) as lease:
-            train = landing_journal(st["repo"], "show", pr=st["pr"])["train"]
-            if train is not None and not train["merge"]:
-                landing_journal(st["repo"], "abandon", pr=st["pr"], **lease)
-    os.chdir(state_dir().parent)  # the git dir: the cwd may be the worktree that is about to go
-    registered = dict(worktrees())
-    paths = {path for path, branch in registered.items() if branch == st["branch"]}
-    if st.get("worktree") in registered:
-        paths.add(st["worktree"])
-    for wt in sorted(paths):
-        if Path(wt).is_dir():  # a directory removed by hand: worktree remove/prune clean its admin entry
-            git("merge", "--abort", cwd=wt, ok=None)
-        git("worktree", "remove", "--force", "--force", wt)
-    git("worktree", "prune", ok=None)
-    if st.get("worktree") and Path(st["worktree"]).exists():
-        print(f"warning: {st['worktree']} is no worktree of this repo: left in place", file=sys.stderr)
-    git("branch", "-D", st["branch"], ok=None)
-    drop_state(st)
-    note = f"; batch PR #{st['pr']} is still open on the remote" if st.get("pr") else ""
-    print(f"aborted batch {st['name']}: removed {', '.join(sorted(paths)) or 'no worktree'} and {st['branch']}{note}")
-    return 0
-
-
 def _jobs_of_part(repo, pr, head):
     """Jobs of the latest completed Tests run for this part PR and head."""
     runs = [r for r in tests_runs(repo, pr, head, gh_json) if r.get("status") == "completed"]
@@ -660,6 +625,24 @@ def exclude_consumed(repo, parts):
         result = landing_journal(repo, "consumed", parts=batch)
         consumed.update((p["pr"], p["head"]) for p in result["consumed"])
     return [p for p in parts if (p.get("pr", p.get("number")), p["head"]) not in consumed]
+
+
+def labelled_prs(repo, label=BATCH_READY):
+    """The open pull requests with ``label``, minus the part heads a landed train consumed (keeper landing only)."""
+    prs = [norm_pr(raw) for raw in gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", label,
+                                             "--limit", "200", "--json", PR_FIELDS)]
+    return exclude_consumed(repo, prs) if keeper_landing_configured() else prs
+
+
+def require_train(repo, base, parts):
+    """A batch of one part lands alone only while no other pull request is ready for ``base`` (plan exclusions,
+    CI finished): several ready ones go into one train, which lands once after its full run."""
+    others = [pr for pr in labelled_prs(repo) if pr["number"] not in parts and not pr["ref"].startswith(("batch/", "land/"))]
+    excluded = exclusions(others, base, stack_parents(others))
+    ready = sorted(pr["number"] for pr in others if pr["number"] not in excluded and pr["ci"] != "pending")
+    if len(parts) == 1 and ready:
+        raise MergeBatchError(f"train_required: {', '.join(f'#{n}' for n in ready)} also ready for {base}: build them "
+                              f"into one train with #{parts[0]} instead of landing it alone")
 
 
 def cmd_consumed(args):

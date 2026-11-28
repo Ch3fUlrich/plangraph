@@ -80,6 +80,39 @@ fn parses_a_go_row_and_rejects_ambiguous_lines() {
 }
 
 #[test]
+fn an_approver_row_lands_the_tested_green_head_without_a_router_decision() {
+    let r = parse_row(&format!("GO by:attended-0042 #1090 {HEAD} plangraph:A")).expect("row");
+    assert_eq!(r.decision, "by:attended-0042");
+    let fake = Fake::green();
+    let (outcome, lines) = handle(&r, &fake);
+    assert_eq!(outcome, "MERGED");
+    assert_eq!(*fake.lands.borrow(), 1);
+    assert!(lines[0].ends_with(&format!("#1090 {HEAD} by:attended-0042")));
+    assert!(
+        lines[1].contains("merge-close closes the parts"),
+        "{lines:?}"
+    );
+    assert_eq!(lines.len(), 2, "no router close-merged without a D-id");
+    let moved = Fake {
+        now: "f".repeat(40),
+        ..Fake::green()
+    };
+    assert_eq!(
+        handle(&r, &moved).0,
+        "BLOCKED",
+        "only the tested head lands"
+    );
+    assert!(
+        parse_row(&format!("GO by: #1090 {HEAD}")).is_none(),
+        "empty approver"
+    );
+    assert!(
+        parse_row(&format!("GO by:op D-1 #1090 {HEAD}")).is_none(),
+        "two approvals"
+    );
+}
+
+#[test]
 fn an_unmoved_green_head_lands_and_posts_merged_with_the_sha_and_the_dry_runs() {
     let fake = Fake::green();
     let (outcome, lines) = handle(&row(), &fake);

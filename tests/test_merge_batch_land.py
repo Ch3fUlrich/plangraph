@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from merge_batch_env import env_fixture, head_of, land, pushed
+from merge_batch_env import ROLLUP, env_fixture, head_of, land, pushed
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stubs")
 
@@ -740,3 +740,32 @@ def test_push_renders_the_pr_body_key_list_at_the_new_head(env):
     env.git("commit", "-qm", "resolver slice\n\nPlan-Item: plangraph:RESOLVER-KEY", cwd=wt)
     assert env.run("push", "--name", "g1").returncode == 0
     assert "GO-KEYS [plangraph:BATCH,plangraph:ITEM-A,plangraph:ITEM-B,plangraph:RESOLVER-KEY]" in env.load()["prs"]["100"]["body"]
+
+
+def test_land_of_one_part_needs_a_train_while_another_pr_is_ready(env):
+    """Several ready pull requests land as one train: one part does not land alone beside another ready one."""
+    approval = pushed(env, prs=(1,))
+    for number in ("2", "3"):
+        env.state["prs"][number]["labels"] = [{"name": "batch-ready"}]
+    env.state["prs"]["3"]["statusCheckRollup"] = ROLLUP["red"]  # red CI: not ready
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "train_required: #2 also ready for main" in res.stderr, res.stderr
+    assert not env.calls("pr", "merge") and env.state_file("l1").exists()
+    env.state["prs"]["2"]["statusCheckRollup"] = ROLLUP["pending"]  # CI still running: not ready yet
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 0 and len(env.calls("pr", "merge")) == 1, res.stderr
+
+
+def test_a_train_lands_on_its_head_approval_without_a_go_row_beside_another_ready_pr(env):
+    """The train head's approval and its green run are the whole land authority: no --go-row, no row per part."""
+    approval = pushed(env, prs=(1, 2))
+    env.state["prs"]["3"]["labels"] = [{"name": "batch-ready"}]
+    env.save()
+    head = head_of(env)
+    res = land(env, approval)
+    assert res.returncode == 0, res.stderr
+    assert [line.split()[:2] for line in res.stdout.splitlines()] == [["MERGED", "1"], ["MERGED", "2"]]
+    (merge,) = env.calls("pr", "merge")
+    assert merge[merge.index("--match-head-commit") + 1] == head

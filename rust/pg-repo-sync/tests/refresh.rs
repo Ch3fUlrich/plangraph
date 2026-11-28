@@ -1,4 +1,4 @@
-//! Real Git merges and pushes; only GitHub and the orchestrator are fixtures.
+//! Real Git merges; only GitHub and the orchestrator are fixtures.
 #![cfg(unix)]
 use std::{fs, path::Path, process::Command};
 
@@ -34,7 +34,7 @@ fn commit(repo: &Path, message: &str) {
 }
 
 #[test]
-fn refresh_union_pushes_real_conflict_labels_without_push() {
+fn probe_labels_a_real_conflict_and_never_remerges_a_behind_head() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let remote = root.join("remote.git");
@@ -127,16 +127,8 @@ esac"#,
     };
     let out = invoke();
     assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(
-        String::from_utf8_lossy(&out.stdout).contains("REFRESHED #1"),
-        "{out:?}"
-    );
-    let refreshed = git(&remote, &["rev-parse", "union"]);
-    assert_ne!(refreshed, union);
-    assert_eq!(git(&remote, &["rev-parse", "union^1"]), union);
-    assert_eq!(git(&remote, &["rev-parse", "union^2"]), main);
-    let content = git(&remote, &["show", "union:CHANGELOG.md"]);
-    assert!(content.contains("pr append") && content.contains("main append"));
+    // A behind part that merges cleanly is not re-merged with main: its head stays as the writer pushed it.
+    assert_eq!(git(&remote, &["rev-parse", "union"]), union);
     assert_eq!(git(&remote, &["rev-parse", "conflict"]), conflict);
     assert!(fs::read_to_string(root.join("labels"))
         .unwrap()
@@ -144,7 +136,7 @@ esac"#,
     assert!(fs::read_to_string(root.join("alerts"))
         .unwrap()
         .contains("#2 conflict code.txt"));
-    assert_eq!(fs::read_to_string(root.join("pushes")).unwrap(), "push\n");
+    assert!(!root.join("pushes").exists(), "the probe never pushes");
     assert_eq!(fs::read_to_string(root.join("merges")).unwrap(), "merge\n");
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), main);
@@ -155,10 +147,10 @@ esac"#,
         1
     );
 
-    // Update the API snapshot, then a second sweep does not push an up-to-date PR.
-    fs::write(&prs, format!(r#"[{{"number":1,"headRefName":"union","headRefOid":"{refreshed}","isCrossRepository":false}}]"#)).unwrap();
+    // Without the conflicting PR a sweep succeeds.
+    fs::write(&prs, format!(r#"[{{"number":1,"headRefName":"union","headRefOid":"{union}","isCrossRepository":false}}]"#)).unwrap();
     assert!(invoke().status.success());
-    // The normal sync entry point refreshes PRs after fast-forwarding a new main.
+    // The normal sync entry point probes PRs after fast-forwarding a new main and still pushes nothing.
     fs::write(repo.join("CHANGELOG.md"), "base\nmain append\nnext main\n").unwrap();
     commit(&repo, "next main");
     git(&repo, &["push", "-q", "origin", "main"]);
@@ -187,25 +179,12 @@ esac"#,
         .unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), next_main);
-    assert_eq!(git(&remote, &["rev-parse", "union^2"]), next_main);
+    assert_eq!(git(&remote, &["rev-parse", "union"]), union);
     assert_eq!(
         fs::read_to_string(root.join("pushes")).unwrap(),
-        "push\npush\npush\n"
+        "push\n",
+        "only the fixture's own push of the next main: the probe never pushes"
     );
-    let refreshed = git(&remote, &["rev-parse", "union"]);
-    fs::write(&prs, format!(r#"[{{"number":1,"headRefName":"union","headRefOid":"{refreshed}","isCrossRepository":false}}]"#)).unwrap();
-    // A hook refusal is an error, never a conflict label or an unhooked push.
-    fs::write(
-        repo.join("CHANGELOG.md"),
-        "base\nmain append\nnext main\nthird main\n",
-    )
-    .unwrap();
-    commit(&repo, "third main");
-    git(&repo, &["push", "-q", "origin", "main"]);
-    script(&repo.join(".git/hooks/pre-push"), "exit 1");
-    let out = invoke();
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert_eq!(git(&remote, &["rev-parse", "union"]), refreshed);
     assert_eq!(
         fs::read_to_string(root.join("labels"))
             .unwrap()

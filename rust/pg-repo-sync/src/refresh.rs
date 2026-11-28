@@ -1,4 +1,6 @@
-//! One sweep after a main update. Hooks and the repository's merge attributes stay active.
+//! One conflict probe after a main update: each `batch-ready` head is merged with main in a disposable
+//! worktree; a conflict labels it `needs-update`, a clean merge is dropped and nothing is pushed.
+//! Hooks and the repository's merge attributes stay active.
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -119,18 +121,8 @@ fn refresh(repo: &Path, github: &str, pr: &Pr, main: &str) -> Result<(), String>
                 files.split_whitespace().collect::<Vec<_>>().join(", ")
             ));
         }
-        let refreshed = output(git(&path, &["rev-parse", "HEAD"]))?;
-        if refreshed != head {
-            output(git(
-                &path,
-                &[
-                    "push",
-                    "origin",
-                    &format!("HEAD:refs/heads/{}", pr.head_ref_name),
-                ],
-            ))?;
-            println!("REFRESHED #{} {refreshed}", pr.number);
-        }
+        // A clean merge stays local: the part head is not re-merged with main on every main move; the train
+        // that takes the part merges main once, right before its full run.
         Ok(())
     })();
     let removed = output(git(repo, &["worktree", "remove", "--force", wt]));
