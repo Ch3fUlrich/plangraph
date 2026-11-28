@@ -44,6 +44,7 @@ def prompt(diff_ref, *, harness='opencode', mode='tools', role='review',
 
 
 def test_mimo_service_refuses_invalid_inline_material_before_launch(diff_ref, tmp_path, monkeypatch, admission_memory):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
     import asyncio
     from unittest.mock import AsyncMock
     from plangraph.routing_errors import SpawnRefused

@@ -29,7 +29,7 @@ from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
 from plangraph.spawner.gateway_models import record_served_witness
-from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, mimo_pro_review
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, mimo_pro_review, role_leg
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
 
@@ -189,7 +189,7 @@ class SpawnerRunner:
         from plangraph.planner.routing import validate_model
         from .target import launch_model, resolve_launch_target
         model_or_combo, leg = resolve_launch_target(model_or_combo, chosen=chosen, client=client)
-        mimo_review = mimo_pro_review(leg, role)
+        mimo_review = mimo_pro_review(leg := role_leg(leg, role), role)   # the leg as this role runs it
         if leg is not None:
             if client is not None and client != leg.harness:
                 from plangraph.routing_errors import SpawnRefused

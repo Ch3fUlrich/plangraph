@@ -581,7 +581,25 @@ LEAD_WRITER_RESEARCH_CAP = 900_000
 
 
 def mimo_pro_review(leg, role):
-    return role == "review" and getattr(leg, "model", None) == MIMO_PRO_MODEL
+    """An inline MiMo Pro review: the exact diff in the prompt and every tool denied.
+
+    ``role_leg`` gives the registered MiMo Pro leg the bounded repository tools for reviews
+    (``route_policy.opencode_repository_review``); only an inline-only review leg takes this path.
+    """
+    return (role == "review" and getattr(leg, "model", None) == MIMO_PRO_MODEL
+            and getattr(leg, "tool_mode", None) == "inline-only")
+
+
+#: Legs that stay inline-only for implement and orchestrate but review with the bounded
+#: read-only repository tools (read, glob, grep, list and allowlisted git/test shell commands).
+REVIEW_TOOLS_LEGS = frozenset({"mimo-v2.6-pro"})
+
+
+def role_leg(leg, role):
+    """``leg`` as ``role`` runs it: a ``REVIEW_TOOLS_LEGS`` leg reviews in tools mode."""
+    if role == "review" and getattr(leg, "id", None) in REVIEW_TOOLS_LEGS and leg.tool_mode != "tools":
+        return _replace(leg, tool_mode="tools")
+    return leg
 
 
 def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role: str | None = None) -> tuple[tuple[Leg, ...], tuple[tuple[Leg, str], ...]]:
@@ -595,6 +613,7 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
     from plangraph.routing_support.opencode_overlay import ProviderView, RequestBoundError
     kept, refused = [], []
     for leg in legs:
+        leg = role_leg(leg, role)
         if not isinstance(leg, Leg) or leg.harness != "opencode":
             kept.append(leg)
             continue
@@ -619,7 +638,7 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
             bound = min(bound, POLICY_REQUEST_CAPS.get(leg.id, bound))
             if role == "research" and leg.id == LEAD_WRITER:
                 bound = min(bound, LEAD_WRITER_RESEARCH_CAP)
-            if mimo_pro_review(leg, role):
+            if role == "review" and leg.model == MIMO_PRO_MODEL:
                 bound = min(bound, MIMO_PRO_REVIEW_CAP)
         kept.append(leg if bound == leg.max_request_tokens else _replace(leg, max_request_tokens=bound))
     return tuple(kept), tuple(refused)

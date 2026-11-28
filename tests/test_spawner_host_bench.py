@@ -107,7 +107,7 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     from plangraph.planner.legs import REVIEW_ORDER
     assert [leg["id"] for leg in bare["legs"]] == [
         *[id for id in REVIEW_ORDER if id not in ("claude-sonnet-5-5-high", "agy-claude-sonnet-5-5-high",
-                                                  "agy-gemini-4-neon-medium", "mimo-v2.6-pro", "mimo-v2.6-flash",
+                                                  "agy-gemini-4-neon-medium", "mimo-v2.6-flash",
                                                   "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")],
         "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",   # argon is last
     ]

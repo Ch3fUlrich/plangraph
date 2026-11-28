@@ -283,7 +283,7 @@ def _build(body, now):
                 raise ValueError
             limited = stamp > now
             until = stamp.isoformat()
-        available = active and status in ("ok", "success") and not row.get("errorCode")
+        available = active and status in ("ok", "success", "active") and not row.get("errorCode")
         reason = "" if available else "inactive"
         if limited:
             available, reason = False, "rate_limited"
