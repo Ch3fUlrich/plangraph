@@ -1,0 +1,19 @@
+# cargo-nextest settings of the Rust workspace in rust/. CI (.github/workflows/tests.yml) builds one archive of
+# every test binary in the job `rust` and runs it in slices in the job `rust-test` with the profile `ci`.
+
+[profile.default]
+# Hang limit of every test: SLOW after each 60 s period, terminated as TIMEOUT after three periods (180 s),
+# SIGKILL 10 s after SIGTERM. A longer limit is an override below whose comment holds a `reason:` line
+# (tests/test_ci_rust_toolchain.py refuses an override without one).
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+# PG_JAIL_BIN names the pg-jail helper that `cargo build -p pg-jail` puts here; the archive carries it.
+archive.include = [{ path = "debug/pg-jail", relative-to = "target", on-missing = "error" }]
+
+[profile.ci]
+fail-fast = false
+failure-output = "immediate-final"
+final-status-level = "slow"
+
+# Per-test durations of each slice (target/nextest/ci/junit.xml), uploaded by the job `rust-test`.
+[profile.ci.junit]
+path = "junit.xml"

@@ -97,6 +97,7 @@ sys.path.insert(0, 'tools')
 import ci_select as ci
 needs = {'select': {'result': 'success', 'outputs': {'full': 'true', **{s: 'false' for s in ci.SUITES}}}}
 needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
+needs['rust-test'] = {'result': 'success'}
 needs['rust-windows'] = {'result': 'skipped'}
 assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
 "#,
@@ -176,7 +177,7 @@ sys.path.insert(0, 'tools')
 import merge_batch_land as land
 head = 'a' * 40
 run = {'id': 7, 'head_sha': head, 'head_branch': 'batch/test', 'event': 'pull_request', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
-names = ['select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', 'pytest (0)', 'pytest (1)', 'pytest (2)', 'pytest-postgres (0)', 'pytest-postgres (1)', 'pytest-postgres (2)', 'browser', 'rust', 'rust-windows', 'rust-worker', 'rust-spike', 'ci-gate']
+names = ['select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', 'pytest (0)', 'pytest (1)', 'pytest (2)', 'pytest-postgres (0)', 'pytest-postgres (1)', 'pytest-postgres (2)', 'browser', 'rust', 'rust-test (0)', 'rust-test (1)', 'rust-test (2)', 'rust-windows', 'rust-worker', 'rust-spike', 'ci-gate']
 jobs = [{'name': n, 'status': 'completed', 'conclusion': 'success'} for n in names]
 def api(*args):
     path = args[1]

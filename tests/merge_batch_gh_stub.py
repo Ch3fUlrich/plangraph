@@ -147,6 +147,7 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
                      "Rust replay spike tests", "ci-gate"]
             names += [f"Python tests, SQLite keeper (shard {i} of 3)" for i in (1, 2, 3)]
             names += [f"Python tests, Postgres keeper: contract and storage (shard {i} of 3)" for i in (1, 2, 3)]
+            names += [f"Rust workspace tests (shard {i} of 3)" for i in (1, 2, 3)]
             jobs = [{"name": n, "status": "completed", "conclusion": "success"} for n in names]
             run_match = re.search(r"/runs/(\d+)/", endpoint_get)
             if run_match:

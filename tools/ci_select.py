@@ -24,6 +24,8 @@ SUITES: tuple[str, ...] = (
     "rust-spike",
     "browser",
 )
+#: Jobs the selection of another suite starts: the Windows job and every slice of the Rust test archive (rust-test).
+FOLLOWERS: dict[str, str] = {"rust-windows": "rust", "rust-test": "rust"}
 
 KNOWN_PREFIXES: tuple[str, ...] = (
     "src/",
@@ -375,8 +377,8 @@ def gate(needs: dict, require_full: bool = False) -> list[str]:
     # A push run of a commit with landing evidence ran only the fast jobs on purpose (landing_evidence).
     if require_full and outputs.get("full") != "true" and outputs.get("tested") != "true":
         problems.append("select: merge candidate ran the affected selection, not the full suite")
-    for suite in ALWAYS + SUITES + ("rust-windows",):
-        selection = "rust" if suite == "rust-windows" else suite
+    for suite in ALWAYS + SUITES + tuple(FOLLOWERS):
+        selection = FOLLOWERS.get(suite, suite)
         selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
         if not selected:
             continue

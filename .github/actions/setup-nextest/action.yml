@@ -1,0 +1,38 @@
+name: Set up pinned cargo-nextest
+description: Install the pinned cargo-nextest release into ~/.cargo/bin after checking its published SHA-256
+runs:
+  using: composite
+  steps:
+    - name: Restore verified cargo-nextest binary
+      id: nextest-cache
+      uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      with:
+        path: ~/.cargo/bin/cargo-nextest
+        key: cargo-nextest-${{ runner.os }}-${{ runner.arch }}-0.9.152
+    # D-2557: the release's own checksum file; a missing checksum line or a mismatch fails the step.
+    - name: Install cargo-nextest 0.9.152
+      if: steps.nextest-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) name=cargo-nextest-0.9.152-x86_64-unknown-linux-gnu ;;
+          *) echo "cargo-nextest: no pinned build for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+        url=https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.152
+        dir=$(mktemp -d)
+        trap 'rm -rf "$dir"' EXIT
+        for file in "$name.tar.gz" "$name.sha256"; do
+          curl -fsSL -o "$dir/$file" --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 \
+            --max-time 60 "$url/$file"
+        done
+        grep -E "^[0-9a-f]{64}  $name\.tar\.gz$" "$dir/$name.sha256" > "$dir/checks.sha256"
+        (cd "$dir" && sha256sum -c checks.sha256)
+        tar -xzf "$dir/$name.tar.gz" -C "$dir" cargo-nextest
+        mkdir -p ~/.cargo/bin
+        install -m 0755 "$dir/cargo-nextest" ~/.cargo/bin/cargo-nextest
+    - name: Check cargo-nextest version
+      shell: bash
+      run: |
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        "$HOME/.cargo/bin/cargo-nextest" nextest --version | grep -F "cargo-nextest 0.9.152"

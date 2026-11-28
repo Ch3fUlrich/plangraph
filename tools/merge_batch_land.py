@@ -37,13 +37,13 @@ JOB_DISPLAY = {
     "rust": "Rust workspace on Linux: fmt, clippy, tests",
     "rust-windows": "Rust spawner and worker core tests on Windows",
     "rust-worker": "Rust worker crate: fmt, clippy, tests",
-    "rust-spike": "Rust replay spike tests",
-    "ci-gate": "ci-gate",
+    "rust-spike": "Rust replay spike tests", "ci-gate": "ci-gate",
 }
 # Sharded job id -> display name prefix; the shard suffix is " (shard N of M)", N from 1.
 SHARD_DISPLAY = {
     "pytest": "Python tests, SQLite keeper",
     "pytest-postgres": "Python tests, Postgres keeper: contract and storage",
+    "rust-test": "Rust workspace tests",
 }
 
 

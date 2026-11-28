@@ -9,6 +9,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = "./.github/actions/setup-rust"
+SETUP_NEXTEST = "./.github/actions/setup-nextest"
 PIN = "rust-toolchain.toml"
 
 
@@ -57,7 +58,7 @@ def test_ci_rust_installers_read_shared_pin():
         if path.suffix in {".yml", ".yaml"}:
             installers[path.name] = assert_workflow_uses_pin(yaml.safe_load(path.read_text()))
     assert installers["tests.yml"] == {
-        "new-code-lang", "pytest", "pytest-postgres", "rust", "rust-windows",
+        "new-code-lang", "pytest", "pytest-postgres", "rust", "rust-test", "rust-windows",
         "rust-worker", "rust-spike",
     }
     for path in sorted((ROOT / ".github/actions").rglob("*")):
@@ -310,12 +311,13 @@ def test_self_hosted_target_dir_is_keyed_by_repo_manifest_and_home_and_capped(tm
     first = run("r1")
     assert first["CARGO_BUILD_JOBS"].isdigit() and int(first["CARGO_BUILD_JOBS"]) >= 1
     target = Path(first["CARGO_TARGET_DIR"])
-    assert target.parent == tmp_path / "home/r1/cargo-target/owner/repo/rust"
+    # The dir is named target: the shards extract the test archive at the same path.
+    assert target.name == "target" and target.parent.parent == tmp_path / "home/r1/cargo-target/owner/repo/rust"
     assert first["RUST_TEST_THREADS"] == "8"
     assert not str(target).startswith(str(ws))
     assert run("r2")["CARGO_TARGET_DIR"] != first["CARGO_TARGET_DIR"]
     assert Path(run("r1", repo="other/repo")["CARGO_TARGET_DIR"]) != target
-    target.mkdir()
+    target.mkdir(parents=True)
     (target / "artifact").write_text("x")
     assert run("r1")["CARGO_TARGET_DIR"] == first["CARGO_TARGET_DIR"]
     assert (target / "artifact").exists()
@@ -326,12 +328,12 @@ def test_self_hosted_target_dir_is_keyed_by_repo_manifest_and_home_and_capped(tm
     (ws / "rust/Cargo.toml").write_text("[profile.dev]\ndebug = 2\n")
     changed = run("r1")
     assert changed["CARGO_TARGET_DIR"] != locked
-    Path(changed["CARGO_TARGET_DIR"]).mkdir()
+    Path(changed["CARGO_TARGET_DIR"]).mkdir(parents=True)
     (Path(changed["CARGO_TARGET_DIR"]) / "big").write_bytes(b"x" * 4096)
     assert run("r1", cap="0")["CARGO_TARGET_DIR"] == changed["CARGO_TARGET_DIR"]
     assert not (Path(changed["CARGO_TARGET_DIR"]) / "big").exists()
     # A non-numeric cap falls back to 40 GB instead of failing the step.
-    Path(changed["CARGO_TARGET_DIR"]).mkdir(exist_ok=True)
+    Path(changed["CARGO_TARGET_DIR"]).mkdir(parents=True, exist_ok=True)
     (Path(changed["CARGO_TARGET_DIR"]) / "keep").write_text("x")
     assert run("r1", cap="abc")["CARGO_TARGET_DIR"] == changed["CARGO_TARGET_DIR"]
     assert (Path(changed["CARGO_TARGET_DIR"]) / "keep").exists()
@@ -356,20 +358,78 @@ def test_self_hosted_pull_request_builds_into_ephemeral_dir_outside_persistent_r
             "CI_CARGO_TARGET_CAP_GB": "40"})
         targets.append(dict(l.split("=", 1) for l in out.read_text().splitlines())["CARGO_TARGET_DIR"])
     assert targets[0] != targets[1]
-    assert all(Path(t).parent == temp and not any(Path(t).iterdir()) for t in targets)
+    assert all(Path(t).name == "target" and Path(t).parent.parent == temp and not any(Path(t).parent.iterdir())
+               for t in targets)
     assert not (home / "cargo-target").exists()
 
 
-def test_rust_job_pg_jail_bin_follows_cargo_target_dir_with_and_without_it(tmp_path):
+def test_rust_shards_find_pg_jail_in_the_archive_target_dir_with_and_without_cargo_target_dir():
     jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
-    line = next(l.strip() for s in jobs["rust"]["steps"] for l in s.get("run", "").splitlines()
-                if l.strip().startswith('PG_JAIL_BIN="'))
-    expr = line.split("PG_JAIL_BIN=", 1)[1].split(" cargo ", 1)[0]
+    archive = next(s for s in jobs["rust"]["steps"] if s.get("id") == "archive")["run"]
+    target = next(l.strip() for l in archive.splitlines() if l.strip().startswith("target="))
+    run = next(s for s in jobs["rust-test"]["steps"] if s.get("name") == "cargo nextest run")["run"]
+    jail = run.split("PG_JAIL_BIN=", 1)[1].split(" cargo ", 1)[0]
     base = {"PATH": "/usr/bin:/bin", "GITHUB_WORKSPACE": "/w"}
 
     def resolve(extra):
-        return subprocess.run(["bash", "-c", f"printf %s {expr}"], env={**base, **extra},
+        script = f'{target}\nTARGET_DIR="$target"\nprintf %s {jail}'
+        return subprocess.run(["bash", "-c", script], env={**base, **extra},
                               capture_output=True, text=True, check=True).stdout
 
     assert resolve({}) == "/w/rust/target/debug/pg-jail"
-    assert resolve({"CARGO_TARGET_DIR": "/t/x"}) == "/t/x/debug/pg-jail"
+    assert resolve({"CARGO_TARGET_DIR": "/t/x/target"}) == "/t/x/target/debug/pg-jail"
+
+
+def test_rust_tests_run_in_three_slices_of_one_archive():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
+    build, shards = jobs["rust"], jobs["rust-test"]
+    upload = next(s for s in build["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+    assert upload["with"]["name"] == "rust-tests" and upload["with"]["if-no-files-found"] == "error"
+    assert "cargo nextest archive" in next(s for s in build["steps"] if s.get("id") == "archive")["run"]
+    assert shards["needs"] == ["select", "rust"] and shards["if"] == "needs.select.outputs.rust == 'true'"
+    assert shards["strategy"] == {"fail-fast": False, "matrix": {"shard": [1, 2, 3]}}
+    assert shards["name"] == "Rust workspace tests (shard ${{ matrix.shard }} of 3)"
+    download = next(s for s in shards["steps"] if str(s.get("uses", "")).startswith("actions/download-artifact"))
+    assert download["with"]["name"] == "rust-tests"
+    run = next(s for s in shards["steps"] if s.get("name") == "cargo nextest run")["run"]
+    for arg in ('--partition "slice:${{ matrix.shard }}/3"', "--archive-file", "--profile ci",
+                '--extract-to "$(dirname "$TARGET_DIR")"'):
+        assert arg in run
+    assert "rust-test" in jobs["ci-gate"]["needs"]
+    assert all(SETUP_NEXTEST in [s.get("uses") for s in job["steps"]] for job in (build, shards))
+
+
+def reasonless_overrides(text):
+    """Headers of nextest overrides that change a timeout without a `reason:` line in the comment above them."""
+    lines = text.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        if not re.fullmatch(r"\[\[profile\.[\w-]+\.overrides\]\]", line.strip()):
+            continue
+        body = []
+        for following in lines[index + 1:]:
+            if following.startswith("["):
+                break
+            body.append(following)
+        comments = []
+        for previous in reversed(lines[:index]):
+            if not previous.startswith("#"):
+                break
+            comments.append(previous)
+        if any(re.match(r"\s*(slow-timeout|leak-timeout)\s*=", b) for b in body) and not any(
+                "reason:" in c for c in comments):
+            found.append(line.strip())
+    return found
+
+
+def test_every_rust_test_has_a_hang_limit_and_each_longer_limit_a_reason():
+    text = (ROOT / "rust/.config/nextest.toml").read_text()
+    config = tomllib.loads(text)
+    limit = config["profile"]["default"]["slow-timeout"]
+    assert re.fullmatch(r"\d+s", limit["period"]) and 1 <= limit["terminate-after"] <= 5
+    assert {"path": "debug/pg-jail", "relative-to": "target", "on-missing": "error"} in (
+        config["profile"]["default"]["archive"]["include"])
+    assert reasonless_overrides(text) == []
+    exempt = "[[profile.default.overrides]]\nfilter = 'test(=slow)'\nslow-timeout = { period = \"600s\" }\n"
+    assert reasonless_overrides(exempt) == ["[[profile.default.overrides]]"]
+    assert reasonless_overrides("# reason: builds a crate\n" + exempt) == []
