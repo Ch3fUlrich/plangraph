@@ -65,3 +65,15 @@ mode; a landing whose row is missing fails the lander. `merge_batch.py landing-r
 and worst minutes READY to landed and landed to green, test minutes per part, reruns, red main, fix tasks per train),
 `landing-settle` fills the green and red-main columns from GitHub (`--train T --fix-tasks N` records fix tasks) and
 `landing-backfill --pr N --mode M` records a train landed before the telemetry existed.
+
+## Where landing time goes (measured 2026-11-28, 100 merged PRs of 2026-11-21 to 11-28)
+
+Source: `gh pr list --state merged`, the pull request commits and `gh run list`; the head's last push is its last commit time.
+
+- Last head commit to merge: median 56 min, p90 163 min (all 100). Trains 36 / 64 min (41 PRs, 40 of them before 11-26); one-by-one merges 86 / 176 min before 11-26 and 62 / 128 min after.
+- Re-merges (a commit with two parents that merges main into the head): 292 over 100 PRs, 58 PRs had one or more. One-by-one PRs after 11-26: 2.8 per PR (18 PRs); train PRs: 5.9 per PR (one had 44).
+- From the last non-merge commit to merge, one-by-one PRs after 11-26: median 138 min, which is the re-merge cycles, not the GO.
+- Per cycle: workstation fast checks 1915-2325 s, then full CI 15.9 min median (p90 17.9, `pull_request`; the `push` run on main is 15.8 min too), then the GO. Every main move starts the cycle again for every open head.
+- GO row on data main to merge: 27-29 min for #1336, #1335, #1334, #1332 (merges land at :15 and :45 past the hour), 4 and 11 min for #1331 and #1333. A GO voided by a main move (#1331, #1332) costs one more cycle and one more GO row.
+- Order of waits, per landed single PR: BEHIND re-merge cycles (fast checks plus CI, repeated), fast-checks receipt, CI, GO-REQ to GO (not timestamped in data main; the GO commit follows the request by minutes to hours), GO to merge tick; train build and push are small next to these.
+- `tested-ff` does not remove the race: its push still needs main to be exactly the tested base (`base_moved` otherwise). A GitHub merge queue tests the speculative merge of main and the head, so no author re-merge happens, but a GO binds the head sha, so it needs the GO check to read the queued head.
