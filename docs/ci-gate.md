@@ -1,6 +1,6 @@
 # CI gate
 
-`tests.yml` runs on every pull request to `main`, every push to `main`, and manual dispatch.
+`tests.yml` runs on every pull request to `main`, every push to `main`, a merge queue event, manual dispatch and a daily schedule (03:23 UTC).
 
 An edit confined to the title or description runs the base-pinned commit policy as
 `ci-pr-description` in a concurrency group unique to that workflow run. The policy still
@@ -22,7 +22,7 @@ this admission check.
 
 The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, architecture and CLI version; cache misses retain the archive SHA-256 check and retry downloads across a six-minute window.
 
-The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike`. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs `scrub` only.
+The `select` job (`tools/ci_select.py`) maps changed paths to the suites `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike` and `browser`; `scrub`, `file-size`, `new-code-lang` and `changelog-docs` run on every change. `rust` also starts the native Windows job. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs only those four fast jobs and `ci-gate`.
 
 Skill text (`skills/**/*.md` and `skills/<name>/evals/evals.json`) selects only `pytest`, whose affected run picks the skill tests; the skills that Rust embeds keep their Rust jobs, and a skill eval file beside any non-text path runs the full suite. A push to `main` of a merge commit whose first-parent diff (renames split into delete and add) is only skill text and Markdown that no Rust, worker, unit or CI check reads runs the fast jobs only and reports `tested=true` with evidence `text-only merge`; any other path keeps the full suite (D-7122).
 
@@ -35,6 +35,42 @@ A non-doc change satisfies the changelog check with a new or edited direct-child
 Branch protection on `main` requires only the `ci-gate` check — no review requirement, admins not enforced. Rollback: delete the protection.
 
 A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a non-Claude `Writer:` trailer — the Writer may name a Claude model only as `claude-<model> <run|session|uuid id> [(note)]` (shape-only check; `claude-<model>` and the run-hex id are lowercase only, a uuid may be any case; the optional note is one parenthesised span that may not contain `)` (so no nested parens), a newline, or a second `Writer:` marker in any case) — and a `Test-Removal:` trailer when tests are removed. Exempt shas are listed in `tools/ci_commit_exempt.txt`.
+
+## Where CI time goes
+
+Measured from the 485 runs of `tests.yml` created 2026-11-21 00:07Z to 2026-11-28 03:15Z (GitHub API runs 44841710542 to 46101977982, job rows per run; wall = run start to last update). Every job ran on a GitHub-hosted runner (`ubuntu-24.04` 7196 jobs, `windows-latest` 459): the repository variables `CI_SELF_HOSTED`, `CI_SELF_HOSTED_WIN` and `LAND_CREATOR_ID` are unset on 2026-11-28 (only the two `*_LABELS` variables exist), so the self-hosted paragraph below and the `tested-ff` push shortcut in `ci_select.py` do not apply today.
+
+| Event | Runs | Median wall | p90 wall | Job-minutes | Share of full job set |
+|---|---|---|---|---|---|
+| pull_request | 402 | 15.4 min | 23.6 min | 32168 | 324 of 402 ran 14 or more jobs |
+| push (main) | 67 | 15.2 min | 20.1 min | 6984 | 67 of 67 full |
+| schedule | 7 | 15.8 min | 17.8 min | 684 | 7 of 7 full |
+| workflow_dispatch | 9 | 14.1 min | 26.7 min | 928 | 9 of 9 full |
+
+Total 40764 job-minutes. Queue wait is small (median 0.05 min from run creation to first job start, p90 0.87 min); wall time is run time. Pull request outcome: 204 success, 118 failure, 79 cancelled (20 percent, 1725 job-minutes in cancelled jobs), 25 runs are reruns (attempt above 1).
+
+Top jobs by total minutes (median / p90 minutes per run):
+
+| Job | Job-minutes | Median | p90 |
+|---|---|---|---|
+| Rust workspace on Linux | 6682 | 13.9 | 20.4 |
+| Rust spawner and worker core tests on Windows | 5157 | 11.8 | 17.1 |
+| Rust worker crate | 4522 | 11.1 | 15.7 |
+| Python SQLite keeper, 3 shards | 12489 | 9.5 | 13.8 |
+| Python Postgres keeper, 3 shards | 9018 | 5.9 to 7.6 | 10.5 |
+
+The Python jobs (SQLite plus Postgres, six shards) are 53 percent of all minutes, the three Rust jobs 40 percent. The critical path of a full run is the Rust Linux job (14 min), so shards do not shorten the wall time.
+
+Duplicate and wasted work:
+
+- Landing trains: 148 `land/*` pull request runs (27 percent of minutes): 60 success (6051 min), 39 failure (3641 min), 49 cancelled (1419 min). Only 41 percent of train runs end green.
+- Every merge repeats the train's full run on the push to `main`: 67 pushes, 6984 job-minutes (17 percent of all), median 99.5 job-minutes each, about 2 minutes of them in the fast jobs. Pushes per day: 3 to 16.
+- Non-draft `lane/*` pull requests: 157 of 179 runs ran 14 or more jobs (88 percent), 15284 minutes. A changed `src/`, `tools/` or `tests/` path selects both Python suites, and any `rust/` path selects both Python suites too, so an affected selection is near the full set.
+- Windows runs on 496 job rows (5157 minutes, 13 percent): it follows `rust`, so every `rust/` and Rust-input path pays 12 minutes.
+- Repeat runs: 356 distinct pull request head shas, 37 of them with more than one run (46 extra runs, 11 percent); 255 branches averaged 1.58 runs, 26 branches ran three or more.
+- Failed runs: 118 of 402 pull request runs (29 percent); `ci-gate` is the failing job in 130 job rows, behind it the Postgres shards (55), Rust Linux (48), Windows (41) and the SQLite shards (97).
+
+Selection check (`python3 tools/ci_select.py select --files ...`): `docs/` and `*.md` select nothing; `skills/*/SKILL.md` selects `pytest`; `skills/*/evals/evals.json` selects every suite and `full=true` (unknown path) until D-7122 lands; `tools/ci_select.py` selects every suite; `rust/plangraph-cli/**` selects `pytest`, `pytest-postgres` and `rust` (and Windows); `src/plangraph/**` or `tests/**` selects `pytest` and `pytest-postgres`.
 
 ## Known limits of the commit gate
 
