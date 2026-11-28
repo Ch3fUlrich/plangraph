@@ -103,6 +103,24 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
   workstation) and model tokens. Report them per merged item every beat and stop a pattern that
   repeats.
 
+## When something breaks or waits
+
+Act without being asked; the operator expects the overseer to see a bottleneck first.
+
+- Question every wait. Any step that takes more than twice its usual time, or more than
+  15 minutes (fast-checks, CI, a review seat, a GO, a train), gets measured the same beat:
+  where the time goes, from logs and run records, with numbers.
+- Ask why the work runs at all before asking how to run it faster: a check that cannot fail
+  for this change (a full suite for skill text, a re-merge of disjoint files, a review of an
+  unchanged patch) is waste; propose removing it.
+- A repeat is a defect. The second time the same failure or wait appears, file it on its
+  keeper item (or a new LE item) and propose a fix in code to the operator with the measured
+  cost, a recommended option and what you start if he agrees.
+- Fix forward what is yours inside the rules: a script, a brief, a seat, a host setting. Ask
+  routing only for decision ids, grants and GO rows, and keep working while it answers.
+- Report the bottleneck in the next operator summary even when nobody asked, with the
+  number, the cause and the fix in flight.
+
 ## Operator
 
 - Relay every operator answer or order to routing verbatim, with its time, and ask for the
