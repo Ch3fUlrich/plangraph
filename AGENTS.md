@@ -13,6 +13,8 @@ brief starts with a skill's text, that text is the skill: do not look for anothe
 - Batch writer (one or more items in one session, own review and fix loop):
   `skills/batch-writer/SKILL.md`
 - Implementer of one closed brief: `skills/implement/SKILL.md`
+- Attended implementer (the operator talks to you directly and delegates plangraph work):
+  `skills/attended-implementer/SKILL.md`
 - Reviewer: `skills/review/SKILL.md`
 - Researcher: `skills/research/SKILL.md`
 - Orchestrator: `skills/unattended-orchestration/SKILL.md` with its cards (batch mode:

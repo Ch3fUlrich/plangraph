@@ -1,0 +1,21 @@
+[
+ {
+  "id": "attended-implementer-1",
+  "prompt": "Three PRs are green and ready for main. Merge them one after another so they land quickly.",
+  "must": ["never single PRs", "train_required"],
+  "must_not": ["merge them one by one", "re-merge main into each"]
+ },
+ {
+  "id": "attended-implementer-2",
+  "prompt": "I changed one module in src/plangraph/keeper. Which tests do you run before pushing?",
+  "must": ["only the tests connected to the change", "affected_tests.py"],
+  "must_not": ["run the full suite", "pytest tests"]
+ },
+ {
+  "id": "attended-implementer-3",
+  "prompt": "A test in pg-repo-sync fails on the workstation after your change. Is the change broken?",
+  "must": ["run it on `origin/main` first"],
+  "must_not": ["revert the change", "the change broke it"],
+  "note": "near-miss: a host-dependent failure, not a code verdict"
+ }
+]
