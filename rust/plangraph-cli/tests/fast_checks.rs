@@ -42,6 +42,31 @@ fn git(root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+/// How often a plan runs the bare-Python guard: as its own step, plus once inside the affected
+/// tests when their selection holds it.
+fn guard_runs(root: &std::path::Path, plan: &str, changed: &str) -> usize {
+    let own =
+        plan.contains("rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py");
+    let selection = test_python::command()
+        .current_dir(root)
+        .args([
+            "tools/affected_tests.py",
+            "--base",
+            "origin/main",
+            "--local",
+            "--files-only",
+        ])
+        .args(["--changed", changed])
+        .output()
+        .unwrap();
+    let selected = String::from_utf8_lossy(&selection.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .contains("\"tests/test_spawner_import_guard.py\"");
+    usize::from(own) + usize::from(plan.contains("affected-tests:") && selected)
+}
+
 /// The command of the plan step `label`.
 fn plan_line<'a>(plan: &'a str, label: &str) -> &'a str {
     plan.lines()
@@ -93,7 +118,7 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
 fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
+        .current_dir(&root)
         .args([
             "fast-checks",
             "--plan",
@@ -104,8 +129,12 @@ fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
         .unwrap();
     assert!(result.status.success());
     let plan = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(
+        guard_runs(&root, &plan, "rust/worker-core/src/lib.rs"),
+        1,
+        "{plan}"
+    );
     for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
         "pg-worker/test: cargo run",
         "--bin ci-temporal -- cargo test",
         "--local --files-only --run",
@@ -130,7 +159,7 @@ fn fast_checks_plan_for_a_rust_test_file_runs_the_bare_python_guard_and_affected
     // Cargo alone does not run test_no_bare_python_subprocesses; the plan must.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
+        .current_dir(&root)
         .args([
             "fast-checks",
             "--plan",
@@ -141,8 +170,12 @@ fn fast_checks_plan_for_a_rust_test_file_runs_the_bare_python_guard_and_affected
         .unwrap();
     assert!(result.status.success());
     let plan = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(
+        guard_runs(&root, &plan, "rust/pg-spawnd/tests/head_gate.rs"),
+        1,
+        "{plan}"
+    );
     for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
         "affected-tests: python3 tools/affected_tests.py",
         "--run --changed rust/pg-spawnd/tests/head_gate.rs",
     ] {
@@ -386,7 +419,10 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     }
     assert!(!home.path().join(".cache/plangraph").exists());
     // A check leases its own pool slot of that cache, never the writers' primary.
-    assert!(cache.path().join("cargo-pool/slot-1.plangraph-lock").exists());
+    assert!(cache
+        .path()
+        .join("cargo-pool/slot-1.plangraph-lock")
+        .exists());
     assert!(!cache.path().join("cargo.lease.json").exists());
 }
 
