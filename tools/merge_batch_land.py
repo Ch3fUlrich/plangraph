@@ -53,10 +53,8 @@ def job_named(seen, key: str) -> bool:
 
 def shard_named(seen, suite: str, index: int) -> bool:
     """True when shard *index* (0-based) of *suite* ran, under the old or the new name."""
-    if f"{suite} ({index})" in seen:
-        return True
     pattern = re.compile(re.escape(SHARD_DISPLAY[suite]) + rf" \(shard {index + 1} of \d+\)")
-    return any(pattern.fullmatch(name) for name in seen)
+    return f"{suite} ({index})" in seen or any(pattern.fullmatch(name) for name in seen)
 #: Every bucket gh prints; any other word is unknown, and unknown is never green.
 BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
 #: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold, underscores): it refuses the approval.
@@ -214,9 +212,7 @@ def parse_checks(text):
     move the bucket (a check named ``lint<TAB>pass`` is not a green ``lint``). A line that does not fit, or
     a bucket gh does not use, is an error: unknown is never green."""
     rows = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
+    for line in filter(str.strip, text.splitlines()):
         cols = line.split("\t")
         if len(cols) < 5 or cols[-4] not in BUCKETS:
             raise MergeBatchError(f"unreadable line in the `gh pr checks` output: {line[:80]!r}")
@@ -498,6 +494,10 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
         elif step == "close_parts":
             if mode == TESTED_FF and not seats_acknowledged():
                 raise MergeBatchError(f"train #{number} settlement requires PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0)")
+            # What the train merged installs and gets its deploy rows before its items close (dry run unless apply).
+            result = run(["plangraph", "land-train", "deploy-train", "--base", train["base"], "--merge", merge, "--train-head",
+                          train["head"]], ok=(0,) if os.environ.get("PG_LAND_DEPLOY") == "apply" else None, timeout=3600)
+            sys.stderr.write(result.stdout + result.stderr)
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
         elif step == "host_sync":

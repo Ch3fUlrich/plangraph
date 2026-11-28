@@ -60,6 +60,7 @@ def journal(env):
     db.close()
     env.env.update(PLANGRAPH_ENV_FILE=str(env.tmp / "keeper.env"), JOURNAL_DB=str(path),
                    JOURNAL_SWEEP_LOG=str(env.tmp / "sweep"), JOURNAL_LANE_LOG=str(env.tmp / "lane"),
+                   JOURNAL_ORDER_LOG=str(env.tmp / "order"),
                    PG_LANE_STATE=str(env.tmp / "lanestate"))
     binary = env.stubs / "plangraph"
     binary.write_text("""#!/usr/bin/env python3
@@ -97,6 +98,11 @@ elif args[:2] == ['landing', 'verify-hosts']:
 elif args[:1] == ['lane-cleanup']:
     with open(os.environ['JOURNAL_LANE_LOG'], 'a') as log:
         print(json.dumps(args), file=log)
+elif args[:2] == ['land-train', 'deploy-train'] or args == ['merge-close']:
+    with open(os.environ['JOURNAL_ORDER_LOG'], 'a') as log:
+        print(' '.join(args[:2]), os.environ.get('PG_LAND_DEPLOY', 'dry-run'), file=log)
+    if args[0] == 'land-train' and os.environ.get('DEPLOY_FAIL'):
+        sys.exit('failed pg-x.service@k: first run of pg-x.service on k is not good')
 else:
     assert args[:2] == ['landing', 'ci-import'] or args == ['merge-close'], args
 """)
@@ -253,6 +259,35 @@ def test_tested_ff_settlement_waits_for_seat_acknowledgement(env, journal):
     resumed = env.run("settle")
     assert resumed.returncode == 0, resumed.stderr
     assert journal()["train"]["open_steps"] == []
+
+
+def test_settlement_deploys_before_merge_close_and_an_applied_failed_first_run_stops_it(env, journal):
+    """settle_train: the deploy step runs after the verified merge and before merge-close; with
+    PG_LAND_DEPLOY=apply a failed first run stops settlement before any item closes, and a rerun resumes."""
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.env.update(INTERRUPT_LANDING="1", PG_LAND_DEPLOY="apply", DEPLOY_FAIL="1")
+    assert "interrupted before saving" in land(env, approval).stderr
+    del env.env["INTERRUPT_LANDING"]
+    failed = env.run("settle")
+    assert failed.returncode == 1 and "first run of pg-x.service" in failed.stderr, failed.stderr
+    assert journal()["train"]["open_steps"] == ["close_parts", "host_sync", "cleanup"]
+    assert (env.tmp / "order").read_text().splitlines() == ["land-train deploy-train apply"]
+
+    del env.env["DEPLOY_FAIL"]
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    assert journal()["train"]["open_steps"] == []
+    assert (env.tmp / "order").read_text().splitlines()[1:] == ["land-train deploy-train apply", "merge-close apply"]
+
+
+def test_a_failed_deploy_dry_run_never_stops_settlement(env, journal):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.env["DEPLOY_FAIL"] = "1"
+    assert land(env, approval).returncode == 0
+    assert journal()["train"]["open_steps"] == []
+    assert (env.tmp / "order").read_text().splitlines() == ["land-train deploy-train dry-run", "merge-close dry-run"]
 
 
 def test_legacy_single_pr_settlement_uses_matching_saved_mode(env, journal):

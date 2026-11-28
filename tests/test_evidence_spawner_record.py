@@ -164,3 +164,11 @@ def test_cli(flags, expected):
     args = build_parser().parse_args(["evidence", ITEM["key"], "--kind", "run-record",
                                       "--run", "run-1", *flags])
     assert evidence_ref(args) == expected
+
+
+def test_cli_deploy_ref_is_the_row_land_train_deploy_apply_writes():
+    row = {"host": "host-a", "unit": "bin:plangraph", "is_active": "installed"}
+    args = build_parser().parse_args(["evidence", ITEM["key"], "--kind", "deploy", "--ref", json.dumps(row)])
+    assert evidence_ref(args) == row
+    with pytest.raises(SystemExit):
+        evidence_ref(build_parser().parse_args(["evidence", ITEM["key"], "--kind", "deploy", "--ref", "[1]"]))
