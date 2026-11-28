@@ -1016,13 +1016,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 <script defer src="https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"></script>
 <script>(function (global) {
   "use strict";
-
   var TERMINAL = { done: true, cancelled: true };
-
   function normItems(items) {
     return Array.isArray(items) ? items.filter(Boolean) : [];
   }
-
   function indexByKey(items) {
     var m = {};
     normItems(items).forEach(function (it) {
@@ -1030,18 +1027,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return m;
   }
-
   function depMet(depKey, idx) {
     var d = idx[depKey];
     return !!(d && d.state === "done");
   }
-
   function unmetDeps(item, idx) {
     return normItems(item && item.depends_on).filter(function (k) {
       return !depMet(k, idx);
     });
   }
-
   function displayState(item, idx) {
     var s = item.state;
     if (s === "done" || s === "cancelled" || s === "in_review") return s;
@@ -1049,7 +1043,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (s === "claimed") return "claimed";
     return "ready";
   }
-
   function computeDisplayState(items) {
     var idx = indexByKey(items);
     var out = {};
@@ -1058,7 +1051,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return out;
   }
-
   function unblocksMap(items) {
     var m = {};
     normItems(items).forEach(function (it) {
@@ -1072,20 +1064,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return m;
   }
-
   function isTerminal(item) {
     return !!(item && TERMINAL[item.state]);
   }
-
   function estimate(item) {
     var v = Number(item && item.estimate_h);
     return isFinite(v) ? v : 0;
   }
-
   function byKeyAsc(a, b) {
     return a < b ? -1 : a > b ? 1 : 0;
   }
-
   function criticalPath(items) {
     items = normItems(items);
     var nodes = items.filter(function (it) {
@@ -1095,7 +1083,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     nodes.forEach(function (n) {
       nset[n.key] = n;
     });
-
     var indeg = {};
     var best = {};
     var prev = {};
@@ -1107,13 +1094,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         if (nset[d]) indeg[n.key] += 1;
       });
     });
-
     var queue = [];
     nodes.forEach(function (n) {
       if (indeg[n.key] === 0) queue.push(n.key);
     });
     queue.sort(byKeyAsc);
-
     var order = [];
     while (queue.length) {
       var k = queue.shift();
@@ -1126,7 +1111,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       });
       queue.sort(byKeyAsc);
     }
-
     order.forEach(function (k) {
       var n = nset[k];
       var est = estimate(n);
@@ -1144,7 +1128,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       best[k] = total;
       prev[k] = from;
     });
-
     var target = null;
     var goalH = -Infinity;
     var anyH = -Infinity;
@@ -1160,7 +1143,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     });
     if (target === null) target = anyK;
-
     var hours = target ? best[target] : 0;
     var keys = [];
     var guard = 0;
@@ -1171,7 +1153,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { keys: keys, hours: hours };
   }
-
   function percentDone(items, by) {
     by = by || "estimate";
     var total = 0;
@@ -1184,7 +1165,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return total > 0 ? done / total : 0;
   }
-
   function readyList(items) {
     var idx = indexByKey(items);
     var ub = unblocksMap(items);
@@ -1201,7 +1181,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         );
       });
   }
-
   function blockedBy(items) {
     var idx = indexByKey(items);
     var out = {};
@@ -1213,13 +1192,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return out;
   }
-
   function inProgress(items) {
     return normItems(items).filter(function (it) {
       return it.state === "claimed" || it.state === "in_review";
     });
   }
-
   var PlanGraph = {
     indexByKey: indexByKey,
     unmetDeps: unmetDeps,
@@ -1234,18 +1211,14 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     blockedBy: blockedBy,
     inProgress: inProgress
   };
-
   global.PlanGraph = PlanGraph;
   if (typeof module !== "undefined" && module.exports) module.exports = PlanGraph;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PG = global.PlanGraph;
   if (!PG || typeof document === "undefined") return;
-
   var state = {
     snapshot: null,
     items: [],
@@ -1265,30 +1238,24 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     selected: null,
     cy: null
   };
-
   function $(id) {
     return document.getElementById(id);
   }
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
   }
-
   function clear(n) {
     while (n.firstChild) n.removeChild(n.firstChild);
   }
-
   function setText(n, t) {
     n.textContent = t === undefined || t === null ? "" : String(t);
   }
-
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
-
   function uniqueSorted(values) {
     var seen = {};
     var out = [];
@@ -1300,19 +1267,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return out.sort();
   }
-
   function effectivePhase(it) {
     return it.phase || it.track || "";
   }
-
   function visible(it) {
     return !state.projectsOff[it.project] && !state.tracksOff[effectivePhase(it)];
   }
-
   function visibleItems() {
     return state.items.filter(visible);
   }
-
   function recompute() {
     state.byKey = PG.indexByKey(state.items);
     state.display = PG.computeDisplayState(state.items);
@@ -1326,10 +1289,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     state.blocked = PG.blockedBy(state.items);
     state.inProgress = PG.inProgress(state.items);
   }
-
-
   var clockRegistered = false;
-
   function renderHeader() {
     var n = state.items.length;
     var snap = state.snapshot || {};
@@ -1354,7 +1314,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     $("progress-bar").style.width = pe + "%";
     setText($("progress-text"), pe + "% done by estimate · " + pc + "% by count");
   }
-
   function chip(label, on, onToggle, color) {
     var b = el("button", "chip" + (on ? " on" : ""));
     b.type = "button";
@@ -1372,7 +1331,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return b;
   }
-
   function renderLegend() {
     var box = $("legend");
     clear(box);
@@ -1396,8 +1354,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(item);
     });
   }
-
-
   function nodeData(it) {
     return {
       id: it.key,
@@ -1414,7 +1370,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       unblocks: state.unblocks[it.key] || 0
     };
   }
-
   function buildElements() {
     var vis = visibleItems();
     var nodes = [];
@@ -1422,7 +1377,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var visibleKeys = {};
     var doneGroup = {};
     var groups = {};
-
     vis.forEach(function (it) {
       if (it.state === "done" && state.collapseDone) {
         groups[it.track] = (groups[it.track] || 0) + 1;
@@ -1435,7 +1389,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (Object.prototype.hasOwnProperty.call(state.criticalIndex, it.key)) cls += " critical";
       nodes.push({ data: nodeData(it), classes: cls });
     });
-
     Object.keys(groups).forEach(function (tr) {
       nodes.push({
         data: {
@@ -1451,7 +1404,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         classes: "state-done kind-group"
       });
     });
-
     var seen = {};
     vis.forEach(function (it) {
       if (!visibleKeys[it.key]) return;
@@ -1480,7 +1432,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
       });
     });
-
     var incoming = {};
     edges.forEach(function (e) {
       incoming[e.data.target] = true;
@@ -1499,7 +1450,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return nodes.concat(edges);
   }
-
   function cyStyles() {
     var list = [
       {
@@ -1538,21 +1488,18 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     );
     return list;
   }
-
   function registerDagre() {
     try {
       if (global.cytoscape && global.cytoscapeDagre) global.cytoscape.use(global.cytoscapeDagre);
     } catch (e) {
     }
   }
-
   function updateEmpty() {
     var empty = $("graph-empty");
     var none = visibleItems().length === 0;
     empty.hidden = !none;
     if (none) empty.textContent = state.items.length ? "No items match the current filters." : "This snapshot has no items.";
   }
-
   function renderGraph() {
     updateEmpty();
     var container = $("cy");
@@ -1590,7 +1537,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (global.PlanPage.selectNode) global.PlanPage.selectNode(ev.target.data("key"));
     });
   }
-
   global.PlanPage = {
     state: state,
     $: $,
@@ -1607,18 +1553,14 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     renderGraph: renderGraph
   };
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PP = global.PlanPage;
   if (!PP || typeof document === "undefined") return;
-
   function effectivePhase(it) {
     return it.phase || it.track || "";
   }
-
   function tracksOf(p) {
     var seen = {}, out = [];
     PP.state.items.forEach(function (it) {
@@ -1632,7 +1574,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return out;
   }
-
   function pushFilters() {
     var app = global.PlanUI && global.PlanUI.app, ui = app && app.ui;
     if (!ui || typeof ui.patch !== "function") return;
@@ -1648,7 +1589,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var active = f.projects.size > 0 || f.phases.size > 0;
     ui.patch({ filters: f, matchMode: active ? "hide" : "dim" });
   }
-
   function toggleFilter(kind, name) {
     var off = kind === "project" ? PP.state.projectsOff : PP.state.tracksOff;
     off[name] = !off[name];
@@ -1658,27 +1598,21 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (global.PlanPage.renderTable) global.PlanPage.renderTable();
     return !off[name];
   }
-
   function isOn(kind, name) {
     return !(kind === "project" ? PP.state.projectsOff : PP.state.tracksOff)[name];
   }
-
   function renderChips() {
     if (global.PlanUI.Sidebar && global.PlanUI.Sidebar.renderProjects) global.PlanUI.Sidebar.renderProjects();
   }
-
   PP.toggleFilter = toggleFilter;
   PP.isFilterOn = isOn;
   PP.renderChips = renderChips;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   var DOT = "\u00b7"; // ·
-
   function format(sha, generated, headSeq, headHash, nowMs) {
     var code = sha ? String(sha) : "unknown";
     var data = generated ? String(generated) : "-";
@@ -1707,7 +1641,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var title = headHash ? "keeper head " + String(headHash).slice(0, 10) : "";
     return { text: text, title: title, stale: stale, ageMin: ageMin };
   }
-
   function buildSha(doc) {
     var d = doc || global.document;
     if (!d || typeof d.querySelector !== "function") return "unknown";
@@ -1715,10 +1648,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     try { m = d.querySelector('meta[name="plangraph-build"]'); } catch (e) { m = null; }
     return (m && m.content) || "unknown";
   }
-
   var refreshFn = null;
   var clockTimer = null;
-
   function startClockRefresh() {
     if (typeof document === "undefined" || typeof setInterval === "undefined") return null;
     if (!refreshFn) return null;
@@ -1729,45 +1660,35 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
     return clockTimer;
   }
-
   function setRefresh(fn) {
     refreshFn = typeof fn === "function" ? fn : null;
     return startClockRefresh();
   }
-
   PlanUI.Stamp = {
     format: format, buildSha: buildSha,
     setRefresh: setRefresh, startClockRefresh: startClockRefresh
   };
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   var PP = global.PlanPage;
   var PG = global.PlanGraph;
   if (!PP || !PG || typeof document === "undefined") return;
-
   var state = PP.state;
   var box = PP.$("details");
   var body = null;                                     // cleared per render
   var app = PlanUI.app || null;                        // set by page_boot (fallback below)
-
   function A() { return app || PlanUI.app; }           // {ui, vm} — vm/ui only (§2)
   function UI() { var a = A(); return a && a.ui; }
   function VM() { var a = A(); return a && a.vm; }
   function noData(msg) { var p = PP.el("p", "sb-empty", msg); return p; }
-
-
   function addField(dl, label, value) {
     dl.appendChild(PP.el("dt", null, label));
     dl.appendChild(PP.el("dd", null, value == null || value === "" ? "—" : String(value)));
   }
-
   function addKeys(dl, label, keys) {
     dl.appendChild(PP.el("dt", null, label));
     var dd = PP.el("dd", "keys");
@@ -1785,7 +1706,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     dl.appendChild(dd);
   }
-
   function badgeRow(rec) {
     var b = PP.el("div", "badges");
     b.appendChild(PP.el("span", "badge badge-" + (rec.display || "open"), rec.display || rec.state));
@@ -1796,7 +1716,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (rec.loop != null) b.appendChild(PP.el("span", "badge", "loop " + rec.loop));
     return b;
   }
-
   function evidenceList(rec) {
     if (!rec.evidence || !rec.evidence.length) return noData("No evidence recorded.");
     var ul = PP.el("ul", "evidence");
@@ -1811,7 +1730,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return ul;
   }
-
   function actions(rec) {
     var row = PP.el("div", "dp-act");
     var show = PP.el("button", null, "Show in table");
@@ -1830,7 +1748,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     row.appendChild(show); row.appendChild(expand); row.appendChild(copy);
     return row;
   }
-
   function copyKey(key, btn) {
     var done = function (ok) { btn.textContent = ok ? "Copied" : "Copy failed"; };
     try {
@@ -1839,7 +1756,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       else done(legacyCopy(key));
     } catch (e) { done(false); }
   }
-
   function legacyCopy(text) {                        // offline/artifact-safe path
     try {
       var t = document.createElement("textarea");
@@ -1854,7 +1770,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return ok;
     } catch (e) { return false; }
   }
-
   function render(key) {
     if (!body) return;
     PP.clear(body);
@@ -1871,7 +1786,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     body.appendChild(PP.el("p", "dp-crumb",
       [rec.project, rec.phase, rec.title || key].filter(Boolean).join(" › ")));
-
     var head = PP.el("div", "details-head");
     head.appendChild(PP.el("h2", null, key));
     var close = PP.el("button", "details-close", "\u00d7");
@@ -1882,7 +1796,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     body.appendChild(head);
     body.appendChild(PP.el("p", "details-title", rec.title || key));
     body.appendChild(badgeRow(rec));
-
     var dl = PP.el("dl", "fields");
     [["project", rec.project], ["phase", rec.phase], ["id", rec.id], ["kind", rec.kind],
      ["state", rec.state], ["display state", rec.display], ["owner", rec.owner],
@@ -1894,7 +1807,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     addKeys(dl, "unblocks", rec.unblocks);
     if (rec.crossDeps && rec.crossDeps.length) addKeys(dl, "cross-project", rec.crossDeps);
     body.appendChild(dl);
-
     if (rec.doneCriteria) {
       body.appendChild(PP.el("h3", null, "Done criteria"));
       body.appendChild(PP.el("p", "criteria", rec.doneCriteria));
@@ -1917,14 +1829,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (kg) body.appendChild(kg);
     body.appendChild(actions(rec));
   }
-
   function snap(dir) {
     var order = ["peek", "half", "full"];
     var i = order.indexOf(box.getAttribute("data-snap"));
     i = Math.max(0, Math.min(order.length - 1, (i < 0 ? 0 : i) + dir));
     box.setAttribute("data-snap", order[i]);
   }
-
   function bindHandle(h) {
     var startY = null, moved = 0;
     h.addEventListener("pointerdown", function (e) {
@@ -1946,7 +1856,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       else if (e.key === "ArrowDown") { snap(-1); e.preventDefault(); }
     });
   }
-
   function mount(ui, vm) {
     app = { ui: ui, vm: vm };
     PP.clear(box);
@@ -1967,8 +1876,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     render(state.selected);
   }
-
-
   function selectNode(key) {
     state.selected = key;
     var U = UI();
@@ -1982,7 +1889,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     }
   }
-
   function focusNode(key) {
     setTab("graph");
     selectNode(key);
@@ -1996,8 +1902,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     }
   }
-
-
   function row(it, st, blockers) {
     var li = PP.el("li", "row row-" + st);
     var b = PP.el("button", "row-main");
@@ -2013,7 +1917,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (blockers && blockers.length) li.appendChild(PP.el("div", "row-blockers", "blocked by " + blockers.join(", ")));
     return li;
   }
-
   function section(box, title, rows) {
     box.appendChild(PP.el("h2", "list-h", title + " (" + rows.length + ")"));
     if (!rows.length) { box.appendChild(PP.el("p", "muted", "none")); return; }
@@ -2021,7 +1924,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     rows.forEach(function (r) { ul.appendChild(r); });
     box.appendChild(ul);
   }
-
   function renderList() {
     var bx = PP.$("list-content");
     PP.clear(bx);
@@ -2041,8 +1943,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     section(bx, "Done", done.map(function (it) { return row(it, "done", null); }));
     if (cancelled.length) section(bx, "Cancelled", cancelled.map(function (it) { return row(it, "cancelled", null); }));
   }
-
-
   function setTab(name) {
     PP.$("tab-graph").classList.toggle("active", name === "graph");
     PP.$("tab-list").classList.toggle("active", name === "list");
@@ -2059,7 +1959,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       else setTimeout(ready, 20);
     }
   }
-
   function rerender() {
     PP.renderGraph();
     if (PP.renderTable) PP.renderTable(); else renderList();
@@ -2068,7 +1967,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     PP.renderHeader();
     if (state.selected) render(state.selected);
   }
-
   function bind() {
     if (bind.done) return;
     bind.done = true;
@@ -2086,7 +1984,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       else if (mq.addListener) mq.addListener(re);
     }
   }
-
   function initData() {                                // legacy path without boot
     var data = PP.$("snapshot-data");
     if (!data) return false;
@@ -2102,7 +1999,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     PP.renderLegend();
     return true;
   }
-
   function init() {
     if (!state.booted && !state.snapshot) initData(); // page_boot pre-boot skips this
     bind();
@@ -2111,7 +2007,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     PP.renderGraph();
     setTab("graph");
   }
-
   PP.selectNode = selectNode;
   PP.focusNode = focusNode;
   PP.renderList = renderList;
@@ -2121,29 +2016,22 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PP.init = init;
   PP.initData = initData;
   PlanUI.DetailPanel = { mount: mount, render: render, snap: snap };
-
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var COLORS = ["#2f6f4f", "#3b5bdb", "#b45309", "#7c3aed",
                 "#0e7490", "#be123c", "#4d7c0f", "#6d28d9"];
-
   function graph() {
     var g = global.PlanGraph;
     if (!g) throw new Error("PlanGraph missing — load page.js before page_model.js");
     return g;
   }
-
   function str(v) { return v == null ? "" : String(v); }
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
-
   function naturalCmp(a, b) {
     var as = str(a).split(/(\d+)/), bs = str(b).split(/(\d+)/);
     var n = Math.min(as.length, bs.length);
@@ -2160,7 +2048,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return as.length - bs.length;
   }
-
   function waveMap(items) {
     var w = {}, known = {};
     items.forEach(function (it) {
@@ -2178,7 +2065,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return w;
   }
-
   function slackMap(items, hours) {
     var G = graph();
     var idx = {};
@@ -2204,18 +2090,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return out;
   }
-
   function questionOf(item) {
     return str(item.title).slice(0, 2) === "Q:" || /^Q-/.test(str(item.id)) ||
       item.kind === "question" || item.kind === "decision" ||
       (item.track === "QUESTIONS" && item.wait !== "task" &&
        item.kind !== "gate" && item.kind !== "goal" && item.kind !== "operator_task");
   }
-
   function questionStatus(state) {
     return state === "done" ? "answered" : state === "cancelled" ? "cancelled" : "open";
   }
-
   function deriveQuestions(items) {
     return items.filter(questionOf).map(function (i) {
       var q = { id: i.id, project: i.project, text: i.title, asked_by: i.owner,
@@ -2226,13 +2109,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return q;
     });
   }
-
   function decisionRefId(ev) {
     var r = ev ? ev.ref : null;
     if (r && typeof r === "object") r = r.id;
     return typeof r === "string" && r ? r : "";
   }
-
   function deriveDecisions(items, decisionText) {
     var order = [], byId = {};
     items.forEach(function (i) {
@@ -2254,12 +2135,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return order;
   }
-
   function qaEffectiveStatus(q, local) {
     if (local && Object.prototype.hasOwnProperty.call(local, q.id) && local[q.id]) return "answered";
     return q.status;
   }
-
   function refreshQA(vm, local) {
     local = local || {};
     var ops = (vm.needsYou || []).filter(function (e) { return e.text === undefined; });
@@ -2272,21 +2151,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     vm.answers = (vm.questions || []).filter(function (q) { return qaEffectiveStatus(q, local) === "answered"; });
     return vm;
   }
-
   function capitalise(name) {
     return str(name).charAt(0).toUpperCase() + str(name).slice(1).toLowerCase();
   }
-
   function depsOf(it) {
     return Array.isArray(it.depends_on) ? it.depends_on : [];
   }
-
   function earliestEvidence(it) {
     var ev = Array.isArray(it.evidence) ? it.evidence : [], best = "";
     ev.forEach(function (e) { if (e && e.at && (!best || e.at < best)) best = e.at; });
     return best;
   }
-
   var ROLE_ALIAS = { planning: "planning", implementation: "implementation", review: "review",
     planner: "planning", researcher: "planning", implementer: "implementation",
     operator: "implementation", reviewer: "review" };
@@ -2300,7 +2175,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (/\b(plan|planning|research|design|spec|scope|investigate)\b/i.test(t)) return "planning";
     return "implementation";
   }
-
   function waitKind(item) {
     if (!item || typeof item !== "object" || item.state === "done" || item.state === "cancelled") return null;
     if (item.wait === "answer" || item.wait === "task") return item.wait;
@@ -2313,7 +2187,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         id.indexOf("DECIDE") === 0 || t.indexOf("Q:") === 0 || t.indexOf("DECIDE") === 0)) return "answer";
     return "task";
   }
-
   function buildViewModel(snap) {
     var G = graph();
     snap = snap || {};
@@ -2326,7 +2199,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var idx = G.indexByKey(raw);
     var critSet = {};
     cp.keys.forEach(function (k) { critSet[k] = true; });
-
     var waiters = {};
     raw.forEach(function (it) {
       if (!it.key || G.isTerminal(it)) return;
@@ -2334,12 +2206,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         if (idx[d]) (waiters[d] = waiters[d] || []).push(it.key);
       });
     });
-
     var questions = Array.isArray(snap.questions) ? snap.questions : deriveQuestions(raw);
     var decisions = Array.isArray(snap.decisions) ? snap.decisions : deriveDecisions(raw, snap.decision_text);
     var decisionById = {};
     decisions.forEach(function (d) { decisionById[d.id] = d; });
-
     var groups = {};
     raw.forEach(function (it) {
       if (!it.key) return;
@@ -2348,7 +2218,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var ph = it.phase || it.track || "";
       groups[pname][ph] = (groups[pname][ph] || []).concat([it]);
     });
-
     var phaseIdxOf = {};
     var projects = Object.keys(groups).sort(naturalCmp).map(function (pname, pi, arr) {
       var byPhase = groups[pname];
@@ -2371,7 +2240,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
                           blocked: list.filter(function (i) { return display[i.key] === "blocked"; }).length };
                }) };
     });
-
     var items = new Map();
     var needsItems = [];
     raw.forEach(function (it) {
@@ -2402,7 +2270,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       items.set(it.key, record);
       if (record.operator && !G.isTerminal(it)) needsItems.push(record);
     });
-
     var waitByKey = {};                       // D-677 waits roll-up + blocked-on-operator
     items.forEach(function (rec) { waitByKey[rec.key] = rec.wait; });
     items.forEach(function (rec) {
@@ -2439,7 +2306,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       (p.phases || []).forEach(function (f) { f.wait = topWait(f.keys || []); all = all.concat(f.keys || []); });
       p.wait = topWait(all);
     });
-
     var needsYou = needsItems.concat(questions.filter(function (q) {
       return q.status === "open";
     }));
@@ -2447,18 +2313,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return num(b.priority) - num(a.priority) ||
         (b.unblocks ? b.unblocks.length : 0) - (a.unblocks ? a.unblocks.length : 0);
     });
-
     function humanize(key) {
       var it = items.get(key);
       return it ? str(it.title) + " (" + it.project + ")" : str(key);
     }
-
     return { items: items, projects: projects, questions: questions,
              decisions: decisions, decisionById: decisionById, needsYou: needsYou,
              answers: questions.filter(function (q) { return q.status === "answered"; }),
              critical: cp.keys, humanize: humanize };
   }
-
   function minWave(wave, list) {
     var m = Infinity;
     list.forEach(function (it) {
@@ -2467,22 +2330,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return m;
   }
-
   PlanUI.buildViewModel = buildViewModel;
   PlanUI.waitKind = waitKind;
   PlanUI.qaEffectiveStatus = qaEffectiveStatus;
   PlanUI.refreshQA = refreshQA;
   PlanUI.naturalCmp = naturalCmp;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function freshDefaults() {
     return {
       view: "graph",                     // "graph" | "table"
@@ -2502,18 +2360,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       tableSel: new Set(),
       prioPending: new Map(),            // key -> int, T3 batch panel
       sidebar: { open: true, tab: "needs" },
-      settings: { textSize: "M", theme: "auto", showCritical: true,
+      settings: { textSize: "M", theme: "auto", workMode: "batch", showCritical: true,
                   showCross: true, autoCollapseDone: false, animate: true },
       focusProject: null                 // phone: one project in view (A11)
     };
   }
-
   function defaultUI(overrides) {
     var ui = freshDefaults();
     Object.keys(overrides || {}).forEach(function (k) { ui[k] = overrides[k]; });
     return ui;
   }
-
   function hEnc(v) {
     try { return encodeURIComponent(String(v)); } catch (e) { return ""; }
   }
@@ -2607,19 +2463,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
   PlanUI.hashEncode = hashEncode;
   PlanUI.hashDecode = hashDecode;
-
   function Store(initial) {
     this._ui = defaultUI(initial);
     this._subs = [];
   }
-
   Store.prototype.get = function (key) {
     if (key !== undefined) return this._ui[key];
     var out = {}, self = this;
     Object.keys(this._ui).forEach(function (k) { out[k] = self._ui[k]; });
     return out;
   };
-
   Store.prototype.patch = function (obj) {
     var changed = [], self = this;
     Object.keys(obj).forEach(function (k) {
@@ -2631,13 +2484,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (changed.length) this._emit(changed);
     return changed.length > 0;
   };
-
   Store.prototype.set = function (key, value) {
     var o = {};
     o[key] = value;
     return this.patch(o);
   };
-
   Store.prototype.subscribe = function (fn) {
     this._subs.push(fn);
     var self = this;
@@ -2646,36 +2497,27 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (i >= 0) self._subs.splice(i, 1);   // safe during an emit walk
     };
   };
-
   Store.prototype._emit = function (keys) {
     var payload = keys.slice();
     this._subs.slice().forEach(function (fn) { fn(payload); });
   };
-
   PlanUI.Store = Store;
   PlanUI.defaultUI = defaultUI;
   PlanUI.freshDefaults = freshDefaults;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var WORD_FIELDS = ["title", "key", "id", "owner", "doneCriteria", "phase"];
   var FACETS = { state: 1, owner: 1, project: 1, phase: 1, op: 1, loop: 1,
                  prio: 1, dep: 1, edge: 1 };
   var cacheQ = null, cacheTok = null;
-
   function lo(v) { return v == null ? "" : String(v).toLowerCase(); }
-
   function has(item, field, needle) {          // substring, both lowered
     return lo(item[field]).indexOf(needle) >= 0;
   }
-
   function facetFn(name, arg) {
     var a = lo(arg);
     var fn;
@@ -2710,13 +2552,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (!fn) return tag(name, arg, function () { return false; });
     return tag(name, arg, fn);
   }
-
   function tag(name, arg, fn) {
     fn.facet = name;
     fn.arg = arg;
     return fn;
   }
-
   function parse(q) {
     if (q === cacheQ) return cacheTok;
     var toks = String(q == null ? "" : q).trim().split(/\s+/).filter(Boolean);
@@ -2730,7 +2570,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     cacheQ = q; cacheTok = out;
     return out;
   }
-
   function match(item, q) {
     var toks = parse(q);
     for (var i = 0; i < toks.length; i++) {
@@ -2738,7 +2577,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return true;
   }
-
   function edgeMatch(edge, q, items) {
     var toks = parse(q);
     var s = items.get(edge.source), t = items.get(edge.target);
@@ -2759,19 +2597,14 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     };
     return pass(s) || pass(t);
   }
-
   PlanUI.Query = { parse: parse, match: match, edgeMatch: edgeMatch };
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var UI = null, VM = null;
   var qaStatus = "all";                      // "all" | "open" | "answered"
   var sortState = {                          // ephemeral, per table (§9)
@@ -2779,26 +2612,20 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     qa: { col: "id", dir: "asc" }
   };
   var checks = {};
-
   function $(id) { return document.getElementById(id); }
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
   }
-
   function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
-
   function join(arr, sep) { return (arr || []).join(sep || ", "); }
-
   function qEff(q) {
     if (PlanUI.qaEffectiveStatus && PlanUI.QAPage && PlanUI.QAPage.answers)
       return PlanUI.qaEffectiveStatus(q, PlanUI.QAPage.answers());
     return q.status;
   }
-
   function shapeQ(q) {
     var st = qEff(q);
     var answered = st === "answered";
@@ -2812,47 +2639,37 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       updatedAt: "", crossDeps: []
     };
   }
-
   function shapeD(d) {                       // §9: id · title · project · date · items
     var s = shapeQ({ id: d.id, text: d.title, project: d.project });
     s.kind = "decision"; s.key = d.id;
     s.title = d.title || d.id; s.deps = d.items || [];
     return s;
   }
-
   function shaped(entry) { return entry.text !== undefined ? shapeQ(entry) : entry; }
-
   function pass(entry) {
     var q = UI ? UI.get("query") : "";
     return !q || PlanUI.Query.match(shaped(entry), q);
   }
-
   function natural(a, b) {
     if (typeof PlanUI.naturalCmp === "function") return PlanUI.naturalCmp(a, b);
     return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
   }
-
   function count(label, shown, total) {
     if (shown === total) return label + " (" + total + ")";
     return label + " (" + shown + " of " + total + ")";
   }
-
   function projectColor(name) {
     var ps = VM ? VM.projects : [];
     for (var i = 0; i < ps.length; i++) if (ps[i].name === name) return ps[i].color;
     return "var(--muted)";
   }
-
-
   var ROLE = {                                   // same glyph set everywhere
     planning: { sym: "\u25C7", label: "Planning" },
     implementation: { sym: "\u25AD", label: "Implementation" },
     review: { sym: "\u2B21", label: "Review" }
   };
   var expanded = {};                             // "p" or "p|phase" -> true
-
   function PP() { return global.PlanPage; }
-
   function eyeBtn(kind, name, label) {
     var on = PP().isFilterOn ? PP().isFilterOn(kind, name) : true;
     var b = el("button", "pt-eye" + (on ? " on" : ""), on ? "\u2713" : "");
@@ -2866,13 +2683,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return b;
   }
-
   function rowHead(open, hasKids) {
     var c = el("span", "pt-chev", hasKids ? (open ? "\u25BE" : "\u25B8") : "");
     c.setAttribute("aria-hidden", "true");
     return c;
   }
-
   function taskNode(rec, color) {
     var li = el("li", "pt-node pt-task");
     li.setAttribute("role", "none");
@@ -2890,7 +2705,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     li.appendChild(b);
     return li;
   }
-
   function phaseNode(p, ph) {
     var id = p.name + "|" + ph.name, open = !!expanded[id];
     var li = el("li", "pt-node pt-phase");
@@ -2920,7 +2734,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return li;
   }
-
   function projectNode(p) {
     var open = !!expanded[p.name];
     var li = el("li", "pt-node pt-project");
@@ -2947,7 +2760,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return li;
   }
-
   function renderProjects() {
     var box = $("project-tree");
     if (!box || !VM) return;
@@ -2961,7 +2773,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     (VM.projects || []).forEach(function (p) { ul.appendChild(projectNode(p)); });
     box.appendChild(ul);
   }
-
   function seg(opts, current, onPick, label) {
     var s = el("div", "seg");
     s.setAttribute("role", "group");
@@ -2976,20 +2787,60 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return s;
   }
-
   function block(title, node) {
     var b = el("div", "set-block");
     b.appendChild(el("h4", "sb-h", title));
     b.appendChild(node);
     return b;
   }
-
-  function renderSettings() {
+  var wm = null, wmBusy = false, wmErr = "", WM = ["auto", "piecewise", "batch"];
+  function requestWorkMode(mode) {
+    wmBusy = true;
+    wmErr = "";
+    function done(e) { wmBusy = false; wmErr = e || ""; renderSettings(); }
+    try {
+      var x = new global.XMLHttpRequest();
+      x.open("POST", "/mcp", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      x.onload = function () {
+        try {
+          var r = JSON.parse(x.responseText);
+          var row = JSON.parse(r.result.content[0].text);
+          if (x.status !== 200 || r.result.isError || WM.indexOf(row.work_mode) < 0) throw 0;
+          wm = row;
+          pick("workMode", row.work_mode);
+          done();
+        } catch (e) { done("Work mode could not be loaded or saved."); }
+      };
+      x.onerror = function () { done("Work mode offline."); };
+      x.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+        name: "plangraph_work_mode", arguments: mode ? { work_mode: mode } : {} } }));
+    } catch (e) { done("Work mode offline."); }
+  }
+  function renderSettings(load) {
     var box = $("sb-panel-settings");
     if (!box) return;
     clear(box);
     var s = UI.get("settings");
     box.appendChild(el("h3", "sb-h", "Settings"));
+    var mode = el("select");
+    mode.setAttribute("aria-label", "Work mode");
+    WM.forEach(function (v) { var o = el("option", null, v); o.value = v; mode.appendChild(o); });
+    mode.value = wm ? wm.work_mode : "batch";
+    mode.disabled = wmBusy || !wm;
+    mode.addEventListener("change", function () { requestWorkMode(mode.value); renderSettings(); });
+    box.appendChild(block("Work mode", mode));
+    var msg = wmErr || (wmBusy ? "Loading…" : "");
+    if (!msg && wm) {
+      if (wm.work_mode !== wm.effective_work_mode) msg = "Repo override: " + wm.effective_work_mode + ". ";
+      if (wm.work_mode === "auto" || wm.effective_work_mode === "auto") msg += "Resolved: " + (wm.resolved_work_mode || "unavailable") + ". " + wm.work_mode_reason;
+    }
+    box.appendChild(el("p", "set-row", msg)).setAttribute("role", "status");
+    if (!wmBusy && (wm || wmErr)) {
+      var refresh = box.appendChild(el("button", null, "Refresh"));
+      refresh.addEventListener("click", function () { requestWorkMode(); renderSettings(); });
+    }
+    if (load && !wm && !wmBusy && !wmErr) requestWorkMode();
     box.appendChild(block("Text size (root px)", seg([["S", "S"], ["M", "M"], ["L", "L"]],
       s.textSize, function (v) { pick("textSize", v); }, "Text size")));
     box.appendChild(block("Theme", seg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]],
@@ -3014,7 +2865,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       checks[pair[0]] = cb;
     });
   }
-
   function pick(key, value) {
     var cur = UI.get("settings");
     if (cur[key] === value) return;
@@ -3023,7 +2873,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     next[key] = value;
     UI.set("settings", next);
   }
-
   function syncSettings() {
     var s = UI.get("settings");
     var boxes = $("sb-panel-settings");
@@ -3036,9 +2885,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     Object.keys(checks).forEach(function (k) { checks[k].checked = !!s[k]; });
   }
-
   function setAttributes() { /* the sidebar is the project tree only; pages live in the header */ }
-
   function renderCounts() {
     function set(id, n) {
       var node = $(id);
@@ -3060,15 +2907,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     });
   }
-
   function renderPanel(tab) {
     if (tab === "projects") renderProjects();
     else if (tab === "qa") PlanUI.SideTables.renderQA();
     else if (tab === "answers") PlanUI.SideTables.renderAnswers();
-    else if (tab === "settings") renderSettings();
+    else if (tab === "settings") renderSettings(true);
     else PlanUI.SideTables.renderNeeds();
   }
-
   function renderAll() {
     renderCounts();
     renderProjects();
@@ -3079,7 +2924,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     syncSettings();
     setAttributes();
   }
-
   function mount(ui, vm) {
     UI = ui;
     VM = vm;
@@ -3093,7 +2937,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     });
   }
-
   PlanUI._sideBase = {
     $: $, el: el, clear: clear, join: join,
     qEff: qEff, shapeQ: shapeQ, shaped: shaped, pass: pass,
@@ -3105,21 +2948,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     setQa: function (v) { qaStatus = v; },
     renderPanel: renderPanel
   };
-
   PlanUI.Sidebar = { mount: mount, sync: syncSettings, render: renderAll, renderProjects: renderProjects };
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   function B() { return PlanUI._sideBase; }
-
   var MAX_ROWS = 300;  // per table, "+N more" beyond (matches page_table_view.js)
   function table(cols, rows, tkey, emptyMsg) {
     var base = B(), el = base.el, s = base.sortState[tkey];
@@ -3171,7 +3008,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     t.appendChild(body);
     return t;
   }
-
   function keylink(key) {
     var base = B(), el = base.el, VM = base.vm();
     var ok = !!(VM && VM.items.has(key));
@@ -3181,7 +3017,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     else { b.disabled = true; b.className += " unknown"; }
     return b;
   }
-
   function renderNeeds() {
     if (global.PlanUI && global.PlanUI.NeedsPage) { global.PlanUI.NeedsPage.render(B().vm()); return; }
     var base = B(), el = base.el, VM = base.vm();
@@ -3222,7 +3057,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(row);
     });
   }
-
   function renderQA() {
     var base = B(), el = base.el, VM = base.vm();
     if (global.PlanUI.QAPage && global.PlanUI.Preview) { global.PlanUI.QAPage.render(VM); return; }
@@ -3246,7 +3080,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
                  cells: [d.id, d.title, d.project, d.date, links.length ? base.join(links) : "—"] };
       }), "decisions", "No rows match the current search."));
     }
-
     var qaStatus = base.qa();
     var qs = (VM.questions || []).filter(function (q) {
       return base.pass(q) && (qaStatus === "all" || base.qEff(q) === qaStatus);
@@ -3280,7 +3113,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }), "qa", "No rows match the current search."));
     }
   }
-
   function renderAnswers() {
     if (global.PlanUI.QAPage && global.PlanUI.Preview) return;      // answers live in the Q&A page
     var base = B(), el = base.el, VM = base.vm();
@@ -3305,23 +3137,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(row);
     });
   }
-
   PlanUI.SideTables = { renderNeeds: renderNeeds, renderQA: renderQA, renderAnswers: renderAnswers };
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function capitalise(name) {
     var s = String(name == null ? "" : name);
     return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
   }
-
   function initialCollapsed(vm) {
     var set = new Set();
     if (!vm || !vm.projects) return set;
@@ -3337,7 +3163,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return set;
   }
-
   var NODE_BUDGET = 200;
   function nodeBudget(ui) {
     var n = ui && ui.settings && ui.settings.nodeBudget;
@@ -3347,25 +3172,21 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var m = ui && ui.moreShown, n = m && Object.prototype.hasOwnProperty.call(m, phId) ? m[phId] : 0;
     return (typeof n === "number" && n > 0 && isFinite(n)) ? Math.floor(n) : 0;
   }
-
   function buildElements(vm, ui) {
     vm = vm || { items: new Map(), projects: [], decisionById: {} };
     ui = ui || {};
-
     var cPhases = new Set(ui.collapsedPhases || []);
     var cProjs = new Set(ui.collapsedProjects || []);
     var settings = ui.settings || {};
     var showAllEdges = !!settings.showAllEdges;
     var showCross = settings.showCross !== false;
     var matchMode = ui.matchMode || "dim";
-
     var query = ui.query && String(ui.query).trim();
     var flt = ui.filters || {};
     var hasFlt = !!((flt.projects && flt.projects.size > 0) || (flt.phases && flt.phases.size > 0) ||
       (flt.states && flt.states.size > 0) || (flt.owners && flt.owners.size > 0) ||
       flt.operatorOnly || flt.loopOnly || (flt.edgeMode && flt.edgeMode !== "all"));
     var filtering = !!(query || hasFlt);
-
     function matches(it) {
       if (!it) return false;
       if (query && PlanUI.Query && !PlanUI.Query.match(it, query)) return false;
@@ -3379,7 +3200,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
       return true;
     }
-
     if (ui.revealMatches && filtering) {
       vm.items.forEach(function (it) {
         if (matches(it)) {
@@ -3388,10 +3208,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       });
     }
-
     var nodes = [], nodeMap = {};
     function putNode(n) { nodes.push(n); nodeMap[n.data.id] = n; }
-
     (vm.projects || []).forEach(function (proj) {
       var isProjCol = cProjs.has(proj.name);
       var tot = 0, done = 0, allKeys = [];
@@ -3403,7 +3221,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var pLabel = proj.label + " — " + tot + " task" + (tot === 1 ? "" : "s") + " · " + pct + " % done";
       var projMatch = !filtering || allKeys.some(function (k) { return matches(vm.items.get(k)); });
       if (matchMode === "hide" && filtering && !projMatch) return;
-
       if (isProjCol) {
         putNode({
           data: { id: "pc:" + proj.name, project: proj.name, label: pLabel, total: tot, done: done, percent: pct, keys: allKeys, width: 300, height: 72 },
@@ -3411,12 +3228,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
         return;
       }
-
       putNode({
         data: { id: "p:" + proj.name, project: proj.name, label: pLabel, color: proj.color, total: tot, done: done, percent: pct },
         classes: "project-compound" + (proj.wait ? " wait-" + proj.wait : "") + (filtering && !projMatch ? " dim" : "")
       });
-
       (proj.phases || []).forEach(function (ph) {
         var phId = proj.name + "|" + ph.name;
         var isPhCol = cPhases.has(phId);
@@ -3424,7 +3239,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         var phMatch = !filtering || pKeys.some(function (k) { return matches(vm.items.get(k)); });
         if (matchMode === "hide" && filtering && !phMatch) return;
         var phLabel = ph.name + " ▾ " + ph.total + " task" + (ph.total === 1 ? "" : "s") + " · " + ph.done + " done";
-
         if (isPhCol) {
           putNode({
             data: { id: "phc:" + phId, parent: "p:" + proj.name, project: proj.name, phase: ph.name, label: phLabel, total: ph.total, done: ph.done, keys: pKeys.slice(), width: 300, height: 72 },
@@ -3432,12 +3246,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           });
           return;
         }
-
         putNode({
           data: { id: "ph:" + phId, parent: "p:" + proj.name, project: proj.name, phase: ph.name, label: phLabel, total: ph.total, done: ph.done },
           classes: "phase-compound" + (ph.wait ? " wait-" + ph.wait : "") + (filtering && !phMatch ? " dim" : "")
         });
-
         var vis = pKeys.filter(function (k) {
           var vi = vm.items.get(k);
           return !!vi && !(matchMode === "hide" && filtering && !matches(vi));
@@ -3454,7 +3266,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           if (!it) return;
           var m = matches(it);
           if (matchMode === "hide" && filtering && !m) return;
-
           var prefix = (it.operator ? "★ " : "") + (it.loop ? ("↺ " + (it.loop.iteration != null && it.loop.max != null ? (it.loop.iteration + "/" + it.loop.max + " ") : "")) : "");
           var cls = ["task-node"];
           if (it.loop) cls.push("loop-node");
@@ -3465,13 +3276,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           if (it.critical) cls.push("critical-node");
           if (it.display) cls.push("state-" + it.display);
           if (filtering && !m) cls.push("dim");
-
           putNode({
             data: { id: "t:" + it.key, key: it.key, parent: "ph:" + phId, project: it.project, phase: it.phase, label: prefix + (it.title || ""), title: it.title, display: it.display, state: it.state, kind: it.kind, operator: !!it.operator, critical: !!it.critical, width: 240, height: 64, color: proj.color,
               waitTip: it.blockedOnOperator ? ("waits on operator (" + it.blockedOnOperator.kind + ") via " + it.blockedOnOperator.via) : null },
             classes: cls.join(" ")
           });
-
           if (it.loop) {
             var edRaw = it.loop.exit_decision;
             var ed = edRaw && typeof edRaw === "object" ? edRaw.id : edRaw;
@@ -3492,7 +3301,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       });
     });
-
     if (showCross) {
       vm.items.forEach(function (it) {
         if (cProjs.has(it.project) || cPhases.has(it.project + "|" + it.phase) || !nodeMap["t:" + it.key]) return;
@@ -3509,7 +3317,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
       });
     }
-
     function srcRep(k) {
       var i = vm.items.get(k);
       if (!i) return null;
@@ -3524,14 +3331,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (cPhases.has(i.project + "|" + i.phase)) return "phc:" + i.project + "|" + i.phase;
       return "t:" + k;
     }
-
     var rawEdges = [];
     vm.items.forEach(function (it) {
       if (it.loop && nodeMap["t:" + it.key] && nodeMap["x:" + it.key]) {
         rawEdges.push({ s: "t:" + it.key, t: "x:" + it.key, crit: !!it.critical, sk: it.key, tk: it.key });
       }
     });
-
     if (showCross) {
       vm.items.forEach(function (it) {
         (it.deps || []).forEach(function (dk) {
@@ -3544,7 +3349,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
       });
     }
-
     vm.items.forEach(function (it) {
       (it.deps || []).forEach(function (dk) {
         var dep = vm.items.get(dk);
@@ -3555,20 +3359,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         rawEdges.push({ s: sr, t: tr, crit: !!(dep.critical && it.critical), sk: dk, tk: it.key, cross: false });
       });
     });
-
     var groups = {};
     rawEdges.forEach(function (e) {
       var k = e.s + "->" + e.t;
       (groups[k] = groups[k] || []).push(e);
     });
-
     var edges = [];
     Object.keys(groups).forEach(function (k) {
       var grp = groups[k], first = grp[0], cnt = grp.length;
       var crit = grp.some(function (e) { return e.crit; });
       var w = Math.round((2 + Math.log2(cnt)) * 100) / 100;
       if (crit) w = Math.max(w, 4);
-
       var em = !filtering;
       if (filtering) {
         var sn = nodeMap[first.s], tn = nodeMap[first.t];
@@ -3586,20 +3387,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       }
       if (matchMode === "hide" && filtering && !em) return;
-
       var ecls = [];
       if (crit) ecls.push("critical-edge");
       if (filtering && !em) ecls.push("dim");
-
       edges.push({
         data: { id: "e:" + first.s + "->" + first.t, source: first.s, target: first.t, count: cnt, label: cnt > 1 ? "×" + cnt : "", width: w, critical: crit },
         classes: ecls.join(" ")
       });
     });
-
     return { nodes: nodes, edges: edges };
   }
-
   function matchCounts(elements) {
     var nodes = 0, edges = 0;
     if (!elements) return { nodes: 0, edges: 0 };
@@ -3614,7 +3411,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { nodes: nodes, edges: edges };
   }
-
   function revealPatch(vm, ui, key) {
     if (!vm || !vm.items || !vm.items.has(key)) return null;
     var it = vm.items.get(key), phId = it.project + "|" + it.phase, patch = {};
@@ -3641,7 +3437,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return patch;
   }
-
   function fitTarget(elements, layout, key) {
     if (!elements || !layout || !key) return null;
     function box(b) { return b ? { x: b.x, y: b.y, w: b.w != null ? b.w : b.width, h: b.h != null ? b.h : b.height } : null; }
@@ -3655,7 +3450,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return rep && layout[rep.data.id] ? box(layout[rep.data.id]) : null;
   }
-
   PlanUI.NODE_BUDGET = NODE_BUDGET;
   PlanUI.nodeBudget = nodeBudget;
   PlanUI.moreShown = moreShown;
@@ -3664,20 +3458,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.matchCounts = matchCounts;
   PlanUI.revealPatch = revealPatch;
   PlanUI.fitTarget = fitTarget;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = global.PlanUI || (global.PlanUI = {});
-
   var extensions = [];
   var fieldRegistry = {};
   var errorsList = [];
-
   function addError(extId, hookName, err) {
     if (errorsList.length < 20) {
       errorsList.push({
@@ -3687,11 +3476,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       });
     }
   }
-
   function addField(name, fn, extId) {
     fieldRegistry[name] = { fn: fn, extId: extId || "fields" };
   }
-
   function fields(ctx) {
     var res = {};
     var keys = Object.keys(fieldRegistry);
@@ -3707,7 +3494,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return res;
   }
-
   var GraphExt = {
     errors: errorsList,
     register: function (ext) {
@@ -3764,7 +3550,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
         return allStyles;
       }
-
       if (name === "state") {
         var mergedPatch = null;
         for (var pi = 0; pi < extensions.length; pi++) {
@@ -3786,7 +3571,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
         return mergedPatch;
       }
-
       if (name === "transformElements") {
         var current = arg;
         for (var ti = 0; ti < extensions.length; ti++) {
@@ -3804,7 +3588,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
         return current;
       }
-
       if (name === "init" || name === "afterSync" || name === "bind") {
         for (var ci = 0; ci < extensions.length; ci++) {
           var cext = extensions[ci];
@@ -3818,13 +3601,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
         return undefined;
       }
-
       return undefined;
     }
   };
-
   PlanUI.GraphExt = GraphExt;
-
   GraphExt.register({ id: "more-node-expand", bind: function (ctx) {
     var cy = ctx && ctx.cy;
     if (!cy || typeof cy.on !== "function") return;
@@ -3837,13 +3617,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       ui.set("moreShown", ms);
     });
   } });
-
   GraphExt.register({ id: "operator-wait", styles: function (env) {
     var cv = (env && env.cssVar) || function () { return ""; };
     return [{ selector: "node.wait-answer", style: { "outline-width": 3, "outline-color": cv("--wait-answer") || "#b45309" } },
       { selector: "node.wait-task", style: { "outline-width": 3, "outline-color": cv("--wait-task") || "#7c3aed" } }];
   } });
-
   function graphStyleRules(env) {
     var cv = (env && typeof env.cssVar === "function") ? env.cssVar : function () { return ""; };
     var fg = cv("--fg") || "#15171c",
@@ -3852,7 +3630,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       crit = cv("--critical") || "#cc79a7",
       mut = cv("--muted") || "#5b616e",
       acc = cv("--accent") || "#33415c";
-
     var s = [
       { selector: "node", style: { label: "data(label)", "font-family": "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", "font-size": 15, "text-valign": "center", "text-halign": "center", "text-wrap": "wrap", "text-max-width": 216, "text-overflow-wrap": "anywhere", "line-height": 1.25, color: fg, "background-color": panel, "border-width": 2, "border-color": bdr, shape: "round-rectangle" } },
       { selector: "node[width][height]", style: { width: "data(width)", height: "data(height)" } },
@@ -3880,16 +3657,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     ];
     ["ready", "blocked", "claimed", "done", "open"].forEach(function (st) { s.push({ selector: "node.state-" + st, style: { "border-color": cv("--state-" + st), "border-style": "solid" } }); });
     ["in_review", "cancelled"].forEach(function (st) { s.push({ selector: "node.state-" + st, style: { "border-color": cv("--state-" + st), "border-style": "dashed" } }); });
-
     var extRules = GraphExt.call("styles", env);
     if (Array.isArray(extRules) && extRules.length) {
       s = s.concat(extRules);
     }
     return s;
   }
-
   PlanUI.graphStyleRules = graphStyleRules;
-
   function freshCanvasSize(cy) {
     if (!cy) return { w: 0, h: 0 };
     if (typeof cy.resize === "function") cy.resize();
@@ -3897,9 +3671,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var h = typeof cy.height === "function" ? cy.height() : 0;
     return { w: w, h: h };
   }
-
   PlanUI.freshCanvasSize = freshCanvasSize;
-
   function installHook() {
     if (typeof window === "undefined") return;
     window.__planGraphUi = function () {
@@ -3907,7 +3679,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var nodeCount = 0, edgeCount = 0, visibleEdgeCount = 0;
       var collapsedPhaseCount = 0, expandedPhaseCount = 0;
       var collapsedProjectCount = 0, projectCompoundCount = 0, taskCount = 0;
-
       if (cy && typeof cy.nodes === "function") {
         nodeCount = cy.nodes().length;
         collapsedPhaseCount = cy.nodes(".phase-collapsed").length;
@@ -3928,7 +3699,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           }
         }
       }
-
       return {
         extensions: GraphExt.list(),
         extErrors: GraphExt.errors.length,
@@ -3944,19 +3714,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       };
     };
   }
-
   installHook();
-
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var EDGE_BUDGET = { overview: 40, phase: 150, perExtraPhase: 50, max: 400 };
-
   function edgeBudget(vm, state) {
     var cProjs = (state && state.collapsedProjects) || new Set();
     var cPhases = (state && state.collapsedPhases) || new Set();
@@ -3974,7 +3738,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (n === 1) return EDGE_BUDGET.phase;
     return Math.min(EDGE_BUDGET.max, EDGE_BUDGET.phase + EDGE_BUDGET.perExtraPhase * (n - 1));
   }
-
   function overviewState(vm, opts) {
     var collapsedProjects = new Set(), collapsedPhases = new Set();
     if (!vm || !Array.isArray(vm.projects) || vm.projects.length === 0) {
@@ -4006,7 +3769,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { collapsedProjects: collapsedProjects, collapsedPhases: collapsedPhases };
   }
-
   function toggleCluster(state, kind, id) {
     var cProjs = new Set((state && state.collapsedProjects) || []);
     var cPhases = new Set((state && state.collapsedPhases) || []);
@@ -4023,7 +3785,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { collapsedProjects: cProjs, collapsedPhases: cPhases };
   }
-
   function expandAllIn(state, vm, projectName) {
     var cProjs = new Set((state && state.collapsedProjects) || []);
     var cPhases = new Set((state && state.collapsedPhases) || []);
@@ -4041,7 +3802,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { collapsedProjects: cProjs, collapsedPhases: cPhases };
   }
-
   function repOf(vm, state, key) {
     if (!vm || !vm.items || typeof vm.items.get !== "function" || !vm.items.has(key)) return null;
     var it = vm.items.get(key);
@@ -4053,7 +3813,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (cPhases.has(phId)) return { id: "phc:" + phId, level: "phase" };
     return { id: "t:" + key, level: "task" };
   }
-
   function edgeCompare(a, b) {
     if (a.critical !== b.critical) return a.critical ? -1 : 1;
     if (a.crossProject !== b.crossProject) return a.crossProject ? -1 : 1;
@@ -4062,14 +3821,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (a.id > b.id) return 1;
     return 0;
   }
-
   function taskEdgeCompare(a, b) {
     var aT = (a.source.indexOf("t:") === 0 || a.target.indexOf("t:") === 0);
     var bT = (b.source.indexOf("t:") === 0 || b.target.indexOf("t:") === 0);
     if (aT !== bT) return aT ? -1 : 1;
     return edgeCompare(a, b);
   }
-
   function cloneEdge(e) {
     return {
       id: e.id, source: e.source, target: e.target, count: e.count,
@@ -4077,7 +3834,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       critical: e.critical, exact: e.exact
     };
   }
-
   function mergeInto(map, list, newId, newSource, newTarget, sEdge, exact) {
     var dest = map[newId];
     if (dest) {
@@ -4098,12 +3854,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       list.push(dest);
     }
   }
-
   function metaEdges(vm, state, opts) {
     var items = (vm && vm.items) || new Map(), optsObj = opts || {};
     var showAll = !!optsObj.showAllEdges, total = 0, intraHidden = 0;
     var rawEdgeMap = {}, internalPhaseMap = {};
-
     items.forEach(function (it) {
       if (!it.key) return;
       (it.deps || []).forEach(function (dk) {
@@ -4135,11 +3889,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       });
     });
-
     var limit = (typeof optsObj.limit === "number" && optsObj.limit > 0 &&
       Math.floor(optsObj.limit) === optsObj.limit && isFinite(optsObj.limit)) ?
       optsObj.limit : edgeBudget(vm, state);
-
     var phaseInternals = {}, remList = [];
     Object.keys(rawEdgeMap).forEach(function (k) {
       var e = rawEdgeMap[k], ph = internalPhaseMap[k];
@@ -4150,7 +3902,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         remList.push(e);
       }
     });
-
     var internalEdges = [];
     Object.keys(phaseInternals).forEach(function (phId) {
       var pEdges = phaseInternals[phId];
@@ -4161,16 +3912,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     });
     internalEdges.sort(edgeCompare);
-
     var hidden = 0;
     if (internalEdges.length > limit) {
       for (var h = limit; h < internalEdges.length; h++) hidden += internalEdges[h].count;
       internalEdges = internalEdges.slice(0, limit);
     }
-
     var remLimit = Math.max(0, limit - internalEdges.length);
     remList.sort(taskEdgeCompare);
-
     var currentEdges = [], currentIntraHidden = intraHidden;
     if (remList.length <= remLimit) {
       currentEdges = remList;
@@ -4207,7 +3955,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           break;
         }
       }
-
       if (currentEdges.length > remLimit) {
         var projMap = {}, projList = [];
         currentEdges.forEach(function (e) {
@@ -4222,28 +3969,23 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
         currentEdges = projList;
       }
-
       currentEdges.sort(taskEdgeCompare);
-
       if (currentEdges.length > remLimit) {
         for (var h2 = remLimit; h2 < currentEdges.length; h2++) hidden += currentEdges[h2].count;
         currentEdges = currentEdges.slice(0, remLimit);
       }
     }
-
     var finalEdges = internalEdges.concat(currentEdges);
     var shown = 0, aggregated = 0;
     finalEdges.forEach(function (e) {
       shown += e.count;
       if (!e.exact) aggregated++;
     });
-
     return {
       edges: finalEdges, limit: limit, total: total, shown: shown,
       intraHidden: currentIntraHidden, aggregated: aggregated, hidden: hidden
     };
   }
-
   function edgeBreakdown(vm, edge, max) {
     var limit = (typeof max === "number" && max >= 0) ? max : 20;
     if (!edge || !Array.isArray(edge.pairs) || edge.pairs.length === 0) {
@@ -4263,14 +4005,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { rows: rows, more: edge.pairs.length - rows.length };
   }
-
   function clusterSummary(vm, state) {
     var cProjs = (state && state.collapsedProjects) || new Set();
     var cPhases = (state && state.collapsedPhases) || new Set();
     var projectsOut = [], phasesOut = [];
     var visCollapsedPhases = 0, visExpandedPhases = 0, visTasks = 0;
     var projs = (vm && Array.isArray(vm.projects)) ? vm.projects : [];
-
     projs.forEach(function (p) {
       var isPCollapsed = cProjs.has(p.name);
       var pTotal = 0, pDone = 0;
@@ -4284,7 +4024,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         project: p.name, label: p.label, color: p.color,
         collapsed: isPCollapsed, total: pTotal, done: pDone, percent: pPct
       });
-
       if (!isPCollapsed) {
         (p.phases || []).forEach(function (f) {
           var phId = p.name + "|" + f.name;
@@ -4306,7 +4045,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
       }
     });
-
     return {
       projects: projectsOut, phases: phasesOut,
       visible: {
@@ -4317,7 +4055,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     };
   }
-
   PlanUI.EDGE_BUDGET = EDGE_BUDGET;
   PlanUI.edgeBudget = edgeBudget;
   PlanUI.overviewState = overviewState;
@@ -4328,21 +4065,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.metaEdges = metaEdges;
   PlanUI.edgeBreakdown = edgeBreakdown;
   PlanUI.clusterSummary = clusterSummary;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function isNodeDim(n) {
     if (!n) return true;
     return (" " + (n.classes || "") + " ").indexOf(" dim ") >= 0;
   }
-
   function cutTitle(str) {
     if (str == null) return "";
     str = String(str);
@@ -4351,7 +4083,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return str;
   }
-
   function budgetElements(vm, ui, els, opts) {
     var emptyReport = {
       limit: 0,
@@ -4369,10 +4100,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (!vm || !els || !ui) {
       return { nodes: [], edges: [], report: emptyReport };
     }
-
     var nodes = Array.isArray(els.nodes) ? els.nodes.slice() : [];
     var elsEdges = Array.isArray(els.edges) ? els.edges : [];
-
     var structuralEdges = [];
     elsEdges.forEach(function (e) {
       var s = (e && e.data && e.data.source) || (e && e.source) || "";
@@ -4381,20 +4110,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         structuralEdges.push(e);
       }
     });
-
     var nodeMap = {};
     nodes.forEach(function (n) {
       if (n && n.data && n.data.id) {
         nodeMap[n.data.id] = n;
       }
     });
-
     var limitOpt = (opts && typeof opts.limit === "number" && opts.limit > 0 &&
       Math.floor(opts.limit) === opts.limit && isFinite(opts.limit)) ? opts.limit : undefined;
-
     var showAllEdges = !!(ui.settings && ui.settings.showAllEdges);
     var model = PlanUI.metaEdges(vm, ui, { showAllEdges: showAllEdges, limit: limitOpt });
-
     var report = {
       limit: model.limit,
       total: model.total,
@@ -4408,7 +4133,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       structural: structuralEdges.length,
       dependency: 0
     };
-
     var flt = ui.filters || {};
     var edgeMode = flt.edgeMode;
     var query = ui.query ? String(ui.query).trim() : "";
@@ -4417,20 +4141,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       (edgeMode && edgeMode !== "all" && (edgeMode === "critical" || edgeMode === "cross" || edgeMode === "blocking")) ||
       (query && query.indexOf("edge:") >= 0)
     );
-
     var dependencyEdges = [];
-
     (model.edges || []).forEach(function (modelEdge) {
       var src = modelEdge.source;
       var tgt = modelEdge.target;
-
       if (src.indexOf("t:") === 0) {
         var k = src.slice(2);
         if (nodeMap["x:" + k]) {
           src = "x:" + k;
         }
       }
-
       var retargeted = false;
       if (!nodeMap[src]) {
         if (src.indexOf("phc:") === 0) {
@@ -4447,7 +4167,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           }
         }
       }
-
       if (!nodeMap[tgt]) {
         if (tgt.indexOf("phc:") === 0) {
           var phCompT = "ph:" + tgt.slice(4);
@@ -4463,12 +4182,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           }
         }
       }
-
       if (!nodeMap[src] || !nodeMap[tgt]) {
         report.filteredOut += modelEdge.count;
         return;
       }
-
       if (modelEdge.exact && modelEdge.crossProject && tgt.indexOf("t:") === 0) {
         var pairs = modelEdge.pairs || [];
         var allGhosts = pairs.length > 0 && pairs.every(function (p) {
@@ -4479,11 +4196,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           return;
         }
       }
-
       var sn = nodeMap[src], tn = nodeMap[tgt];
       var bothDim = isNodeDim(sn) && isNodeDim(tn);
       var keep = !bothDim;
-
       if (hasEdgeFilter) {
         if (edgeMode === "critical" && !modelEdge.critical) {
           keep = false;
@@ -4503,34 +4218,27 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           if (!hasMatch) keep = false;
         }
       }
-
       if (hasEdgeFilter && !keep && matchMode === "hide") {
         report.filteredOut += modelEdge.count;
         return;
       }
-
       var cnt = modelEdge.count;
       var crit = !!modelEdge.critical;
       var w = Math.round((2 + Math.log2(cnt)) * 100) / 100;
       if (crit) w = Math.max(w, 4);
       w = Math.min(8, w);
-
       var isMeta = (!modelEdge.exact || modelEdge.level === "meta");
       var isCross = !!modelEdge.crossProject;
-
       var cls = [];
       if (isMeta) cls.push("meta-edge");
       if (crit) cls.push("critical-edge");
       if (isCross) cls.push("cross-edge");
       if (retargeted) cls.push("compound-edge");
-
       var edgeDim = bothDim || (hasEdgeFilter && !keep);
       if (edgeDim) cls.push("dim");
-
       var memberCopies = (modelEdge.pairs || []).map(function (p) {
         return { from: p.from, to: p.to };
       });
-
       var edgeData = {
         id: modelEdge.id,
         source: src,
@@ -4545,18 +4253,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         compound: retargeted,
         members: memberCopies
       };
-
       if (retargeted) {
         report.compoundRouted += cnt;
       }
       report.dependency++;
-
       dependencyEdges.push({
         data: edgeData,
         classes: cls.join(" ")
       });
     });
-
     var finalEdges = structuralEdges.concat(dependencyEdges);
     return {
       nodes: nodes,
@@ -4564,7 +4269,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       report: report
     };
   }
-
   function budgetSummary(report) {
     if (!report || typeof report.dependency !== "number") return "";
     var dep = report.dependency;
@@ -4575,12 +4279,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return dep + " edges";
   }
-
   function edgeMembersTitle(vm, edgeData, max) {
     var limit = (typeof max === "number" && max > 0 && Math.floor(max) === max) ? max : 12;
     var members = (edgeData && Array.isArray(edgeData.members)) ? edgeData.members : [];
     if (!members.length) return [];
-
     var items = (vm && vm.items) || null;
     var rows = [];
     if (typeof PlanUI.edgeBreakdown === "function") {
@@ -4600,38 +4302,30 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         };
       });
     }
-
     var lines = rows.map(function (r) {
       var fromT = (r.fromTitle && String(r.fromTitle).trim()) ? r.fromTitle : r.from;
       var toT = (r.toTitle && String(r.toTitle).trim()) ? r.toTitle : r.to;
       return cutTitle(fromT) + " -> " + cutTitle(toT);
     });
-
     if (members.length > limit) {
       lines.push("+" + (members.length - limit) + " more");
     }
     return lines;
   }
-
   PlanUI.budgetElements = budgetElements;
   PlanUI.budgetSummary = budgetSummary;
   PlanUI.edgeMembersTitle = edgeMembersTitle;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var PROJECT_PALETTE = [
     "#2f6f4f", "#3b5bdb", "#b45309", "#7c3aed",
     "#0e7490", "#be123c", "#4d7c0f", "#c026d3"
   ];
   PlanUI.PROJECT_PALETTE = PROJECT_PALETTE;
-
   function fnv1a(str) {
     var hash = 2166136261;
     for (var i = 0; i < str.length; i++) {
@@ -4640,7 +4334,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return hash >>> 0;
   }
-
   function resolveAllocations(names) {
     var out = Object.create(null), used = new Array(PROJECT_PALETTE.length);
     for (var u = 0; u < PROJECT_PALETTE.length; u++) used[u] = false;
@@ -4673,13 +4366,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { map: plain, used: used };
   }
-
   function projectColors(names) {
     if (!names || !Array.isArray(names)) return {};
     return resolveAllocations(names).map;
   }
   PlanUI.projectColors = projectColors;
-
   function projectColor(name, names) {
     if (typeof name !== "string" || name.length === 0) return PROJECT_PALETTE[0];
     if (!names || !Array.isArray(names)) return PROJECT_PALETTE[fnv1a(name) % PROJECT_PALETTE.length];
@@ -4693,7 +4384,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return PROJECT_PALETTE[probed >= PROJECT_PALETTE.length ? base : idx];
   }
   PlanUI.projectColor = projectColor;
-
   function colorTint(hex, alpha) {
     var a = (typeof alpha === "number" && isFinite(alpha)) ? Math.max(0, Math.min(1, alpha)) : 0.12;
     var m = typeof hex === "string" ? /^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex.trim()) : null;
@@ -4701,7 +4391,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return "rgba(" + parseInt(m[1], 16) + ", " + parseInt(m[2], 16) + ", " + parseInt(m[3], 16) + ", " + a + ")";
   }
   PlanUI.colorTint = colorTint;
-
   function chipsModel(vm, ui) {
     var projects = (vm && vm.projects) ? vm.projects : [];
     var allNames = projects.map(function (p) { return p.name; });
@@ -4729,7 +4418,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return [{ id: "all", label: "All", count: totalTasks, color: null, active: !anySelected }].concat(projectChips);
   }
   PlanUI.chipsModel = chipsModel;
-
   function uniqueSortedStrings(arr) {
     var out = [], seen = {};
     for (var i = 0; i < arr.length; i++) {
@@ -4738,7 +4426,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return out.sort(function (a, b) { return a < b ? -1 : (a > b ? 1 : 0); });
   }
-
   function chipClick(selected, id, mods, known) {
     var sel = Array.isArray(selected) ? selected.slice() : [];
     if (!id || typeof id !== "string") return uniqueSortedStrings(sel);
@@ -4759,7 +4446,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return uniqueSortedStrings(cur);
   }
   PlanUI.chipClick = chipClick;
-
   function parseBox(b) {
     if (!b || typeof b !== "object") return null;
     var x1 = (typeof b.x1 === "number") ? b.x1 : ((typeof b.x === "number") ? b.x : NaN);
@@ -4769,11 +4455,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2)) return null;
     return { x1: Math.min(x1, x2), y1: Math.min(y1, y2), x2: Math.max(x1, x2), y2: Math.max(y1, y2) };
   }
-
   function crossProduct(a, b, c) {
     return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
   }
-
   function andrewMonotoneChain(pts) {
     if (pts.length <= 2) return pts.slice();
     var sorted = pts.slice().sort(function (a, b) { return a.x === b.x ? a.y - b.y : a.x - b.x; });
@@ -4795,7 +4479,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     lower.pop(); upper.pop();
     return lower.concat(upper);
   }
-
   function hullFor(boxes, pad) {
     if (!boxes || !boxes.length) return null;
     var p = (typeof pad === "number" && isFinite(pad)) ? pad : 24, valid = [];
@@ -4820,7 +4503,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return { points: points, labelAt: labelAt, bbox: bbox };
   }
   PlanUI.hullFor = hullFor;
-
   function pointInPolygon(pt, points) {
     if (!pt || typeof pt.x !== "number" || typeof pt.y !== "number") return false;
     if (!points || !Array.isArray(points) || points.length < 3) return false;
@@ -4843,7 +4525,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return inside;
   }
   PlanUI.pointInPolygon = pointInPolygon;
-
   function fitBoxFor(boxesByProject, selected) {
     if (!boxesByProject || typeof boxesByProject !== "object") return null;
     var targetKeys = [];
@@ -4871,23 +4552,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return { x1: minX, y1: minY, x2: maxX, y2: maxY };
   }
   PlanUI.fitBoxFor = fitBoxFor;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : (typeof global !== "undefined" ? global : this));
-
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function setToSortedArray(s) {
     var arr = [];
     s.forEach(function (x) { arr.push(x); });
     return arr.sort();
   }
-
   function copyObject(obj) {
     if (!obj || typeof obj !== "object") return null;
     var copy = {};
@@ -4898,21 +4573,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return copy;
   }
-
   function focusSets(graph, id, opts) {
     if (!graph || typeof graph !== "object" || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !id) return null;
     var hops = (opts && typeof opts.hops === "number" && !isNaN(opts.hops) && opts.hops >= 1 && Math.floor(opts.hops) === opts.hops) ? opts.hops : 1;
     if (hops > 3) hops = 3;
-
     var nodeMap = {};
     for (var i = 0; i < graph.nodes.length; i++) {
       var n = graph.nodes[i];
       if (n && n.data && n.data.id) nodeMap[n.data.id] = n;
     }
     if (!nodeMap[id]) return null;
-
     var coreSet = new Set([id]);
-
     if (id.indexOf("p:") === 0 || id.indexOf("ph:") === 0) {
       var childrenMap = {};
       for (var j = 0; j < graph.nodes.length; j++) {
@@ -4930,14 +4601,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       }
     }
-
     if (id.indexOf("g:") === 0) {
       var gNode = nodeMap[id];
       if (gNode && gNode.data && gNode.data.dep && nodeMap["t:" + gNode.data.dep]) {
         coreSet.add("t:" + gNode.data.dep);
       }
     }
-
     var adj = {};
     for (var eI = 0; eI < graph.edges.length; eI++) {
       var e = graph.edges[eI];
@@ -4947,7 +4616,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       (adj[src] = adj[src] || []).push(tgt);
       (adj[tgt] = adj[tgt] || []).push(src);
     }
-
     var dist = {}, bfsQ = [];
     coreSet.forEach(function (cid) { dist[cid] = 0; bfsQ.push(cid); });
     while (bfsQ.length > 0) {
@@ -4959,14 +4627,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         if (dist[nxt] === undefined) { dist[nxt] = d + 1; bfsQ.push(nxt); }
       }
     }
-
     var nearSet = new Set();
     Object.keys(dist).forEach(function (nid) {
       if (dist[nid] > 0 && dist[nid] <= hops && !coreSet.has(nid) && nodeMap[nid]) {
         nearSet.add(nid);
       }
     });
-
     var contextSet = new Set();
     function addAncestors(nid) {
       var cur = nodeMap[nid];
@@ -4982,7 +4648,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     coreSet.forEach(addAncestors);
     nearSet.forEach(addAncestors);
-
     var fadedSet = new Set();
     for (var nI = 0; nI < graph.nodes.length; nI++) {
       var node = graph.nodes[nI];
@@ -4990,7 +4655,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var nid2 = node.data.id;
       if (!coreSet.has(nid2) && !nearSet.has(nid2) && !contextSet.has(nid2)) fadedSet.add(nid2);
     }
-
     var keepEdgeSet = new Set(), fadeEdgeSet = new Set();
     for (var edI = 0; edI < graph.edges.length; edI++) {
       var ed = graph.edges[edI];
@@ -5009,7 +4673,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
       (keep ? keepEdgeSet : fadeEdgeSet).add(ed.data.id);
     }
-
     return {
       id: id,
       core: setToSortedArray(coreSet),
@@ -5020,7 +4683,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       fadeEdges: setToSortedArray(fadeEdgeSet)
     };
   }
-
   function focusClasses(sets) {
     if (!sets) return { nodes: {}, edges: {} };
     var nodes = {}, edges = {};
@@ -5032,7 +4694,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     (sets.fadeEdges || []).forEach(function (id) { edges[id] = "fade"; });
     return { nodes: nodes, edges: edges };
   }
-
   function focusReduce(state, action) {
     state = state || { focusId: null, expand: null };
     action = action || {};
@@ -5061,7 +4722,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { focusId: state.focusId, expand: null };
   }
-
   function focusAfterRebuild(graph, focusId) {
     if (!graph || !graph.nodes || !focusId) return null;
     var nodeMap = {};
@@ -5070,12 +4730,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (n && n.data && n.data.id) nodeMap[n.data.id] = n;
     }
     if (nodeMap[focusId]) return focusId;
-
     if (focusId.indexOf("phc:") === 0 && nodeMap["ph:" + focusId.slice(4)]) return "ph:" + focusId.slice(4);
     if (focusId.indexOf("ph:") === 0 && nodeMap["phc:" + focusId.slice(3)]) return "phc:" + focusId.slice(3);
     if (focusId.indexOf("pc:") === 0 && nodeMap["p:" + focusId.slice(3)]) return "p:" + focusId.slice(3);
     if (focusId.indexOf("p:") === 0 && nodeMap["pc:" + focusId.slice(2)]) return "pc:" + focusId.slice(2);
-
     if (focusId.indexOf("t:") === 0) {
       var taskKey = focusId.slice(2);
       var sep = taskKey.indexOf(":");
@@ -5097,7 +4755,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return null;
   }
-
   function focusLabel(vm, id) {
     if (!id || typeof id !== "string") return "";
     vm = vm || {};
@@ -5119,24 +4776,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return "";
   }
-
   PlanUI.focusSets = focusSets;
   PlanUI.focusClasses = focusClasses;
   PlanUI.focusReduce = focusReduce;
   PlanUI.focusAfterRebuild = focusAfterRebuild;
   PlanUI.focusLabel = focusLabel;
-
   if (typeof module !== "undefined" && module.exports) {
     module.exports = PlanUI;
   }
 })(typeof window !== "undefined" ? window : global);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var ROOT_LAYOUT_OPTIONS = {
     'elk.algorithm': 'layered',
     'elk.direction': 'RIGHT',
@@ -5148,15 +4800,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
     'elk.padding': '[top=12,left=12,bottom=12,right=12]'
   };
-
   var PHASE_LAYOUT_OPTIONS = {
     'elk.padding': '[top=44,left=16,bottom=16,right=16]'
   };
-
   function buildElkGraph(elements, project, sizes) {
     sizes = sizes || {};
     var rootId = "p:" + project;
-
     var pcNode = (elements.nodes || []).find(function (n) {
       return n.data && n.data.id === "pc:" + project;
     });
@@ -5169,12 +4818,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         edges: []
       };
     }
-
     var phaseNodes = [];
     var phaseChildren = {};
     var projectNodeIds = {};
     projectNodeIds[rootId] = true;
-
     (elements.nodes || []).forEach(function (n) {
       var d = n.data || {};
       if (d.parent === rootId) {
@@ -5182,7 +4829,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         projectNodeIds[d.id] = true;
       }
     });
-
     (elements.nodes || []).forEach(function (n) {
       var d = n.data || {};
       if (d.parent && projectNodeIds[d.parent]) {
@@ -5190,7 +4836,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         projectNodeIds[d.id] = true;
       }
     });
-
     function getNodeSize(n) {
       var d = n.data || {};
       var id = d.id || n.id;
@@ -5199,12 +4844,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var h = (s && (s.height != null ? s.height : s)) ? (s.height != null ? s.height : s) : (d.height || 64);
       return { width: Number(w) || 240, height: Number(h) || 64 };
     }
-
     var elkChildren = phaseNodes.map(function (pn) {
       var pd = pn.data || {};
       var pId = pd.id;
       var isCompound = (pn.classes || "").indexOf("phase-compound") >= 0;
-
       if (isCompound) {
         var children = (phaseChildren[pId] || []).map(function (cn) {
           var cd = cn.data || {};
@@ -5221,7 +4864,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         return { id: pId, width: sz.width, height: sz.height };
       }
     });
-
     var elkEdges = [];
     (elements.edges || []).forEach(function (e) {
       var ed = e.data || {};
@@ -5235,7 +4877,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
       }
     });
-
     return {
       id: rootId,
       layoutOptions: ROOT_LAYOUT_OPTIONS,
@@ -5243,7 +4884,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       edges: elkEdges
     };
   }
-
   function accumulate(elkResult) {
     var out = {};
     function walk(node, px, py) {
@@ -5260,13 +4900,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (elkResult) walk(elkResult, 0, 0);
     return out;
   }
-
   function stackProjects(layouts, gap) {
     if (gap === undefined) gap = 80;
     var out = {};
     var list = Array.isArray(layouts) ? layouts : Object.keys(layouts || {}).map(function (k) { return layouts[k]; });
     var curY = 0;
-
     list.forEach(function (layout) {
       if (!layout) return;
       var keys = Object.keys(layout);
@@ -5280,20 +4918,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       });
       var projH = (isFinite(maxY) && isFinite(minY)) ? (maxY - minY) : 0;
       var yShift = curY - (isFinite(minY) ? minY : 0);
-
       keys.forEach(function (k) {
         var n = layout[k];
         var w = n.width != null ? n.width : (n.w || 0);
         var h = n.height != null ? n.height : (n.h || 0);
         out[k] = { x: n.x || 0, y: (n.y || 0) + yShift, width: w, height: h, w: w, h: h };
       });
-
       curY += projH + gap;
     });
-
     return out;
   }
-
   function layoutSignature(project, elements, heights) {
     var ids = [];
     if (elements && elements.nodes) {
@@ -5316,35 +4950,28 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return project + ";" + ids.join(",") + ";" + hEntries.join(",");
   }
-
   var LayoutService = {
     _engine: null,
     _cache: {},
     _epoch: 0,
-
     setEngine: function (engine) {
       this._engine = engine;
     },
-
     getEpoch: function () {
       return this._epoch;
     },
-
     bumpEpoch: function () {
       return ++this._epoch;
     },
-
     clearCache: function () {
       this._cache = {};
     },
-
     layoutProject: function (proj, elements, heights) {
       var self = this;
       var sig = layoutSignature(proj, elements, heights);
       if (self._cache[sig]) {
         return Promise.resolve(self._cache[sig]);
       }
-
       var engine = self._engine;
       if (!engine) {
         if (typeof ELK !== "undefined") {
@@ -5353,11 +4980,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           return Promise.reject(new Error("ELK layout engine is not available"));
         }
       }
-
       var elkGraph = buildElkGraph(elements, proj, heights);
       var runEpoch = self._epoch;
       var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-
       return Promise.resolve(engine.layout(elkGraph)).then(function (result) {
         var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
         var elapsed = t1 - t0;
@@ -5375,29 +5000,23 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       });
     }
   };
-
   PlanUI.buildElkGraph = buildElkGraph;
   PlanUI.accumulate = accumulate;
   PlanUI.stackProjects = stackProjects;
   PlanUI.layoutSignature = layoutSignature;
   PlanUI.LayoutService = LayoutService;
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function clusterLabel(text) {
     if (typeof text !== "string") return text;
     var idx = text.indexOf(" · ");
     if (idx < 0) return text;
     return text.slice(0, idx) + "\n" + text.slice(idx + 3);
   }
-
   function wrapLabel(text, maxPx, measure) {
     if (typeof text !== "string" || !text) return text;
     var m = typeof measure === "function" ? measure : function (s) { return s.length * 10; };
@@ -5416,7 +5035,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return allLines.join("\n");
   }
-
   var _measureCtx = null;
   function measurer(ele) {
     if (!_measureCtx && typeof document !== "undefined" && document.createElement) {
@@ -5430,7 +5048,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var fontStr = weight + " " + size + "px " + family;
     return function (s) { _measureCtx.font = fontStr; return _measureCtx.measureText(s).width; };
   }
-
   function isPhoneWin(w) {
     if (!w) return false;
     if (typeof w.matchMedia === "function") {
@@ -5439,7 +5056,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return typeof w.innerWidth === "number" ? w.innerWidth <= 700 : false;
   }
-
   function getActiveSheet(doc, win) {
     var d = doc || (typeof document !== "undefined" ? document : null);
     if (!d || typeof d.getElementById !== "function") return null;
@@ -5452,7 +5068,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var r = det.getBoundingClientRect(), h = (r && typeof r.height === "number") ? r.height : (r ? r.bottom - r.top : 0);
     return (r && h > 0) ? r : null;
   }
-
   function sheetInset(doc, win) {
     var d = doc || (typeof document !== "undefined" ? document : null), sr = getActiveSheet(d, win);
     if (!sr) return { top: 0, bottom: 0, left: 0, right: 0 };
@@ -5461,7 +5076,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var cr = cyEl.getBoundingClientRect();
     return { top: 0, bottom: Math.max(Math.max(0, cr.bottom - sr.top), 120), left: 0, right: 0 };
   }
-
   function focusProjectFor(ui, vm, key) {
     if (!ui || !vm || !vm.items || !key) return null;
     var cur = (typeof ui.get === "function") ? ui.get("focusProject") : ui.focusProject;
@@ -5471,7 +5085,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (cur === item.project) return null;
     return item.project;
   }
-
   function viewportFor(box, size, phone) {
     var isPh = !!phone, zmin = isPh ? 0.8 : 0.75, zmax = isPh ? 0.8 : 0.9;
     var bx1 = (box && typeof box.x1 === "number") ? box.x1 : 0;
@@ -5480,7 +5093,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var bh = (box && typeof box.h === "number") ? box.h : ((box && typeof box.y2 === "number") ? box.y2 - by1 : 0);
     var sw = (size && typeof size.w === "number") ? size.w : 0;
     var sh = (size && typeof size.h === "number") ? size.h : 0;
-
     var zoom;
     if (bw <= 0 || bh <= 0) {
       zoom = zmax;
@@ -5490,7 +5102,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { zoom: zoom, pan: { x: 24 - bx1 * zoom, y: 24 - by1 * zoom } };
   }
-
   function anchorBoxFor(boxes, expIdx, availW) {
     if (!boxes || !boxes.length) return null;
     var idx = (typeof expIdx === "number" && expIdx >= 0 && expIdx < boxes.length) ? expIdx : 0;
@@ -5524,9 +5135,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       y2: maxY2
     };
   }
-
   function cleanInset(v) { return (typeof v === "number" && isFinite(v) && v >= 0) ? v : 0; }
-
   function panZoomFor(box, size, z, inset) {
     var bx = (box && typeof box.x === "number") ? box.x : 0, by = (box && typeof box.y === "number") ? box.y : 0;
     var bw = (box && typeof box.w === "number") ? box.w : ((box && typeof box.width === "number") ? box.width : 0);
@@ -5545,7 +5154,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     };
   }
-
   function updateSemanticZoom(c, phone) {
     if (!c || typeof c.zoom !== "function") return;
     var z = c.zoom();
@@ -5569,7 +5177,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     });
   }
-
   function installHook(cyInstance) {
     if (typeof window === "undefined") return;
     window.__planViewport = function () {
@@ -5579,7 +5186,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var ex1 = Math.min(ext.x1, ext.x2), ex2 = Math.max(ext.x1, ext.x2);
       var ey1 = Math.min(ext.y1, ext.y2), ey2 = Math.max(ext.y1, ext.y2);
       var visibleTasks = 0, selectedVisible = false;
-
       if (typeof c.nodes === "function") {
         c.nodes(".task-node").forEach(function (n) {
           var nb = n.boundingBox(), nx1 = Math.min(nb.x1, nb.x2), nx2 = Math.max(nb.x1, nb.x2);
@@ -5592,7 +5198,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           if (nx1 <= ex2 && nx2 >= ex1 && ny1 <= ey2 && ny2 >= ey1) selectedVisible = true;
         });
       }
-
       var wrapSet = new Set();
       if (typeof c.nodes === "function") {
         c.nodes(":parent, .project-compound, .phase-compound, .project-collapsed, .phase-collapsed").forEach(function (n) {
@@ -5604,7 +5209,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var taskNodePx = (firstTask && firstTask.length)
         ? (typeof firstTask.renderedHeight === "function" ? firstTask.renderedHeight() : (firstTask.renderedBoundingBox ? firstTask.renderedBoundingBox().h : 64 * z))
         : 64 * z;
-
       var colPhase = (typeof c.nodes === "function") ? c.nodes(".phase-collapsed").first() : null;
       var expPhase = (typeof c.nodes === "function") ? c.nodes(".phase-compound").first() : null;
       var colFs = (colPhase && colPhase.length && typeof colPhase.style === "function") ? parseFloat(colPhase.style("font-size")) : null;
@@ -5613,13 +5217,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var headerLabelPx = (expFs != null && !isNaN(expFs)) ? expFs * z : null;
       var collapsedLabelWeight = (colPhase && colPhase.length && typeof colPhase.style === "function") ? (colPhase.style("font-weight") || null) : null;
       var headerLabelWeight = (expPhase && expPhase.length && typeof expPhase.style === "function") ? (expPhase.style("font-weight") || null) : null;
-
       var doc = (typeof document !== "undefined") ? document : null;
       var cyEl = doc && doc.getElementById ? doc.getElementById("cy") : null;
       var cRect = (cyEl && typeof cyEl.getBoundingClientRect === "function") ? cyEl.getBoundingClientRect() : { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
       var sr = getActiveSheet(doc, typeof window !== "undefined" ? window : null);
       var sheetTop = sr ? sr.top : null;
-
       var selNode = (typeof c.nodes === "function") ? c.nodes(":selected").first() : null, selectedRenderedBox = null;
       if (selNode && selNode.length && typeof selNode.renderedBoundingBox === "function") {
         var rbb = selNode.renderedBoundingBox();
@@ -5629,7 +5231,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
       var selectedAboveSheet = (!selectedRenderedBox || sheetTop == null) ? true : (selectedRenderedBox.y2 <= sheetTop);
       var selectedInsideCanvasX = selectedRenderedBox ? (selectedRenderedBox.x1 >= cRect.left - 1e-3 && selectedRenderedBox.x2 <= cRect.right + 1e-3) : false;
-
       var colNode = (colPhase && colPhase.length) ? colPhase : ((typeof c.nodes === "function") ? c.nodes(".phase-collapsed, .project-collapsed").first() : null);
       var rawLabel = (colNode && colNode.length && typeof colNode.data === "function") ? (colNode.data("label") || "") : "", styleLabel = "";
       if (colNode && colNode.length && typeof colNode.style === "function") {
@@ -5653,7 +5254,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         var lwPx = colMeasurer(collapsedLabelLines[li]);
         if (lwPx > collapsedLineMaxPx) collapsedLineMaxPx = lwPx;
       }
-
       return {
         zoom: z, pan: pan,
         extent: { x1: ext.x1, y1: ext.y1, x2: ext.x2, y2: ext.y2 },
@@ -5668,14 +5268,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       };
     };
   }
-
   function initial(cy, vm, ui, phone, onApply) {
     if (cy && typeof cy.resize === "function") cy.resize();
     var isPh = (phone !== undefined) ? !!phone : (typeof window !== "undefined" && window.innerWidth <= 700);
     var p0 = (vm && vm.projects && vm.projects.length) ? vm.projects[0] : null;
     var pName = p0 ? p0.name : null, box = null;
     var bbOpts = { includeLabels: true, includeOverlays: false };
-
     if (cy && PlanUI.isOverviewState && PlanUI.isOverviewState(ui, vm)) {   // fresh load: fit all hulls
       var over = PlanUI.fitOverview(cy, isPh, onApply, bbOpts);
       if (over) return over;
@@ -5692,7 +5290,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var targetProj = (ui && typeof ui.get === "function") ? ui.get("focusProject") : (ui ? ui.focusProject : null);
       if (!targetProj || targetProj === "all" || targetProj === "All") targetProj = pName;
       var proj = (vm && vm.projects || []).find(function (p) { return p.name === targetProj; }) || p0;
-
       var phaseItems = [];
       if (proj && proj.phases && cy) {
         (proj.phases || []).forEach(function (ph) {
@@ -5720,7 +5317,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           }
         });
       }
-
       if (phaseItems.length) {
         phaseItems.sort(function (a, b) { return a.box.x1 - b.box.x1; });
         var expIdx = -1;
@@ -5736,7 +5332,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         var availW = cyW / 0.8;
         box = anchorBoxFor(boxes, expIdx, availW);
       }
-
       if ((!box || !box.w) && pName && cy) {
         var pNodeFallback = cy.getElementById("p:" + pName);
         if (pNodeFallback && pNodeFallback.length) box = pNodeFallback.boundingBox(bbOpts);
@@ -5747,12 +5342,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         if (pNode && pNode.length) box = pNode.boundingBox(bbOpts);
       }
     }
-
     if ((!box || !box.w) && cy && typeof cy.elements === "function") {
       var allEles = cy.elements();
       if (allEles && allEles.length) box = allEles.boundingBox(bbOpts);
     }
-
     var size = {
       w: (cy && typeof cy.width === "function") ? cy.width() : 0,
       h: (cy && typeof cy.height === "function") ? cy.height() : 0
@@ -5766,7 +5359,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     res.box = box;
     return res;
   }
-
   PlanUI.viewportFor = viewportFor; PlanUI.anchorBoxFor = anchorBoxFor; PlanUI.panZoomFor = panZoomFor;
   PlanUI.updateSemanticZoom = updateSemanticZoom; PlanUI.clusterLabel = clusterLabel;
   PlanUI.wrapLabel = wrapLabel; PlanUI.measurer = measurer; PlanUI.sheetInset = sheetInset;
@@ -5776,16 +5368,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     panZoomFor: panZoomFor, viewportFor: viewportFor, sheetInset: sheetInset,
     wrapLabel: wrapLabel, measurer: measurer
   };
-
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
   var PlanUI = global.PlanUI = global.PlanUI || {};
   var DRAG_PX = 5, HEADER_UNITS = 44;
-
   function install(cy) {
     var pd = null;
     cy.on("mouseover", "node", function (e) { var c = cy.container(); if (c) c.title = e.target.data("waitTip") || ""; });
@@ -5811,7 +5400,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       }
     };
   }
-
   function uiVal(ui, key) {
     try {
       if (ui && typeof ui.get === "function") { var v = ui.get(key); if (v !== undefined) return v; }
@@ -5819,7 +5407,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     } catch (e) {}
     return undefined;
   }
-
   function isOverviewState(ui, vm) {
     var focus = uiVal(ui, "focusProject");
     if (focus && focus !== "all" && focus !== "All") return false;
@@ -5831,7 +5418,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return Array.isArray(cPr) ? cPr.indexOf(n) >= 0 : !!cPr[n];
     });
   }
-
   function fitOverview(cy, isPh, onApply, bbOpts) {
     var GV = PlanUI.GraphViewport || {};
     var eles = (typeof cy.elements === "function") ? cy.elements() : null;
@@ -5849,32 +5435,26 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     try { bb = eles.boundingBox(bbOpts); } catch (e4) {}
     return { zoom: cy.zoom(), pan: cy.pan(), box: bb };
   }
-
   PlanUI.PanDrag = { install: install };
   PlanUI.isOverviewState = isOverviewState; PlanUI.fitOverview = fitOverview;
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   var PP = global.PlanPage;
   PlanUI.cardHeights = PlanUI.cardHeights || {};
   PlanUI.freshCanvasSize = PlanUI.freshCanvasSize || function (c) { if (!c) return { w: 0, h: 0 }; if (typeof c.resize === "function") c.resize(); return { w: typeof c.width === "function" ? c.width() : 0, h: typeof c.height === "function" ? c.height() : 0 }; };
   var GraphExt = { call: function (n, a, c) { if (PlanUI.GraphExt && typeof PlanUI.GraphExt.call === "function") return PlanUI.GraphExt.call(n, a, c); return n === "transformElements" ? a : (n === "styles" ? [] : null); } };
-
   var cy = null, currentUI = null, currentVM = null, lastElements = null, lastStackedLayout = null;
   var projectSignatures = {}, projectLayouts = {}, syncTimer = null, syncPromise = null, syncResolve = null;
   var initialViewportDone = false, positionsApplied = false, userTouched = false, applying = false;
   var lastToggledId = null, lastToggledRenderedPos = null;
-
   var ctx = {
     get cy() { return cy; }, set cy(v) { cy = v; }, vm: function () { return currentVM; }, ui: function () { return currentUI; },
     sync: function (immediate) { return sync(immediate); }, selectNode: function (key) { return selectNode(key); }, isPhone: function () { return isPhone(); }, get container() { return typeof document !== "undefined" && document.getElementById ? document.getElementById("cy") : null; }, set container(v) {}
   };
-
   function cssVar(name) {
     if (typeof document === "undefined") return "";
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -5883,9 +5463,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (typeof window === "undefined") return false;
     return typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 700px)").matches : (typeof window.innerWidth === "number" ? window.innerWidth <= 700 : false);
   }
-
   function buildStyles() { return PlanUI.graphStyleRules ? PlanUI.graphStyleRules({ cssVar: cssVar, isPhone: isPhone }) : []; }
-
   function checkEngineBanner(hasError) {
     if (typeof document === "undefined") return;
     var banner = document.getElementById("graph-engine-banner");
@@ -5904,7 +5482,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       banner.hidden = false;
     } else if (banner) banner.hidden = true;
   }
-
   function renderFocusChips() {
     if (typeof document === "undefined") return;
     var row = document.getElementById("focus-chip-row");
@@ -5928,7 +5505,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       row.appendChild(btn);
     });
   }
-
   function updateFocusChips() {
     if (typeof document === "undefined") return;
     var cur = currentUI ? currentUI.get("focusProject") : null;
@@ -5937,9 +5513,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       b.classList.toggle("active", on); b.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
-
   function updateSemanticZoom() { if (PlanUI.updateSemanticZoom) PlanUI.updateSemanticZoom(cy, isPhone()); }
-
   function setInitialViewport() {
     if (!positionsApplied || !cy || !currentVM) return;
     cy.resize();
@@ -5953,16 +5527,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     initialViewportDone = true;
     updateSemanticZoom();
   }
-
   function refreshInitialViewport() { if (userTouched) return; setInitialViewport(); }
-
   function sync(immediate) {
     if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
     if (!syncPromise) syncPromise = new Promise(function (resolve) { syncResolve = resolve; });
     if (immediate) runSync(); else syncTimer = setTimeout(runSync, 60);
     return syncPromise;
   }
-
   function runSync() {
     syncTimer = null;
     if (!cy || !currentVM || !currentUI) {
@@ -6006,7 +5577,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         cy.add(toAdd);
       }
     });
-
     var heights = PlanUI.cardHeights || {}, projects = currentVM.projects || [];
     var layoutPromises = projects.map(function (p) {
       var sig = PlanUI.layoutSignature(p.name, els, heights);
@@ -6018,7 +5588,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         return { project: p.name, layout: res };
       });
     });
-
     Promise.all(layoutPromises).then(function (results) {
       if (epoch !== PlanUI.LayoutService.getEpoch()) return;
       checkEngineBanner(false);
@@ -6068,7 +5637,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var res = syncResolve; syncResolve = null; syncPromise = null; if (res) res();
     });
   }
-
   function selectNode(key) {
     if (PP && PP.state) PP.state.selected = key;
     if (currentUI && currentUI.get("sel") !== key) currentUI.set("sel", key);
@@ -6078,7 +5646,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     if (PP && PP.renderDetails) PP.renderDetails(key);
   }
-
   function focusNode(key) {
     if (!cy || !currentVM || !key) return;
     var targetProj = PlanUI.focusProjectFor ? PlanUI.focusProjectFor(currentUI, currentVM, key) : null;
@@ -6119,7 +5686,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       });
     });
   }
-
   function bindEvents() {
     var pan = PlanUI.PanDrag && PlanUI.PanDrag.install(cy), rawOn = cy.on.bind(cy);
     function inHeader(e) { return !pan || pan.inHeader(e); }
@@ -6158,7 +5724,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     cy.on("viewport", function () { if (!applying) userTouched = true; });
     GraphExt.call("bind", null, ctx);
   }
-
   function initGraphView() {
     var container = document.getElementById("cy");
     if (!container) return;
@@ -6166,7 +5731,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (!currentUI && PlanUI.app) currentUI = PlanUI.app.ui;
     if (!currentVM && PlanUI.app) currentVM = PlanUI.app.vm;
     if (!currentVM && PP && PP.state && PP.state.snapshot) currentVM = PlanUI.buildViewModel(PP.state.snapshot);
-
     if (currentUI && currentVM) {
       var extPatch = GraphExt.call("state", null, ctx);
       if (extPatch && typeof extPatch === "object") currentUI.patch(extPatch);
@@ -6178,7 +5742,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       }
     }
-
     if (!cy) {
       renderFocusChips(); checkEngineBanner(false);
       cy = global.cytoscape({
@@ -6192,7 +5755,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       GraphExt.call("init", null, ctx);
       if (typeof ResizeObserver !== "undefined" && container) new ResizeObserver(function () { refreshInitialViewport(); }).observe(container);
       if (typeof window !== "undefined") window.addEventListener("resize", function () { refreshInitialViewport(); });
-
       if (currentUI) {
         var KEYS = ["collapsedPhases", "collapsedProjects", "expanded", "query", "filters", "matchMode", "revealMatches", "focusProject", "settings"];
         currentUI.subscribe(function (keys) {
@@ -6212,7 +5774,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     sync(true);
   }
-
   if (PP) {
     PP.renderGraph = initGraphView;
     PP.selectNode = selectNode;
@@ -6231,13 +5792,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var TABLE_STATES = ["ready", "blocked", "claimed", "in_review", "open", "done", "cancelled"];
   function col(id, label, w, num, dir, on) { return { id: id, label: label, w: w, num: num, dir: dir, on: on }; }
   var TABLE_COLUMNS = [
@@ -6251,7 +5809,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.TABLE_STATES = TABLE_STATES;
   PlanUI.TABLE_COLUMNS = TABLE_COLUMNS;
   PlanUI.TABLE_METRICS = TABLE_METRICS;
-
   var prevNaturalCmp = PlanUI.naturalCmp;
   function naturalCmp(a, b) {
     return prevNaturalCmp ? prevNaturalCmp(a, b) : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
@@ -6259,7 +5816,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.naturalCmp = prevNaturalCmp || naturalCmp;
   function operatorNeeded(row) { return !!(row && row.operator && row.display !== "done" && row.display !== "cancelled"); }
   function plainAsc(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
-
   function tableContext(vm) {
     var rows = [];
     if (vm && vm.items) {
@@ -6295,7 +5851,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       byKey: byKey, total: rows.length
     };
   }
-
   function tableDefaults() {
     return {
       sort: [{ col: "priority", dir: "desc" }],
@@ -6307,7 +5862,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var VALID_COL_MAP = {}, COL_CANONICAL = TABLE_COLUMNS.map(function (c) {
     VALID_COL_MAP[c.id] = c; return c.id;
   });
-
   function normList(arr, isNum) {
     if (!Array.isArray(arr)) return [];
     var seen = {}, out = [];
@@ -6317,7 +5871,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return out.sort(isNum ? function (a, b) { return a - b; } : plainAsc);
   }
-
   function tableNormalize(st) {
     var def = tableDefaults();
     if (!st || typeof st !== "object") return def;
@@ -6350,19 +5903,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       collapsed: normList(st.collapsed, false)
     };
   }
-
   function makeSet(arr) {
     if (!arr || !arr.length) return null;
     var s = {}; for (var i = 0; i < arr.length; i++) s[arr[i]] = true; return s;
   }
-
   function tableFilter(ctx, st) {
     if (!ctx || !Array.isArray(ctx.rows)) return [];
     var rows = ctx.rows, f = (st && st.filters) || {};
     var pSet = makeSet(f.project), phSet = makeSet(f.phase), sSet = makeSet(f.state);
     var oSet = makeSet(f.owner), prSet = makeSet(f.priority), kSet = makeSet(f.kind);
     var op = !!f.op, search = st ? (st.search == null ? "" : String(st.search).trim()) : "";
-
     return rows.filter(function (r) {
       if (!r) return false; if (pSet && !pSet[r.project == null ? "" : r.project]) return false;
       if (phSet && !phSet[r.phase == null ? "" : r.phase]) return false;
@@ -6375,10 +5925,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return true;
     });
   }
-
   var STATE_IDX = {};
   TABLE_STATES.forEach(function (s, idx) { STATE_IDX[s] = idx; });
-
   function compareValues(col, dir, a, b, ctx) {
     var d = 0, p1, p2;
     if (col === "state") {
@@ -6397,7 +5945,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     else if (col === "op") d = (operatorNeeded(a) ? 1 : 0) - (operatorNeeded(b) ? 1 : 0);
     return dir === "desc" ? -d : d;
   }
-
   function tableSort(rows, st, ctx) {
     if (!rows || !rows.length) return [];
     var sortKeys = (st && Array.isArray(st.sort)) ? st.sort : [{ col: "priority", dir: "desc" }];
@@ -6415,7 +5962,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return decorated.map(function (d) { return d.r; });
   }
-
   function stateCounts(list) {
     var d = 0, r = 0, b = 0;
     for (var i = 0; i < list.length; i++) {
@@ -6436,7 +5982,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       done: counts.d, ready: counts.r, blocked: counts.b, collapsed: col
     });
   }
-
   function tableApply(ctx, st, opts) {
     st = tableNormalize(st);
     opts = opts || {};
@@ -6501,7 +6046,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       entries: entries, tops: tops, height: accH, headers: headers
     };
   }
-
   function tableWindow(res, scrollTop, viewportH, overscan) {
     if (overscan === undefined || overscan === null) overscan = TABLE_METRICS.overscan;
     var n = res && res.entries ? res.entries.length : 0, h = (res && res.height) || 0, tops = (res && res.tops) || [0];
@@ -6524,7 +6068,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var start = Math.max(0, rawStart - overscan), end = Math.min(n, (vh <= 0 ? rawStart : rawEnd) + overscan);
     return { start: start, end: end, padTop: tops[start], padBottom: h - tops[end], count: Math.max(0, end - start) };
   }
-
   function tableStickyGroups(res, index) {
     var entries = res && res.entries;
     if (!entries || !entries.length || index == null || index < 0) return { project: null, phase: null };
@@ -6539,7 +6082,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (foundPh && (!foundProj || foundPh.project !== foundProj.project)) foundPh = null;
     return { project: foundProj || null, phase: foundPh || null };
   }
-
   function tableFacets(ctx, st) {
     st = tableNormalize(st);
     var list = ["project", "phase", "state", "owner", "priority", "kind"], res = {}, pLbl = {};
@@ -6616,7 +6158,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   function tableSetGroup(st, group) {
     return tableNormalize(Object.assign({}, tableNormalize(st), { group: group === "none" ? "none" : "project>phase" }));
   }
-
   Object.assign(PlanUI, {
     tableContext: tableContext, tableDefaults: tableDefaults, tableNormalize: tableNormalize,
     tableFilter: tableFilter, tableSort: tableSort, tableApply: tableApply,
@@ -6624,24 +6165,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     tableToggleSort: tableToggleSort, tableToggleCollapse: tableToggleCollapse,
     tableCollapseAll: tableCollapseAll, tableSetColumn: tableSetColumn, tableSetGroup: tableSetGroup
   });
-
   if (typeof module !== "undefined" && module.exports) {
     module.exports = PlanUI;
   }
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function enc(v) {
     return encodeURIComponent(String(v == null ? "" : v))
       .replace(/%3A/gi, ":")
       .replace(/%7C/gi, "|");
   }
-
   function safeDec(str) {
     try {
       return decodeURIComponent(str);
@@ -6649,34 +6185,28 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return str;
     }
   }
-
   function tableUrlEncode(st) {
     st = PlanUI.tableNormalize(st);
     var def = PlanUI.tableDefaults();
     var parts = [];
-
     var isDefSort = st.sort.length === 1 && st.sort[0].col === "priority" && st.sort[0].dir === "desc";
     if (!isDefSort && st.sort.length) {
       parts.push("t_sort=" + st.sort.map(function (s) {
         return enc(s.col) + ":" + enc(s.dir);
       }).join(","));
     }
-
     var isDefCols = st.cols.length === def.cols.length && st.cols.every(function (c, i) {
       return c === def.cols[i];
     });
     if (!isDefCols && st.cols.length) {
       parts.push("t_cols=" + st.cols.map(enc).join(","));
     }
-
     if (st.group !== "project>phase") {
       parts.push("t_group=" + enc(st.group));
     }
-
     if (st.collapsed.length) {
       parts.push("t_collapsed=" + st.collapsed.map(enc).join(","));
     }
-
     var facets = ["project", "phase", "state", "owner", "priority", "kind"];
     facets.forEach(function (f) {
       var arr = st.filters[f];
@@ -6684,25 +6214,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         parts.push("t_" + f + "=" + arr.map(enc).join(","));
       }
     });
-
     if (st.filters.op) {
       parts.push("t_op=1");
     }
-
     if (st.search) {
       parts.push("t_q=" + enc(st.search));
     }
-
     return parts.join("&");
   }
-
   function tableUrlDecode(str) {
     var raw = (str == null ? "" : String(str)).trim();
     if (raw.charAt(0) === "?" || raw.charAt(0) === "#") raw = raw.slice(1);
-
     var st = PlanUI.tableDefaults();
     if (!raw) return PlanUI.tableNormalize(st);
-
     var pairs = raw.split("&");
     for (var i = 0; i < pairs.length; i++) {
       var pair = pairs[i];
@@ -6710,7 +6234,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var eq = pair.indexOf("=");
       var key = eq >= 0 ? pair.slice(0, eq) : pair;
       var val = eq >= 0 ? pair.slice(eq + 1) : "";
-
       if (key === "t_sort") {
         var sortItems = val.split(",").filter(Boolean);
         st.sort = sortItems.map(function (item) {
@@ -6740,14 +6263,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       }
     }
-
     return PlanUI.tableNormalize(st);
   }
-
   function tableUrlMerge(search, st) {
     var raw = (search == null ? "" : String(search)).trim();
     if (raw.charAt(0) === "?" || raw.charAt(0) === "#") raw = raw.slice(1);
-
     var kept = [];
     if (raw) {
       var pairs = raw.split("&");
@@ -6757,40 +6277,30 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         if (p.indexOf("t_") !== 0) kept.push(p);
       }
     }
-
     var encSt = tableUrlEncode(st);
     if (encSt) kept.push(encSt);
-
     if (!kept.length) return "";
     return "?" + kept.join("&");
   }
-
   PlanUI.tableUrlEncode = tableUrlEncode;
   PlanUI.tableUrlDecode = tableUrlDecode;
   PlanUI.tableUrlMerge = tableUrlMerge;
-
   PlanUI.effectivePriority = function (r) {
     return Number(r.effective_priority != null ? r.effective_priority : r.priority) || 0;
   };
-
   if (typeof module !== "undefined" && module.exports) {
     module.exports = PlanUI;
   }
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var FACETS = ["state", "owner", "priority", "kind"];
   var LABELS = { state: "State", owner: "Owner", priority: "Prio", kind: "Kind" };
   var STATE_ORDER = ["ready", "blocked", "claimed", "in_review", "open", "done", "cancelled"];
-
   var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {}, sort: null };
   var base = "", openSet = {};
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -6812,19 +6322,16 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return true;
   }
   function colOn(id) { return id === "task" ? true : !state.hide[id]; }
-
   function reset() {
     state.filters = { state: [], owner: [], priority: [], kind: [], op: false };
     state.hide = {};
     return state;
   }
-
   function hiddenIds() {
     var out = [];
     for (var id in state.hide) if (state.hide[id]) out.push(id);
     return out;
   }
-
   function save() {
     var f = state.filters;
     var st = {
@@ -6852,7 +6359,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     } catch (e) { /* file:// may throw */ }
     return q;
   }
-
   function load(search) {
     var raw = search == null ? "" : String(search);
     var trimmed = raw;
@@ -6893,7 +6399,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return state;
   }
-
   function facetItems(rows, key) {
     var map = {}, keys = [], out = [], i, r, v, k;
     for (i = 0; i < rows.length; i++) {
@@ -6919,7 +6424,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return out;
   }
-
   function checkbox(text, checked, disabled, aria, onChange, apply) {
     var lb = el("label", "tt-fl");
     var cb = el("input");
@@ -6932,13 +6436,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     cb.addEventListener("change", function () { apply(cb.checked); save(); onChange(); });
     return lb;
   }
-
   function keepOpen(det, id) {
     det.open = !!openSet[id];
     det.addEventListener("toggle", function () { openSet[id] = det.open; });
     return det;
   }
-
   function addFacet(d, key, items, onChange) {
     var det = keepOpen(el("details", "tt-fd"), key);
     det.appendChild(el("summary", null, LABELS[key] + " (" + state.filters[key].length + ")"));
@@ -6955,7 +6457,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     det.appendChild(list);
     d.appendChild(det);
   }
-
   function colPicker(onChange) {
     var det = keepOpen(el("details", "tt-fd"), "cols");
     det.appendChild(el("summary", null, "Columns (" + hiddenIds().length + ")"));
@@ -6971,7 +6472,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     det.appendChild(list);
     return det;
   }
-
   function bar(allRows, onChange) {
     var d = el("div", "tt-filt");
     var rows = allRows || [];
@@ -6986,27 +6486,22 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     d.appendChild(cl);
     return d;
   }
-
   PlanUI.TableCtl = {
     state: state, pass: pass, colOn: colOn, operatorNeeded: operatorNeeded,
     load: load, save: save, bar: bar, reset: reset
   };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var ROLE = { planning: "◇", implementation: "▭", review: "⬡" };
   var ROLE_LABEL = { planning: "Planning", implementation: "Implementation", review: "Review" };
   var MAX_ROWS = 300;                                   // per group, "show more" beyond
   var view = { group: "project", sort: { col: "task", dir: "asc" }, collapsed: {}, more: {} };
   var urlLoaded = false;
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -7017,7 +6512,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   function VM() { return global.PlanUI.app && global.PlanUI.app.vm; }
   function when(s) { return s ? String(s).replace("T", " ").slice(0, 16) : ""; }
   function day(s) { return s ? String(s).slice(0, 10) : "(none)"; }
-
   var pop = null, popFor = null, shownAt = 0;
   function popup() {
     if (pop) return pop;
@@ -7057,7 +6551,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") hidePreview(); });
   window.addEventListener("scroll", function () { if (Date.now() - shownAt > 400) hidePreview(); }, true);
-
   function linkIndex(vm) {
     var idx = {};
     function add(k, r) { if (k) (idx[k] = idx[k] || []).push(r); }
@@ -7071,7 +6564,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return idx;
   }
-
   function goQA(rec) {
     if (PlanUI.Pages) PlanUI.Pages.show("qa");
     var n = document.getElementById("qa-row-" + rec.id);
@@ -7085,10 +6577,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     b.addEventListener("click", function () { hidePreview(); goQA(rec); });
     return b;
   }
-
   function agentOf(r) { return r.claimedBy || r.workerRun || r.owner || ""; }
   function pick(r, which) { return which === "prev" ? (r.deps || []) : (r.unblocks || []); }
-
   var COLS = [
     { id: "project", label: "Project", val: function (r) { return r.project; } },
     { id: "phase", label: "Phase", val: function (r) { return r.phase; } },
@@ -7105,28 +6595,24 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   ];
   var COL = {}; COLS.forEach(function (c) { COL[c.id] = c; });
   PlanUI.TABLE_PAGE_COLUMNS = COLS;
-
   function groupKey(col, r) {
     var c = COL[col];
     if (!c) return "";
     var v = c.group ? c.group(r) : c.val(r);
     return v === "" || v == null ? "(none)" : String(v);
   }
-
   function cmp(a, b) {
     var cmpN = PlanUI.naturalCmp || function (x, y) { return String(x).localeCompare(String(y), undefined, { numeric: true }); };
     var c = COL[view.sort.col] || COL.task, va = c.val(a), vb = c.val(b);
     var d = c.num ? (va - vb) : cmpN(String(va), String(vb));
     return view.sort.dir === "desc" ? -d : d;
   }
-
   function setSort(col, dir) {
     view.sort = { col: col, dir: dir };
     var t = global.PlanUI.TableCtl;
     if (t) { t.state.sort = { col: col, dir: dir }; t.save(); }
     render();
   }
-
   function itemChip(key, vm) {
     var rec = vm.items.get(key);
     var b = el("button", "tl-item", key.split(":").pop());
@@ -7145,7 +6631,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return td;
   }
-
   function rowFor(r, vm, color) {
     var tr = el("tr", "tr state-" + (r.display || r.state));
     tr.style.setProperty("--pc", color || "#888");
@@ -7192,7 +6677,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return tr;
   }
-
   function tableFor(rows, vm, colorOf, gkey) {
     var wrap = el("div", "tg-scroll");
     var ctl = global.PlanUI.TableCtl, hc = "";
@@ -7226,13 +6710,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return wrap;
   }
-
   function progress(rows) {
     var done = 0, live = 0;
     rows.forEach(function (r) { if (r.state === "cancelled") return; live++; if (r.state === "done") done++; });
     return { done: done, total: live, pct: live ? Math.round(100 * done / live) : 0 };
   }
-
   function pass(r) {
     var s = PP().state;
     if (s.projectsOff && s.projectsOff[r.project]) return false;
@@ -7242,7 +6724,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (q && PlanUI.Query && PlanUI.Query.match) { try { return PlanUI.Query.match(r, q); } catch (e) { return true; } }
     return true;
   }
-
   function render() {
     var box = document.getElementById("list-content");
     var vm = VM();
@@ -7258,7 +6739,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       view.sort = { col: ss.col, dir: ss.dir === "desc" ? "desc" : "asc" };
     }
     var rows = all.filter(pass);
-
     var bar = el("div", "tt-bar");
     var lab = el("label", "tt-grp", "Group by ");
     var sel = el("select", "tt-sel"); sel.setAttribute("aria-label", "Group table by column");
@@ -7285,7 +6765,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
     if (global.PlanUI.TableCtl) box.appendChild(global.PlanUI.TableCtl.bar(all, render));
-
     var groups = [], map = {};
     rows.sort(cmp);
     rows.forEach(function (r) {
@@ -7298,7 +6777,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     ca.addEventListener("click", function () { groups.forEach(function (g) { view.collapsed[g.key] = true; }); render(); });
     ea.addEventListener("click", function () { view.collapsed = {}; render(); });
     if (view.group) { bar.appendChild(ca); bar.appendChild(ea); }
-
     if (!rows.length) { box.appendChild(el("p", "muted", all.length ? "No tasks match the current filters." : "This snapshot has no items.")); return; }
     groups.forEach(function (g) {
       var sec = el("section", "tg"), pr = progress(g.rows);
@@ -7323,24 +6801,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(sec);
     });
   }
-
   PlanUI.Preview = { attach: attachPreview, show: showPreview, hide: hidePreview, linkIndex: linkIndex, goQA: goQA };
   PlanUI.TablePage = { render: render, view: view, columns: COLS, groupKey: groupKey, progress: progress };
   if (global.PlanPage) global.PlanPage.renderTable = render;
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var KEY = "plangraph.qa.answers.v1";
   var status = "all", open = {};                 // status filter; question id -> editor open
   var sort = { dec: { col: "id", dir: "asc" }, qa: { col: "id", dir: "asc" } };
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -7351,7 +6824,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   function nat(a, b) {
     return PlanUI.naturalCmp ? PlanUI.naturalCmp(String(a), String(b)) : String(a).localeCompare(String(b), undefined, { numeric: true });
   }
-
   function loadAnswers() {
     try { var o = JSON.parse(global.localStorage.getItem(KEY) || "{}"); return o && typeof o === "object" ? o : {}; }
     catch (e) { return {}; }
@@ -7365,14 +6837,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     saveAnswers(a);
     refresh();
   }
-
   function refresh() {
     var vm = PlanUI.app && PlanUI.app.vm;
     if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());
     if (vm && PlanUI.Sidebar && PlanUI.Sidebar.render) PlanUI.Sidebar.render();
     render(vm);
   }
-
   function ctxOf(vm, key) {
     var it = key && vm.items.get(key);
     return it ? { project: it.project, phase: it.phase, key: key, title: it.title } : { project: "", phase: "", key: key || "", title: "" };
@@ -7391,7 +6861,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return s;
   }
   function uniq(a) { var o = {}, r = []; a.forEach(function (x) { if (x && !o[x]) { o[x] = 1; r.push(x); } }); return r; }
-
   function passes(vm, ctx, text) {
     var s = global.PlanPage.state;
     if (ctx.project && s.projectsOff && s.projectsOff[ctx.project]) return false;
@@ -7399,7 +6868,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var ui = global.PlanUI.app && global.PlanUI.app.ui, q = ui ? String(ui.get("query") || "").trim().toLowerCase() : "";
     return !q || String(text).toLowerCase().indexOf(q) >= 0;
   }
-
   function mkTable(id, cols, rows, skey, empty, rerender) {
     var wrap = el("div", "tg-scroll"), t = el("table", "tt qa-t"); t.id = id;
     var st = sort[skey], hr = el("tr");
@@ -7423,7 +6891,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     t.appendChild(tb); wrap.appendChild(t);
     return wrap;
   }
-
   function decisionTable(vm, rerender) {
     var cols = [{ id: "id", label: "ID" }, { id: "title", label: "Decision" }, { id: "date", label: "Date" },
                 { id: "project", label: "Project" }, { id: "phase", label: "Phase" }, { id: "tasks", label: "Tasks" }];
@@ -7447,7 +6914,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { node: mkTable("decisions-table", cols, rows, "dec", "No decisions match the current filters.", rerender), n: rows.length };
   }
-
   function effective(q) {
     var all = answers(), a = all[q.id];
     if (a) return { status: "answered", answer: a.text, local: true, at: a.at };
@@ -7455,7 +6921,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return { status: st, answer: q.answer, local: false };
   }
   function effectiveStatus(q) { return effective(q).status; }
-
   function editor(q, rerender) {
     var box = el("div", "qa-edit");
     var ta = el("textarea", "qa-ta"); ta.rows = 3; ta.placeholder = "Your answer…"; ta.setAttribute("aria-label", "Answer to " + q.id);
@@ -7472,7 +6937,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return box;
   }
-
   function questionTable(vm, rerender) {
     var cols = [{ id: "id", label: "ID" }, { id: "text", label: "Question" }, { id: "status", label: "Status" },
                 { id: "project", label: "Project" }, { id: "phase", label: "Phase" }, { id: "task", label: "Task" },
@@ -7503,7 +6967,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { node: mkTable("qa-table", cols, rows, "qa", "No questions match the current filters.", rerender), n: rows.length };
   }
-
   function exportBar(vm) {
     var a = answers(), ids = Object.keys(a), bar = el("div", "tt-bar qa-export");
     bar.appendChild(el("span", "tt-count", ids.length + " local answer" + (ids.length === 1 ? "" : "s") + " — this page is read-only; export them for the keeper"));
@@ -7523,7 +6986,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     bar.appendChild(cp); bar.appendChild(dl);
     return bar;
   }
-
   function render(vm) {
     vm = vm || (global.PlanUI.app && global.PlanUI.app.vm);
     if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());  // stored answers apply on first paint too
@@ -7548,22 +7010,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var ans = document.getElementById("sb-panel-answers");
     if (ans) clear(ans);
   }
-
   PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus, editor: editor, exportBar: exportBar };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var FACETS = ["type", "project", "priority", "state"];
   var AGES = ["", "1", "7", "30", "30+"];
   var COLS = ["type", "id", "title", "project", "priority", "state", "age"];
   var DEFAULT_SORT = { col: "priority", dir: "desc" };
-
   function effStatus(q) {
     return (PlanUI.QAPage && PlanUI.QAPage.effectiveStatus) ?
       PlanUI.QAPage.effectiveStatus(q) : String(q.status || "");
@@ -7575,7 +7032,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
   function num(v) { var n = Number(v); return v === "" || v === null || v === undefined || isNaN(n) ? null : n; }
   function str(v) { return v === null || v === undefined ? "" : String(v); }
-
   function rows(vm, nowMs) {
     var now = typeof nowMs === "number" ? nowMs : Date.now();
     var out = [], list = (vm && vm.needsYou) || [], i, e;
@@ -7601,12 +7057,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return out;
   }
-
   function inNum(list, v) {
     for (var i = 0; i < list.length; i++) if (Number(list[i]) === v) return true;
     return false;
   }
-
   function filter(rs, f) {
     f = f || {};
     var out = [], i, r, a, ok, list;
@@ -7632,7 +7086,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return out;
   }
-
   function cmp(a, b) {
     if (PlanUI.naturalCmp) return PlanUI.naturalCmp(a, b);
     return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
@@ -7659,7 +7112,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     for (i = 0; i < idx.length; i++) out.push(rs[idx[i]]);
     return out;
   }
-
   function encList(v) {
     var p = [], i;
     for (i = 0; i < v.length; i++) p.push(encodeURIComponent(str(v[i])));
@@ -7680,7 +7132,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (rowId !== undefined && rowId !== null && rowId !== "") p.push("n_row=" + encodeURIComponent(str(rowId)));
     return p.join("&");
   }
-
   function decode(search) {
     var f = { type: [], project: [], priority: [], state: [], age: "" };
     var spec = { col: DEFAULT_SORT.col, dir: DEFAULT_SORT.dir };
@@ -7717,17 +7168,14 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return { f: f, sort: spec, row: row };
   }
-
   PlanUI.NeedsPage = { rows: rows, filter: filter, sort: sort, encode: encode, decode: decode,
     FACETS: FACETS, AGES: AGES, COLS: COLS, DEFAULT_SORT: DEFAULT_SORT };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
   if (typeof document === "undefined") return;
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   var NP = (PlanUI.NeedsPage = PlanUI.NeedsPage || {});
   var LABELS = { type: "Type", project: "Project", priority: "Prio", state: "State" };
@@ -7738,7 +7186,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var CAP = 300;
   var f = clone(DEFF), sort = { col: "priority", dir: "desc" };
   var openF = {}, openA = "", showAll = false, init = false, rowId = "", flashed = false, vm = null;
-
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -7752,7 +7199,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     d.appendChild(node); tr.appendChild(d);
     return d;
   }
-
   function facetItems(all, key) {
     var map = new Map();
     all.forEach(function (r) {
@@ -7808,7 +7254,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     cl.addEventListener("click", function () { f = clone(DEFF); refresh(); });
     d.appendChild(cl); return d;
   }
-
   function refresh() { showAll = false; commit(); }
   function commit() {
     var q = NP.encode ? NP.encode(f, sort, rowId) : "";
@@ -7821,7 +7266,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     } catch (e) { /* file:// may throw */ }
     render(vm);
   }
-
   function head() {
     var tr = el("tr"), th;
     COLS.forEach(function (c) {
@@ -7848,10 +7292,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     tr.id = "ny-row-" + r.id;
     var proj = (vm.projects || []).find(function (p) { return p.name === r.project; });
     try { if (proj) tr.style.setProperty("--pc", proj.color || "#888"); } catch (e) { /* optional styling */ }
-
     td(tr, "tc-type", "Type", el("span", null,
       r.type.charAt(0).toUpperCase() + r.type.slice(1)));
-
     var a = el("a", "ny-id", r.id);
     a.href = (global.location ? global.location.pathname : "") + "?" +
       (NP.encode ? NP.encode(f, sort, r.id) : "") + "#pg=needs";
@@ -7865,7 +7307,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       } catch (e) { /* preview optional */ }
     }
     td(tr, "tc-key", "ID", a);
-
     var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
     if (r.ref && r.ref.kind === "operator_wait_unlinked") tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
     var wk = r.type === "question" ? "answer" : r.type === "task" && r.ref ? r.ref.wait : "";
@@ -7888,14 +7329,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         }
       }
     }
-
     [["project", "Project", r.project || "-"],
      ["priority", "Prio", r.priority == null ? "-" : r.priority],
      ["state", "State", r.state || "-"],
      ["age", "Age", r.ageDays == null ? "-" : r.ageDays + "d"]].forEach(function (c) {
       td(tr, "tc-" + c[0], c[1], el("span", null, c[2]));
     });
-
     var key = r.key || "";
     var has = !!(key && vm.items && typeof vm.items.get === "function" && vm.items.get(key));
     var jb = el("button", "tt-btn ny-jump", "Jump");
@@ -7908,7 +7347,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     td(tr, "tc-open", "Open", jb); return tr;
   }
-
   function flash() {
     if (flashed || !rowId) return;
     var tr = document.getElementById("ny-row-" + rowId);
@@ -7918,7 +7356,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     tr.className += " flash";
     setTimeout(function () { tr.classList.remove("flash"); }, 1600);
   }
-
   function render(m) {
     vm = m || vm;
     var host = document.getElementById("sb-panel-needs");
@@ -7968,22 +7405,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     flash();
   }
-
   NP.render = render;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var REF = /^[a-z0-9][a-z0-9-]{0,62}:(Decision|Rule|Convention|Component|Preference|Project):[a-z0-9][a-z0-9._-]{0,127}$/;
   var MAX_NODES = 8000, MAX_KEYS = 20000, MAX_ITEM_REFS = 40, MAX_REV = 200, FILE = "kg-export.json";
   var ITEM_KEY = /^[\w.-]{1,100}:[\w.-]{1,100}$/;
   var data = null;
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -7999,7 +7431,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (Array.isArray(v)) for (var i = 0; i < v.length && out.length < cap; i++) { var x = keep(v[i]); if (x) out.push(x); }
     return out;
   }
-
   function normalize(raw) {
     if (!isObj(raw) || raw.enabled !== true || !isObj(raw.nodes)) return null;
     var d = { nodes: Object.create(null), items: Object.create(null), reverse: Object.create(null),
@@ -8028,10 +7459,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     list(raw.unresolved_graphs, 50, gname).forEach(function (g) { d.unresolved[g] = true; });
     return Object.keys(d.nodes).length ? d : null;                  // no nodes: nothing to show, hidden
   }
-
   function label(n) { return n.type === "Rule" ? n.severity : n.type === "Component" ? n.kind : n.status; }
   function isSuperseded(n) { return !!n.superseded_by || n.status === "superseded"; }
-
   function nodeRow(r, opts) {
     var n = data && data.nodes[r], li = el("li", "kg-node");
     if (!n) {
@@ -8067,7 +7496,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     return li;
   }
-
   function block(key) {
     var refs = data && own(data.items, key) ? data.items[key] : null;
     if (!refs || !refs.length) return null;
@@ -8078,9 +7506,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     box.appendChild(ul);
     return box;
   }
-
   function enabled() { return !!data; }
-
   function setData(raw) {
     try { data = normalize(raw); } catch (e) { data = null; }
     var tab = document.getElementById("tab-knowledge");
@@ -8090,7 +7516,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (PP && PP.renderDetails && PP.state && PP.state.selected) { try { PP.renderDetails(PP.state.selected); } catch (e) { /* panel not mounted */ } }
     if (data && P && P.current && P.current() === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
   }
-
   function load() {
     if (typeof global.XMLHttpRequest !== "function") return Promise.resolve();
     return new Promise(function (resolve) {
@@ -8109,26 +7534,20 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       } catch (e) { done(null); }
     });
   }
-
   var tab0 = document.getElementById("tab-knowledge");
   if (tab0) tab0.hidden = true;                                  // until an export says otherwise
-
   PlanUI.Knowledge = { setData: setData, load: load, block: block, nodeRow: nodeRow, enabled: enabled,
     get: function () { return data; } };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { load(); });
   else load();
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var cur = "";
   var ORDER = ["Decision", "Rule", "Component", "Convention", "Preference", "Project"];
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -8136,7 +7555,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return n;
   }
   function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
-
   function render() {
     var box = document.getElementById("sb-panel-knowledge");
     if (!box) return;
@@ -8146,7 +7564,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var names = Object.keys(d.projects).sort();
     if (!names.length) { box.appendChild(el("p", "sb-empty", "The export lists no project knowledge.")); return; }
     if (names.indexOf(cur) < 0) cur = names[0];
-
     var head = el("div", "kg-head");
     head.appendChild(el("h2", null, "Knowledge"));
     var sel = el("select", "kg-project");
@@ -8161,7 +7578,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     head.appendChild(sel);
     box.appendChild(head);
     if (d.truncated) box.appendChild(el("p", "muted", "The export was truncated; not every node is listed."));
-
     var refs = d.projects[cur].filter(function (r) { return d.nodes[r]; });
     ORDER.forEach(function (type) {
       var group = refs.filter(function (r) { return d.nodes[r].type === type; });
@@ -8173,24 +7589,18 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(ul);
     });
   }
-
   PlanUI.KnowledgePage = { render: render };
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
-
   var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", hosts: "panel-hosts", agents: "panel-agents", knowledge: "panel-knowledge", settings: "panel-settings" };
   var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", hosts: "tab-hosts", agents: "tab-agents", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
-
   function $(id) { return document.getElementById(id); }
-
   function show(name) {
     if (name === "qa") name = "needs";
     if (!PANELS[name] || !$(PANELS[name]) || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
@@ -8219,7 +7629,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (name === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);
   }
-
   function storedWidth() {
     try { var v = parseInt(global.localStorage.getItem(SBW_KEY), 10); return isFinite(v) ? v : null; }
     catch (e) { return null; }
@@ -8234,7 +7643,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
     return px;
   }
-
   function bindResize() {
     var h = $("sb-resize"), sb = $("sidebar");
     if (!h || !sb) return;
@@ -8263,7 +7671,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       else if (e.key === "ArrowRight") { setWidth(w + 16, true); e.preventDefault(); }
     });
   }
-
   function mount(store) {
     ui = store;
     var bound = {};
@@ -8279,17 +7686,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     bindResize();
   }
-
   PlanUI.Pages = { mount: mount, show: show, current: function () { return cur; }, setSidebarWidth: setWidth, onChange: null };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   var DAY = 86400000;
   var PRESETS = { "24h": DAY, "7d": 7 * DAY, "30d": 30 * DAY };
   var GROUPS = [
@@ -8300,7 +7703,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   ];
   var COLS = ["created", "done", "cancelled", "progress", "qasked", "qanswered", "unblocked", "blocked"];
   var mode = "24h", customStart = "", customEnd = "";
-
   function parseTs(v) { var m = Date.parse(v); return isFinite(m) ? m : NaN; }
   function isDone(e) {
     return e.type === "closed_on_decision" || e.type === "review_passed" || e.type === "answered" ||
@@ -8359,7 +7761,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return isFinite(best) ? best : Date.now();
   }
   function inRange(m, start, end) { return isFinite(m) && m >= start && m <= end; }
-
   function compute(snap, start, end) {
     snap = snap || {};
     var items = Array.isArray(snap.items) ? snap.items : [];
@@ -8425,7 +7826,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return { projects: Object.keys(counts).sort(), counts: counts, groups: groups };
   }
-
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -8457,7 +7857,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       return s.slice(0, 16);
     } catch (e) { return ""; }
   }
-
   function render() {
     if (typeof document === "undefined") return;
     var box = document.getElementById("sb-panel-activity");
@@ -8531,7 +7930,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(det);
     });
   }
-
   PlanUI.ActivityPage = {
     render: render, compute: compute, nowMs: nowMs,
     setPreset: function (name) { if (PRESETS[name]) mode = name; },
@@ -8539,13 +7937,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
   function str(v) { return v == null ? "" : String(v); }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -8568,7 +7963,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     b.setAttribute("aria-label", num(pct) + " percent done");
     return b;
   }
-
   function rows(progress) {
     return ((progress && progress.projects) || []).map(function (p) {
       var st = p.states || {};
@@ -8581,9 +7975,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       };
     });
   }
-
   var HEAD = ["Project", "Done", "Count", "Hours", "Left (h)", "Open", "Active", "Operator", "Updated"];
-
   function render() {
     if (typeof document === "undefined") return;
     var box = document.getElementById("sb-panel-progress");
@@ -8635,11 +8027,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       box.appendChild(det);
     });
   }
-
   PlanUI.ProgressPage = { render: render, rows: rows };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
@@ -8690,25 +8080,19 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PlanUI.HostsPage = { render: render };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
-
 ;
 (function (global) {
   "use strict";
-
   var PlanUI = (global.PlanUI = global.PlanUI || {});
-
-
   if (typeof document === "undefined") return;
   var PP = global.PlanPage;
   if (!PP || !PlanUI.Store || !PlanUI.buildViewModel) return;
-
   var LS_KEY = "plangraph.ui.settings.v1";
   var SIZES = ["S", "M", "L"], THEMES = ["auto", "light", "dark"];
   var BOOLS = ["showCritical", "showCross", "autoCollapseDone", "animate", "showAllEdges"];
   var TABS = ["projects", "needs", "qa", "answers", "settings"];
   var body = document.body;
   var HASH_PG = /[#&]pg=(qa|needs|settings|hosts)\b/.exec(location.hash);   // read before the first writeHash drops it
-
   function $(id) { return document.getElementById(id); }
   function is(str) {
     return body.getAttribute("data-screen") === str;
@@ -8716,7 +8100,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   function drawer() {                       // off-canvas range 701–1199 px
     return global.matchMedia && global.matchMedia("(min-width: 701px) and (max-width: 1199px)").matches;
   }
-
   function readSettings() {
     var out = {};
     var def = PlanUI.freshDefaults().settings;
@@ -8731,7 +8114,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     } catch (e) { /* private mode / no storage: defaults are fine */ }
     return normalize(out);
   }
-
   function normalize(s) {
     var out = {};
     Object.keys(s || {}).forEach(function (k) { out[k] = s[k]; });
@@ -8740,25 +8122,21 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     BOOLS.forEach(function (k) { out[k] = !!out[k]; });
     return out;
   }
-
   function writeSettings(s) {
     try { global.localStorage && global.localStorage.setItem(LS_KEY, JSON.stringify(s)); }
     catch (e) { /* storage blocked: still fully functional */ }
   }
-
   function applySettings(s) {
     var h = document.documentElement;
     h.setAttribute("data-textsize", s.textSize);
     h.setAttribute("data-theme", s.theme);
   }
-
   function syncSB(ui) {
     var sb = ui.get("sidebar");
     body.setAttribute("data-sbopen", sb.open ? "1" : "0");
     var scrim = $("sb-scrim");
     if (scrim) scrim.hidden = !(sb.open && drawer());
   }
-
   function setScreen(name) {
     body.setAttribute("data-screen", name);
     var want = is("inbox") || is("menu") ? "" : (ui.get("view") === "table" ? "table" : "graph");
@@ -8769,9 +8147,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     return want;
   }
-
   var ui = null;                            // bound in boot()
-
   function syncView() {
     var view = ui.get("view") === "table" ? "table" : "graph";
     var cur = body.getAttribute("data-screen");
@@ -8782,7 +8158,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       l.classList.toggle("active", view === "table");
     }
   }
-
   var lastW = -1;
   function resizeGraph() {
     var run = function () {
@@ -8799,7 +8174,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (global.requestAnimationFrame) global.requestAnimationFrame(run);
     else setTimeout(run, 40);
   }
-
   function writeHash() {
     var h = PlanUI.hashEncode(ui.get());
     var pg = PlanUI.Pages && PlanUI.Pages.current();
@@ -8810,12 +8184,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       } else if (h && location.hash !== h) location.hash = h;
     } catch (e) { /* file:// quirks: the view still works, links just stay plain */ }
   }
-
   function typing(e) {
     var t = e.target;
     return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
   }
-
   function nextReady() {
     var V = PlanUI.app.vm, list = [];
     V.items.forEach(function (it) { if (it.display === "ready") list.push(it); });
@@ -8826,7 +8198,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     list.some(function (it, i) { if (it.key === cur) { idx = (i + 1) % list.length; return true; } return false; });
     PP.focusNode(list[idx].key);
   }
-
   function toggleExpand() {
     var k = PP.state.selected;
     if (!k) return;
@@ -8834,7 +8205,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (next.has(k)) next.delete(k); else next.add(k);
     ui.set("expanded", next);
   }
-
   function collapsePhase() {
     var V = PlanUI.app.vm, k = PP.state.selected;
     var rec = k && V.items.get(k);
@@ -8843,14 +8213,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     next.add(rec.project + "|" + rec.phase);
     ui.set("collapsedPhases", next);
   }
-
   function moveSelection(dir) {                  // → successor, ← predecessor
     var rec = PP.state.selected && PlanUI.app.vm.items.get(PP.state.selected);
     if (!rec) return;
     var picks = dir > 0 ? rec.unblocks : rec.deps;
     if (picks && picks.length) PP.focusNode(picks[0]);
   }
-
   function clearAll() {
     if (body.getAttribute("data-search") === "1") body.removeAttribute("data-search");
     if (ui.get("sidebar").open && drawer()) ui.set("sidebar", { open: false, tab: ui.get("sidebar").tab });
@@ -8858,7 +8226,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var s = $("search");
     if (s && s.value) { s.value = ""; ui.set("query", ""); }
   }
-
   function onKey(e) {
     if (e.key === "Escape") {
       if (typing(e)) e.target.blur();
@@ -8874,7 +8241,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     else if (e.key === "ArrowRight") moveSelection(1);
     else if (e.key === "ArrowLeft") moveSelection(-1);
   }
-
   function focusSearch() {
     var s = $("search");
     if (!s) return;
@@ -8883,7 +8249,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     s.focus();
     s.select();
   }
-
   function focusAfter() {
     var sheet = $("details");
     var head = PP.state.selected && sheet && !sheet.hidden && sheet.querySelector
@@ -8895,11 +8260,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     try { if (!target) return; if (head) target.setAttribute("tabindex", "-1"); target.focus(); }
     catch (err) { /* focus is best-effort, it never breaks the close */ }
   }
-
   function closeOverlay() {              // one exit path: #sb-close, Esc, Jump
     ui.set("view", "graph"); setScreen("graph"); focusAfter();
   }
-
   function debounced(fn, ms) {
     var t = null;
     return function () {
@@ -8907,7 +8270,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       t = setTimeout(fn, ms);
     };
   }
-
   function bindControls() {
     var s = $("search");
     if (s) {
@@ -8945,14 +8307,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     });
     document.addEventListener("keydown", onKey);
   }
-
   function boot() {
     PP.initData();                     // parse snapshot + header/chips/legend
     PP.state.booted = true;
     var vm = PlanUI.buildViewModel(PP.state.snapshot);
     var initial = { settings: readSettings() };
     ui = new PlanUI.Store(initial);    // defaults + our `settings` object on top
-
     var h = PlanUI.hashDecode(location.hash); // restore BEFORE subscribing (no echo)
     var patch = {};
     if (h.view) patch.view = h.view;
@@ -8969,26 +8329,21 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       tab: TABS.indexOf(h.tab) >= 0 ? h.tab : "needs"
     };
     ui.patch(patch);
-
     PlanUI.app = { ui: ui, store: ui, vm: vm, jump: function (k) {
       ui.set("view", "graph"); if (PlanUI.Pages) PlanUI.Pages.show("graph"); PP.focusNode(k); setScreen("graph"); focusAfter();
     } };
     applySettings(ui.get("settings"));
     syncSB(ui);
     syncView();
-
     PlanUI.Sidebar.mount(ui, vm);      // counts + panels (reads vm/ui only)
     if (PlanUI.Pages) PlanUI.Pages.mount(ui);
     PlanUI.DetailPanel.mount(ui, vm);  // docked panel, follows ui.sel
-
     try { performance.mark("plan:shell-paint"); } catch (e) { /* no Perf API */ }
     global.__planTimings = global.__planTimings || {};
     var t0 = (global.performance && performance.now) ? Math.round(performance.now()) : 0;
     global.__planTimings.shellPaintMs = t0;
     try { console.log("[plan] shell paint " + t0 + " ms"); } catch (e) { /* noop */ }
-
     bindControls();
-
     ui.subscribe(function (keys) {
       if (keys.indexOf("settings") >= 0) {
         var sett = normalize(ui.get("settings"));
@@ -9010,7 +8365,6 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       writeHash();
     });
   }
-
   function afterInit() {               // runs after legacy init(): cy exists here
     PP.initData();                     // idempotent when boot() already parsed
     if (ui.get("view") === "table") PP.setTab("list");
@@ -9027,11 +8381,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     lastW = c ? c.clientWidth : 0;
     resizeGraph();
   }
-
   boot();
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", afterInit);
   else afterInit();
-})(typeof window !== "undefined" ? window : globalThis);
-</script>
+})(typeof window !== "undefined" ? window : globalThis);</script>
 </body>
 </html>
