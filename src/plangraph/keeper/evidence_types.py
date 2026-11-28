@@ -13,7 +13,7 @@ from typing import Any
 
 __all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S",
            "has_live_clause", "live_evidence_status", "no_deploy_declaration",
-           "oneshot_timer", "proven_pairs"]
+           "no_runtime_change", "oneshot_timer", "proven_pairs"]
 
 # A commit reference is a full lowercase hex sha: 40 for sha1, 64 for sha256.
 # Abbreviations, refs ("main") and anything option-like are rejected so a sha
@@ -122,6 +122,19 @@ def no_deploy_declaration(item: dict) -> str | None:
     return next((r for r in reasons if r), "" if reasons else None)
 
 
+# Paths that never run in production: tests, docs, changelog fragments, skills, CI workflows, markdown.
+_NO_RUNTIME_PATH = re.compile(
+    r"(?:^|/)tests?/|^(?:docs|changelog\.d|skills|\.github)/"
+    r"|(?:^|/)(?:test_[^/]*\.py|conftest\.py|[^/]*_tests?\.(?:py|rs)|[^/]*\.md)$")
+
+
+def no_runtime_change(changes) -> bool:
+    """True when a landed diff of ``(status, path)`` pairs or paths is non-empty and every path is a test,
+    doc, changelog fragment, skill, CI workflow or markdown file: the item ships nothing to deploy."""
+    paths = [change if isinstance(change, str) else change[1] for change in changes or ()]
+    return bool(paths) and all(_NO_RUNTIME_PATH.search(path) for path in paths)
+
+
 def oneshot_timer(ref: dict) -> str | None:
     """The timer a oneshot deploy row needs active beside it, or ``None`` when the row is not a oneshot."""
     unit = ref.get("unit")
@@ -156,7 +169,8 @@ def has_live_proof(item: dict, rows, since: float | None = None) -> bool:
 
 def live_evidence_status(item: dict, rows, since: float | None = None) -> str | None:
     """Why an item may not close yet, or ``None``: every item needs a verified ``deploy`` row of its current
-    epoch (the item went into production) or a ``no deploy needed: <reason>`` line.
+    epoch (the item went into production) or a ``no deploy needed: <reason>`` line. A close that read the
+    item's landed diff sets ``_no_runtime`` (:func:`no_runtime_change`), which counts as that line.
 
     An explicit ``Live:`` clause is met by the row only; the declaration never excuses it. ``since`` is the
     item's latest landing: a row recorded before it proves nothing about newer work.
@@ -166,6 +180,6 @@ def live_evidence_status(item: dict, rows, since: float | None = None) -> str | 
     if has_live_clause(item):
         return "live_evidence_missing"
     declared = no_deploy_declaration(item)
-    if declared:
+    if declared or item.get("_no_runtime") is True:
         return None
     return "no_deploy_reason_empty" if declared == "" else "live_evidence_missing"

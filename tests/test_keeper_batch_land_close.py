@@ -222,3 +222,81 @@ def test_a_nested_merge_carrying_the_item_must_be_covered_by_a_cited_part(batch)
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
     assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+# --- a merge closes its items by code (MERGE-CLOSES-ITEMS-NO-AGENT-CALL and its lessons) ---
+from test_keeper_deploy_gate_paths import frozen  # noqa: E402
+from test_keeper_merge_close_auto import auto, env, set_states, state, two_repos  # noqa: E402,F401 - env is a fixture
+
+
+def commit_files(root, branch, key, paths, base="main"):
+    git(root, "checkout", "-q", "-b", branch, base)
+    for path in paths:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(f"{branch}\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", f"work {branch}\n\nPlan-Item: {key}\n")
+
+
+def test_one_repository_registered_under_two_names_closes_instead_of_refusing_ambiguous(env):  # noqa: F811
+    set_states(env)
+    data = two_repos(env)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "data": str(data.root),
+                                       "data-alias": str(data.root) + "/."})
+    data.land("w1", "Plan-Item: demo:C", 400)
+    result = auto(env, require_seats=False)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"] and result["listed"] == []
+    assert env.store._scan_projects(state(env, "demo:B")) == ["demo", "data"]
+
+
+def test_a_train_lands_on_one_approval_and_closes_items_that_ship_no_runtime_without_a_deploy_line(env):  # noqa: F811
+    """APPROVED-BY train: no GO row, no seat run, no deploy line; a part that ships code waits for deploy proof."""
+    for key in ("A", "B", "C"):
+        env.store.edit_definition(env.p("router"), f"demo:{key}", {"note": ""})
+        to_in_review(env, f"demo:{key}")
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "train", "main")
+    parts = ((1, "A", ["tests/test_a.py", "docs/a.md"]), (2, "B", ["changelog.d/b.md", "skills/b/SKILL.md"]),
+             (3, "C", ["src/plangraph/c.py", "tests/test_c.py"]))
+    for number, key, paths in parts:
+        commit_files(root, f"part{key}", f"demo:{key}", paths, base="train")
+        git(root, "checkout", "-q", "train")
+        git(root, "merge", "--no-ff", "-q", "-m", f"Merge PR #{number}: part {key}", f"part{key}")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "batch att: #1 #2 #3 (#100)\n\n"
+        + "\n".join(f"Plan-Item: demo:{k}" for k in "ABC"), "train")
+    result = auto(env, require_seats=False)
+    assert sorted(c["key"] for c in result["closed"]) == ["demo:A", "demo:B"]
+    assert [(r["key"], "live_evidence_missing" in r["reason"]) for r in result["listed"]] == [("demo:C", True)]
+    assert {p["pr"] for c in result["closed"] for p in c["prs"]} == {100}
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def lane_merge(env, decisions_row):
+    """``demo:B`` lands through ``Merge lane/b into main (D-123 ...)``: a merge without a pull request."""
+    to_in_review(env, "demo:B")
+    head = env.repo.land("b", "Plan-Item: demo:B", None, merge=False)
+    git(env.repo.root, "merge", "--no-ff", "-q", "-m", "Merge lane/b into main (D-123 lane merge)", "b")
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(decisions_row(merge, head), encoding="utf-8")
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    return merge
+
+
+@pytest.mark.parametrize("run", [auto, frozen])
+def test_a_lane_merge_without_a_pr_closes_on_the_decision_row_naming_its_merge(env, run):  # noqa: F811
+    merge = lane_merge(env, lambda merge, head: f"| D-123 | demo | merged lane/b as {merge[:12]} |\n")
+    result = run(env, require_seats=False)
+    assert [c["key"] for c in result["closed"]] == ["demo:B"]
+    proof = result["closed"][0]["prs"][0]
+    assert (proof["pr"], proof["decision_id"], proof["lane_merge"], proof["merge_sha"]) == (None, "D-123", True, merge)
+    assert "go_row_missing" not in result["closed"][0].get("landing_flags", {})
+
+
+@pytest.mark.parametrize("row", [lambda merge, head: f"| D-123 | demo | merged lane/b as {head[:12]} |\n",
+                                 lambda merge, head: f"| D-124 | demo | merged lane/b as {merge[:12]} |\n"])
+def test_a_lane_merge_without_a_row_naming_its_merge_still_refuses(env, row):  # noqa: F811
+    lane_merge(env, row)
+    result = auto(env, require_seats=False)
+    assert result["closed"] == [] and "merged_pr_missing" in result["listed"][0]["reason"]
