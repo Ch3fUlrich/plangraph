@@ -77,16 +77,23 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
     let running = sources::runs(env, &o.repo, &ready, state, home, o.dry)?;
-    decide(
+    let (admitted, no_spec) = super::with_spec_write_sets(&ready, &o.repo);
+    let mut row = decide(
         home,
         env,
         o,
         state,
         policy,
         local.as_deref(),
-        &ready,
+        &admitted,
         &running,
-    )
+    )?;
+    if !no_spec.is_empty() {
+        let mut skipped = row["skipped"].as_array().cloned().unwrap_or_default();
+        skipped.extend(no_spec);
+        row["skipped"] = json!(skipped);
+    }
+    Ok(row)
 }
 
 /// The capacity line of a live decision: why this host admits or refuses. `load1` is null and

@@ -8,6 +8,7 @@ pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
+mod specs;
 mod windows_ram;
 mod workflow;
 pub(crate) use adapters::MERGE_INDEX_EXPIRED;
@@ -17,6 +18,7 @@ pub use runtime::run;
 pub use selection::{decode_task, pick, pick_batch, prepare_ready, validate_ready};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+pub use specs::with_spec_write_sets;
 use std::collections::BTreeMap;
 pub use workflow::{tick, ClaimError, SpawnError};
 
