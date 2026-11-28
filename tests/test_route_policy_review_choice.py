@@ -12,6 +12,46 @@ from plangraph.routing_errors import SpawnRefused
 REQUIRED_MODELS = {leg.model for leg in DEFAULT_LEGS if leg.id in REVIEW_REQUIRED}
 
 
+def test_gpt_exact_diff_mimo_inline_fallback(tmp_path):
+    from plangraph.planner.legs import (REVIEW_AGY_SONNET, REVIEW_HYDROGEN, REVIEW_MIMO_PRO,
+                                        REVIEW_SONNET)
+    from plangraph.planner.route_policy import DEFAULT_POLICY_PATH
+    from registry_route_util import _repo
+
+    repo, base, head = _repo(tmp_path)
+    diff = dict(repo=str(repo), base=base, head=head)
+    models = {leg.id: leg.model for leg in DEFAULT_LEGS}
+    policy = load_route_policy(DEFAULT_POLICY_PATH)
+
+    def plan(card, down=()):
+        return plan_spawn(dict(estimate_tokens=1000, **card), role="review", policy=policy,
+                          writer_families=("gpt",), catalog_rows=(), installed=lambda _: True,
+                          leg_reader=lambda model, **_: {
+                              "state": "limited" if model in down else "available", "evidence": None})
+
+    ordinary = plan({"diff_ref": diff})
+    ids = [leg.id for leg in ordinary.legs]
+    assert ids[:2] == list(REVIEW_REQUIRED)
+    assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO)
+    assert ordinary.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == "inline-only"
+    assert all(not leg.claude_family for leg in ordinary.legs)
+    assert {row["leg"]: row["reason"] for row in plan({}).skipped}[REVIEW_MIMO_PRO] == "inline_only_needs_diff"
+    assert {row["leg"]: row["reason"] for row in plan(
+        {"diff_ref": diff, "repository_review_required": True}).skipped}[
+            REVIEW_MIMO_PRO] == "repository_review_tools_unavailable"
+
+    for extra, down in (({"risk_tags": ["auth"]}, set()), ({}, REQUIRED_MODELS)):
+        card = dict(diff_ref=diff, **extra)
+        ineligible = {REVIEW_AGY_SONNET, REVIEW_SONNET}
+        assert ineligible.isdisjoint(leg.id for leg in plan(card, down).legs)
+        without_hydrogen = down | {models[REVIEW_HYDROGEN]}
+        assert REVIEW_MIMO_PRO in {leg.id for leg in plan(card, without_hydrogen).legs}
+        assert ineligible.isdisjoint(leg.id for leg in plan(card, without_hydrogen).legs)
+        fallback = without_hydrogen | {models[REVIEW_MIMO_PRO]}
+        assert REVIEW_AGY_SONNET in {leg.id for leg in plan(card, fallback).legs}
+        assert REVIEW_SONNET in {leg.id for leg in plan(card, fallback | {"agy/" + REVIEW_SONNET}).legs}
+
+
 def test_qoder_off_for_review_even_with_old_active_leg():
     leg = next(l for l in DEFAULT_LEGS if l.harness == 'qodercli')
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
@@ -144,7 +184,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
     for role, base, head, expected in (
         ("implement", None, None, ("cx-gpt-6.2-sol-medium", "codex")),
         ("review", "HEAD~2", "HEAD~1", ("opencode-go-deepseek-v4-flash", "opencode")),
-        ("review", "HEAD~1", "HEAD", ("agy-claude-sonnet-5-5-high", "agy")),
+        ("review", "HEAD~1", "HEAD", ("opencode-go-deepseek-v4-flash", "opencode")),
     ):
         card = {"estimate_tokens": 1000}
         if base:
@@ -162,6 +202,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
             seat = group["seats"][0]["chosen_leg"]
             assert (seat["id"], seat["harness"]) == expected
             assert group["seat_coverage"][0]["leg"] == seat["id"]
+            assert {row["chosen_leg"]["id"] for row in group["seats"]} == set(REVIEW_REQUIRED)
 
 
 def test_native_review_route_requires_repository_tools():

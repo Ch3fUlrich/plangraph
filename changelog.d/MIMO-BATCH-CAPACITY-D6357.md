@@ -1,0 +1,1 @@
+- Admit MiMo Pro as a bounded, tool-denied inline reviewer of an exact diff after Hydrogen-high, with response-side gateway evidence and the required repository-capable seats kept in the route.

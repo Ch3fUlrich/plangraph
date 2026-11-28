@@ -1,0 +1,68 @@
+{
+  "project": "plangraph",
+  "cards": {
+    "MIMO-BATCH-CAPACITY-D6357": {
+      "outcome": "Admit a witnessed MiMo Pro inline diff verdict after Hydrogen-high within the review request bound.",
+      "read_set": [
+        ".docs-map",
+        "rust/pg-spawnd/src/prompt.rs",
+        "rust/pg-spawnd/src/review_retry.rs",
+        "rust/pg-spawnd/src/review_split.rs",
+        "rust/pg-spawnd/src/runs.rs",
+        "rust/pg-spawnd/src/seat_fallback.rs",
+        "rust/pg-spawnd/tests/mimo_output_cap.rs",
+        "rust/pg-spawnd/tests/review_diff_split.rs",
+        "src/plangraph/planner/route_policy.py",
+        "src/plangraph/routing_support/clients.py",
+        "src/plangraph/spawner/cli.py",
+        "src/plangraph/spawner/context_pack.py",
+        "src/plangraph/spawner/gateway_witness.py",
+        "src/plangraph/spawner/inline_diff.py",
+        "src/plangraph/spawner/opencode_isolation.py",
+        "src/plangraph/spawner/prompt_guard.py",
+        "src/plangraph/spawner/target.py",
+        "tests/test_cli_gateway_witness.py",
+        "tests/test_review_gpt_native_codex_leg.py",
+        "tests/test_seat_tag.py",
+        "tests/test_spawn_cli.py",
+        "tools/check_file_size.py"
+      ],
+      "write_set": [
+        "changelog.d/MIMO-BATCH-CAPACITY-D6357.md",
+        "docs/SPAWNER.md",
+        "docs/operations/spawner-mimo-seats.md",
+        "docs/routing.md",
+        "rust/pg-spawnd/src/launch_tests.rs",
+        "rust/pg-spawnd/src/spawn.rs",
+        "src/plangraph/planner/legs.py",
+        "src/plangraph/planner/route_policy.json",
+        "src/plangraph/planner/routing.py",
+        "src/plangraph/spawner/launch_spec.py",
+        "src/plangraph/spawner/runner.py",
+        "src/plangraph/spawner/seat_spawn.py",
+        "src/plangraph/spawner/service.py",
+        "tests/test_opencode_isolation_go.py",
+        "tests/test_route_free_first.py",
+        "tests/test_route_policy_review_choice.py",
+        "tests/test_spawner_launch_spec.py",
+        "tests/test_spawner_review_tools_inline.py"
+      ],
+      "exports": [
+        "review_route_pool",
+        "inline_diff_prompt",
+        "bound_prompt",
+        "fallback_seats"
+      ],
+      "check_cmd": "python3 -m pytest -q tests/test_route_policy_review_choice.py tests/test_route_free_first.py tests/test_spawner_review_tools_inline.py tests/test_spawner_launch_spec.py tests/test_opencode_isolation_go.py tests/test_cli_gateway_witness.py tests/test_spawn_cli.py tests/test_seat_tag.py tests/test_review_gpt_native_codex_leg.py && sh -c 'route_output=$(cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --bin pg-spawnd review_route); route_status=$?; printf \"%s\\n\" \"$route_output\"; test \"$route_status\" -eq 0 && test \"$(printf \"%s\\n\" \"$route_output\" | grep -Ec \"^test ([^ ]+::)?review_route_mimo_not_served_on_host_advances_to_next_seat \\\\.\\\\.\\\\. ok$\")\" -eq 1'",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test mimo_output_cap && cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test review_diff_split",
+      "check_kind": "change",
+      "risk_tags": [
+        "auth",
+        "public-contract",
+        "live-step"
+      ],
+      "estimate_tokens": 310000,
+      "window_class": "1m"
+    }
+  }
+}

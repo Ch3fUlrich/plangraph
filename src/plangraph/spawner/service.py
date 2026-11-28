@@ -19,6 +19,32 @@ from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item, batch_members, valid_item
 from .base_fresh import admit_base
+
+
+def exact_inline_diff_ref(reference, timeout):
+    """Resolve moving refs before assembling a MiMo inline request."""
+    import subprocess
+    from plangraph.planner.seats import _check_diff_ref
+    from plangraph.routing_errors import SpawnRefused
+    from .inline_diff import InlineDiffError
+    from .prompt_input import checkout_env
+    try:
+        _check_diff_ref(reference)
+        deadline = time.monotonic() + timeout
+        return dict(reference, **{
+            key: subprocess.check_output(
+                ['git', '-C', reference['repo'], 'rev-parse', '--verify', '--end-of-options',
+                 reference[key] + '^{commit}'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=checkout_env(), text=True, encoding='utf-8', errors='replace',
+                timeout=max(0, deadline - time.monotonic())).strip()
+            for key in ('base', 'head')
+        })
+    except SpawnRefused as exc:
+        raise InlineDiffError(str(exc)) from None
+    except (OSError, subprocess.SubprocessError):
+        raise InlineDiffError('git diff failed: cannot bind base and head commits') from None
+
+
 def remote_native_running(record):
     """True for a native Codex run placed on another host that is not settled yet; only these need a remote refresh.
 
@@ -366,7 +392,7 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
-        from plangraph.planner.legs import spawnable_legs
+        from plangraph.planner.legs import mimo_pro_review, spawnable_legs
         if not card: raise ParameterRefused('spawn by card; card required')
         if seats:
             return await self._spawn_seats(card=card, prompt=prompt, role=role,
@@ -524,8 +550,11 @@ class SpawnService(SeatSpawnMixin):
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     from .inline_diff import InlineDiffError, review_sonnet_diff_prompt
                     try:
-                        leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
-                            deadline=watchdog.get('deadline'))   # Dry runs never launch; live document reviews require --leg.
+                        missing_diff = not dry_run and mimo_pro_review(chosen, role) and card.get('diff_ref') is None
+                        # Preserve render refusals when the host and the review material are both unavailable.
+                        leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack,
+                            document_review=dry_run or missing_diff or leg is not None,
+                            deadline=watchdog.get('deadline'))
                         leg_prompt = await review_sonnet_diff_prompt(leg_prompt, card, role, chosen, deadline=watchdog.get('deadline'))
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
@@ -544,6 +573,7 @@ class SpawnService(SeatSpawnMixin):
                         writer_env = dict(writer_env, CARGO_TARGET_DIR=record['review_target'])
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
+                        **({'missing_review_diff': True} if missing_diff else {}),
                         allow_shas=await asyncio.to_thread(allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     if record.get('reason') == 'reasoning_output_limit':
