@@ -462,4 +462,5 @@ def test_land_without_its_full_run_labels_the_batch_pr_ci_full(monkeypatch, mess
     with pytest.raises(mb.MergeBatchError) as refused:
         mb.land_with_full_run(Namespace(name="n", batch_pr=5))
     assert ("labelled ci-full" in str(refused.value)) is labelled
-    assert calls == ([("pr", "edit", "5", "--repo", "owner/proj", "--add-label", "ci-full")] if labelled else [])
+    assert calls == ([("api", "-X", "POST", "repos/owner/proj/issues/5/labels", "-f", "labels[]=ci-full")]
+                     if labelled else [])

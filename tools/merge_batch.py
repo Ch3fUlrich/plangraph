@@ -159,7 +159,8 @@ def land_with_full_run(args):
     except MergeBatchError as exc:
         if not str(exc).startswith("full_ci: ") or "must target main" in str(exc):
             raise
-        gh("pr", "edit", str(args.batch_pr), "--repo", load_state(args.name)["repo"], "--add-label", "ci-full")
+        # REST, not `gh pr edit`: that GraphQL path fails on repositories with classic project cards.
+        gh("api", "-X", "POST", f"repos/{load_state(args.name)['repo']}/issues/{args.batch_pr}/labels", "-f", "labels[]=ci-full")
         raise MergeBatchError(f"{exc}; labelled ci-full: the full suite runs once now, run land again when it is green") from exc
 
 
