@@ -22,12 +22,13 @@ The decision does not waive on its own: its D-row must carry the whole token
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from . import auth, context_sources, timing
 from .coverage import writer_families
 from .errors import Refused
-from .evidence_types import Result, as_epoch, valid_commit_ref
+from .evidence_types import Result, as_epoch, no_runtime_change, valid_commit_ref
 from .store_runs import go_key_scope
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
@@ -151,10 +152,19 @@ class WaiverMixin:
         return project, next(iter(revisions), None)
 
     def _scan_projects(self, item):
-        """Projects to read for the item's merge: its own first, then every scanned repository."""
-        scan = getattr(self._adapter("git"), "scan_projects", None)
+        """Projects to read for the item's merge: its own first, then every scanned repository.
+
+        Names registered for one repository (same resolved path and ref) count once: the first, so the
+        item's own name wins; two of them holding the commits are one repository, never ambiguous."""
+        git = self._adapter("git")
+        scan = getattr(git, "scan_projects", None)
         names = list(scan()) if callable(scan) else []
-        return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        ordered = [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
+        seen = {}
+        for name in ordered:
+            path = git.repo_path(name)
+            seen.setdefault((os.path.realpath(path), git.repo_ref(name)) if path else name, name)
+        return list(seen.values())
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
@@ -542,6 +552,7 @@ class WaiverMixin:
             if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes, token)
+            item["_no_runtime"] = token is not None and no_runtime_change(changes)
             # The latest landing of the item's work, not the GO head alone: another landing may be newer.
             floor = self._landing_floor(item, shas=[] if waiver_only else [head])
             if code := self._live_status(item, floor):
@@ -559,10 +570,10 @@ class WaiverMixin:
             # Lease maintenance changes no close authority. All other fields
             # (including epoch/round, definition and writer proofs) must agree.
             stable = lambda row: {k: v for k, v in row.items()
-                                  if k not in ("updated_at", "lease_until", "_merge_project", "_close_head")}
+                                  if k not in ("updated_at", "lease_until", *self._CLOSE_PINS)}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            fresh.update({field: item[field] for field in ("_merge_project", "_close_head") if field in item})
+            fresh.update({field: item[field] for field in self._CLOSE_PINS if field in item})
             fresh["_live_floor"] = floor
             if waiver_only:
                 current_head, current_prs, current_waiver, result = self._merged_waiver_only(
@@ -632,6 +643,9 @@ class WaiverMixin:
         return dict(self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats),
                                release=release, flags=flags), closed=True)
 
+    # Read before the write lock and carried onto the fresh row: repository, default commit, landed diff class.
+    _CLOSE_PINS = ("_merge_project", "_close_head", "_no_runtime")
+
     def _auto_close_one(self, principal, item, require_seats, apply, now):
         key = item["key"]
         tier = item.get("review_tier")
@@ -642,7 +656,7 @@ class WaiverMixin:
         self._assert_unlocked(item)
         seated = tier != "none"
         token, changes = self._auto_deploy_scan(item)
-        pinned = dict(item, _close_head=token[0])
+        pinned = dict(item, _close_head=token[0], _no_runtime=no_runtime_change(changes))
         proofs = self._merged_auto_proofs(pinned)
         pending = self._deploy_pending(pinned, changes, token)
         missing = list(pending)
@@ -671,10 +685,10 @@ class WaiverMixin:
             self._assert_unlocked(fresh)
             if fresh["state"] not in self.AUTO_STATES:
                 raise Refused("conflict", f"{key} is {fresh['state']}")
-            stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until", "_merge_project")}
+            stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until", *self._CLOSE_PINS)}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            fresh.update({field: pinned[field] for field in ("_merge_project", "_close_head") if field in pinned})
+            fresh.update({field: pinned[field] for field in self._CLOSE_PINS if field in pinned})
             fresh["_live_floor"] = floor
             if self._merged_auto_proofs(fresh) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
@@ -711,11 +725,14 @@ class WaiverMixin:
         # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
         for commit in self._merged_work_commits(item):
             pr, head, date, sha = self._commit_landing(project, commit)
-            if pr is None or not valid_commit_ref(sha) or not valid_commit_ref(head):
+            # A merge without a PR (a direct lane merge) lands on a D-row its subject cites that names its sha.
+            lane = (self._lane_merge_decision(item, (commit.get("merge") or {}).get("subject"), sha)
+                    if pr is None and valid_commit_ref(sha) else None)
+            if (pr is None and lane is None) or not valid_commit_ref(sha) or not valid_commit_ref(head):
                 raise Refused("evidence_unverified", "merged_pr_missing")
             if all(p["head"] != head for p in proofs):
-                proofs.append({"pr": pr, "head": head, "decision_id": None,
-                               "merge_sha": sha, "merged_at": date})
+                proofs.append({"pr": pr, "head": head, "decision_id": lane, "merge_sha": sha, "merged_at": date,
+                               **({"lane_merge": True} if lane else {})})
         return proofs
 
     def waive_second_family(self, principal, key, decision_id):

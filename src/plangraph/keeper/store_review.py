@@ -336,6 +336,19 @@ class ReviewMixin:
         """The code that holds ``item`` from closing (``live_evidence_status``), or ``None``."""
         return live_evidence_status(item, self._evidence(item["key"]), since)
 
+    _SHA_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+
+    def _lane_merge_decision(self, item, subject, merge_sha):
+        """The first D-id the PR-less merge ``subject`` cites whose decision row names ``merge_sha`` (7 to 40
+        hex digits), else ``None``. A frozen close reads the scan's decision snapshot, never the document."""
+        snapshot = (self.__dict__.get("_landing_decisions") if self.__dict__.get("_frozen_lanes")
+                    else self._decision_snapshot([item["key"]]))
+        rows = snapshot["book"]["rows"] if snapshot else {}
+        for did in context_sources.decision_ids(subject or ""):
+            if any(merge_sha.startswith(token) for line in rows.get(did, ()) for token in self._SHA_TOKEN.findall(line)):
+                return did
+        return None
+
     def _require_live_evidence(self, item):
         """The one close gate; every path ends here under the write lock with the floor it pinned.
 

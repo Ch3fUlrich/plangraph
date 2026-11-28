@@ -730,7 +730,8 @@ class ContextMixin:
         go_rows = self._landing_go_rows(item, proofs, snapshot)
         if snapshot is None:   # an unreadable decisions document is not a missing row
             flags["go_rows_unverified"] = True
-        elif missing := [p["pr"] for p in proofs if p["pr"] not in {row["pr"] for row in go_rows}]:
+        elif missing := [p["pr"] for p in proofs   # a lane merge's proof is its own D-row
+                         if not p.get("lane_merge") and p["pr"] not in {row["pr"] for row in go_rows}]:
             flags["go_row_missing"] = {"prs": missing}
         return {"authority": authority, "landings": landings, "go_rows": go_rows, "flags": flags}
 
