@@ -127,10 +127,13 @@ pub(crate) async fn connect(path: &Path) -> Result<tokio::net::UnixStream, Strin
 mod tests {
     use super::*;
 
+    /// A short 0700 directory under /tmp: a host TMPDIR can be too long for a socket
+    /// path (sun_path holds about 100 bytes) or sit on a filesystem without sockets.
     fn private_tempdir() -> tempfile::TempDir {
         tempfile::Builder::new()
+            .prefix("s-")
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
+            .tempdir_in("/tmp")
             .unwrap()
     }
 

@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _split_ci_environment import timeout_extended
 
 from plangraph.spawner import stall_watchdog as w
 
@@ -27,7 +28,8 @@ def _binary():
                               capture_output=True, text=True, check=True)
         target = json.loads(meta.stdout)['target_directory']
     # Always build: a stale binary from an earlier checkout state would test other code.
-    subprocess.run(['cargo', 'build', '-p', 'pg-spawnd', '--bin', 'pg-spawnd'], cwd=RUST, check=True, timeout=1500)
+    with timeout_extended(1500):
+        subprocess.run(['cargo', 'build', '-p', 'pg-spawnd', '--bin', 'pg-spawnd'], cwd=RUST, check=True, timeout=1500)
     return Path(target) / 'debug/pg-spawnd'
 
 

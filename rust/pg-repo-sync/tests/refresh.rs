@@ -3,8 +3,7 @@
 use std::{fs, path::Path, process::Command};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(repo)
+    let out = pg_worker_core::git_test_support::command(repo)
         .env("FIXTURE", repo.parent().unwrap())
         .args([
             "-c",
@@ -104,6 +103,8 @@ esac"#,
     );
     let invoke = || {
         Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+            .env("HOME", root)
+            .env("XDG_CONFIG_HOME", root.join(".config"))
             .args([
                 "refresh-prs",
                 "--repo",
@@ -158,6 +159,8 @@ esac"#,
     git(&repo, &["reset", "--hard", &main]);
     script(&bin.join("systemctl"), "exit 0");
     let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+        .env("HOME", root)
+        .env("XDG_CONFIG_HOME", root.join(".config"))
         .args([
             "--repo",
             repo.to_str().unwrap(),

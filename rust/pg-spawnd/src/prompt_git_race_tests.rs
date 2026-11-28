@@ -272,11 +272,12 @@ fn healthy_over_cap_producer_returns_too_large_without_waiting_for_eof() {
     #[cfg(unix)]
     let pid = child.id() as i32;
     let start = Instant::now();
+    // Waiting for EOF would run into the 20 s timeout; a loaded host stays far below 10 s.
     assert_eq!(
-        collect_diff(child, 4096, Duration::from_secs(2)),
+        collect_diff(child, 4096, Duration::from_secs(20)),
         Err(InlineDiffError::TooLarge)
     );
-    assert!(start.elapsed() < Duration::from_millis(500));
+    assert!(start.elapsed() < Duration::from_secs(10));
     #[cfg(unix)]
     {
         assert_eq!(

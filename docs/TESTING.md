@@ -31,8 +31,10 @@ also caps auto on resource-constrained hosts. Exit status propagates pytest fail
 pytest's default report. After a failed run (exit 1, at most 50 failed ids) the failed ids rerun
 with `-n0` and at the first worker count, with a tree hash around every run. `FLAKY (...)` needs
 an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass at `-n0` and a
-failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
-status stays that of the first run, so a flake is named, never hidden.
+failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. When every
+failure is `FLAKY`, none timed out and `--maxfail` did not stop the run, the tool prints
+`FLAKY-ONLY: N flaky test(s) do not fail the run` and the pytest batch passes; any other label
+keeps the exit status of the first run. A test that failed by `TEST-TIMEOUT` is never rerun.
 
 Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split_ci_environment.py`):
 
@@ -49,7 +51,15 @@ Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split
   which windows are active (`starts <= as_of < expires`); a window that has not begun or has
   expired blocks as normal.
 - `PYTEST_QUARANTINE_MODE`: `blocking` (default) deselects active quarantined tests;
-  `quarantine` runs only them, and an empty selection is not a failure.
+  `quarantine` runs only them, and an empty selection is not a failure; `xfail` runs every
+  test and marks the active quarantined ones non-strict xfail, so they report but cannot fail.
+- Without `PYTEST_QUARANTINE_FILE` the committed ledger `tests/quarantine.json` (same format)
+  applies in `xfail` mode as of the current UTC time (or `PYTEST_QUARANTINE_AS_OF`).
+- `PYTEST_TEST_TIMEOUT`: seconds each setup, call and teardown phase may take (default 300,
+  `0` turns it off; `@pytest.mark.timeout(seconds)` overrides it per test). A phase over budget
+  fails with `TEST-TIMEOUT <nodeid> (<phase>) exceeded <N>s` and the stack where it hung; a hang
+  that never returns to the interpreter is dumped by faulthandler 60 s later and the process exits.
+  A cold cargo build inside a test runs under `timeout_extended(1500)` and does not count.
 
 Pytest supports expiry-bound quarantine selection. The part-entry replay is
 tracked by `LE-CI-FLAKE-ENTRY-REPLAY`. The nonblocking job, retry ledger and

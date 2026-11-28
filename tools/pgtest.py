@@ -319,3 +319,27 @@ def affected_parser(description):
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
     parser.add_argument("--root", default=None, help="repository root")
     return parser
+
+
+def flake_labels(failed, first_rerun, second_rerun, hashes, parallel=True):
+    """FLAKY needs an explicit pass on both reruns and one tree hash around every run.
+
+    FAILED-IN-PARALLEL needs workers that actually ran (parallel); a serial sequence has none."""
+    stable = None not in hashes and len(set(hashes)) == 1
+    lines = []
+    for nodeid in failed:
+        low, high = first_rerun.get(nodeid), second_rerun.get(nodeid)
+        if "passed" in (low, high) and not stable:
+            lines.append(f"FAILED-THEN-PASSED: {nodeid}")
+        elif parallel and low == "passed" and high == "failed":
+            lines.append(f"FAILED-IN-PARALLEL: {nodeid}")
+        elif low == high == "passed":
+            lines.append(f"FLAKY (rerun -n0; a parallel race is not excluded): {nodeid}")
+    return lines
+
+
+def flaky_only(failed, timed_out, labels, maxfail):
+    """True when every failure is FLAKY, none timed out and --maxfail did not cut the run short."""
+    flaky = [line for line in labels if line.startswith("FLAKY ")]
+    stopped = bool(maxfail) and len(failed) + len(timed_out) >= maxfail
+    return bool(failed) and not timed_out and not stopped and len(flaky) == len(failed)

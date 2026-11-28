@@ -379,11 +379,17 @@ fn remote_validation_and_quotes() {
 fn parallel_outer_deadline_and_slack() {
     let entries = json!({"slow":{},"fast":{}}).as_object().unwrap().clone();
     let start = Instant::now();
-    let rows = gather(&entries, Duration::from_millis(20), |host, _, _| {
-        thread::sleep(Duration::from_millis(if host == "slow" { 700 } else { 40 }));
+    // The outer deadline is 1 s plus 250 ms slack: far above the fast host's 40 ms and far
+    // below the slow host's 20 s, so scheduler delay on a loaded host cannot flip either.
+    let rows = gather(&entries, Duration::from_secs(1), |host, _, _| {
+        thread::sleep(Duration::from_millis(if host == "slow" {
+            20_000
+        } else {
+            40
+        }));
         json!({"host":host,"readable":true})
     });
-    assert!(start.elapsed() < Duration::from_millis(500));
+    assert!(start.elapsed() < Duration::from_secs(10));
     assert!(rows
         .iter()
         .any(|r| r["host"] == "fast" && r["readable"] == true));

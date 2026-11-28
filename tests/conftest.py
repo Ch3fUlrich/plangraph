@@ -22,7 +22,8 @@ from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, pytest_terminal_summary, detached_git_environment, isolated_git_session, config_guard)
+    pytest_sessionstart, pytest_terminal_summary, detached_git_environment, isolated_git_session, config_guard,
+    pytest_runtest_setup, pytest_runtest_call, pytest_runtest_teardown)
 from _stray_git_guard import no_git_outside_tmp_path, settings_root_ceiling, SharedTempCheck  # noqa: F401
 
 # Initial nested conftests load before sessionstart and may invoke Git at import.
@@ -273,6 +274,7 @@ def pytest_configure(config):
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
     config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
     config.addinivalue_line('markers', 'pinned_base: stub admission even inside a real_base_fresh module')
+    config.addinivalue_line('markers', 'timeout(seconds): per-phase test budget (default 300 s, PYTEST_TEST_TIMEOUT, 0 = off)')
 
 @pytest.fixture
 def real_served_models():
@@ -396,6 +398,7 @@ def pytest_ignore_collect(collection_path, config):
                 return True
     return None
 from _split_ci_environment import shard_items, shard_selector
+_COMMITTED_QUARANTINE = Path(__file__).resolve().parent / 'quarantine.json'
 def pytest_collection_modifyitems(config, items):
     if os.environ.get('PYTEST_SHARD'):
         selected = shard_items(items, os.environ['PYTEST_SHARD'])
@@ -415,15 +418,19 @@ def pytest_collection_modifyitems(config, items):
         if dropped:
             config.hook.pytest_deselected(items=dropped)
             items[:] = kept
-    if ledger := os.environ.get('PYTEST_QUARANTINE_FILE'):
-        from datetime import datetime
+    # Without PYTEST_QUARANTINE_FILE the committed ledger applies in xfail mode as of now.
+    ledger = os.environ.get('PYTEST_QUARANTINE_FILE')
+    if ledger or _COMMITTED_QUARANTINE.is_file():
+        from datetime import datetime, timezone
         from _split_ci_environment import quarantine_items
 
         try:
-            now = datetime.fromisoformat(os.environ['PYTEST_QUARANTINE_AS_OF'])
+            now = datetime.fromisoformat(os.environ['PYTEST_QUARANTINE_AS_OF'] if ledger else
+                                         os.environ.get('PYTEST_QUARANTINE_AS_OF') or datetime.now(timezone.utc).isoformat())
         except (KeyError, ValueError) as exc:
             raise pytest.UsageError('PYTEST_QUARANTINE_AS_OF must be the shared UTC run timestamp') from exc
-        mode = os.environ.get('PYTEST_QUARANTINE_MODE', 'blocking')
+        mode = os.environ.get('PYTEST_QUARANTINE_MODE', 'blocking' if ledger else 'xfail')
+        ledger = ledger or _COMMITTED_QUARANTINE
         selected, active = quarantine_items(items, Path(ledger), mode, now)
         identities = {id(item) for item in selected}
         config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])

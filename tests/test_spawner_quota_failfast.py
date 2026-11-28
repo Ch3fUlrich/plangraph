@@ -353,13 +353,19 @@ def test_a_failing_call_log_check_does_not_fail_the_run(tmp_path, monkeypatch):
 
 def test_call_log_poll_is_time_bounded(monkeypatch):
     from plangraph.spawner.gateway_witness import QuotaWatch
+    import threading
+    release = threading.Event()
     monkeypatch.setattr('plangraph.spawner.gateway_witness.QUOTA_POLL_TIMEOUT_S', .05, raising=False)
-    monkeypatch.setattr('plangraph.spawner.gateway_witness.poll_quota', lambda *a, **k: time.sleep(.4) or THRESHOLD)
+    # The poll blocks until released (30 s at most), so a generous bound still proves the timeout.
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.poll_quota', lambda *a, **k: release.wait(30) and THRESHOLD)
     job = SimpleNamespace(model_or_combo='omniroute/gpt-6.1-sol')
     async def run():
         started = time.monotonic()
-        assert await QuotaWatch(job, {}).poll('j', job, {}) is None
-        assert time.monotonic() - started < .3
+        try:
+            assert await QuotaWatch(job, {}).poll('j', job, {}) is None
+            assert time.monotonic() - started < 10
+        finally:
+            release.set()
     asyncio.run(run())
 
 
