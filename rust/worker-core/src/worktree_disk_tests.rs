@@ -64,7 +64,7 @@ fn cache_size_within_slack(measured: u64, files: u64, file_bytes: u64) -> bool {
 fn cache_size_check_allows_allocation_slack_and_rejects_wrong_counts() {
     let files = 3;
     let file_bytes = 4 * 1024 * 1024;
-    let upper = files * (file_bytes + 64 * 1024);
+    let upper = files * (file_bytes + SLACK_PER_FILE);
     for measured in [12_582_912, 12_595_200, upper] {
         let within_slack = cache_size_within_slack(measured, files, file_bytes);
         assert!(within_slack, "{measured}");
