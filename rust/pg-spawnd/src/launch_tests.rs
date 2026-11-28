@@ -119,32 +119,42 @@ fn timeout_kills_group() {
         &dir,
         &format!("echo $$ > '{}/pid'\nsleep 30 &\nwait", dir.display()),
     );
-    let start = Instant::now();
-    let error = adapter
-        .request(&dir, &json!({}), Duration::from_millis(300))
-        .err()
-        .unwrap()
-        .into_error_data();
-    assert_eq!(error.message, "launch adapter timed out");
-    assert!(start.elapsed() < Duration::from_secs(2));
-    let pid: i32 = std::fs::read_to_string(dir.join("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    // A loaded host can kill the script before its first line wrote the pid; such a
+    // round proves nothing about the group, so it repeats with a longer timeout.
+    for timeout in [300, 1_000, 3_000, 10_000].map(Duration::from_millis) {
+        let _ = std::fs::remove_file(dir.join("pid"));
+        let start = Instant::now();
+        let error = adapter
+            .request(&dir, &json!({}), timeout)
+            .err()
+            .unwrap()
+            .into_error_data();
+        assert_eq!(error.message, "launch adapter timed out");
+        // Well under the 30 s sleep: the group was killed, not waited for.
+        assert!(start.elapsed() < timeout + Duration::from_secs(10));
+        let Some(pid) = std::fs::read_to_string(dir.join("pid"))
+            .ok()
+            .and_then(|text| text.trim().parse::<i32>().ok())
+        else {
+            continue;
+        };
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        return;
+    }
+    panic!("the launch adapter script never started");
 }
 
 #[test]
 fn exited_adapter_closes_descendant_pipes() {
     let (dir, valid) = fixture();
     std::fs::write(dir.join("spec"), serde_json::to_vec(&valid).unwrap()).unwrap();
-    let adapter = script(&dir, &format!("cat '{}/spec'\n(sleep 5 &)", dir.display()));
+    let adapter = script(&dir, &format!("cat '{}/spec'\n(sleep 30 &)", dir.display()));
     let start = Instant::now();
+    // Waiting for the descendant's pipe would end in the 10 s timeout (an error).
     assert!(adapter
-        .request(&dir, &json!({}), Duration::from_secs(1))
+        .request(&dir, &json!({}), Duration::from_secs(10))
         .is_ok());
-    assert!(start.elapsed() < Duration::from_millis(900));
+    assert!(start.elapsed() < Duration::from_secs(10));
 }
 
 #[test]

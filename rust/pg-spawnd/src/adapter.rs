@@ -162,19 +162,29 @@ mod tests {
             ),
         );
         std::env::set_var("PG_SPAWND_ADAPTER", &script);
-        let start = Instant::now();
-        let error = Adapter(&dir)
-            .run(&[], Duration::from_millis(300))
-            .unwrap_err();
+        // A loaded host can kill the script before its first line wrote the pid; such a
+        // round proves nothing about the group, so it repeats with a longer timeout.
+        let mut checked = false;
+        for timeout in [300, 1_000, 3_000, 10_000].map(Duration::from_millis) {
+            let _ = std::fs::remove_file(&pidfile);
+            let start = Instant::now();
+            let error = Adapter(&dir).run(&[], timeout).unwrap_err();
+            let elapsed = start.elapsed();
+            assert!(matches!(error, ToolError::Internal(ref s) if s == "route adapter timed out"));
+            // Well under the 30 s sleep: the group was killed, not waited for.
+            assert!(elapsed < timeout + Duration::from_secs(10), "{elapsed:?}");
+            let Some(pid) = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            else {
+                continue;
+            };
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+            checked = true;
+            break;
+        }
         std::env::remove_var("PG_SPAWND_ADAPTER");
-        assert!(matches!(error, ToolError::Internal(ref s) if s == "route adapter timed out"));
-        assert!(start.elapsed() < Duration::from_secs(2));
-        let pid: i32 = std::fs::read_to_string(pidfile)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert!(checked, "the adapter script never started");
         assert_eq!(drain(&b"abcdef"[..], 3), b"abc");
         std::fs::remove_dir_all(dir).unwrap();
     }

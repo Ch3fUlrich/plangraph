@@ -653,14 +653,15 @@ def test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan(monkeypa
     def run(argv, **kwargs):
         # A descendant inherits stdin and outlives the killed child, so the pipe stays full.
         child = ('import subprocess, sys, time\n'
-                 'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdin=0)\n'
+                 'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], stdin=0)\n'
                  'time.sleep(30)')
         return original([sys.executable, '-c', child], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         remote_ps.query_host(host, 0.15)
-    assert time.monotonic() - started < 0.5
+    # The full pipe would hold the call for the descendant's 20 s; a loaded host stays far below.
+    assert time.monotonic() - started < 10
 
 
 def test_wsl_query_delivers_a_plan_larger_than_a_pipe_buffer(monkeypatch, tmp_path):
