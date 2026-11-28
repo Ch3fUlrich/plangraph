@@ -518,11 +518,20 @@ class CloseMixin:
             return
         text = self._merge_text(item)
         index = self.__dict__["_warmed"][project]
-        pending = None
+
+        def record(token, changes):
+            self.__dict__["_deploy_warm"][project, key] = {
+                "text": text, "token": token, "commits": commits, "changes": changes}
+
         try:
             hinted, revision = self._merge_repository(item)
             if (hinted != item["project"] or revision is not None) and hinted != project:
                 return
+            if revision is not None and submit is not None:
+                def named():
+                    with timing.merge_refresh_timing().stage("deploy_snapshot", attempt=False):
+                        self._snapshot_deploy(key, project, commits, previous)
+                return named
             tagged = dict(item, _merge_project=project)
             head = index.get("target")
             if head is None:
@@ -533,23 +542,23 @@ class CloseMixin:
             elif revision is None and submit is not None:
                 pending = submit(unnamed_deploy, self._adapter("git"), self._merge_project(tagged),
                                  dict(tagged, _close_head=head))
-                token, changes = None, None
+                return partial(self._finish_unnamed_deploy, key, head, record, pending)
             else:
                 token, changes = self._deploy_changes(dict(tagged, _close_head=head))
         except Exception:  # noqa: BLE001 - recorded as unreadable
             token, changes = None, None
-        snapshot = {"text": text, "token": token, "commits": commits, "changes": changes}
-        self.__dict__["_deploy_warm"][project, key] = snapshot
-        if pending is not None:
-            return partial(self._finish_unnamed_deploy, key, head, snapshot, pending)
+        if submit is not None:
+            return partial(record, token, changes)
+        record(token, changes)
 
-    def _finish_unnamed_deploy(self, key, head, snapshot, pending):
+    def _finish_unnamed_deploy(self, key, head, record, pending):
         try:
             token, changes = pending.result()
-        except Exception:  # Unreadable tagged history leaves both caches as they stand.
-            return
-        self._named_landings[key, head] = None
-        snapshot.update(token=token, changes=changes)
+        except Exception:  # Unreadable tagged history adds no named landing.
+            token, changes = None, None
+        else:
+            self._named_landings[key, head] = None
+        record(token, changes)
 
     def _deploy_scan_current(self, item, token):
         """Keep a scan across first-parent extensions that add no work for this item."""

@@ -743,7 +743,8 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
                 if identity not in verified:
                     if frozen:        # a warm answer that no longer matches is unknown, never a forge call
                         return None
-                    verified[identity] = _closed_lane_pr(git, repo, hosted, short, tip.strip())
+                    verified[identity] = timing.merge_lookup(("closed_lane_pr", id(git), *identity), lambda:
+                                                             _closed_lane_pr(git, *identity))
                 pr = verified[identity]
                 if pr is None:
                     return None

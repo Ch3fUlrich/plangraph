@@ -34,6 +34,7 @@ from collections import deque
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from functools import partial
 
 from .. import views
 from . import context_sources as src, timing
@@ -41,7 +42,6 @@ from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 from .item_fields import CLOCK_PREMISE_FIELDS
 from .evidence_decisions import decision_book, decisions_naming
-from .evidence_pr import landing_record
 from .evidence_types import valid_commit_ref
 from .store_runs import merged_decision_delivery
 from .schema import DEFINITION_EVENTS
@@ -50,12 +50,21 @@ __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
 STALE_DAYS = 7
 _CLAIM_INDEX_WORKERS = 4
-_MERGE_DEPLOY_WORKERS = 4
+_MERGE_REFRESH_WORKERS = 4
 #: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
 BRIEF_DECISIONS = 6
 BRIEF_STALE_MAX = 240
+
+
+def _read_warm_lanes(git, project, key, head):
+    cache = {}
+    try:
+        src.open_lanes(git, project, key, cache=cache, head=head, fresh=False)
+    except Exception as exc:
+        return cache, exc
+    return cache, None
 
 
 def _payload(raw):
@@ -609,73 +618,60 @@ class ContextMixin:
     #: The operator decision (a ``D-NNN`` row) that stands behind every automatic merge close;
     #: the keeper config sets it. It is recorded in the close evidence, never required to close.
     merge_close_decision = None
-    _LANDING_MISS_S = 600
-
-    def _landing_for(self, project, sha):
-        """The forge's cached record of the landing at *sha*, or ``None`` when it proves nothing.
-
-        A record whose checks are verified never changes and is kept for good. "No merged PR" and a
-        check set that read but is not green are kept for ``_LANDING_MISS_S``; a check set that could
-        not be read is asked again on the next run. The forge is asked outside the keeper lock
-        (``warm_merge_scan``); a frozen run reads only what is cached.
-        """
-        cache = self.__dict__.setdefault("_landings", {})
-        frozen = self.__dict__.get("_frozen_lanes")
-        now = self.now()
-        if found := cache.get((project, sha)):
-            record, at = found
-            checks = record["checks"] if record else None
-            unreadable = bool(checks) and checks["detail"] == "check_runs_unavailable"
-            if frozen or (checks and checks["verified"]) or (now - at < self._LANDING_MISS_S and not unreadable):
-                timing.merge_landing_cache_hit()
-                return record
-        ci, git = self._adapter("ci"), self._adapter("git")
-        if (frozen or not valid_commit_ref(sha)
-                or not callable(getattr(ci, "merged_pr_for", None)) or git is None):
-            return None
-        try:
-            record = landing_record(ci, project, sha, git.repo_ref(project))
-        except Exception:  # noqa: BLE001 - an unreadable forge proves nothing
-            return None
-        cache[(project, sha)] = (record, now)
-        return record
-
-    def _warm_landings(self, project, commits):
-        """Ask the forge for each landing of *commits*, outside the keeper lock."""
-        for commit in commits:
-            self._landing_for(project, (commit.get("merge") or {}).get("sha") or commit.get("sha"))
 
     def _warm_merge_candidates(self, git, project, index, candidates, previous):
+        """Overlap adapter reads and apply their cache updates in candidate order."""
         refresh = timing.merge_refresh_timing()
-        workers = _MERGE_DEPLOY_WORKERS if refresh else 0
-        executor = ThreadPoolExecutor(workers, thread_name_prefix="keeper-merge-deploy") if workers else nullcontext()
+        workers = _MERGE_REFRESH_WORKERS if refresh else 0
+        executor = ThreadPoolExecutor(workers, thread_name_prefix="keeper-merge-io") if workers else nullcontext()
         pending = deque()
+        head, lanes_cache = index.get("target"), self.__dict__["_lanes"]
 
-        def submit(read, *args):
+        def submit(stage, read, *args, attempt=True):
             def timed_read():
-                with refresh.stage("deploy_snapshot", attempt=False):
+                with refresh.stage(stage, attempt=attempt):
                     return read(*args)
             return pool.submit(copy_context().run, timed_read)
 
+        def finish_next():
+            landings, lanes, deploy = pending.popleft()
+            try:
+                landings()
+                lane_records, error = lanes.result()
+                lanes_cache.update(lane_records)
+                if error is not None:
+                    raise error
+                if deploy is not None:
+                    deploy()
+            except BaseException:
+                pending.clear()
+                raise
+
+        deploy_submit = partial(submit, "deploy_snapshot", attempt=False) if workers else None
         with executor as pool:
             try:
                 for key, _ in candidates:
                     commits = timing.merge_stage_call("delivery_lookup", src.indexed_work, index, key, limit=None)["commits"]
                     if not commits:
                         continue
-                    timing.merge_stage_call("landing_warm", self._warm_landings, project, commits)
-                    timing.merge_stage_call("open_lanes", src.open_lanes, git, project, key,
-                                            cache=self.__dict__["_lanes"], head=index.get("target"), fresh=False)
-                    finish = timing.merge_stage_call("deploy_snapshot", self._snapshot_deploy,
+                    landing = timing.merge_stage_call("landing_warm", self._warm_landings, project, commits,
+                                                      submit=submit if workers else None)
+                    if workers:
+                        lanes = submit("open_lanes", _read_warm_lanes, git, project, key, head)
+                    else:
+                        timing.merge_stage_call("open_lanes", src.open_lanes, git, project, key,
+                                                cache=lanes_cache, head=head, fresh=False)
+                    deploy = timing.merge_stage_call("deploy_snapshot", self._snapshot_deploy,
                                                      key, project, commits, previous.get((project, key)),
-                                                     submit=submit if workers else None)
-                    if finish is not None:
-                        pending.append(finish)
-                        if len(pending) == workers:
-                            pending.popleft()()
+                                                     submit=deploy_submit)
+                    if workers:
+                        pending.append((landing, lanes, deploy))
+                        # Queue ahead of a slow candidate while bounding speculative reads.
+                        if len(pending) == 2 * workers:
+                            finish_next()
             finally:
-                for finish in pending:
-                    finish()
+                while pending:
+                    finish_next()
 
     def _decision_snapshot(self, keys):
         """The decisions the landing evidence reads, captured once: ``None`` when unreadable.

@@ -269,6 +269,25 @@ class MergeRefreshTiming:
         self.cache_hits = 0
         self._lock = Lock()
         self._intervals = []
+        self._lookups = {}
+
+    def lookup(self, key, fetch):
+        """Share one observation, including an error, for this generation."""
+        with self._lock:
+            pending = self._lookups.get(key)
+            if pending is None:
+                self._lookups[key] = leader = Future()
+            else:
+                leader = None
+        if leader is None:
+            return pending.result()
+        try:
+            result = fetch()
+        except BaseException as exc:
+            leader.set_exception(exc)
+            raise
+        leader.set_result(result)
+        return result
 
     @contextmanager
     def active(self):
@@ -277,6 +296,7 @@ class MergeRefreshTiming:
             yield
         finally:
             _merge_refresh.reset(token)
+            self._lookups.clear()
 
     @contextmanager
     def stage(self, name, *, attempt=True):
@@ -327,6 +347,12 @@ class MergeRefreshTiming:
 def merge_refresh_timing():
     """Return the current background generation's counters, if any."""
     return _merge_refresh.get()
+
+
+def merge_lookup(key, fetch):
+    """Use the current generation's observation while keeping other callers uncached."""
+    refresh = _merge_refresh.get()
+    return fetch() if refresh is None else refresh.lookup(key, fetch)
 
 
 def merge_stage_call(name, fn, *args, **kwargs):
