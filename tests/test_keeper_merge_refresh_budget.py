@@ -1,5 +1,6 @@
 """The keeper merge-index refresh: a scan budget, a terminal failed state and resume."""
 import logging
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event, Lock, current_thread, local
 from time import sleep
@@ -81,7 +82,6 @@ def test_deploy_reads_overlap_landing_work_with_a_bounded_pool(
     git_adapter = env.store.ctx["git"]
     read_diff = git_adapter.deploy_changes
     lock, overlap, first_deploy = Lock(), Event(), Event()
-    first_wave = Barrier(4, timeout=5)
     workers, named_readers, budgets = set(), set(), []
     active = peak = 0
     concurrent = False
@@ -95,13 +95,10 @@ def test_deploy_reads_overlap_landing_work_with_a_bounded_pool(
             with lock:
                 workers.add(thread)
                 budgets.append(timing.io_timeout(1000))
-                first = len(budgets) <= 4
                 active += 1
                 peak = max(peak, active)
                 first_deploy.set()
             try:
-                if first:
-                    first_wave.wait()
                 sleep(0.08)
             finally:
                 with lock:
@@ -133,7 +130,7 @@ def test_deploy_reads_overlap_landing_work_with_a_bounded_pool(
         return server.merge_refresh._bundle
 
     with monkeypatch.context() as serial:
-        serial.setattr(store_context, "_MERGE_DEPLOY_WORKERS", 0, raising=False)
+        serial.setattr(store_context, "_MERGE_REFRESH_WORKERS", 0)
         expected = scan()
     concurrent = True
     server.merge_refresh = api_routes.MergeRefresh(server)
@@ -144,7 +141,7 @@ def test_deploy_reads_overlap_landing_work_with_a_bounded_pool(
     target = actual["_warmed"]["demo"]["target"]
     assert actual["_named_landings"]["demo:C", target] == named
     assert ("demo:N", target) in actual["_named_landings"]
-    assert peak == len(workers) == 4
+    assert 1 <= peak <= len(workers) <= 4
     assert len(budgets) == 6 and all(0 < left <= 180 for left in budgets)
     assert named_readers == {"keeper-merge-index"}
     assert overlap.is_set()
@@ -167,6 +164,93 @@ def test_deploy_worker_keeps_an_explicit_repository_hint(env, refresh_door, tmp_
     bundle = refresh_door.server.merge_refresh._bundle
     assert bundle["_deploy_warm"]["other", "demo:A"]["changes"] is None
     assert ("demo:A", bundle["_warmed"]["other"]["target"]) not in bundle["_named_landings"]
+
+
+@pytest.mark.parametrize("workers", [1, 2, 4])
+def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
+        env, refresh_door, monkeypatch, caplog, workers):
+    caplog.set_level(logging.INFO, "plangraph.keeper")
+    landings = set()
+    for number, keys in enumerate(("AB", "C", "H", "N", "P", "S"), 81):
+        env.repo.land(keys.lower(), "\n".join(f"Plan-Item: demo:{key}" for key in keys), number)
+        landings.add(git(env.repo.root, "rev-parse", "HEAD"))
+    head = "d" * 40
+    calls, active, threads = Counter(), Counter(), set()
+    lock = Lock()
+    peak, overlap = 0, False
+
+    def slow(stage, key, fn):
+        nonlocal peak, overlap
+        with lock:
+            calls[stage, key] += 1
+            active[stage] += 1
+            threads.add(current_thread().name)
+            peak = max(peak, sum(active.values()))
+            overlap |= sum(count > 0 for count in active.values()) > 1
+        try:
+            sleep(0.025)
+            return fn()
+        finally:
+            with lock:
+                active[stage] -= 1
+
+    def checks(_mode, sha):
+        def unreadable():
+            raise RuntimeError("stable unreadable check-runs")
+        return slow("check_runs", sha, unreadable)
+
+    git_adapter = env.store.ctx["git"]
+    real_deploy = git_adapter.deploy_changes
+    real_lanes = context_sources.open_lanes
+
+    def lanes(git_, project, key, **opts):
+        def read():
+            result = real_lanes(git_, project, key, **opts)
+            opts["cache"][project, "example/fixture", key, opts["head"]] = 100
+            return result
+        return slow("open_lanes", key, read)
+
+    monkeypatch.setattr(git_adapter, "deploy_changes", lambda repo, sha, ref, key: slow(
+        "deploy_snapshot", key, lambda: real_deploy(repo, sha, ref, key)))
+    monkeypatch.setattr(context_sources, "open_lanes", lanes)
+    env.store.ctx["ci"] = SimpleNamespace(
+        mode=lambda project: project, check_runs=checks, merged_pr_for=lambda project, sha, ref: slow(
+            "merged_pr_for", (project, sha, ref), lambda: {"head": {"sha": head}}))
+    refresh = refresh_door.server.merge_refresh
+
+    def scan(size):
+        nonlocal peak, overlap
+        calls.clear()
+        threads.clear()
+        peak, overlap = 0, False
+        monkeypatch.setattr(store_context, "_MERGE_REFRESH_WORKERS", size)
+        refresh.expires_at = 0
+        assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"})[0] == 200
+        assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+        return refresh._bundle, _fields(_records(caplog)[-1])
+
+    with monkeypatch.context() as serial:
+        serial.setattr(timing, "merge_lookup", lambda _key, fetch: fetch(), raising=False)
+        expected, baseline = scan(0)
+    assert baseline["merged_pr_for_attempts"] == baseline["check_runs_attempts"] == "7"
+    serial_bundle, serial_record = scan(0)
+    actual, fields = scan(workers)
+    assert actual == serial_bundle == expected
+    assert len(actual["_lanes"]) == 7 and set(actual["_lanes"].values()) == {100}
+    assert all(value[0]["checks"]["detail"] == "check_runs_unavailable"
+               for value in actual["_landings"].values())
+    assert fields["generation"] == "3"
+    assert {key[1][1] for key, count in calls.items() if key[0] == "merged_pr_for" and count == 1} == landings
+    assert calls["check_runs", head] == 1
+    assert fields["merged_pr_for_attempts"] == serial_record["merged_pr_for_attempts"] == "6"
+    assert fields["check_runs_attempts"] == serial_record["check_runs_attempts"] == "1"
+    assert fields["deploy_snapshot_attempts"] == fields["open_lanes_attempts"] == fields["landing_warm_attempts"] == "7"
+    assert peak == len(threads) == workers
+    assert overlap == (workers > 1)
+    stages = {"landing_warm", "open_lanes", "deploy_snapshot"}
+    io_ms = sum(int(fields[f"{stage}_ms"]) for stage in stages)
+    print(f"refresh sweep workers={workers} wall_ms={fields['elapsed_ms']} io_ms={io_ms} peak={peak} "
+          f"merged_pr_for={fields['merged_pr_for_attempts']} check_runs={fields['check_runs_attempts']}")
 
 
 def test_refresh_timing_sums_concurrent_work_and_subtracts_only_covered_wall_time(caplog):
@@ -207,19 +291,12 @@ def test_refresh_timing_sums_concurrent_work_and_subtracts_only_covered_wall_tim
 def test_refresh_reports_stage_counters_on_ready_generation(
         env, refresh_door, scan_clock, monkeypatch, caplog, capsys, info_enabled):
     caplog.set_level(logging.INFO if info_enabled else logging.WARNING, "plangraph.keeper")
+    monkeypatch.setattr(store_context, "_MERGE_REFRESH_WORKERS", 0)
     set_states(env)
     env.repo.land("c", "Plan-Item: demo:C", 84)
     refresh = refresh_door.server.merge_refresh
     adapter = env.store.ctx["git"]
     store = type(env.store)
-    read_candidates = refresh._read_candidates
-
-    def landed_last():
-        # Complete the owner's clock advances before the worker reads the clock.
-        candidates, scan = read_candidates()
-        return sorted(candidates, key=lambda candidate: candidate[0] == "demo:C"), scan
-
-    monkeypatch.setattr(refresh, "_read_candidates", landed_last)
     for obj, name, ms in [
         (refresh, "_read_candidates", 11), (adapter, "scan_projects", 2.6),
         (store, "_snapshot_landing_decisions", 13), (context_sources, "work_index", 31),
@@ -265,6 +342,7 @@ def test_refresh_reports_stage_counters_on_ready_generation(
 def test_refresh_separates_landing_cache_pr_and_check_calls(
         env, refresh_door, scan_clock, monkeypatch, caplog):
     caplog.set_level(logging.INFO, "plangraph.keeper")
+    monkeypatch.setattr(store_context, "_MERGE_REFRESH_WORKERS", 0)
     set_states(env)
     landings = {}
     for key, pr in [("C", 84), ("S", 85), ("N", 86)]:

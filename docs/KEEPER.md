@@ -352,10 +352,12 @@ Each of `candidate_snapshot`, `decision_snapshot`, `default_ref`, `work_index`,
 `publish_wait` has a `_ms` duration and an `_attempts` count. Attempts include
 calls that raise, and unvisited stages show zero. The `merged_pr_for` and
 `check_runs` durations and attempts, along with `landing_cache_hits`, describe
-forge work during the scan. Up to four deploy workers read pinned history and
-diffs alongside the refresh thread's landing and lane lookups. The refresh
-thread handles explicit named revisions and collects worker results into its
-private caches. All workers share the generation's deadline.
+forge work during the scan. Four workers share the generation's deadline and
+read landing records, lanes and pinned deploy history and diffs. The refresh
+thread handles explicit named revisions and applies results to its private
+caches in candidate order. Merge and CI lookups reuse one observation per
+adapter and exact arguments for the generation. Nested attempts count actual
+adapter calls, including failures.
 
 Stage durations sum work across threads, so they can exceed elapsed wall time.
 `residual_ms` subtracts the wall time covered by any top-level stage before
