@@ -111,6 +111,42 @@ as the check: a silent alarm is itself a line-7 finding.
 - A part that changes how all tests run lands alone.
 - A batch passes its own full CI before it joins a train.
 
+## Own writer lanes and landing
+
+- Work in batches of related items as the batch definition groups them (one area, disjoint
+  paths): one writer brief carries every item of the batch, and each batch head gets one
+  fast-checks run, one review seat and one fix round for all findings. Never one writer, brief
+  or review per item when the items belong to one batch.
+- A ready head (review ACCEPT, fast gates green) goes to the orchestrator's landing train with
+  its head sha, item keys and evidence (rule 3.39). The overseer sends no GO-REQ and merges
+  nothing itself while the orchestrator runs trains.
+- A single item merges alone only when no other item or batch is ready to merge at that moment;
+  it then takes one GO-REQ for its exact head. A head that turns ready before that merge rides
+  the same train.
+- Never re-merge one head per main move. A head that falls behind waits for the next train,
+  which merges main once for all its parts.
+- Each fix round, re-merge and review seat costs a full fast-checks run (25 to 40 minutes on the
+  workstation) and model tokens. Report them per merged item every beat and stop a pattern that
+  repeats.
+
+## When something breaks or waits
+
+Act without being asked; the operator expects the overseer to see a bottleneck first.
+
+- Question every wait. Any step that takes more than twice its usual time, or more than
+  15 minutes (fast-checks, CI, a review seat, a GO, a train), gets measured the same beat:
+  where the time goes, from logs and run records, with numbers.
+- Ask why the work runs at all before asking how to run it faster: a check that cannot fail
+  for this change (a full suite for skill text, a re-merge of disjoint files, a review of an
+  unchanged patch) is waste; propose removing it.
+- A repeat is a defect. The second time the same failure or wait appears, file it on its
+  keeper item (or a new LE item) and propose a fix in code to the operator with the measured
+  cost, a recommended option and what you start if he agrees.
+- Fix forward what is yours inside the rules: a script, a brief, a seat, a host setting. Ask
+  routing only for decision ids, grants and GO rows, and keep working while it answers.
+- Report the bottleneck in the next operator summary even when nobody asked, with the
+  number, the cause and the fix in flight.
+
 ## Operator
 
 - Relay every operator answer or order to routing verbatim, with its time, and ask for the
