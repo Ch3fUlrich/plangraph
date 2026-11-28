@@ -88,12 +88,13 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
             fixture.finish();
         } else {
             if !status.is_empty() {
-                write!(
-                    stream,
+                // One write: the client closes as soon as it rejects a malformed status line, so a
+                // response sent piecewise by write! could hit the closed socket.
+                let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
-                )
-                .unwrap();
+                );
+                stream.write_all(response.as_bytes()).unwrap();
             }
             drop(stream);
             fixture.finish();

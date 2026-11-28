@@ -285,9 +285,10 @@ def test_cli_default_vendor_dir_is_discovered():
 
 
 def test_strip_line_comments_keeps_code():
-    """Only whole-line comments go; code after a closing */ and inline // stay."""
-    js = "/* head\n * more */ var a = 1;\n// gone\n  var url = 'http://x//y'; // tail\n/* one */\nvar b = 2;"
+    """Only blank lines and whole-line comments go; code after a closing */ and inline // stay."""
+    js = "/* head\n * more */ var a = 1;\n// gone\n\n  \n  var url = 'http://x//y'; // tail\n/* one */\nvar b = 2;"
     out = render_mod._strip_line_comments(js)
     assert "var a = 1;" in out and "var b = 2;" in out
     assert "'http://x//y'; // tail" in out
     assert "gone" not in out and "head" not in out and "one" not in out
+    assert all(line.strip() for line in out.split("\n"))

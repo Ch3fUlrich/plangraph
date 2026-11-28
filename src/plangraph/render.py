@@ -200,11 +200,12 @@ def _vendor_scripts(vendor_dir: Path, cdn: bool) -> str:
 
 
 def _strip_line_comments(js: str) -> str:
-    """Drop whole-line ``//`` comments and block comments that start a line.
+    """Drop blank lines, whole-line ``//`` comments and block comments that start a line.
 
     Keeps the page under its size budget (UI-PLAN 12) without a minifier:
-    only lines whose first non-blank characters open a comment are touched,
-    and code after a closing ``*/`` on the same line is kept.
+    only blank lines and lines whose first non-blank characters open a comment
+    are touched, and code after a closing ``*/`` on the same line is kept.
+    The page scripts hold no template literals, so a blank line is never content.
     """
     out, in_block = [], False
     for line in js.split("\n"):
@@ -216,7 +217,7 @@ def _strip_line_comments(js: str) -> str:
                 if rest:
                     out.append(rest)
             continue
-        if text.startswith("//"):
+        if not text or text.startswith("//"):
             continue
         if text.startswith("/*"):
             if "*/" not in text:
