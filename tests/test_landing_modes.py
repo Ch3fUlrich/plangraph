@@ -136,6 +136,8 @@ def test_active_parts_agree_after_a_drop(env, journal, operation):
         assert refused.returncode == 1 and "not an included part" in refused.stderr
     if operation == "land":
         mode(env, "single-pr")
+        env.load()["prs"][str(dropped["pr"])]["labels"] = []  # the dropped part is not batch-ready (train_required)
+        env.save()
         approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
         result = land(env, approval)
         assert result.returncode == 0, result.stderr
