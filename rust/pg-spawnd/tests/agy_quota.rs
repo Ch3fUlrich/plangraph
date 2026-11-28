@@ -80,6 +80,7 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, gemini_only=gemini
             "opencode-go/deepseek-v4.1-flash",
             "opencode-go/glm-5.3-flash",
             "gemini-4-hydrogen-high",
+            "mimo/mimo-v2.6-pro", // the MiMo Pro review leg with read-only tools
             "opencode/deepseek-v4.1-flash-free",
             "gemini-4-argon-low",
             "gemini-4-argon-medium"
