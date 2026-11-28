@@ -32,6 +32,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "vendor/",
     "rust/",
 )
+_is_skill_text = re.compile(r"skills/(?:.+\.md|[^/]+/evals/[^/]+\.json)").fullmatch  # skill pages and eval files
 
 # The standalone Temporal worker job also runs the probe admission guard tests and builds
 # pg-worker-core; the secret deny-list policy JSON is registered here so it selects that job.
@@ -207,9 +208,18 @@ def _is_docs_class(p: str) -> bool:
 
 
 def _is_known(p: str) -> bool:
-    if _is_docs_class(p):
+    if _is_docs_class(p) or _is_skill_text(p):
         return True
     return any(p.startswith(prefix) for prefix in KNOWN_PREFIXES)
+
+
+def _text_only_merge(sha: str):
+    """'text-only merge' for a pushed merge commit whose first-parent diff is only skill text and docs (D-7122)."""
+    run = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True).stdout  # noqa: E731
+    paths = run("diff", "--name-only", f"{sha}^1", sha).split() if len(run("rev-list", "--parents", "-n1", sha).split()) == 3 else []
+    plain = lambda p: (_is_skill_text(p) or _is_docs_class(p)) and not (_is_ci_deps(p) or p in RUST_WORKER_INPUTS  # noqa: E731
+                                                                       or p.endswith(DEPLOY_UNIT_SUFFIXES) or any(fnmatchcase(p, g) for g in RUST_INPUTS))
+    return "text-only merge" if paths and all(map(plain, paths)) else None
 
 
 def select(paths: list[str]) -> dict[str, bool]:
@@ -253,8 +263,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["rust"] = True
         if p in RUST_WORKER_INPUTS:
             res["rust-worker"] = True
-        if p.startswith("skills/") and p.endswith(".md"):
-            # skill pages are guarded by tests/test_skill_*.py
+        if _is_skill_text(p):
+            # skill pages and eval files are guarded by tests/test_skill_*.py
             res["pytest"] = True
             continue
         if _is_docs_class(p):
@@ -636,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
                     evidence = landing_evidence(json.load(handle), args.tree, args.land_creator_id)
             except (OSError, ValueError):
                 evidence = None  # an unreadable record is no evidence: the full suite runs
+        evidence = evidence or (None if args.full or args.event != "push" else _text_only_merge(os.environ.get("GITHUB_SHA", "")))
         if evidence:
             selection = {s: False for s in SUITES} | {"full": False}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
@@ -643,7 +654,6 @@ def main(argv: list[str] | None = None) -> int:
         if evidence:
             lines += ["tested=true", f"evidence={evidence}"]
         output_str = "\n".join(lines) + "\n"
-
         sys.stdout.write(output_str)
 
         gh_out = os.environ.get("GITHUB_OUTPUT")
