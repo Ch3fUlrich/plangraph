@@ -1,0 +1,1 @@
+Review shell allowlist denies redirects, composition and git/cargo/pytest write options. A live opencode probe showed `git diff --output=x` and `git diff > x` wrote files under the previous allowlist.
