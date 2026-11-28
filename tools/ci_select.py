@@ -220,11 +220,10 @@ def _is_text(p: str) -> bool:
 
 
 def _text_only_merge(sha: str):
-    """'text-only merge' for a pushed merge commit whose whole first-parent diff, renames split, is text (D-7122)."""
+    """'text-only merge' for a pushed merge commit whose whole first-parent diff, renames split, is text (D-7122); a non-UTF-8 path is not."""
     run = lambda *a: subprocess.run(["git", *a], capture_output=True).stdout  # noqa: E731
     paths = [p.decode("utf-8", "replace") for p in run("diff", "--no-renames", "--name-only", "-z", f"{sha}^1", sha).split(b"\0") if p]
-    known = paths and "�" not in "".join(paths) and all(map(_is_text, paths))  # a non-UTF-8 path is unknown: full suite
-    return "text-only merge" if len(run("rev-list", "--parents", "-n1", sha).split()) >= 3 and known else None
+    return "text-only merge" if len(run("rev-list", "--parents", "-n1", sha).split()) >= 3 and paths and "\ufffd" not in "".join(paths) and all(map(_is_text, paths)) else None
 
 
 def select(paths: list[str]) -> dict[str, bool]:
