@@ -1,0 +1,1 @@
+A test the faulthandler backstop kills counts as timed out: the timeout plugin records timeouts and the running test in the directory `PYTEST_TIMEOUT_DIR` names, and `tools/affected_tests.py` reads that record instead of the report text, so such a hang is never rerun or excused as flaky.

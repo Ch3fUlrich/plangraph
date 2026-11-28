@@ -17,7 +17,7 @@ import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, cargo_path, flake_labels, flaky_only,
-                    keeper_postgres_files, postgres_bin, report_batches, run_flag_in, run_keeper_postgres,
+                    keeper_postgres_files, postgres_bin, recorded_timeouts, report_batches, run_flag_in, run_keeper_postgres,
                     test_environment, with_result_line)
 
 
@@ -43,9 +43,8 @@ def pytest_runtest_logreport(report):
     if hasattr(_config, "workerinput"):
         return
     if report.failed:
-        timed_out = "TEST-TIMEOUT " in str(report.longrepr) or _outcomes.get(report.nodeid) == "timeout"
-        _outcomes[report.nodeid] = "timeout" if timed_out else "failed"
-    elif _outcomes.get(report.nodeid) not in ("failed", "timeout"):
+        _outcomes[report.nodeid] = "failed"
+    elif _outcomes.get(report.nodeid) != "failed":
         if report.when == "call" and report.passed:
             _outcomes[report.nodeid] = "passed"
         elif report.skipped:
@@ -731,14 +730,26 @@ def _main(root=None):
             def pytest(options, capture=False):
                 """One pytest run: (exit code, {nodeid: outcome}, workers started) from the controller's recorder."""
                 outcomes = Path(scratch) / f"outcomes-{len(runs)}.json"
+                timeouts = Path(scratch) / f"timeouts-{len(runs)}"
+                timeouts.mkdir()
                 runs.append(outcomes)
-                run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTHONPATH=os.pathsep.join(
-                    part for part in (scratch, env.get("PYTHONPATH")) if part))
+                run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTEST_TIMEOUT_DIR=str(timeouts),
+                               PYTHONPATH=os.pathsep.join(part for part in (scratch, env.get("PYTHONPATH")) if part))
                 result = run_pytest(
                     [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
-                return result.returncode, *read_record_file(outcomes)
+                recorded, workers = read_record_file(outcomes)
+                # Timeouts come from the plugin's record, not the report text: a hang the
+                # faulthandler backstop killed reaches the controller only as a crashed worker.
+                timed_out, dumps = recorded_timeouts(timeouts)
+                for dump in dumps:
+                    print(dump, end="")
+                for nodeid in timed_out:
+                    recorded[nodeid] = "timeout"
+                    if not capture:
+                        print(f"TIMED OUT: {nodeid}")
+                return result.returncode, recorded, workers
 
             hashes = [tree_hash(root)]
             code, first, _ = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),

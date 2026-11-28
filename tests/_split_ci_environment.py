@@ -250,6 +250,26 @@ DEFAULT_TEST_TIMEOUT = 300.0
 # reports the crashed worker with the running test's id).
 TIMEOUT_BACKSTOP_GRACE = 60.0
 _ARMED = {}
+#: Directory where timeouts are recorded outside the report text (tools/affected_tests.py sets
+#: it): `timeouts-<pid>` lists each timed-out node id, `armed-<pid>` names the phase running now
+#: and `backstop-<pid>` receives the faulthandler dump, so a non-empty dump names its test.
+TIMEOUT_DIR_ENV = 'PYTEST_TIMEOUT_DIR'
+_BACKSTOP = {}
+
+
+def _timeout_record(kind):
+    directory = os.environ.get(TIMEOUT_DIR_ENV)
+    return Path(directory, f'{kind}-{os.getpid()}') if directory else None
+
+
+def _backstop_stream():
+    """Where the faulthandler dump goes: this process's backstop file, else stderr."""
+    path = _timeout_record('backstop')
+    if path is None:
+        return sys.stderr
+    if _BACKSTOP.get('path') != path:
+        _BACKSTOP.update(path=path, stream=open(path, 'w', encoding='utf-8'))
+    return _BACKSTOP['stream']
 
 
 def phase_timeout_seconds(item, environ=os.environ):
@@ -275,6 +295,9 @@ def _on_timeout(signum, frame):
     # A SIGALRM the test sends itself before the deadline is not this timer's.
     if deadline is None or time.monotonic() < deadline - 0.05:
         return
+    if record := _timeout_record('timeouts'):
+        with open(record, 'a', encoding='utf-8') as stream:
+            stream.write(_ARMED['nodeid'] + '\n')
     pytest.fail(f"TEST-TIMEOUT {_ARMED['nodeid']} ({_ARMED['when']}) exceeded {_ARMED['seconds']:g}s")
 
 
@@ -283,7 +306,10 @@ def _arm(seconds):
     if _signal_timer():
         signal.signal(signal.SIGALRM, _on_timeout)
         signal.setitimer(signal.ITIMER_REAL, seconds)
-    faulthandler.dump_traceback_later(seconds + TIMEOUT_BACKSTOP_GRACE, exit=True)
+    if armed := _timeout_record('armed'):
+        armed.write_text(_ARMED['nodeid'], encoding='utf-8')
+    grace = float(os.environ.get('PYTEST_TIMEOUT_BACKSTOP_GRACE', TIMEOUT_BACKSTOP_GRACE))
+    faulthandler.dump_traceback_later(seconds + grace, exit=True, file=_backstop_stream())
 
 
 @contextmanager
@@ -302,6 +328,8 @@ def phase_timeout(item, when):
     finally:
         _ARMED.clear()
         faulthandler.cancel_dump_traceback_later()
+        if armed := _timeout_record('armed'):
+            armed.write_text('', encoding='utf-8')
         if uses_signal:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, signal.SIG_DFL if previous is None else previous)

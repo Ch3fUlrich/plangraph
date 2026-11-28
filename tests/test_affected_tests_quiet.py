@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import textwrap
@@ -16,6 +17,7 @@ needs_xdist = pytest.mark.skipif(not HAS_XDIST, reason="pytest-xdist missing")
 
 CONFTEST = '''
 import json, os
+from _split_ci_environment import pytest_runtest_setup, pytest_runtest_call, pytest_runtest_teardown
 def pytest_configure(config):
     if not hasattr(config, "workerinput"):
         with open(os.environ["FIXTURE_ARGV_LOG"], "a") as log:
@@ -44,6 +46,9 @@ class Fixture:
                         GIT_AUTHOR_NAME="T", GIT_COMMITTER_NAME="T",
                         GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_EMAIL="t@example.invalid")
         self.env.pop("PYTEST_ADDOPTS", None)
+        # The fixture tree uses the suite's per-test timeout plugin.
+        self.env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(Path(__file__).resolve().parent), self.env.get("PYTHONPATH")) if part)
         self.env.pop("PYTEST_XDIST_WORKER", None)
         (self.tree / "tests").mkdir()
         (self.tree / "conftest.py").write_text(CONFTEST)
@@ -135,14 +140,45 @@ def test_a_flake_that_hit_maxfail_stays_red(fx):
 
 
 def test_a_timed_out_test_is_not_rerun_and_stays_red(fx):
-    fx.write(FLAKY + "\nimport pytest\ndef test_hung():\n"
-             "    pytest.fail('TEST-TIMEOUT tests/test_x.py::test_hung (call) exceeded 1s')\n")
+    fx.write(FLAKY + "\nimport time\nimport pytest\n@pytest.mark.timeout(1)\ndef test_hung():\n"
+             "    time.sleep(60)\n")
     fx.commit()
     result = fx.run()
     assert result.returncode == 1
     reruns = fx.invocations()[1:]
     assert reruns and all("tests/test_x.py::test_hung" not in args for args in reruns)
     assert "FLAKY-ONLY" not in result.stdout
+    assert "TIMED OUT: tests/test_x.py::test_hung" in result.stdout.splitlines()
+
+
+# Hangs once where SIGALRM cannot interrupt it, so only the faulthandler backstop ends it.
+HANGS_ONCE = '''
+import os, signal, time
+from pathlib import Path
+import pytest
+@pytest.mark.timeout(1)
+def test_hangs_once():
+    marker = Path(os.environ["FIXTURE_MARKER"])
+    if not marker.exists():
+        marker.write_text("seen")
+        signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGALRM])
+        time.sleep(60)
+def test_ok():
+    pass
+'''
+
+
+@needs_xdist
+@pytest.mark.skipif(not hasattr(signal, "pthread_sigmask"), reason="needs POSIX signal masks")
+def test_a_hang_killed_by_the_backstop_counts_as_timed_out_and_fails_the_run(fx):
+    fx.write(HANGS_ONCE)
+    fx.commit()
+    fx.env["PYTEST_TIMEOUT_BACKSTOP_GRACE"] = "1"
+    result = fx.run(workers="2")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "TIMED OUT: tests/test_x.py::test_hangs_once" in result.stdout.splitlines()
+    assert "FLAKY" not in result.stdout
+    assert all("tests/test_x.py::test_hangs_once" not in args for args in fx.invocations()[1:])
 
 
 @needs_xdist
