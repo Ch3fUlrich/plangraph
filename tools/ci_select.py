@@ -32,6 +32,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "vendor/",
     "rust/",
 )
+_is_skill_text = re.compile(r"skills/(?:.+\.md|[^/]+/evals/evals\.json)").fullmatch  # skill pages and eval files
 
 # The standalone Temporal worker job also runs the probe admission guard tests and builds
 # pg-worker-core; the secret deny-list policy JSON is registered here so it selects that job.
@@ -207,9 +208,22 @@ def _is_docs_class(p: str) -> bool:
 
 
 def _is_known(p: str) -> bool:
-    if _is_docs_class(p):
+    if _is_docs_class(p) or _is_skill_text(p):
         return True
     return any(p.startswith(prefix) for prefix in KNOWN_PREFIXES)
+
+
+def _is_text(p: str) -> bool:
+    """Skill text or Markdown that no Rust, worker, unit or CI check reads (D-7122)."""
+    return (_is_skill_text(p) or p.endswith(".md")) and not (_is_ci_deps(p) or p in RUST_WORKER_INPUTS
+                                                              or p.endswith(DEPLOY_UNIT_SUFFIXES) or any(fnmatchcase(p, g) for g in RUST_INPUTS))
+
+
+def _text_only_merge(sha: str):
+    """'text-only merge' for a pushed merge commit whose whole first-parent diff, renames split, is text (D-7122)."""
+    run = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True).stdout  # noqa: E731
+    paths = [p for p in run("diff", "--no-renames", "--name-only", "-z", f"{sha}^1", sha).split("\0") if p]
+    return "text-only merge" if len(run("rev-list", "--parents", "-n1", sha).split()) >= 3 and paths and all(map(_is_text, paths)) else None
 
 
 def select(paths: list[str]) -> dict[str, bool]:
@@ -236,8 +250,9 @@ def select(paths: list[str]) -> dict[str, bool]:
         res["full"] = True
         return res
 
-    # 3. Any UNKNOWN path -> full run
-    if any(not _is_known(p) for p in norm_paths):
+    # 3. Any UNKNOWN path, or a skill eval file beside a non-text path (D-7122), -> full run
+    if any(not _is_known(p) for p in norm_paths) or (any(p.endswith(".json") and _is_skill_text(p) for p in norm_paths)
+                                                       and not all(map(_is_text, norm_paths))):
         res = {s: True for s in SUITES}
         res["full"] = True
         return res
@@ -253,8 +268,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["rust"] = True
         if p in RUST_WORKER_INPUTS:
             res["rust-worker"] = True
-        if p.startswith("skills/") and p.endswith(".md"):
-            # skill pages are guarded by tests/test_skill_*.py
+        if _is_skill_text(p):
+            # skill pages and eval files are guarded by tests/test_skill_*.py
             res["pytest"] = True
             continue
         if _is_docs_class(p):
@@ -548,7 +563,6 @@ def write_part_cost(path, record: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CI selector and gate verdict")
     subparsers = parser.add_subparsers(dest="command")
-
     select_parser = subparsers.add_parser("select")
     select_parser.add_argument("--full", action="store_true", help="Force full CI run")
     select_parser.add_argument("--base", type=str, default=None, help="Base commit SHA")
@@ -613,7 +627,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.base is not None and args.head is not None:
                 try:
                     proc = subprocess.run(
-                        ["git", "diff", "--name-only", "-z", f"{args.base}...{args.head}"],
+                        ["git", "diff", "--no-renames", "--name-only", "-z", f"{args.base}...{args.head}"],
                         capture_output=True,
                         check=True,
                     )
@@ -628,7 +642,6 @@ def main(argv: list[str] | None = None) -> int:
             selection = select(args.files)
         else:
             selection = {s: True for s in SUITES} | {"full": True}
-
         evidence = None
         if args.event == "push" and args.statuses:
             try:
@@ -636,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
                     evidence = landing_evidence(json.load(handle), args.tree, args.land_creator_id)
             except (OSError, ValueError):
                 evidence = None  # an unreadable record is no evidence: the full suite runs
+        evidence = evidence or (None if args.full or args.event != "push" else _text_only_merge(os.environ.get("GITHUB_SHA", "")))
         if evidence:
             selection = {s: False for s in SUITES} | {"full": False}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
@@ -643,9 +657,7 @@ def main(argv: list[str] | None = None) -> int:
         if evidence:
             lines += ["tested=true", f"evidence={evidence}"]
         output_str = "\n".join(lines) + "\n"
-
         sys.stdout.write(output_str)
-
         gh_out = os.environ.get("GITHUB_OUTPUT")
         if gh_out:
             with open(gh_out, "a", encoding="utf-8") as f:
@@ -700,13 +712,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             sys.stderr.write("ci-gate: bad needs json\n")
             return 1
-
         problems = gate(needs_obj, require_full=candidate)
         if problems:
             for prob in problems:
                 sys.stderr.write(f"{prob}\n")
             return 1
-
         sys.stdout.write("ci-gate: ok\n")
         return 0
 

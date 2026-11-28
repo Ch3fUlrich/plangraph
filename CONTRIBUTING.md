@@ -151,7 +151,7 @@ protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-rea
 and [lane lifetime](docs/lane-lifetime.md) (`plangraph lane-cleanup`, restore, retry).
 
 CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge queue
-event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
+event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it; a push of a merge whose first-parent diff is only skill text and docs runs the fast jobs, D-7122).
 Every other pull request, draft or ready, runs the affected selection
 (`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
 Title and description corrections use the isolated `ci-pr-description` policy check. The legacy landing reader looks up attempt 1 when metadata evidence omits the attempt or reports null. Base edits still run normal CI (see [CI gate](docs/ci-gate.md)). Ordinary draft lane checks report a literal `ci-gate` without test proof. The legacy landing readers exclude this check from CI admission.
