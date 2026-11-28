@@ -577,7 +577,7 @@ def land_with_lease(args, lease, st, mode):
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
-        require_train(repo, st["base"], [part["pr"] for part in st["merged"]])
+        require_train(repo, st.get("base", "main"), [part["pr"] for part in st["merged"]])
         require_migration_go(st, args.go_row)
         batch_key = landing_batch_key(st) if lease else None
         reruns = require_full_run(repo, st["head"], st["branch"], batch_key)

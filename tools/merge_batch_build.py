@@ -655,6 +655,8 @@ def labelled_prs(repo, label=BATCH_READY):
 def require_train(repo, base, parts):
     """A batch of one part lands alone only while no other pull request is ready for ``base`` (plan exclusions,
     CI finished): several ready ones go into one train, which lands once after its full run."""
+    if len(parts) != 1:  # a train already folds its parts; no pull request listing is needed
+        return
     others = [pr for pr in labelled_prs(repo) if pr["number"] not in parts and not pr["ref"].startswith(("batch/", "land/"))]
     excluded = exclusions(others, base, stack_parents(others))
     ready = sorted(pr["number"] for pr in others if pr["number"] not in excluded and pr["ci"] != "pending")
