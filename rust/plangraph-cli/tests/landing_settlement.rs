@@ -577,7 +577,7 @@ for refused in (False, True):
         stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
         for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
                      'require_green', 'record_reruns', 'prepare_train', 'require_main_green', 'require_migration_go',
-                     'merge_trailers'):
+                     'merge_trailers', 'require_train'):  # require_train lists PRs through gh
             stack.enter_context(patch.object(land, name, Mock()))
         stack.enter_context(patch.object(land, 'require_full_run', return_value=[]))
         stack.enter_context(patch.object(land, 'landing_journal', journal))
