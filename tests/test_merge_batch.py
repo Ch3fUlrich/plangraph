@@ -204,6 +204,18 @@ def test_fold_adds_a_later_pr_as_a_recorded_part(env):
     assert [(m["pr"], m["items"]) for m in st["merged"]] == [(1, ["plangraph:ITEM-A"]), (2, ["plangraph:ITEM-B"])]
 
 
+def test_fold_merges_a_pr_an_earlier_run_skipped(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, title="add a")
+    env.branch_pr(2, {"b.txt": "b\n"}, title="add b")
+    assert env.run("build", "--name", "f2", "--prs", "1").returncode == 0
+    st = json.loads(env.state_file("f2").read_text())
+    st["prs"]["2"] = {"title": "add b", "head": "0" * 40, "ref": "b", "base": "main"}  # known, skipped, not a part
+    env.state_file("f2").write_text(json.dumps(st))
+    assert env.run("fold", "--name", "f2", "--prs", "2").returncode == 0
+    st = json.loads(env.state_file("f2").read_text())
+    assert [m["pr"] for m in st["merged"]] == [1, 2]
+
+
 def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")

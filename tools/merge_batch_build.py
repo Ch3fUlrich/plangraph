@@ -481,7 +481,8 @@ def cmd_fold(args):
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']}: fold needs a built batch")
     if args.worktree:
         st["worktree"] = str(Path(args.worktree).resolve())
-    nums = [num for num in parse_prs(args.prs) if str(num) not in st["prs"]]
+    parts = {part["pr"] for part in st["merged"]}  # a PR skipped on conflict earlier is folded again
+    nums = [num for num in parse_prs(args.prs) if num not in parts]
     infos = {num: fetch_pr(st["repo"], num) for num in nums}
     fetch_heads(st["name"], st["base"], nums, infos, st["repo"])
     for num in nums:
