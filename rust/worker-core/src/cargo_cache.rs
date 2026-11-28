@@ -188,6 +188,13 @@ pub fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> 
     try_lease(target, libc::LOCK_EX)
 }
 
+/// Nonblocking shared flock on the same lock file: held by every user of the target, refused
+/// only while reclaim holds the exclusive one.
+#[cfg(unix)]
+pub fn try_shared_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> {
+    try_lease(target, libc::LOCK_SH)
+}
+
 /// Guard a writer from start through child exit using the same lease as preflight.
 #[cfg(target_os = "linux")]
 pub fn writer_lease(target: &Path) -> io::Result<CacheLease> {
@@ -243,6 +250,10 @@ fn try_lock_file(lease: File, mode: libc::c_int) -> io::Result<Option<CacheLease
 #[cfg(not(unix))]
 pub fn try_exclusive_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
     Err(io::Error::other("disk hygiene requires a Unix host"))
+}
+#[cfg(not(unix))]
+pub fn try_shared_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
+    Err(io::Error::other("cargo pool leases require a Unix host"))
 }
 
 #[cfg(test)]

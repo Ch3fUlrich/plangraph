@@ -1,5 +1,5 @@
 //! Bounded local projection of CI selection; the selector remains authoritative.
-use crate::fast_check_packages::packages;
+use crate::fast_check_packages::{packages, Package};
 #[path = "fast_check_replay.rs"]
 mod replay;
 use pg_worker_core::cargo_cache;
@@ -117,6 +117,51 @@ fn output(root: &Path, args: &[String]) -> Result<String> {
     }
     String::from_utf8(result.stdout).map_err(|e| e.to_string())
 }
+/// fmt and clippy over `lint`, then the tests of `test`, in the workspace of `manifest`; the
+/// worker's tests run under the Temporal wrapper. A verb with no package is left out.
+fn cargo_steps(label: &str, manifest: &str, lint: &[String], test: &[String]) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for (verb, names, tail) in [
+        ("fmt", lint, &["--", "--check"][..]),
+        (
+            "clippy",
+            lint,
+            &["--all-targets", "--", "-D", "warnings"][..],
+        ),
+        ("test", test, &[][..]),
+    ] {
+        if names.is_empty() {
+            continue;
+        }
+        let mut args: Vec<String> = ["cargo", verb, "--manifest-path", manifest]
+            .map(String::from)
+            .into();
+        args.extend(names.iter().flat_map(|n| ["-p".to_string(), n.clone()]));
+        args.extend(tail.iter().map(|s| (*s).to_string()));
+        if verb == "test" && manifest.starts_with("rust/worker/") {
+            let mut wrapper: Vec<String> = [
+                "cargo",
+                "run",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                "pg-spawnd",
+                "--bin",
+                "ci-temporal",
+                "--",
+            ]
+            .map(String::from)
+            .into();
+            wrapper.extend(args);
+            args = wrapper;
+        }
+        steps.push(Step {
+            label: format!("{label}/{verb}"),
+            args,
+        });
+    }
+    steps
+}
 fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)> {
     let mut selector = vec![
         "python3".into(),
@@ -137,6 +182,10 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
             &[
                 "python3",
                 "tools/split/scrub_check.py",
+                "--base",
+                base,
+                "--head",
+                "HEAD",
                 ".",
                 "--rules",
                 "tools/split/manifest.toml",
@@ -191,14 +240,23 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
             && output(root, &external_selector)?
                 .lines()
                 .any(|line| line.trim() == "rust=true");
-        let mut selected = packages(root, paths, enabled("full") || external_rust)?;
-        if enabled("rust-worker") && !selected.iter().any(|(_, n)| n == "pg-worker") {
-            selected.push(("rust/worker/Cargo.toml".into(), "pg-worker".into()));
+        let full = enabled("full");
+        let mut selected = packages(root, paths, full || external_rust, full)?;
+        if enabled("rust-worker") && !selected.iter().any(|p| p.name == "pg-worker") {
+            selected.push(Package {
+                manifest: "rust/worker/Cargo.toml".into(),
+                name: "pg-worker".into(),
+                lint: false,
+            });
         }
-        if selected
-            .iter()
-            .any(|(m, _)| !m.starts_with("rust/worker/") && !m.starts_with("rust/spikes/"))
-        {
+        selected.retain(|p| {
+            !(p.manifest.starts_with("rust/worker/") && !enabled("rust-worker")
+                || p.manifest.starts_with("rust/spikes/") && !enabled("rust-spike"))
+        });
+        let (main, own): (Vec<Package>, Vec<Package>) = selected.into_iter().partition(|p| {
+            !p.manifest.starts_with("rust/worker/") && !p.manifest.starts_with("rust/spikes/")
+        });
+        if !main.is_empty() {
             steps.push(step(
                 "jail-helper",
                 &[
@@ -211,55 +269,32 @@ fn plan(root: &Path, base: &str, paths: &[String]) -> Result<(String, Vec<Step>)
                 ],
             ));
         }
-        for (manifest, name) in selected {
-            if manifest.starts_with("rust/worker/") && !enabled("rust-worker")
-                || manifest.starts_with("rust/spikes/") && !enabled("rust-spike")
-            {
-                continue;
-            }
-            let workspace =
-                if manifest.starts_with("rust/worker/") || manifest.starts_with("rust/spikes/") {
-                    manifest
-                } else {
-                    "rust/Cargo.toml".into()
-                };
-            for (verb, tail) in [
-                ("fmt", vec!["--", "--check"]),
-                ("clippy", vec!["--all-targets", "--", "-D", "warnings"]),
-                ("test", vec![]),
-            ] {
-                let mut args = vec![
-                    "cargo".into(),
-                    verb.into(),
-                    "--manifest-path".into(),
-                    workspace.clone(),
-                    "-p".into(),
-                    name.clone(),
-                ];
-                args.extend(tail.into_iter().map(String::from));
-                if verb == "test" && workspace.starts_with("rust/worker/") {
-                    let mut wrapper: Vec<String> = [
-                        "cargo",
-                        "run",
-                        "--manifest-path",
-                        "rust/Cargo.toml",
-                        "-p",
-                        "pg-spawnd",
-                        "--bin",
-                        "ci-temporal",
-                        "--",
-                    ]
-                    .into_iter()
-                    .map(String::from)
-                    .collect();
-                    wrapper.extend(args);
-                    args = wrapper;
-                }
-                steps.push(Step {
-                    label: format!("{name}/{verb}"),
-                    args,
-                });
-            }
+        // One cargo call per verb for the whole workspace, as CI runs it: cargo then builds
+        // the selected packages in parallel instead of one package after another.
+        let names = |lint: bool, set: &[Package]| -> Vec<String> {
+            set.iter()
+                .filter(|p| p.lint || !lint)
+                .map(|p| p.name.clone())
+                .collect()
+        };
+        steps.extend(cargo_steps(
+            "rust",
+            "rust/Cargo.toml",
+            &names(true, &main),
+            &names(false, &main),
+        ));
+        for package in own {
+            let lint = if package.lint {
+                vec![package.name.clone()]
+            } else {
+                vec![]
+            };
+            steps.extend(cargo_steps(
+                &package.name,
+                &package.manifest,
+                &lint,
+                &[package.name.clone()],
+            ));
         }
     }
     if enabled("pytest") || enabled("pytest-postgres") || enabled("browser") {
@@ -424,6 +459,8 @@ fn execute(args: &[String]) -> Result<()> {
     }
     let primary = cargo_cache::shared_cache_roots().map_err(|e| e.to_string())?;
     let target = resolve_cargo_target(&root, &primary[0], "fast-checks")?;
+    // Every step, the Python ones too, finds cargo on a host whose PATH lacks rustup's bin.
+    let cargo_path = pg_worker_core::cargo_bin::child_path();
     let mut failures = Vec::new();
     let mut checks = Vec::new();
     let results = std::env::var_os(owned::RESULTS_ENV).map(PathBuf::from);
@@ -434,6 +471,9 @@ fn execute(args: &[String]) -> Result<()> {
             || matches!(step.label.as_str(), "affected-tests" | "rust-test-env")
         {
             replay::scrub_test_env(&mut command);
+        }
+        if let Some(path) = &cargo_path {
+            command.env("PATH", path);
         }
         command
             .env("CARGO_TARGET_DIR", &target.path)
