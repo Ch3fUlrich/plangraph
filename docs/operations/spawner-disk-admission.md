@@ -75,6 +75,42 @@ commit to remain reachable from a Git ref.
 When every Cargo pool slot is leased, `plangraph fast-checks` waits up to 30 seconds
 for a slot. It reports exhaustion if every slot stays busy.
 
+### Fast-checks wall time and the slot 0 lease (measured 2026-11-27/28)
+
+Pool slot 0 is the primary target, which is also the shared writer target
+(`pool_slots`, `cargo_pool.rs`). `acquire_slot` takes the first slot whose
+`<slot>.plangraph-lock` it can lock `LOCK_EX`, so every `fast-checks` run on an idle pool
+holds slot 0 exclusively from its first to its last cargo step
+(`fast_check_target.rs::resolve_cargo_target`, lease json `run_id: fast-checks`,
+`slot 0`). `writer_lease` (`cargo_cache.rs`) takes `LOCK_SH` on the same file, so a writer
+launch or resume fails with `CARGO_TARGET_DIR: shared cache is being reclaimed` for the
+whole run. The exclusive hold is needed for the target's artifacts only while a cargo
+command runs; it is not needed between steps, and a pool slot above 0 would not collide
+with writers. A `fast-checks` that is stopped keeps the lock: on the workstation a run
+with a stopped (`T`) cargo child held slot 0 for 2 h 55 min.
+The 30 s slot wait is never the cost: `cargo-pool-lock-waits.jsonl` shows 0 s of
+Cargo lock wait on every build, and no run log shows a slot wait.
+
+Wall time per run (workstation, 32 cores, no sccache; selector output decides the size):
+
+| Selector | Wall | Clippy | Test compile | Test run | Other |
+| --- | --- | --- | --- | --- | --- |
+| no Rust (`rust=false`) | 33 to 96 s | 0 | 0 | 0 | scrub 15 to 26 s, affected tests 23 to 51 s |
+| `rust=true full=false`, few crates | 583 s | 152 s (26%) | 367 s test step (63%, compile and run not split) | | 54 s |
+| `rust=true full=false`, `pg-spawnd` | above 2400 s (timeout) | 336 s | 939 s | 965 s | 64 s |
+| `rust=true full=true` | 1915 to 2131 s | 10 to 15% | 44 to 45% | 37 to 42% | 4% |
+
+On dell (12 cores) a full run is 1265 to 1665 s and a `pg-spawnd` run 660 to 696 s,
+with 18 crates compiled and 250 to 310 s of test runtime. "Test compile" is the test
+step wall minus the sum of the `finished in` times of its test binaries. Four
+`pg-worker` test binaries use 124 s, 137 s, 63 s and 59 s of runtime (`admission_policy_guard`,
+`admission_policy_guard_probes`, `e2e`, `process_crash`). A full run prints 471 to 962
+`Compiling` lines, with each local crate compiled up to 9 times (clippy, test and build
+profiles). The warm shared target of the workstation holds 1.4 GB, so every run starts
+nearly cold. sccache is not installed on the workstation or on dell. The 300 s wall budget is
+now a receipt line, not a failure (`budget overrun wall_ns=... limit_s=300`), so the
+overrun does not refuse a green head; it only measures the host.
+
 Pre-push preflight also pins the shared target, disables incremental builds and
 holds its shared lease while Cargo runs. Cap checks run before and after each
 Cargo command. They count allocated blocks once per file inode. A non-Rust
