@@ -17,11 +17,19 @@ pub(crate) fn configured_mode(repo_root: &Path) -> Result<WorkMode, String> {
 
 // Inject paths for deterministic tests without mutating the process environment.
 fn load_from(repo_root: &Path, user_config_root: &Path) -> Result<WorkMode, String> {
-    for path in [
+    load_paths(&[
         repo_root.join(".plangraph/work-mode.json"),
         user_config_root.join("work-mode.json"),
-    ] {
-        let bytes = match std::fs::read(&path) {
+    ])
+}
+
+pub(crate) fn user_mode() -> Result<WorkMode, String> {
+    load_paths(&[crate::prompt::config_root().join("work-mode.json")])
+}
+
+fn load_paths(paths: &[std::path::PathBuf]) -> Result<WorkMode, String> {
+    for path in paths {
+        let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(format!("work mode config {}: {error}", path.display())),

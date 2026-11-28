@@ -77,6 +77,7 @@ mod seat_admission;
 mod seat_fallback;
 mod serve;
 mod serve_options;
+mod settings_web;
 mod shim;
 mod spawn;
 use pg_spawnd::state;
@@ -88,6 +89,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod work_mode_settings;
 mod worker_liveness;
 mod writer_control;
 mod writer_ledger;

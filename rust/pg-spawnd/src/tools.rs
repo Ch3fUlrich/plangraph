@@ -1,7 +1,7 @@
 //! MCP tool catalogue and dispatch for `pg-spawnd`.
 //!
-//! `tools_list.json` is the committed `TOOLS_METADATA` fixture; `tools/list`
-//! shares the base catalogue; Rust-only native review parameters are added below.
+//! `tools_list.json` contains the shared `TOOLS_METADATA` catalogue plus native
+//! settings; Rust-only native review parameters are added below.
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ListToolsResult, Tool,
@@ -10,8 +10,7 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-/// Committed copy of `plangraph.spawner.mcp.TOOLS_METADATA` (regenerate via the
-/// command in the R6a-1 brief when the Python metadata changes).
+/// Shared Python catalogue plus the Rust-only settings tool.
 pub(crate) const TOOLS_JSON: &str = include_str!("tools_list.json");
 
 pub(crate) fn tools() -> Vec<Tool> {
@@ -91,6 +90,14 @@ pub(crate) fn dispatch(
     runs: Option<&crate::runs::Runs>,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if name == "plangraph_work_mode" {
+        let payload = crate::work_mode_settings::settings(
+            state,
+            &request.arguments.clone().unwrap_or_default(),
+        )
+        .map_err(crate::errors::ToolError::into_error_data)?;
+        return Ok(CallToolResult::success(vec![ContentBlock::text(payload)]));
+    }
     if name == "plangraph_agent_steer" {
         if let Some(args) = request
             .arguments
@@ -404,7 +411,7 @@ mod tests {
             }
         }
         assert_eq!(base, fixture);
-        assert_eq!(listed.len(), 15);
+        assert_eq!(listed.len(), 16);
     }
 
     #[test]
