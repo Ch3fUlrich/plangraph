@@ -101,15 +101,48 @@ def test_a_pass_runs_pytest_once_and_prints_no_label(fx):
     assert "FLAKY" not in result.stdout and "FAILED-" not in result.stdout
 
 
-def test_a_failure_that_passes_both_reruns_is_named_flaky_and_stays_red(fx):
+def test_a_failure_that_passes_both_reruns_is_named_flaky_and_does_not_fail_the_run(fx):
     fx.write(FLAKY)
+    fx.commit()
+    result = fx.run()
+    assert result.returncode == 0, result.stdout
+    assert ("FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky"
+            in result.stdout.splitlines())
+    assert "FLAKY-ONLY: 1 flaky test(s) do not fail the run" in result.stdout.splitlines()
+    assert len(fx.invocations()) == 3
+    assert "-n" in fx.invocations()[1] and fx.invocations()[1][fx.invocations()[1].index("-n") + 1] == "0"
+
+
+def test_a_failure_that_passes_both_reruns_is_named_flaky_and_stays_red(fx):
+    """Next to a real failure the flake is named and the run stays red."""
+    fx.write(FLAKY + "\ndef test_bad():\n    assert False\n")
     fx.commit()
     result = fx.run()
     assert result.returncode == 1
     assert ("FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky"
             in result.stdout.splitlines())
+    assert "FLAKY-ONLY" not in result.stdout
     assert len(fx.invocations()) == 3
     assert "-n" in fx.invocations()[1] and fx.invocations()[1][fx.invocations()[1].index("-n") + 1] == "0"
+
+
+def test_a_flake_that_hit_maxfail_stays_red(fx):
+    fx.write(FLAKY + "\ndef test_later():\n    pass\n")
+    fx.commit()
+    result = fx.run("--maxfail", "1")
+    assert result.returncode == 1
+    assert "FLAKY-ONLY" not in result.stdout
+
+
+def test_a_timed_out_test_is_not_rerun_and_stays_red(fx):
+    fx.write(FLAKY + "\nimport pytest\ndef test_hung():\n"
+             "    pytest.fail('TEST-TIMEOUT tests/test_x.py::test_hung (call) exceeded 1s')\n")
+    fx.commit()
+    result = fx.run()
+    assert result.returncode == 1
+    reruns = fx.invocations()[1:]
+    assert reruns and all("tests/test_x.py::test_hung" not in args for args in reruns)
+    assert "FLAKY-ONLY" not in result.stdout
 
 
 @needs_xdist
@@ -117,7 +150,7 @@ def test_flaky_is_classified_the_same_under_two_workers(fx):
     fx.write(FLAKY)
     fx.commit()
     result = fx.run(workers="2")
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout
     assert "FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky" in result.stdout
     reruns = fx.invocations()[1:]
     assert [args[args.index("-n") + 1] for args in reruns] == ["0", "2"]
@@ -318,7 +351,7 @@ def test_collection_attempt_and_retries_get_isolated_basetemps(fx):
     collection = fx.run("--collect-only")
     assert collection.returncode == 0, collection.stdout + collection.stderr
     run = fx.run()
-    assert run.returncode == 1, run.stdout + run.stderr
+    assert run.returncode == 0, run.stdout + run.stderr
 
     invocations = fx.invocations()
     assert len(invocations) == 4

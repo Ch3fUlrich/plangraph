@@ -143,7 +143,8 @@ def sweep_binary(tmp_path_factory):
     shared = tmp_path_factory.getbasetemp()
     if shared.name.startswith('popen-gw'):
         shared = shared.parent
-    with (shared / 'worktree-sweep-build.lock').open('w') as lock:
+    from _split_ci_environment import timeout_extended
+    with timeout_extended(1500), (shared / 'worktree-sweep-build.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         binary = built_rust_binary('pg-worktree-sweep', cargo_cwd=ROOT / 'rust')
         inputs = [

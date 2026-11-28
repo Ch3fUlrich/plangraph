@@ -1,5 +1,6 @@
 """The writer environment is scrubbed before test fixtures execute."""
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -446,3 +447,100 @@ def test_pytest_quarantine_is_applied_during_collection(tmp_path):
 
 def _nested_pytest_env():
     return {key: value for key, value in os.environ.items() if not key.startswith('PYTEST_')}
+
+
+HANGING = '''
+import time
+import pytest
+from _split_ci_environment import timeout_extended
+
+
+@pytest.fixture
+def stuck():
+    time.sleep(60)
+
+
+def test_hangs():
+    time.sleep(60)
+
+
+@pytest.mark.timeout(1)
+def test_marker_budget():
+    time.sleep(60)
+
+
+def test_stuck_setup(stuck):
+    pass
+
+
+def test_extended_step_has_its_own_budget():
+    with timeout_extended(5):
+        time.sleep(2.5)
+
+
+def test_quick():
+    pass
+'''
+
+
+def _plugin_run(tmp_path, *args, **env):
+    import time
+    run_env = dict(_nested_pytest_env(), PYTHONPATH=str(Path(__file__).resolve().parent), **env)
+    start = time.monotonic()
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
+                             '-p', '_split_ci_environment', *args], cwd=tmp_path, env=run_env,
+                            capture_output=True, text=True, timeout=120)
+    return result, time.monotonic() - start
+
+
+def test_a_hanging_test_fails_by_name_within_its_timeout(tmp_path):
+    (tmp_path / 'test_hang.py').write_text(HANGING)
+    result, elapsed = _plugin_run(tmp_path, 'test_hang.py', PYTEST_TEST_TIMEOUT='2')
+    out = result.stdout + result.stderr
+    assert result.returncode == 1, out
+    assert 'TEST-TIMEOUT test_hang.py::test_hangs (call) exceeded 2s' in out
+    assert 'TEST-TIMEOUT test_hang.py::test_marker_budget (call) exceeded 1s' in out
+    assert 'TEST-TIMEOUT test_hang.py::test_stuck_setup (setup) exceeded 2s' in out
+    assert re.search(r'2 failed, 2 passed, (1 warning, )?1 error', out), out
+    assert elapsed < 60
+
+
+def test_test_timeout_rejects_a_budget_that_is_not_seconds():
+    from types import SimpleNamespace
+    from _split_ci_environment import phase_timeout_seconds
+
+    item = SimpleNamespace(nodeid='t::x', get_closest_marker=lambda name: None)
+    assert phase_timeout_seconds(item, {}) == 300
+    assert phase_timeout_seconds(item, {'PYTEST_TEST_TIMEOUT': '0'}) == 0
+    for raw in ('soon', '-1', 'inf', 'nan'):
+        with pytest.raises(pytest.UsageError, match='not a number of seconds'):
+            phase_timeout_seconds(item, {'PYTEST_TEST_TIMEOUT': raw})
+
+
+def test_quarantined_test_runs_but_cannot_fail_the_run(tmp_path):
+    import json
+    (tmp_path / 'test_q.py').write_text('def test_flaky():\n    assert False\n\ndef test_ok():\n    pass\n')
+    ledger = tmp_path / 'quarantine.json'
+    ledger.write_text(json.dumps({'test_q.py::test_flaky': {
+        'owner': 'plangraph:FIX-THE-FLAKE', 'starts': '2026-11-23T09:00:00+00:00',
+        'expires': '2026-11-25T09:00:00+00:00'}}), encoding='utf-8')
+    (tmp_path / 'conftest.py').write_text(
+        'import os\nfrom pathlib import Path\nfrom datetime import datetime\n'
+        'from _split_ci_environment import quarantine_items\n'
+        'def pytest_collection_modifyitems(config, items):\n'
+        "    quarantine_items(items, Path(os.environ['LEDGER']), 'xfail',\n"
+        "                     datetime.fromisoformat('2026-11-24T09:00:00+00:00'))\n")
+    result, _ = _plugin_run(tmp_path, '-rx', 'test_q.py', LEDGER=str(ledger))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert '1 passed, 1 xfailed' in result.stdout
+    assert 'QUARANTINED owner=plangraph:FIX-THE-FLAKE' in result.stdout
+
+
+def test_the_committed_quarantine_ledger_applies_in_xfail_mode_by_default():
+    from datetime import datetime, timezone
+    from _split_ci_environment import quarantine_items
+
+    ledger = Path(__file__).resolve().parent / 'quarantine.json'
+    quarantine_items([], ledger, 'xfail', datetime.now(timezone.utc))
+    hook = (ledger.parent / 'conftest.py').read_text().split('def pytest_collection_modifyitems', 1)[1]
+    assert "'blocking' if ledger else 'xfail'" in hook and 'ledger = ledger or _COMMITTED_QUARANTINE' in hook
