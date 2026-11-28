@@ -87,6 +87,7 @@ pub(crate) fn discover(
                 crate::disk_hygiene::Candidate::new(path.clone(), root.to_path_buf(), cutoff);
             if let Some(mut item) = discovery_probe(item, &path, &mut keep)? {
                 item.selector_scratch = is_run(&path);
+                item.fixtures = item.selector_scratch;
                 found.push(item);
             }
         }

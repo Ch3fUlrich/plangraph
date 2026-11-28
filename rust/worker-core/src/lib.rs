@@ -79,6 +79,8 @@ pub mod placement_rules;
 pub mod private_targets;
 pub mod probe;
 #[cfg(unix)]
+mod proc_mounts;
+#[cfg(unix)]
 mod reap_journal;
 #[cfg(unix)]
 mod reap_run_dirs;

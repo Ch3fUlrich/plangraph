@@ -34,7 +34,12 @@ fn execute(
                 .chain((temp != tmp).then_some(tmp))
                 .map(Path::to_path_buf)
                 .collect();
-            Ok((scratch, pg_worker_core::cargo_cache::shared_cache_roots()?))
+            let shm = Some(PathBuf::from("/dev/shm"));
+            Ok((
+                scratch,
+                pg_worker_core::cargo_cache::shared_cache_roots()?,
+                shm,
+            ))
         },
     )
 }
@@ -49,11 +54,11 @@ fn execute_with(
     started: Duration,
     inventory: impl Fn(Instant) -> io::Result<HygieneInventory>,
     sample: impl Fn(&Path) -> io::Result<disk_runtime::DiskSpace>,
-    caches: impl FnOnce() -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)>,
+    caches: impl FnOnce() -> io::Result<(Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>)>,
 ) -> io::Result<HygieneReport> {
     let (mut repo, mut pins) = (None, None);
     let mut roots = Vec::new();
-    let mut tmp_root = None;
+    let (mut tmp_root, mut shm_root) = (None, None);
     let (mut apply, mut dry) = (false, false);
     let mut thresholds = Thresholds::default();
     let mut cap = pg_worker_core::cargo_pool::configured_cap_bytes();
@@ -74,7 +79,7 @@ fn execute_with(
             }
             "--apply" => apply = true,
             "--dry-run" => dry = true,
-            "--repo" | "--root" | "--pins" | "--tmp-root" | "--state" => {
+            "--repo" | "--root" | "--pins" | "--tmp-root" | "--shm-root" | "--state" => {
                 let value = PathBuf::from(
                     args.next()
                         .filter(|value| !value.is_empty())
@@ -85,6 +90,7 @@ fn execute_with(
                     "--root" => roots.push(value),
                     "--pins" => pins = Some(value),
                     "--tmp-root" => tmp_root = Some(value),
+                    "--shm-root" => shm_root = Some(value),
                     _ => {}
                 }
             }
@@ -128,10 +134,13 @@ fn execute_with(
         *root = path;
         true
     });
-    let (mut scratch, shared) = caches()?;
+    let (mut scratch, shared, mut shm) = caches()?;
+    // A scratch root named on the command line replaces the host's /tmp and /dev/shm alike.
     if let Some(root) = tmp_root {
         scratch = vec![root];
+        shm = None;
     }
+    shm = shm_root.or(shm);
     let repo = repo.canonicalize()?;
     let layout = disk_hygiene::Layout {
         repo: &repo,
@@ -140,7 +149,17 @@ fn execute_with(
         shared: &shared,
         home: &home,
         cache: None,
+        shm: shm.as_deref(),
         cap,
+    };
+    // A degraded inventory (reader fault, own-process fallback) is reported once per run.
+    let degraded = std::cell::RefCell::new(None);
+    let inventory = |end| {
+        inventory(end).inspect(|rows| {
+            if let Some(fault) = &rows.degraded {
+                degraded.borrow_mut().get_or_insert_with(|| fault.clone());
+            }
+        })
     };
     let tick = (budget.clock)();
     let initial = inventory(budget.start + budget.rank_for);
@@ -159,15 +178,33 @@ fn execute_with(
             .take()
             .unwrap_or_else(|| inventory(end))
     };
+    // Pins, live run checkouts and unit file references, reloaded once they are older than the
+    // refresh budget: reading every run record per candidate does not fit a run's budget.
+    let loaded = std::cell::RefCell::new(None::<(Instant, Guards, Vec<PathBuf>)>);
     let protection = |item: &Candidate, end| {
-        let mut guards = Guards::load(&pins, state)?;
-        guards.pinned.extend(
-            sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, &home)?
-                .into_iter()
-                .filter(|r| item.boundary != repo || r.path != repo)
-                .map(|r| r.path),
-        );
-        if guards.pin_protects(&item.scope) {
+        let mut loaded = loaded.borrow_mut();
+        let now = (budget.clock)();
+        if loaded
+            .as_ref()
+            .is_none_or(|(at, _, _)| now.duration_since(*at) >= budget.refresh_for)
+        {
+            let units = sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, &home)?;
+            // A unit run from the home directory (`WorkingDirectory=%h`) needs the directory,
+            // not every tree below it; its other paths still pin.
+            let units = units.into_iter().map(|r| r.path);
+            let units = units.filter(|path| !home.starts_with(path)).collect();
+            *loaded = Some((now, Guards::load(&pins, state)?, units));
+        }
+        let (_, guards, units) = loaded.as_ref().unwrap();
+        let unit_pins = Guards {
+            pinned: units
+                .iter()
+                .filter(|path| item.boundary != repo || **path != repo)
+                .cloned()
+                .collect(),
+            live: vec![],
+        };
+        if guards.pin_protects(&item.scope) || unit_pins.pin_protects(&item.scope) {
             return Ok(Some("pinned"));
         }
         if guards.protects(&item.scope) {
@@ -228,6 +265,13 @@ fn execute_with(
         }
     }
     report.sync_timing(budget);
+    if let Some(fault) = degraded.take() {
+        report.summary.alarm = true;
+        report.process_reader = Some(fault);
+    }
+    if let Some(fault) = &report.process_reader {
+        eprintln!("ALERT disk hygiene: {fault}");
+    }
     let diagnostic_start = (budget.clock)();
     if diagnostic_start < end {
         pg_worker_core::disk_watermark::record_configured(
@@ -383,7 +427,7 @@ mod tests {
             Duration::ZERO,
             |_| Ok(HygieneInventory::default()),
             disk_runtime::disk_space,
-            || Ok((vec![], vec![])),
+            || Ok((vec![], vec![], None)),
         )
         .unwrap();
         assert!(report.summary.alarm);
@@ -408,7 +452,7 @@ mod tests {
             Duration::ZERO,
             |_| Ok(HygieneInventory::default()),
             disk_runtime::disk_space,
-            || Ok((vec![], vec![])),
+            || Ok((vec![], vec![], None)),
         )
         .unwrap();
         assert!(!stranded.exists(), "{report:?}");
@@ -516,7 +560,7 @@ mod tests {
                         total: 100,
                     })
                 },
-                || Ok((scratch, shared)),
+                || Ok((scratch, shared, None)),
             )
             .unwrap();
             let evictions = result

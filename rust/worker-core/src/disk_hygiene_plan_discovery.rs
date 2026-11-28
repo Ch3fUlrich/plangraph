@@ -51,7 +51,7 @@ pub(super) fn rank_candidate(
             row.work += 1;
             *left -= 1;
             row.walk
-                .step(&item.path, item.cutoff, item.identity.0, uid)?;
+                .step(&item.path, item.cutoff, item.identity.0, uid, item.fixtures)?;
         }
         Ok(())
     })();
@@ -65,6 +65,8 @@ pub struct Layout<'a> {
     pub shared: &'a [PathBuf],
     pub home: &'a Path,
     pub cache: Option<&'a Path>,
+    /// Where pytest makes `pg<pid>-*` run dirs (`/dev/shm`).
+    pub shm: Option<&'a Path>,
     pub cap: u64,
 }
 
@@ -87,10 +89,11 @@ impl Layout<'_> {
             room
         };
         let now = SystemTime::now();
-        let idle = now - Duration::from_secs(1800);
+        let idle = now - IDLE_SCRATCH;
         let main_idle = now - crate::main_target::IDLE_AFTER;
         let legacy = now - idle_targets::IDLE_AFTER;
         let mut found = vec![];
+        let mut sweep = vec![];
         for (tree, locked, detached) in super::super::fast_worktrees::registered(
             self.repo,
             end.saturating_duration_since(clock()),
@@ -167,6 +170,7 @@ impl Layout<'_> {
                     report.keep_boundary(path.to_path_buf(), reason);
                 }
             };
+            let first = found.len();
             if scratch {
                 found.extend(affected_scratch::discover(
                     &boundary,
@@ -207,6 +211,9 @@ impl Layout<'_> {
                 item.maintenance = historical;
                 found.push(item);
             }
+            if scratch {
+                sweep.extend(first..found.len());
+            }
         }
         let parent = self.shared.first().and_then(|root| root.parent());
         if let Some(path) = parent.and_then(|root| root.canonicalize().ok()) {
@@ -222,6 +229,8 @@ impl Layout<'_> {
             )?);
         }
         self.pool_candidates(&mut found, &mut report.summary, now, &mut permit)?;
+        self.nested_targets(&mut found, &mut sweep, now, &mut permit)?;
+        self.shm_runs(&mut found, &mut sweep, now, &mut permit)?;
         for path in self
             .roots
             .iter()
@@ -243,11 +252,21 @@ impl Layout<'_> {
                 report.keep_boundary(root, "root_unavailable");
                 continue;
             };
-            let limits = thresholds.for_filesystem(space.total);
+            // A RAM-backed shm root is far smaller than the work disk: its floors are shares.
+            let shm = self.shm.and_then(|shm| shm.canonicalize().ok());
+            let limits = match shm {
+                Some(shm) if root.starts_with(&shm) => crate::disk_hygiene::Thresholds {
+                    alarm_free_bytes: 0,
+                    cleanup_free_bytes: 0,
+                },
+                _ => thresholds,
+            };
+            let limits = limits.for_filesystem(space.total);
             report
                 .devices
                 .insert(id, Device::new(id, root, Some(space.free), limits));
         }
+        sweep_idle(&mut found, &sweep, &report.devices, now);
         report
             .stage_durations
             .insert("discovery", clock().duration_since(tick).as_secs_f64());
@@ -311,7 +330,7 @@ impl Layout<'_> {
         use crate::{
             cargo_pool::{pool_slot_sets, DEFAULT_POOL_SLOTS},
             cargo_pool_trim::trusted_slot,
-            shared_target::{debug_artifacts, PoolCap, STALE_AFTER},
+            shared_target::PoolCap,
         };
         let fallback = self
             .shared
@@ -337,28 +356,170 @@ impl Layout<'_> {
                     let Some(root) = trusted_slot(primary, slot)? else {
                         continue;
                     };
-                    let mut paths = debug_artifacts(&root)?;
-                    for name in ["debug", "release"] {
-                        let path = root.join(name);
-                        if path.is_dir() && !paths.contains(&path) {
-                            paths.push(path);
-                        }
-                    }
-                    for path in paths {
-                        if !permit() {
-                            return Ok(());
-                        }
-                        let mut item = Candidate::new(path, root.clone(), now - STALE_AFTER)?;
-                        item.scope = root.clone();
-                        item.lease_root = root.clone();
-                        item.maintenance = true;
-                        item.cap = Some(PoolCap(self.cap, total_limit, group.clone()));
-                        found.push(item);
+                    let cap = PoolCap(self.cap, total_limit, group.clone());
+                    // A build in a target nested in this root does not use the root's own
+                    // profiles.
+                    let nested = Some(nested_dirs(&root).into());
+                    if !capped_artifacts(&root, cap, nested, now, found, permit)? {
+                        return Ok(());
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Cargo targets nested in a shared root (`<shared>/<name>`, an agent's own
+    /// CARGO_TARGET_DIR): each is capped like a pool slot, and removed whole when idle. The
+    /// indices of the whole-target candidates go to `sweep`.
+    fn nested_targets(
+        &self,
+        found: &mut Vec<Candidate>,
+        sweep: &mut Vec<usize>,
+        now: SystemTime,
+        permit: &mut impl FnMut() -> bool,
+    ) -> io::Result<()> {
+        for primary in self
+            .shared
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+        {
+            for path in nested_dirs(&primary) {
+                if !permit() {
+                    return Ok(());
+                }
+                let mut whole = Candidate::new(path.clone(), primary.clone(), now - IDLE_SCRATCH)?;
+                whole.maintenance = true;
+                sweep.push(found.len());
+                found.push(whole);
+                let group: std::sync::Arc<[PathBuf]> = vec![path.clone()].into();
+                let cap = crate::shared_target::PoolCap(self.cap, self.cap, group);
+                if !capped_artifacts(&path, cap, None, now, found, permit)? {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Run dirs `pg<pid>-*` that pytest made in the shm root, whose pid no longer runs.
+    fn shm_runs(
+        &self,
+        found: &mut Vec<Candidate>,
+        sweep: &mut Vec<usize>,
+        now: SystemTime,
+        permit: &mut impl FnMut() -> bool,
+    ) -> io::Result<()> {
+        let Some(root) = self.shm.and_then(|root| root.canonicalize().ok()) else {
+            return Ok(());
+        };
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            if !permit() {
+                break;
+            }
+            let pid = entry.file_name().to_str().and_then(|name| {
+                let (pid, rest) = name.strip_prefix("pg")?.split_once('-')?;
+                let pid: libc::pid_t = pid.parse().ok().filter(|pid| *pid > 0)?;
+                (!rest.is_empty()).then_some(pid)
+            });
+            let Some(pid) = pid else {
+                continue;
+            };
+            // SAFETY: signal 0 only checks that the pid exists.
+            let dead = unsafe { libc::kill(pid, 0) } != 0
+                && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if !dead || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let mut item = Candidate::new(entry.path(), root.clone(), now - IDLE_SCRATCH)?;
+            item.lease_root = root.join("pg-hygiene");
+            item.fixtures = true;
+            sweep.push(found.len());
+            found.push(item);
+        }
+        Ok(())
+    }
+}
+
+/// Profile and output directories of a Cargo target root, never a nested target.
+const PROFILES: [&str; 5] = ["debug", "release", "tmp", "doc", "package"];
+
+/// Cargo targets nested in a target root: real directories with their own target markers.
+fn nested_dirs(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return vec![];
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| !PROFILES.iter().any(|name| entry.file_name() == *name))
+        .map(|entry| entry.path())
+        .filter(|path| crate::private_targets::cargo_target(path))
+        .collect()
+}
+/// Scratch younger than this stays, also under disk pressure.
+const IDLE_SCRATCH: Duration = Duration::from_secs(1800);
+/// Scratch and nested targets idle this long go also without disk pressure.
+pub const SWEEP_AFTER: Duration = Duration::from_secs(6 * 3600);
+
+/// The profile and build-unit candidates of one capped target root (a pool slot or a nested
+/// target). False when the discovery budget ran out.
+fn capped_artifacts(
+    root: &Path,
+    cap: crate::shared_target::PoolCap,
+    nested: Option<std::sync::Arc<[PathBuf]>>,
+    now: SystemTime,
+    found: &mut Vec<Candidate>,
+    permit: &mut impl FnMut() -> bool,
+) -> io::Result<bool> {
+    use crate::shared_target::{debug_artifacts, STALE_AFTER};
+    let mut paths = debug_artifacts(root)?;
+    for name in ["debug", "release"] {
+        let path = root.join(name);
+        if path.is_dir() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    for path in paths {
+        if !permit() {
+            return Ok(false);
+        }
+        let mut item = Candidate::new(path, root.to_path_buf(), now - STALE_AFTER)?;
+        item.scope = root.to_path_buf();
+        item.lease_root = root.to_path_buf();
+        item.maintenance = true;
+        item.cap = Some(cap.clone());
+        if let Some(nested) = &nested {
+            item.nested = nested.clone();
+        }
+        found.push(item);
+    }
+    Ok(true)
+}
+
+/// Above the cleanup floor a sweepable candidate goes once idle for [`SWEEP_AFTER`]; under
+/// pressure it keeps its shorter cutoff and goes as rebuildable scratch.
+fn sweep_idle(
+    found: &mut [Candidate],
+    sweep: &[usize],
+    devices: &std::collections::BTreeMap<u64, Device>,
+    now: SystemTime,
+) {
+    for &index in sweep {
+        let Some(item) = found.get_mut(index) else {
+            continue;
+        };
+        let device = devices.get(&item.identity.0);
+        let calm = device.and_then(|row| Some(row.start_free_bytes? >= row.cleanup_floor_bytes));
+        if calm == Some(true) {
+            item.cutoff = now - SWEEP_AFTER;
+            item.maintenance = true;
+        } else {
+            item.maintenance = false;
+        }
     }
 }
 
@@ -444,6 +605,7 @@ impl FinalProof {
                 self.item.cutoff,
                 self.item.identity.0,
                 self.uid,
+                self.item.fixtures,
             )?;
         }
         Ok(self.walk.complete)

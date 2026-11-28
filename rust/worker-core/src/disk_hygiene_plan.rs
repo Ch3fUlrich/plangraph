@@ -188,6 +188,12 @@ pub fn reclaim(
         .stage_durations
         .insert("inventory", now().duration_since(begin).as_secs_f64());
     let mut usable = initial.is_ok();
+    // Every candidate is then kept as probe_unavailable; the report names why.
+    if let Err(error) = &initial {
+        report.summary.alarm = true;
+        let reason = format!("process inventory unavailable: {error}");
+        report.process_reader.get_or_insert(reason);
+    }
     let mut seen = BTreeSet::new();
     let mut rows: Vec<_> = candidates
         .into_iter()
@@ -197,9 +203,11 @@ pub fn reclaim(
                 match &initial {
                     Ok(inv) => item.safe(uid).err().or_else(|| {
                         match (checks.protection)(&item, ranking_end) {
-                            Ok(reason) => {
-                                reason.or_else(|| inv.blocks(&item.scope).then_some("busy"))
-                            }
+                            Ok(reason) => reason.or_else(|| {
+                                let held =
+                                    inv.blocks_outside(&item.scope, Path::new(""), &item.nested);
+                                held.then_some("busy")
+                            }),
                             Err(error) => {
                                 report
                                     .summary
@@ -371,7 +379,7 @@ pub fn reclaim(
                     let mut lease = item.lease_root.as_os_str().to_os_string();
                     let suffix = [".plangraph-lock", "/.lease"];
                     lease.push(suffix[usize::from(item.selector_scratch)]);
-                    if inventory.blocks_except(&item.scope, Path::new(&lease)) {
+                    if inventory.blocks_outside(&item.scope, Path::new(&lease), &item.nested) {
                         row.reason = Some("busy");
                         return Ok(false);
                     }

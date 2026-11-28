@@ -97,6 +97,11 @@ pub fn process_references_direct() -> io::Result<(Vec<std::path::PathBuf>, bool)
     scan_process_paths(Path::new("/proc"), true)
 }
 
+/// Process names that mark a running build.
+const BUILD_TOOLS: [&str; 11] = [
+    "cargo", "rustc", "rustdoc", "cc", "gcc", "clang", "ld", "npm", "make", "cmake", "ninja",
+];
+
 fn scan_process_paths(
     root: &Path,
     references: bool,
@@ -106,13 +111,7 @@ fn scan_process_paths(
     for path in process_dirs(root)? {
         let path = path?;
         match fs::read_to_string(path.join("comm")) {
-            Ok(name) => {
-                building |= [
-                    "cargo", "rustc", "rustdoc", "cc", "gcc", "clang", "ld", "npm", "make",
-                    "cmake", "ninja",
-                ]
-                .contains(&name.trim())
-            }
+            Ok(name) => building |= BUILD_TOOLS.contains(&name.trim()),
             Err(e) if !vanished(&e) => return Err(e),
             _ => {}
         }
@@ -217,6 +216,8 @@ mod hygiene {
     use super::*;
     use crate::disk_hygiene::{file_identity, invalid_inventory, HygieneInventory};
     use crate::private_targets::{process_cargo_path, resolve_deleted_path};
+    use crate::proc_mounts::Mount;
+    use std::path::PathBuf;
     use std::{
         collections::BTreeSet,
         ffi::OsStr,
@@ -230,13 +231,47 @@ mod hygiene {
             .ok_or_else(|| io::ErrorKind::TimedOut.into())
     }
 
-    /// Obtain hygiene evidence from the bounded proc scan or the authoritative reader.
+    /// Obtain hygiene evidence from the bounded proc scan or the authoritative reader. When the
+    /// reader is missing or fails (an older helper without `--hygiene-references`), the inventory
+    /// comes from this user's own processes and carries the reader fault in `degraded`; after a
+    /// fault that is not a timeout the reader is not called again in this process.
     pub fn hygiene_references(deadline: Instant) -> io::Result<HygieneInventory> {
-        let reader = || read_hygiene_processes(&process_reader(), deadline);
+        static READER_FAULT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         if reader_only() {
-            return reader();
+            return read_hygiene_processes(&process_reader(), deadline);
         }
-        resolve_processes(scan_hygiene_processes(Path::new("/proc"), deadline), reader)
+        let reader = || match READER_FAULT.get() {
+            Some(fault) => Err(io::Error::other(fault.clone())),
+            None => read_hygiene_processes(&process_reader(), deadline).inspect_err(|error| {
+                if error.kind() != io::ErrorKind::TimedOut {
+                    let _ = READER_FAULT.set(error.to_string());
+                }
+            }),
+        };
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        resolve_hygiene(
+            scan_hygiene_processes(Path::new("/proc"), deadline),
+            reader,
+            || scan_own_hygiene_processes(Path::new("/proc"), deadline, uid),
+        )
+    }
+
+    /// Denied direct scan: the reader's inventory, else the own-process inventory marked degraded.
+    pub(super) fn resolve_hygiene(
+        direct: io::Result<HygieneInventory>,
+        reader: impl FnOnce() -> io::Result<HygieneInventory>,
+        own: impl FnOnce() -> io::Result<HygieneInventory>,
+    ) -> io::Result<HygieneInventory> {
+        resolve_processes(direct, || {
+            reader().or_else(|fault| {
+                let mut rows = own()?;
+                rows.degraded = Some(format!(
+                    "process reader incompatible: {fault}; inventory from own processes"
+                ));
+                Ok(rows)
+            })
+        })
     }
 
     /// Read the hygiene inventory in the privileged, read-only helper.
@@ -272,7 +307,27 @@ mod hygiene {
             .ok_or_else(invalid_inventory)
     }
 
-    fn insert_link(link: &Path, paths: &mut BTreeSet<Vec<u8>>) -> io::Result<()> {
+    /// Mount tables (theirs, ours) of a process in another mount namespace than this one.
+    pub(super) type Foreign = (Vec<Mount>, Vec<Mount>);
+
+    fn foreign_mounts(pid: &Path) -> io::Result<Option<Foreign>> {
+        let theirs = match fs::read_link(pid.join("ns/mnt")) {
+            Ok(namespace) => namespace,
+            Err(error) if vanished(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if fs::read_link("/proc/self/ns/mnt")? == theirs {
+            return Ok(None);
+        }
+        let ours = crate::proc_mounts::read(Path::new("/proc/self"))?;
+        Ok(Some((crate::proc_mounts::read(pid)?, ours)))
+    }
+
+    fn insert_link(
+        link: &Path,
+        paths: &mut BTreeSet<Vec<u8>>,
+        foreign: Option<&Foreign>,
+    ) -> io::Result<()> {
         let name = match fs::read_link(link) {
             Ok(name) if name.is_absolute() => name,
             Ok(_) => return Ok(()),
@@ -283,26 +338,61 @@ mod hygiene {
             Err(error) if !vanished(&error) => return Err(error),
             result => result.ok(),
         };
+        paths.extend(place(&name, meta.as_ref(), foreign)?);
+        Ok(())
+    }
+
+    /// The paths in this namespace that a process reference `name` (target metadata `meta`)
+    /// protects. A name from another mount namespace maps through both mount tables; an object
+    /// on a device this namespace does not mount is unreachable here and protects nothing.
+    pub(super) fn place(
+        name: &Path,
+        meta: Option<&fs::Metadata>,
+        foreign: Option<&Foreign>,
+    ) -> io::Result<Vec<Vec<u8>>> {
         let bytes = name.as_os_str().as_bytes();
-        if let (Some(actual), Ok(named)) = (&meta, fs::canonicalize(&name)) {
+        let deleted = bytes.strip_suffix(b" (deleted)");
+        if deleted.is_some_and(|base| {
+            base.starts_with(b"/memfd:") || base.starts_with(b"/SYSV") && !base[1..].contains(&b'/')
+        }) {
+            return Ok(vec![]);
+        }
+        let encode = |path: PathBuf| path.into_os_string().into_encoded_bytes();
+        if let Some((theirs, ours)) = foreign {
+            let base = deleted.map_or(name, |base| Path::new(OsStr::from_bytes(base)));
+            let Some(actual) = meta else {
+                return Ok(vec![]);
+            };
+            let Some(hosts) =
+                crate::proc_mounts::host_paths(base, file_identity(actual).0, theirs, ours)
+            else {
+                return Ok(vec![]);
+            };
+            if hosts.is_empty() {
+                return Err(invalid_inventory());
+            }
+            // The verified host path; else every mapped one (a path this user cannot stat, such
+            // as a container overlay, lies outside every tree this user can clean).
+            for host in &hosts {
+                if fs::metadata(host).is_ok_and(|m| file_identity(&m) == file_identity(actual)) {
+                    return Ok(vec![encode(fs::canonicalize(host)?)]);
+                }
+            }
+            return Ok(hosts.into_iter().map(encode).collect());
+        }
+        if let (Some(actual), Ok(named)) = (meta, fs::canonicalize(name)) {
             if file_identity(actual) == file_identity(&fs::metadata(&named)?) {
-                paths.insert(named.into_os_string().into_encoded_bytes());
-                return Ok(());
+                return Ok(vec![encode(named)]);
             }
         }
-        if let Some(base) = bytes.strip_suffix(b" (deleted)") {
-            if base.starts_with(b"/memfd:")
-                || base.starts_with(b"/SYSV") && !base[1..].contains(&b'/')
-            {
-                return Ok(());
-            }
+        if let Some(base) = deleted {
             let base = Path::new(OsStr::from_bytes(base));
-            let base = resolve_deleted_path(base, meta.as_ref().map(file_identity))?;
-            paths.extend([bytes.to_vec(), base.into_os_string().into_encoded_bytes()]);
+            let base = resolve_deleted_path(base, meta.map(file_identity))?;
+            return Ok(vec![bytes.to_vec(), encode(base)]);
         } else if meta.is_some() {
             return Err(invalid_inventory());
         }
-        Ok(())
+        Ok(vec![])
     }
 
     pub(super) fn scan_hygiene_processes(
@@ -312,47 +402,108 @@ mod hygiene {
         let mut rows = HygieneInventory::default();
         for pid in process_dirs(root)? {
             remaining(deadline)?;
-            let pid = pid?;
-            let Some(start) = start_time(&pid)? else {
-                continue;
-            };
-            let mut row = HygieneInventory::default();
-            let scanned = (|| {
-                insert_link(&pid.join("cwd"), &mut row.cwds)?;
-                for name in ["root", "exe"] {
-                    insert_link(&pid.join(name), &mut row.open_paths)?;
-                }
-                for fd in fs::read_dir(pid.join("fd"))? {
-                    remaining(deadline)?;
-                    match fd {
-                        Ok(fd) => insert_link(&fd.path(), &mut row.open_paths)?,
-                        Err(error) if vanished(&error) => continue,
-                        Err(error) => return Err(error),
-                    }
-                }
-                for field in fs::read(pid.join("environ"))?.split(|byte| *byte == 0) {
-                    remaining(deadline)?;
-                    if let Some(value) = field
-                        .strip_prefix(b"CARGO_TARGET_DIR=")
-                        .or_else(|| field.strip_prefix(b"CARGO_BUILD_TARGET_DIR="))
-                        .filter(|value| !value.is_empty())
-                    {
-                        row.cargo_targets.insert(
-                            process_cargo_path(&pid, Path::new(OsStr::from_bytes(value)))?
-                                .into_os_string()
-                                .into_encoded_bytes(),
-                        );
-                    }
-                }
-                Ok(())
-            })();
-            if start_time(&pid)? == Some(start) {
-                scanned?;
+            if let Some(row) = scan_pid(&pid?, deadline)? {
                 rows.merge(row);
             }
         }
         remaining(deadline)?;
         Ok(rows)
+    }
+
+    /// Real, effective, saved and filesystem uid of a process; `None` when it has vanished.
+    fn process_uids(pid: &Path) -> io::Result<Option<Vec<u32>>> {
+        let status = match fs::read_to_string(pid.join("status")) {
+            Ok(status) => status,
+            Err(error) if vanished(&error) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let uids = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Uid:"))
+            .and_then(|line| line.split_whitespace().map(|id| id.parse().ok()).collect())
+            .filter(|uids: &Vec<u32>| !uids.is_empty());
+        uids.map(Some).ok_or_else(invalid_inventory)
+    }
+
+    /// The inventory of the processes `uid` owns, readable without privileges. Other users'
+    /// processes are not seen. An own process whose entries are denied (not dumpable) is skipped
+    /// unless it is a build tool: then the inventory is unusable.
+    pub(super) fn scan_own_hygiene_processes(
+        root: &Path,
+        deadline: Instant,
+        uid: u32,
+    ) -> io::Result<HygieneInventory> {
+        let mut rows = HygieneInventory::default();
+        for pid in process_dirs(root)? {
+            remaining(deadline)?;
+            let pid = pid?;
+            if !process_uids(&pid)?.is_some_and(|uids| uids.contains(&uid)) {
+                continue;
+            }
+            match scan_pid(&pid, deadline) {
+                Ok(row) => rows.merge(row.unwrap_or_default()),
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    let name = match fs::read_to_string(pid.join("comm")) {
+                        Ok(name) => name,
+                        Err(error) if vanished(&error) => continue,
+                        Err(error) => return Err(error),
+                    };
+                    if BUILD_TOOLS.contains(&name.trim()) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("own build process {} unreadable", pid.display()),
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        remaining(deadline)?;
+        Ok(rows)
+    }
+
+    /// One process's cwd, open files, root, executable and Cargo target settings; `None` when
+    /// the process vanished or its pid was reused during the read.
+    fn scan_pid(pid: &Path, deadline: Instant) -> io::Result<Option<HygieneInventory>> {
+        let Some(start) = start_time(pid)? else {
+            return Ok(None);
+        };
+        let mut row = HygieneInventory::default();
+        let scanned = (|| {
+            let foreign = foreign_mounts(pid)?;
+            let foreign = foreign.as_ref();
+            insert_link(&pid.join("cwd"), &mut row.cwds, foreign)?;
+            for name in ["root", "exe"] {
+                insert_link(&pid.join(name), &mut row.open_paths, foreign)?;
+            }
+            for fd in fs::read_dir(pid.join("fd"))? {
+                remaining(deadline)?;
+                match fd {
+                    Ok(fd) => insert_link(&fd.path(), &mut row.open_paths, foreign)?,
+                    Err(error) if vanished(&error) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            for field in fs::read(pid.join("environ"))?.split(|byte| *byte == 0) {
+                remaining(deadline)?;
+                if let Some(value) = field
+                    .strip_prefix(b"CARGO_TARGET_DIR=")
+                    .or_else(|| field.strip_prefix(b"CARGO_BUILD_TARGET_DIR="))
+                    .filter(|value| !value.is_empty())
+                {
+                    row.cargo_targets.insert(
+                        process_cargo_path(pid, Path::new(OsStr::from_bytes(value)))?
+                            .into_os_string()
+                            .into_encoded_bytes(),
+                    );
+                }
+            }
+            Ok(())
+        })();
+        if start_time(pid)? != Some(start) {
+            return Ok(None);
+        }
+        scanned.map(|()| Some(row))
     }
 }
 
@@ -589,6 +740,9 @@ fn resolve_processes<T>(
         other => other,
     }
 }
+#[cfg(all(test, target_os = "linux"))]
+#[path = "disk_runtime_fallback_tests.rs"]
+mod fallback_tests;
 #[cfg(test)]
 #[path = "disk_runtime_tests.rs"]
 mod tests;
