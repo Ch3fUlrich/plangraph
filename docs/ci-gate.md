@@ -22,7 +22,7 @@ this admission check.
 
 The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, architecture and CLI version; cache misses retain the archive SHA-256 check and retry downloads across a six-minute window.
 
-The `select` job (`tools/ci_select.py`) maps changed paths to the suites `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike` and `browser`; `scrub`, `file-size`, `new-code-lang` and `changelog-docs` run on every change. `rust` also starts the native Windows job. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs only those four fast jobs and `ci-gate`.
+The `select` job (`tools/ci_select.py`) maps changed paths to the suites `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike` and `browser`; `scrub`, `file-size`, `new-code-lang` and `changelog-docs` run on every change. `rust` also starts the native Windows job. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs only those four fast jobs and `ci-gate`, except a Rust input under `docs/` (`RUST_INPUTS`, for example `docs/flow-watchdog.md`), which also selects `rust`. A change only under `.github/workflows/` selects `pytest` and `rust`. A draft `lane/*` pull request, and a title or body edit, skip `select` through the `if:` at `tests.yml:37`.
 
 Skill text (`skills/**/*.md` and `skills/<name>/evals/evals.json`) selects only `pytest`, whose affected run picks the skill tests; the skills that Rust embeds keep their Rust jobs, and a skill eval file beside any non-text path runs the full suite. A push to `main` of a merge commit whose first-parent diff (renames split into delete and add) is only skill text and Markdown that no Rust, worker, unit or CI check reads runs the fast jobs only and reports `tested=true` with evidence `text-only merge`; any other path keeps the full suite (D-7122).
 
@@ -70,7 +70,7 @@ Duplicate and wasted work:
 - Repeat runs: 356 distinct pull request head shas, 37 of them with more than one run (46 extra runs, 11 percent); 255 branches averaged 1.58 runs, 26 branches ran three or more.
 - Failed runs: 118 of 402 pull request runs (29 percent); `ci-gate` is the failing job in 130 job rows, behind it the Postgres shards (55), Rust Linux (48), Windows (41) and the SQLite shards (97).
 
-Selection check (`python3 tools/ci_select.py select --files ...`): `docs/` and `*.md` select nothing; `skills/*/SKILL.md` selects `pytest`; `skills/*/evals/evals.json` selects every suite and `full=true` (unknown path) until D-7122 lands; `tools/ci_select.py` selects every suite; `rust/plangraph-cli/**` selects `pytest`, `pytest-postgres` and `rust` (and Windows); `src/plangraph/**` or `tests/**` selects `pytest` and `pytest-postgres`.
+Selection check (`python3 tools/ci_select.py select --files ...`): `docs/` and `*.md` select nothing, except the Rust inputs in `RUST_INPUTS` (`docs/flow-watchdog.md` selects `rust`); `skills/*/SKILL.md` selects `pytest`, plus `rust` for a skill that Rust embeds (`skills/batch-writer/SKILL.md`); `skills/*/evals/evals.json` alone selects `pytest`, and every suite with `full=true` beside a non-text path (D-7122); `tools/ci_select.py` selects every suite; `rust/plangraph-cli/**` selects `pytest`, `pytest-postgres` and `rust` (and Windows); `src/plangraph/**` or `tests/**` selects `pytest` and `pytest-postgres`.
 
 ## Known limits of the commit gate
 
