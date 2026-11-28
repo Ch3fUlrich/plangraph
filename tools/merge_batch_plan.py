@@ -236,7 +236,7 @@ def windows_commands(workflow_text):
 
 def windows_needed(paths, full=False):
     """The Windows job runs whenever CI selects Rust, also for a Python-only change (tools/ci_select.py), and
-    always when CI runs the full suite: a train or batch candidate (ci_select.full_run_required)."""
+    always when CI runs the full suite: the merge candidate into main (ci_select.full_run_required)."""
     import ci_select
     return bool(full or ci_select.select(list(paths))["rust"])
 

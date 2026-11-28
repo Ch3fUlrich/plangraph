@@ -294,32 +294,22 @@ def select(paths: list[str]) -> dict[str, bool]:
     return res
 
 
-#: Label a router GO row puts on a pull request head to name it the merge candidate (D-6392 run-once order).
+#: Label set at merge time on the pull request that is the merge candidate into main (D-6392 run-once order).
 FULL_LABEL = "ci-full"
-BATCH_PREFIX = "batch/"
-#: A landing train's head branch: always the full suite, once, directly before the merge into main.
+#: A landing train's head branch: the merge candidate into main, so the full suite runs on it, once.
 TRAIN_PREFIX = "land/train-"
-#: Label of a part pull request (a batch waiting for a train): it runs the affected selection even on a batch/* head.
+#: Label of a part pull request (a batch waiting for a train): never a candidate, whatever its other labels.
 PART_LABEL = "land-part"
 
 
 def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels=()) -> bool:
-    """The full suite runs once per merge candidate; every part and lane pull request gets the affected selection.
-
-    A pull_request event gets the full suite only for a train head (TRAIN_PREFIX), a batch/* head or a head
-    carrying FULL_LABEL, and only when it targets main. A part (PART_LABEL) that is not a train head runs the
-    affected-only mode, whatever its branch name, draft state or other labels.
-    Push, schedule, workflow_dispatch and merge_group events are the record or the candidate itself: full."""
-    if event != "pull_request":
-        return True
-    if base_ref != "main":
-        return False
+    """The full suite runs exactly once, on the merge candidate into main: a train head (TRAIN_PREFIX) or a
+    pull request labelled FULL_LABEL that is not a part (PART_LABEL), both targeting main, or a manual
+    workflow_dispatch. Every other event runs the affected selection: batch/* heads, parts, lanes,
+    merge_group, and the push to main, whose merged train already ran the full suite."""
     names = set(labels or ())
-    if head_ref.startswith(TRAIN_PREFIX):
-        return True
-    if PART_LABEL in names:   # a part is never a candidate, not even with a stray ci-full label
-        return False
-    return FULL_LABEL in names or head_ref.startswith(BATCH_PREFIX)
+    return event == "workflow_dispatch" or (event == "pull_request" and base_ref == "main" and (
+        head_ref.startswith(TRAIN_PREFIX) or (FULL_LABEL in names and PART_LABEL not in names)))
 
 
 #: Commit-status contexts of the landing mode ``tested-ff`` (LAND-MODE-TESTED-FF). ``land-auth`` is the
@@ -351,7 +341,7 @@ def landing_evidence(statuses, tree: str, creator_id):
     the land App's bot user; statuses report their creator, and an unset id never matches), whose description
     names an evidence run and attempt, and the newest ``ci-full`` status in state success whose description
     names that same run and attempt and the tree of this commit (``tree``). Anything else, a newer failed
-    ``land-auth`` included, is not tested: a push run then runs everything, as before."""
+    ``land-auth`` included, is not tested: a push run then runs the affected selection."""
     if not creator_id or not tree:
         return None
     auth = _latest(statuses, LAND_AUTH)
@@ -418,6 +408,18 @@ def _load_tool(name: str):
     return module
 
 
+def _rust_plan(root, base: str, head: str):
+    """(cargo test commands, workspace packages) for the crates base...head changes plus every crate that
+    depends on them (tools/preflight.py rust_commands); both empty when no Rust path changed."""
+    preflight = _load_tool("preflight")
+    try:
+        commands = preflight.rust_commands(Path(root), base, head)
+    except preflight.SkipFamily:
+        commands = []
+    tests = [preflight.with_no_fail_fast(c) for c in commands if c[:2] == ["cargo", "test"] or c[:3] == ["cargo", "nextest", "run"]]
+    return tests, sorted({c[i + 1] for c in tests for i, arg in enumerate(c[:-1]) if arg == "-p"})
+
+
 def entry_set(root, base: str, head: str) -> dict:
     """What a part must pass on its head before it enters a train.
 
@@ -431,20 +433,10 @@ def entry_set(root, base: str, head: str) -> dict:
     suites = select(paths)
     python_tests = _load_tool("affected_tests").select_tests(root, paths, local=True, base=base, head=head)["tests"]
     fallback = "tests" in python_tests or suites["full"]
-    packages: list[str] = []
-    rust_tests: list[list[str]] = []
-    if any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths):
-        preflight = _load_tool("preflight")
-        try:
-            commands = preflight.rust_commands(root, base, head)
-        except preflight.SkipFamily:
-            commands = []
-        for command in commands:
-            if command[:2] == ["cargo", "test"] or command[:3] == ["cargo", "nextest", "run"]:
-                rust_tests.append(preflight.with_no_fail_fast(command))
-                packages += [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
+    rust = any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths)
+    rust_tests, packages = _rust_plan(root, base, head) if rust else ([], [])
     return {"paths": paths, "suites": {k: v for k, v in suites.items()}, "python_tests": python_tests,
-            "rust_packages": sorted(set(packages)), "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
+            "rust_packages": packages, "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
 
 
 def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", root=None) -> list[list[str]]:
@@ -621,27 +613,19 @@ def main(argv: list[str] | None = None) -> int:
         candidate = full_run_required(args.event, args.base_ref, args.head_ref, labels)
 
     if args.command == "select":
+        paths = None
         if args.full or candidate:
-            selection = {s: True for s in SUITES} | {"full": True}
-        elif args.base is not None or args.head is not None:
-            if args.base is not None and args.head is not None:
-                try:
-                    proc = subprocess.run(
-                        ["git", "diff", "--no-renames", "--name-only", "-z", f"{args.base}...{args.head}"],
-                        capture_output=True,
-                        check=True,
-                    )
-                    raw_text = proc.stdout.decode("utf-8", errors="replace")
-                    paths = [p for p in raw_text.split("\0") if p]
-                    selection = select(paths)
-                except Exception:
-                    selection = {s: True for s in SUITES} | {"full": True}
-            else:
-                selection = {s: True for s in SUITES} | {"full": True}
-        elif args.files is not None:
-            selection = select(args.files)
-        else:
-            selection = {s: True for s in SUITES} | {"full": True}
+            pass
+        elif args.base and args.head:
+            try:
+                raw = subprocess.run(["git", "diff", "--no-renames", "--name-only", "-z", f"{args.base}...{args.head}"],
+                                     capture_output=True, check=True).stdout
+                paths = [p for p in raw.decode("utf-8", errors="replace").split("\0") if p]
+            except Exception:
+                paths = None
+        elif args.base is None and args.head is None and args.files is not None:
+            paths = args.files
+        selection = select(paths) if paths is not None else {s: True for s in SUITES} | {"full": True}
         evidence = None
         if args.event == "push" and args.statuses:
             try:
@@ -654,6 +638,15 @@ def main(argv: list[str] | None = None) -> int:
             selection = {s: False for s in SUITES} | {"full": False}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
         lines.append(f"full={'true' if selection['full'] else 'false'}")
+        # Rust jobs test only the changed crates and their dependents. Without the line the whole workspace runs:
+        # a full run, a Rust input outside rust/ (read by tests of any crate) or no package list.
+        if selection["rust"] and not selection["full"] and args.base and not any(
+                fnmatchcase(p, g) for p in paths if not p.startswith("rust/") for g in RUST_INPUTS):
+            try:
+                packages = _rust_plan(Path.cwd(), args.base, args.head)[1]
+            except Exception:
+                packages = []
+            lines += [f"rust-packages={' '.join(packages)}"] if packages else []
         if evidence:
             lines += ["tested=true", f"evidence={evidence}"]
         output_str = "\n".join(lines) + "\n"

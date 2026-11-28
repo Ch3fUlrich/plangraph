@@ -10,13 +10,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: '23 3 * * *'
 
-# The full suite runs once, on the merge candidate: a train head (land/train-*), a batch/* head without the
-# land-part label, a merge queue event, or a head a router GO row labels ci-full (a push to main and a dispatch
-# also run it). Every other pull request, a part included (label land-part), runs the affected selection
-# (tools/ci_select.py full_run_required).
+# The full suite runs exactly once, on the merge candidate into main: a train head (land/train-*) or a pull
+# request labelled ci-full at merge time, or a manual dispatch. Every other event runs the affected selection
+# (tools/ci_select.py full_run_required): batch/* heads, parts (label land-part), lanes, the merge queue and the
+# push to main, which selects from the pushed-over sha to the pushed sha. Rust jobs then test only the changed
+# crates and the crates that depend on them (select output rust-packages; empty means the whole workspace).
 # An ordinary draft lane pull request gets a literal ci-gate and its no-test step. Suites stay skipped
 # (part admission is review, fast gates and affected tests on the writer host; D-6773).
 # A base edit evaluates the normal gate and suites against the changed base.
@@ -45,6 +44,8 @@ jobs:
       browser: ${{ steps.sel.outputs.browser }}
       full: ${{ steps.sel.outputs.full }}
       tested: ${{ steps.sel.outputs.tested }}
+      rust-packages: ${{ steps.sel.outputs.rust-packages }}
+      base: ${{ steps.sel.outputs.base }}
     permissions:
       contents: read
       statuses: read
@@ -53,14 +54,15 @@ jobs:
         with: {fetch-depth: 0}
       # A push to main of a commit the land App authorized after its full run passed (landing mode tested-ff)
       # runs only the fast jobs; the record is the commit's statuses (tools/ci_select.py landing_evidence).
-      # Without the repository variable LAND_CREATOR_ID nothing is trusted and the full suite runs.
+      # Without the repository variable LAND_CREATOR_ID nothing is trusted and the affected selection runs.
+      # The diff base: the pull request base, the merge queue base, or the sha a push to main moved from.
       - id: sel
         name: Select test suites
         env:
           GH_TOKEN: ${{ github.token }}
           LAND_CREATOR_ID: ${{ vars.LAND_CREATOR_ID }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -75,6 +77,7 @@ jobs:
           python3 tools/ci_select.py select --event "${{ github.event_name }}" \
             --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS" \
             --base "$BASE_SHA" --head "$HEAD_SHA" "${extra[@]}"
+          echo "base=$BASE_SHA" >> "$GITHUB_OUTPUT"
 
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
@@ -240,12 +243,12 @@ jobs:
         if: matrix.shard == 0
         timeout-minutes: 3
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ needs.select.outputs.base }}
         uses: ./.github/actions/bounded-step
         with:
           seconds: 165
           command: |
-            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            if [ "${{ needs.select.outputs.full }}" != "true" ]; then
               python tools/affected_tests.py --base "$BASE_SHA" > "$RUNNER_TEMP/plan.json"
             else
               echo '{"tests": ["tests"]}' > "$RUNNER_TEMP/plan.json"
@@ -254,12 +257,12 @@ jobs:
       - name: pytest
         timeout-minutes: 15
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ needs.select.outputs.base }}
         uses: ./.github/actions/bounded-step
         with:
           seconds: 885
           command: |
-            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            if [ "${{ needs.select.outputs.full }}" != "true" ]; then
               python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
             else
               python -m pytest -q -n auto --dist loadgroup --durations=30 tests
@@ -273,9 +276,9 @@ jobs:
     if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
     # Sum of the step timeouts (every step running to its own limit): checkout 3 + Python 3
-    # + pip 5 + browser cache 3 + package list 4 + apt cache restore 3 + deps 17 + apt cache
-    # save 3 + Chromium 5 + browser tests 10 + screenshots 3 = 59.
-    timeout-minutes: 60
+    # + pip 5 + browser cache restore 3 + package list 4 + apt cache restore 3 + deps 17 + apt cache
+    # save 3 + Chromium 8 + browser cache save 3 + browser tests 10 + screenshots 3 = 65.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
         timeout-minutes: 3
@@ -289,9 +292,12 @@ jobs:
         with:
           seconds: 285
           command: python -m pip install --quiet -r requirements-ci.txt
+      # The Chromium download gets its own cache, restored here and saved right after a good install
+      # (also when the tests then fail), so the timed test step never downloads a browser.
       - name: Restore Playwright browser cache
+        id: playwright-cache
         timeout-minutes: 3
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
@@ -361,11 +367,26 @@ jobs:
           path: ~/apt-archives/*.deb
           key: apt-chromium-${{ runner.os }}-${{ hashFiles('.ci-apt-packages.txt') }}
       - name: Install Chromium
-        timeout-minutes: 5
+        timeout-minutes: 8
         uses: ./.github/actions/bounded-step
         with:
-          seconds: 285
-          command: python -m playwright install chromium
+          seconds: 465
+          command: |
+            limits=(200 110 110)
+            for try in 1 2 3; do
+              if timeout -k 10s "${limits[$((try - 1))]}" python -m playwright install chromium; then
+                exit 0
+              fi
+              echo "playwright install chromium try $try failed"
+            done
+            exit 1
+      - name: Save Playwright browser cache
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 3
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
       - name: browser tests
         timeout-minutes: 10
         uses: ./.github/actions/bounded-step
@@ -469,14 +490,14 @@ jobs:
         timeout-minutes: 10
         if: matrix.shard == 0
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ needs.select.outputs.base }}
         uses: ./.github/actions/bounded-step
         with:
           seconds: 585
           command: |
             FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                     | xargs grep -L sqlite3 | tr '\n' ' ')
-            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            if [ "${{ needs.select.outputs.full }}" != "true" ]; then
               PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run --collect-only
             else
               PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
@@ -484,7 +505,7 @@ jobs:
       - name: pytest (contract suite + keeper storage tests on Postgres)
         timeout-minutes: 30
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ needs.select.outputs.base }}
         uses: ./.github/actions/bounded-step
         with:
           seconds: 1785
@@ -492,7 +513,7 @@ jobs:
             # keeper modules that never open the SQLite file directly
             FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                     | xargs grep -L sqlite3 | tr '\n' ' ')
-            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            if [ "${{ needs.select.outputs.full }}" != "true" ]; then
               python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
               exit $?
             fi
@@ -556,20 +577,30 @@ jobs:
           key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo fmt --check
         run: cargo fmt --check
+      # RUST_PACKAGES names the changed crates and their dependents; empty runs the whole workspace.
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        env:
+          RUST_PACKAGES: ${{ needs.select.outputs.rust-packages }}
+        run: |
+          packages=(); for p in $RUST_PACKAGES; do packages+=(-p "$p"); done
+          cargo clippy "${packages[@]}" --all-targets -- -D warnings
       - name: cargo check (windows-gnu)
+        if: needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd ') || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-worker-core ')
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
+        env:
+          RUST_PACKAGES: ${{ needs.select.outputs.rust-packages }}
         run: |
-          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test
+          packages=(); for p in $RUST_PACKAGES; do packages+=(-p "$p"); done
+          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test "${packages[@]}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.14"}
       - name: Native writer lifecycle (Python 3.14)
+        if: needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd ')
         run: cargo test -p pg-spawnd --test native_writer
 
   rust-windows:
@@ -593,9 +624,12 @@ jobs:
             rust/target
           # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
           key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
+      # Each crate runs when the selection names it or names no crates (the whole workspace).
       - name: cargo test -p pg-spawnd
+        if: needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-spawnd ')
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
+        if: needs.select.outputs.rust-packages == '' || contains(format(' {0} ', needs.select.outputs.rust-packages), ' pg-worker-core ')
         run: cargo test -p pg-worker-core
 
   rust-worker:

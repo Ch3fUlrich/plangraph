@@ -78,10 +78,27 @@ def test_browser_deps_are_installed_by_apt_in_a_bounded_retried_step_that_fails_
     assert position("Install Chromium system dependencies") < position("Install Chromium")
 
 
+def test_chromium_download_is_its_own_bounded_retried_cached_step_before_the_timed_tests():
+    chromium = step_named("Install Chromium")
+    text = command(chromium)
+    assert "timeout -k 10s" in text and "python -m playwright install chromium" in text
+    assert "for try in 1 2 3" in text and re.search(r"exit 1\s*$", text.strip()), text
+    limits = [int(n) for n in re.search(r"limits=\(([\d ]+)\)", text).group(1).split()]
+    assert len(limits) == 3 and int(chromium["with"]["seconds"]) > sum(limits) + 30
+    assert int(chromium["with"]["seconds"]) < chromium["timeout-minutes"] * 60
+    restore, save = step_named("Restore Playwright browser cache"), step_named("Save Playwright browser cache")
+    assert restore["id"] == "playwright-cache" and restore["uses"].startswith("actions/cache/restore@")
+    assert save["uses"].startswith("actions/cache/save@") and save["if"] == "steps.playwright-cache.outputs.cache-hit != 'true'"
+    assert save["with"] == restore["with"] and restore["with"]["path"] == "~/.cache/ms-playwright"
+    # Saved right after a good install, so a later red test step still keeps the download.
+    assert position("Restore Playwright browser cache") < position("Install Chromium")
+    assert position("Install Chromium") + 1 == position("Save Playwright browser cache")
+    assert position("Save Playwright browser cache") < position("browser tests")
+
+
 def test_browser_download_and_tests_are_not_relaxed_and_do_not_use_apt():
     chromium = step_named("Install Chromium")
-    assert command(chromium) == "python -m playwright install chromium"
-    assert "continue-on-error" not in chromium
+    assert "continue-on-error" not in chromium and "if" not in chromium
     tests = step_named("browser tests")
     assert tests["with"]["seconds"] == 585
     assert command(tests) == TESTS_COMMAND
