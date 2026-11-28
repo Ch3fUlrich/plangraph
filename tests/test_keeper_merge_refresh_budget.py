@@ -1,15 +1,17 @@
 """The keeper merge-index refresh: a scan budget, a terminal failed state and resume."""
+import json
 import logging
+import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event, Lock, current_thread, local
-from time import sleep
+from time import monotonic, sleep
 from types import SimpleNamespace
 
 import pytest
 
 from door_util import Doors
-from plangraph.keeper import api_routes, context_sources, store_context, timing
+from plangraph.keeper import api_routes, context_sources, store_context, store_review, timing
 from test_keeper_merge_close_auto import Repo, env, git, set_states  # noqa: F401  (includes the shared fixture)
 
 
@@ -166,9 +168,49 @@ def test_deploy_worker_keeps_an_explicit_repository_hint(env, refresh_door, tmp_
     assert ("demo:A", bundle["_warmed"]["other"]["target"]) not in bundle["_named_landings"]
 
 
+def _hosted_sweep(env, tmp_path, monkeypatch, lane_calls):
+    root, hosted = env.repo.root, "example/fixture"
+    tips = {name: env.repo.land(name, "unmerged work", 0, merge=False) for name in ("lane/ab", "lane/ac")}
+    remote = tmp_path / "origin.git"
+    git(tmp_path, "clone", "-q", "--bare", str(root), str(remote))
+    git(root, "remote", "add", "origin", str(remote))
+    expected = {}
+    for number, (branch, tip) in enumerate(tips.items(), 101):
+        git(remote, "update-ref", f"refs/pull/{number}/head", tip)
+        expected[str(root), hosted, branch, tip] = number
+    adapter = env.store.ctx["git"]
+    real_git, real_run = adapter._run, subprocess.run
+
+    def fake_origin(repo, args, **kwargs):
+        if args == ["remote", "get-url", "origin"]:
+            return subprocess.CompletedProcess(args, 0, f"https://github.com/{hosted}.git\n", "")
+        return real_git(repo, args, **kwargs)
+
+    def fake_forge(args, *rest, **kwargs):
+        if args[:3] != ["gh", "pr", "list"]:
+            return real_run(args, *rest, **kwargs)
+        if "--head" not in args:
+            assert args[args.index("--state") + 1] == "open"
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+        branch = args[args.index("--head") + 1]
+        key = str(kwargs["cwd"]), args[args.index("--repo") + 1], branch, tips[branch]
+        with lock:
+            lane_calls[key] += 1
+        response = [{"number": expected[key], "state": "CLOSED", "headRefOid": tips[branch],
+                     "isCrossRepository": False}]
+        return subprocess.CompletedProcess(args, 0, json.dumps(response), "")
+
+    lock = Lock()
+    monkeypatch.setattr(context_sources, "time", SimpleNamespace(monotonic=monotonic, time=env.store.now))
+    monkeypatch.setattr(adapter, "_run", fake_origin)
+    monkeypatch.setattr(subprocess, "run", fake_forge)
+    return expected
+
+
 @pytest.mark.parametrize("workers", [1, 2, 4])
+@pytest.mark.parametrize("hosted", [False, True], ids=["local", "hosted"])
 def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
-        env, refresh_door, monkeypatch, caplog, workers):
+        env, refresh_door, tmp_path, monkeypatch, caplog, workers, hosted):
     caplog.set_level(logging.INFO, "plangraph.keeper")
     landings = set()
     for number, keys in enumerate(("AB", "C", "H", "N", "P", "S"), 81):
@@ -176,28 +218,40 @@ def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
         landings.add(git(env.repo.root, "rev-parse", "HEAD"))
     head = "d" * 40
     calls, active, threads = Counter(), Counter(), set()
+    lane_calls = Counter()
+    lane_records = _hosted_sweep(env, tmp_path, monkeypatch, lane_calls) if hosted else {}
     lock = Lock()
-    peak, overlap = 0, False
+    peak, overlap, arrivals, barrier = 0, False, 0, None
 
-    def slow(stage, key, fn):
-        nonlocal peak, overlap
+    def slow(stage, fn):
+        nonlocal peak, overlap, arrivals
         with lock:
-            calls[stage, key] += 1
             active[stage] += 1
             threads.add(current_thread().name)
             peak = max(peak, sum(active.values()))
             overlap |= sum(count > 0 for count in active.values()) > 1
+            gate = barrier if barrier is not None and arrivals < barrier.parties else None
+            arrivals += 1
         try:
-            sleep(0.025)
+            if gate is not None:
+                gate.wait()
+            if stage != "landing_warm":
+                sleep(0.025)
             return fn()
         finally:
             with lock:
                 active[stage] -= 1
 
+    def forge(stage, key, fn):
+        with lock:
+            calls[stage, key] += 1
+        sleep(0.025)
+        return fn()
+
     def checks(_mode, sha):
         def unreadable():
             raise RuntimeError("stable unreadable check-runs")
-        return slow("check_runs", sha, unreadable)
+        return forge("check_runs", sha, unreadable)
 
     git_adapter = env.store.ctx["git"]
     real_deploy = git_adapter.deploy_changes
@@ -206,27 +260,34 @@ def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
     def lanes(git_, project, key, **opts):
         def read():
             result = real_lanes(git_, project, key, **opts)
-            opts["cache"][project, "example/fixture", key, opts["head"]] = 100
+            if not hosted:
+                opts["cache"][project, "example/fixture", key, opts["head"]] = 100
             return result
-        return slow("open_lanes", key, read)
+        return slow("open_lanes", read)
 
+    read_landings = store_review._read_landings
+    monkeypatch.setattr(store_review, "_read_landings", lambda *args: slow(
+        "landing_warm", lambda: read_landings(*args)))
     monkeypatch.setattr(git_adapter, "deploy_changes", lambda repo, sha, ref, key: slow(
-        "deploy_snapshot", key, lambda: real_deploy(repo, sha, ref, key)))
+        "deploy_snapshot", lambda: real_deploy(repo, sha, ref, key)))
     monkeypatch.setattr(context_sources, "open_lanes", lanes)
     env.store.ctx["ci"] = SimpleNamespace(
-        mode=lambda project: project, check_runs=checks, merged_pr_for=lambda project, sha, ref: slow(
+        mode=lambda project: project, check_runs=checks, merged_pr_for=lambda project, sha, ref: forge(
             "merged_pr_for", (project, sha, ref), lambda: {"head": {"sha": head}}))
     refresh = refresh_door.server.merge_refresh
 
     def scan(size):
-        nonlocal peak, overlap
+        nonlocal peak, overlap, arrivals, barrier
         calls.clear()
+        lane_calls.clear()
         threads.clear()
-        peak, overlap = 0, False
+        peak, overlap, arrivals = 0, False, 0
+        barrier = Barrier(size, timeout=5) if size > 1 else None
         monkeypatch.setattr(store_context, "_MERGE_REFRESH_WORKERS", size)
         refresh.expires_at = 0
         assert refresh_door.http("system", "POST", _REFRESH_PATH, {"refresh": "start"})[0] == 200
         assert _await_scan(refresh_door, _REFRESH_PATH) == (200, {"scan": "ready"})
+        assert barrier is None or not barrier.broken
         return refresh._bundle, _fields(_records(caplog)[-1])
 
     with monkeypatch.context() as serial:
@@ -234,9 +295,14 @@ def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
         expected, baseline = scan(0)
     assert baseline["merged_pr_for_attempts"] == baseline["check_runs_attempts"] == "7"
     serial_bundle, serial_record = scan(0)
+    serial_lane_calls = lane_calls.copy()
     actual, fields = scan(workers)
     assert actual == serial_bundle == expected
-    assert len(actual["_lanes"]) == 7 and set(actual["_lanes"].values()) == {100}
+    if hosted:
+        assert actual["_lanes"] == lane_records
+        assert lane_calls == serial_lane_calls == Counter(dict.fromkeys(lane_records, 1))
+    else:
+        assert len(actual["_lanes"]) == 7 and set(actual["_lanes"].values()) == {100}
     assert all(value[0]["checks"]["detail"] == "check_runs_unavailable"
                for value in actual["_landings"].values())
     assert fields["generation"] == "3"
@@ -248,6 +314,7 @@ def test_refresh_worker_sweep_reuses_only_generation_forge_reads(
     assert peak == len(threads) == workers
     assert overlap == (workers > 1)
     stages = {"landing_warm", "open_lanes", "deploy_snapshot"}
+    assert all(int(fields[f"{stage}_ms"]) > 0 for stage in stages)
     io_ms = sum(int(fields[f"{stage}_ms"]) for stage in stages)
     print(f"refresh sweep workers={workers} wall_ms={fields['elapsed_ms']} io_ms={io_ms} peak={peak} "
           f"merged_pr_for={fields['merged_pr_for_attempts']} check_runs={fields['check_runs_attempts']}")
