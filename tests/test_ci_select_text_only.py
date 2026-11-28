@@ -59,3 +59,48 @@ def test_push_skips_heavy_jobs_only_for_a_text_only_merge(tmp_path, monkeypatch,
     needs = {"select": {"result": "success", "outputs": out}} | {j: {"result": "success"} for j in cs.ALWAYS}
     needs |= {s: {"result": "success"} for s in (*cs.SUITES, "rust-windows")} if not skipped else {}
     assert cs.gate(needs, require_full=True) == []
+
+
+def _repo(tmp_path):
+    def git(*a):
+        return subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True).stdout.decode()
+    git("init", "-q", "-b", "main"); git("config", "user.email", "t@example.invalid"); git("config", "user.name", "t")
+    (tmp_path / "base.md").write_text("base\n"); git("add", "-A"); git("commit", "-q", "-m", "base")
+    return git
+
+
+def test_a_path_that_is_not_utf8_runs_the_full_suite(tmp_path, monkeypatch):
+    git = _repo(tmp_path)
+    git("checkout", "-q", "-b", "lane")
+    (tmp_path / "docs").mkdir(); (tmp_path / "docs" / "ok.md").write_text("x\n")
+    with open(bytes(tmp_path / "docs") + b"/\xff.md", "w") as handle:
+        handle.write("x\n")
+    git("add", "-A"); git("commit", "-q", "-m", "bytes"); git("checkout", "-q", "main")
+    git("merge", "-q", "--no-ff", "-m", "merge", "lane")
+    monkeypatch.chdir(tmp_path)
+    assert cs._text_only_merge(git("rev-parse", "HEAD").strip()) is None
+
+
+@pytest.mark.parametrize("second,skipped", [("docs/b.md", True), ("src/plangraph/m.py", False)])
+def test_an_octopus_merge_is_text_only_only_when_every_branch_is_text(tmp_path, monkeypatch, second, skipped):
+    git = _repo(tmp_path)
+    for lane, path in (("a", "docs/a.md"), ("b", second)):
+        git("checkout", "-q", "-b", lane, "main")
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True); (tmp_path / path).write_text(lane + "\n")
+        git("add", "-A"); git("commit", "-q", "-m", lane)
+    git("checkout", "-q", "main"); git("merge", "-q", "--no-ff", "-m", "octopus", "a", "b")
+    assert len(git("rev-list", "--parents", "-n1", "HEAD").split()) == 4
+    monkeypatch.chdir(tmp_path)
+    assert (cs._text_only_merge(git("rev-parse", "HEAD").strip()) == "text-only merge") is skipped
+
+
+def test_a_pull_request_renaming_code_into_docs_still_selects_its_suite(tmp_path, monkeypatch, capsys):
+    git = _repo(tmp_path)
+    (tmp_path / "src/plangraph").mkdir(parents=True); (tmp_path / "src/plangraph/m.py").write_text("same\n" * 20)
+    git("add", "-A"); git("commit", "-q", "-m", "code"); base = git("rev-parse", "HEAD").strip()
+    git("checkout", "-q", "-b", "lane"); (tmp_path / "docs").mkdir(); git("mv", "src/plangraph/m.py", "docs/m.md")
+    git("commit", "-q", "-m", "rename"); head = git("rev-parse", "HEAD").strip()
+    monkeypatch.chdir(tmp_path); monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert cs.main(["select", "--event", "pull_request", "--base", base, "--head", head]) == 0
+    out = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert out["pytest"] == "true" and "tested" not in out
