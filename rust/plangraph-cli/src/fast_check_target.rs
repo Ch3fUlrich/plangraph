@@ -125,7 +125,8 @@ fn resolve_with_cap(
     acquire_slot_with_wait(primary, slots.len(), run, SLOT_WAIT_LIMIT)
 }
 
-/// Wait for a real pool lease so concurrent checks still respect the pool size.
+/// Wait for a pool lease: an own slot, else the writers' primary shared; only reclaim of the
+/// primary while every other slot is leased makes a check wait.
 fn acquire_slot_with_wait(
     primary: &Path,
     count: usize,
@@ -135,7 +136,7 @@ fn acquire_slot_with_wait(
     let deadline = Instant::now() + timeout;
     let mut announced = false;
     loop {
-        let busy = match cargo_pool::acquire_slot(primary, count, run, None) {
+        let busy = match cargo_pool::acquire_check_slot(primary, count, run, None) {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => error,
             result => return result.map_err(|error| format!("cargo pool: {error}")),
         };
@@ -166,12 +167,22 @@ fn resolve_cargo_target_uses_shared_pool_instead_of_worktree_target() {
     let primary = tmp.path().join("shared/cargo-target");
 
     let lease = resolve_cargo_target(&worktree, &primary, "fc-test").unwrap();
-    assert_eq!(lease.path, primary);
+    assert!(lease
+        .path
+        .starts_with(cargo_pool::pool_root(&primary).unwrap()));
     let second = resolve_cargo_target(&worktree, &primary, "fc-test-2").unwrap();
-    assert_ne!(second.path, primary);
+    assert_ne!(second.path, lease.path);
+    // Once the pool slots are taken, checks share the writers' primary instead of waiting.
+    let third = resolve_cargo_target(&worktree, &primary, "fc-test-3").unwrap();
+    let fourth = resolve_cargo_target(&worktree, &primary, "fc-test-4").unwrap();
+    assert_eq!(
+        (third.path.as_path(), fourth.path.as_path()),
+        (primary.as_path(), primary.as_path())
+    );
+    assert!(!third.exclusive() && !fourth.exclusive());
     assert!(!worktree.join("rust/target").exists());
     assert_eq!(
-        jail_binary(&lease.path),
+        jail_binary(&third.path),
         primary.join(format!("debug/pg-jail{}", std::env::consts::EXE_SUFFIX))
     );
 }
@@ -230,7 +241,7 @@ fn symlinked_ancestor_of_the_cache_is_allowed_but_a_symlinked_slot_is_not() {
     let linked = tmp.path().join("cache-link");
     std::os::unix::fs::symlink(&real, &linked).unwrap();
     let lease = resolve_cargo_target(&worktree, &linked.join("cargo-target"), "fc-link").unwrap();
-    assert_eq!(lease.slot_index, 0);
+    assert_eq!(lease.slot_index, 1);
     drop(lease);
 
     let primary = tmp.path().join("other/cargo-target");
@@ -292,7 +303,7 @@ fn resolve_cargo_target_trims_an_over_cap_idle_slot_before_leasing() {
 
     let lease = resolve_with_cap(&worktree, &primary, "fc-trim", 2048).unwrap();
     assert!(!idle.join("debug/blob").exists());
-    assert_eq!(lease.path, primary);
+    assert_eq!(lease.path, idle);
 }
 
 #[test]

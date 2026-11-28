@@ -125,6 +125,22 @@ def selected_count(partial):
         return "unknown"
 
 
+def cargo_path(env):
+    """env's PATH with the rustup bin directory first: the first existing one of $CARGO_HOME/bin
+    and ~/.cargo/bin. Non-login shells and services leave it off PATH, and only the rustup proxy
+    honours rust-toolchain.toml. Unchanged when that directory is on PATH already or absent.
+    Mirrors pg_worker_core::cargo_bin::path_with_cargo for the Python tools."""
+    path = env.get("PATH", "")
+    home = env.get("HOME") or str(Path.home())
+    candidates = [Path(env["CARGO_HOME"]) / "bin"] if env.get("CARGO_HOME") else []
+    for directory in (*candidates, Path(home) / ".cargo/bin"):
+        if directory.is_dir():
+            if str(directory) in path.split(os.pathsep):
+                return path
+            return os.pathsep.join(part for part in (str(directory), path) if part)
+    return path
+
+
 def test_environment(root, env, *, timeout=30):
     """A pre-push caller's Git context must not select a fixture's repository."""
     local = set(subprocess.check_output(

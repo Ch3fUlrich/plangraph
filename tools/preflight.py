@@ -17,7 +17,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_busy_reason, host_load, planned_test_binaries, running_test_binary, rust_bound
-from pgtest import run_test_process as run_bounded_test, selected_count, test_environment
+from pgtest import cargo_path, run_test_process as run_bounded_test, selected_count, test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
@@ -573,9 +573,7 @@ def _main(argv, root, cleanup):
                         CHANGELOG_BASE=policy_base)
     load, cores = host_load()
     env = dict(os.environ, CARGO_BUILD_JOBS=str(build_jobs(os.environ, cores, load)))
-    cargo_bin = Path.home() / '.cargo/bin'
-    if cargo_bin.is_dir():
-        env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
+    env['PATH'] = cargo_path(env)
     env = cargo_child_env(env)
     # Nested test repositories own their revision history, not this checkout's base.
     for key in policy_bases:
