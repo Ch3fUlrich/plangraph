@@ -385,7 +385,7 @@ def _bash_decision(rules, command):
     ('python3 -m pytest -q tests/test_a.py', 'allow'),
     # git options that write a file, run a program or read outside the checkout
     ('git diff --output=x', 'deny'), ('git log --outp=x -1', 'deny'), ('git show --output x', 'deny'),
-    ('git diff --ext-diff', 'deny'), ('git diff --no-index /dev/null /etc/passwd', 'deny'),
+    ('git diff --ext-diff', 'deny'), ('git diff --no-index /dev/null ../outside.txt', 'deny'),
     ('git -c core.pager=x log', 'deny'), ('git log --exec=x', 'deny'),
     ('cargo test --config build.rustc-wrapper=x', 'deny'), ('cargo test --target-dir /x', 'deny'),
     ('pytest --basetemp=/ tests', 'deny'),

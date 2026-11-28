@@ -139,9 +139,18 @@ def test_a_flake_that_hit_maxfail_stays_red(fx):
     assert "FLAKY-ONLY" not in result.stdout
 
 
+HUNG = '''
+import time
+import pytest
+
+@pytest.mark.timeout(1)
+def test_hung():
+    time.sleep(60)
+'''
+
+
 def test_a_timed_out_test_is_not_rerun_and_stays_red(fx):
-    fx.write(FLAKY + "\nimport time\nimport pytest\n@pytest.mark.timeout(1)\ndef test_hung():\n"
-             "    time.sleep(60)\n")
+    fx.write(FLAKY + HUNG)
     fx.commit()
     result = fx.run()
     assert result.returncode == 1
