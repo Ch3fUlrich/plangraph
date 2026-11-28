@@ -354,6 +354,24 @@ def flake_labels(failed, first_rerun, second_rerun, hashes, parallel=True):
     return lines
 
 
+def recorded_timeouts(directory):
+    """(timed-out node ids, faulthandler dumps) from the timeout plugin's record directory
+    (tests/_split_ci_environment.py TIMEOUT_DIR_ENV): every listed SIGALRM timeout, plus the
+    test a non-empty backstop dump of the same process names (that hang killed the process)."""
+    directory = Path(directory)
+    nodeids, dumps = set(), []
+    for listed in directory.glob("timeouts-*"):
+        nodeids.update(line for line in listed.read_text(encoding="utf-8").splitlines() if line)
+    for dump in sorted(directory.glob("backstop-*")):
+        text = dump.read_text(encoding="utf-8", errors="replace")
+        armed = directory / ("armed-" + dump.name.removeprefix("backstop-"))
+        nodeid = armed.read_text(encoding="utf-8").strip() if armed.exists() else ""
+        if text and nodeid:
+            nodeids.add(nodeid)
+            dumps.append(text)
+    return sorted(nodeids), dumps
+
+
 def flaky_only(failed, timed_out, labels, maxfail):
     """True when every failure is FLAKY, none timed out and --maxfail did not cut the run short."""
     flaky = [line for line in labels if line.startswith("FLAKY ")]
