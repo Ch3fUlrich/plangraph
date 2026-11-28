@@ -334,7 +334,8 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
 
 def go_ready(env, *, seats=True, first_files=None, third=False, second_follow_up=False):
     env.branch_pr(1, first_files or {"a.txt": "a\n"}, item="ITEM-A")
-    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
+    # A one-part batch keeps #2 out of batch-ready, else land refuses it as train_required.
+    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B", **({"labels": ()} if first_files is not None else {}))
     if second_follow_up:
         env.push_commit(2, {"b.txt": "b\n", "follow-up.txt": "follow-up\n"})
     if third:
@@ -769,3 +770,22 @@ def test_a_train_lands_on_its_head_approval_without_a_go_row_beside_another_read
     assert [line.split()[:2] for line in res.stdout.splitlines()] == [["MERGED", "1"], ["MERGED", "2"]]
     (merge,) = env.calls("pr", "merge")
     assert merge[merge.index("--match-head-commit") + 1] == head
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_an_approved_by_line_covers_parts_without_seat_runs(monkeypatch, tmp_path, approved):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "tools"))
+    import merge_batch_land as mbl
+
+    class Done:
+        returncode = 0
+    monkeypatch.setattr(mbl, "git", lambda *a, **k: Done())
+    monkeypatch.setattr(mbl, "part_items", lambda st, rec: {"plangraph:ITEM"})
+    approval = tmp_path / "approval.txt"
+    approval.write_text("HEAD: " + "a" * 40 + "\nVERDICT: PASS\n" + ("APPROVED-BY: attended-impl\n" if approved else ""))
+    st = {"merged": [{"pr": 7, "head": "b" * 40}], "head": "a" * 40, "worktree": str(tmp_path)}
+    if approved:
+        assert mbl.require_part_seats(st, str(approval)) == {7: []}
+    else:
+        with pytest.raises(mbl.MergeBatchError, match="lacks a keeper-bound review"):
+            mbl.require_part_seats(st, str(approval))

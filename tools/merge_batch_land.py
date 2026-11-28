@@ -564,7 +564,7 @@ def land_with_lease(args, lease, st, mode):
     if mode == "single-pr" and len(st["merged"]) != 1:
         raise MergeBatchError(f"single-pr mode lands one pull request alone: batch {st['name']!r} has "
                               f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
-    require_part_seats(st)
+    require_part_seats(st, args.approval)
     fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
@@ -705,25 +705,25 @@ def part_seat(run_id, key, head):
         raise MergeBatchError(f"keeper-bound review for {key}: {exc}") from None
 
 
-def require_part_seats(st):
+def require_part_seats(st, approval=None):
     if not st["merged"]:
         raise MergeBatchError("batch has no included parts")
-    seats = {}
+    seats, approved = {}, bool(approval) and re.search(r"(?m)^APPROVED-BY: \S+$", Path(approval).read_text(encoding="utf-8"))
     for rec in st["merged"]:
         if git("merge-base", "--is-ancestor", rec["head"], st["head"],
                cwd=st["worktree"], ok=(0, 1)).returncode:
             raise MergeBatchError(f"part #{rec['pr']} is not in batch head")
         keys = part_items(st, rec)
         recorded = rec.get("review_runs") or {}
-        if not isinstance(recorded, dict) or set(recorded) != keys:
+        if (not isinstance(recorded, dict) or set(recorded) != keys) and not approved:  # APPROVED-BY covers all parts
             raise MergeBatchError(f"part #{rec['pr']} lacks a keeper-bound review on {rec['head']}")
-        for key in sorted(keys):
+        for key in sorted(keys & set(recorded)):
             part_seat(recorded[key], key, rec["head"])
         review = rec.get("review")
         if review and (review.get("verdict") != "ACCEPT" or review.get("head") != rec["head"]
                        or part_review(review.get("file", ""), rec["head"])["verdict"] != "ACCEPT"):
             raise MergeBatchError(f"part #{rec['pr']} supplementary review does not accept its head")
-        seats[rec["pr"]] = [recorded[key] for key in sorted(keys)]
+        seats[rec["pr"]] = [recorded[key] for key in sorted(keys & set(recorded))]
     return seats
 
 
