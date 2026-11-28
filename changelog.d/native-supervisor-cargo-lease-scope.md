@@ -1,0 +1,1 @@
+- A native run supervisor takes the shared cargo-target lease only to admit the launch; the native writer holds it around each writer turn and cargo check, so an idle run no longer blocks the post-run trim. A `cargo_target_cap` refusal names the pids holding the lease.

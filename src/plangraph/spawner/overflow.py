@@ -641,6 +641,8 @@ async def native_spawn(self, card, options):
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
     atomic_write_private(directory / 'native-request.json', json.dumps(request))
+    # The lease admits the launch only (refused while a reclaim holds it); the native writer
+    # takes it again around each writer turn and cargo check, so an idle run never blocks a trim.
     lease = None
     try:
         env = cargo_child_env(os.environ)
@@ -650,13 +652,11 @@ async def native_spawn(self, card, options):
             stderr=asyncio.subprocess.PIPE, start_new_session=True,
             env=env)
     except (OSError, RuntimeError) as exc:
-        if lease: lease.close()
         native_launch_failure(record, exc)
         self._save(record)
         return record
-    except BaseException:
+    finally:
         if lease: lease.close()
-        raise
     from .proc_kill import root_identity
     identity = root_identity(process.pid)
     async def finish():
@@ -684,8 +684,6 @@ async def native_spawn(self, card, options):
             if survivors: record.update(reason='kill_incomplete', survivors=survivors)
             self._save(record)
             raise
-        finally:
-            lease.close()
     self.tasks[record['run_id']] = asyncio.create_task(finish())
     if options.get('wait_seconds') is None:
         await self.tasks[record['run_id']]
