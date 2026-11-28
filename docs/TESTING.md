@@ -111,6 +111,13 @@ requiring per-worker database creation privileges. Supply PG_DSN for live PG che
 `tests/test_parallel_isolation.py` pins directory/schema separation and simultaneous
 live keeper listeners; run it three times with xdist after fixture changes.
 
+## Writing load-independent tests
+
+A test that passes alone and fails inside a full run on a loaded or shared host
+costs every writer a full fast-check run. Measured 2026-11-24 to 2026-11-28 (CI
+run attempts and the dell and workstation fast-check logs), these rules each
+answer one real failure.
+
 ## W22 measured evidence (local sandbox)
 
 For the representative two-file change `src/plangraph/live_follow.py` plus
