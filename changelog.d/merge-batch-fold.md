@@ -1,0 +1,1 @@
+- `merge_batch.py fold --name N --prs P,...` merges more pull requests into a built batch and records them as parts, with the build's conflict stop; the pre-push open-PR check then accepts them.
