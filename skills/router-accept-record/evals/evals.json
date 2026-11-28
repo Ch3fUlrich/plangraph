@@ -8,7 +8,7 @@
   {
     "id": "router-accept-plan-block",
     "prompt": "A GO-REQ has conforms=yes with deviations=none, plus trailing prose. Does the gate pass?",
-    "must": ["`conforms=yes` has any deviations value other than exactly `none`"],
+    "must": ["`conforms=yes` takes deviations exactly `none`"],
     "must_not": ["pass with prose"]
   }
 ]

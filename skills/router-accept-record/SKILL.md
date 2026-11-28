@@ -57,9 +57,8 @@ TRAIN-HEAD --exclude origin/main` prints `accept` or `refuse: <code>: <reason>`
 with the keeper's own grammar (prefix `(HH:MMZ)` or `(HH:MMZ, date -u)` only,
 no key token ending in punctuation, no delivered key left out).
 
-Put `PLAN <item-key> conforms=yes|no deviations=<text, or none>` last in every GO-REQ and in the GO row's decision cell. The key is the keeper item key; pass it to the gate with `--key KEY`, and the gate also needs `pgk show KEY` to succeed. `bin/go-row-gate` reads the block after GO-HEAD validation and refuses (exit 5) when:
-- the block is missing, repeated, or its key differs from the item;
-- `conforms=yes` has any deviations value other than exactly `none`;
-- `conforms=no` has an empty, punctuation-only or `none`-led value (a first token exactly `none` describes no departure);
-- the keeper wrapper is unavailable or times out (10 s): `STOP: keeper wrapper unavailable`, `STOP: no keeper item KEY`, `STOP: keeper timed out KEY`; missing evidence gives `STOP: evidence wrapper unavailable` (exit 6).
-Deviations end at the cell end, a pipe, or the next ` word=` or `; word=` field; quoted prose keeps its text, and a quote-wrapped block is still a declaration. `bin/merge-part` shares the gate's helpers (`bin/merge_paths.py`): `PG_PGK` and `PG_CI_EVIDENCE` must be absolute existing files, else the wrappers are found on PATH (absolute entries only, no cwd search, no dated host default). Hosts without them refuse every GO and merge on purpose: install the wrappers before enabling the check. Successful output names the item key, conformance and deviations so the GO record exposes departures.
+Trains land on one approval of their head; there is no GO row per pull request and no per-part gate script. A GO-REQ or GO row still ends with `PLAN <item-key> conforms=yes|no deviations=<text, or none>`, the keeper item key:
+- the block appears once and names the item;
+- `conforms=yes` takes deviations exactly `none`;
+- `conforms=no` names the departure (an empty, punctuation-only or `none`-led value describes none).
+Deviations end at the cell end, a pipe, or the next ` word=` or `; word=` field; quoted prose keeps its text. The GO record names the item key, conformance and deviations so departures stay visible.
