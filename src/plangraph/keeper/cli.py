@@ -161,6 +161,7 @@ def _add_writes(sub):
     evidence.add_argument("--project", help="semaphore project id (semaphore-task)")
     evidence.add_argument("--template", help="semaphore template id (semaphore-task)")
     evidence.add_argument("--decision")
+    evidence.add_argument("--ref", help="deploy: the row as a JSON object (land-train deploy-apply --row-cmd)")
 
     verdict = _p(sub, "verdict", help="pass or send back a review")
     verdict.add_argument("key")

@@ -31,6 +31,13 @@ def evidence_ref(args) -> dict:
         return ref
     if kind == "decision":
         return {"id": args.decision}
+    if kind == "deploy" and getattr(args, "ref", None):
+        # The deploy row as `land-train deploy-apply` writes it: host, unit, is_active and the oneshot fields.
+        import json
+        ref = json.loads(args.ref)
+        if not isinstance(ref, dict):
+            raise SystemExit("--ref must be a JSON object")
+        return ref
     ref = {}
     for key, value in (("commit", args.commit), ("run_id", args.run),
                        ("task_id", args.task), ("id", args.decision)):
