@@ -55,7 +55,7 @@ import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
 from merge_batch_build import landing_journal, landing_lease
-from merge_batch_util import (BATCH_READY, EXIT_REFUSED, MergeBatchError, check_name, drop_state, fetch_pr, git, refresh_diff,
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, MergeBatchError, check_name, drop_state, fetch_pr, gh, git, refresh_diff,
                               keeper_landing_configured, load_state, orphan_names, state_dir, state_path, worktrees,
                               ci_window, first_ready, gh_json, landing_report, parse_prs, record_landing, render_landing_report,
                               repo_info, require_landing_row, set_fix_tasks, settle_landings)
@@ -147,6 +147,18 @@ def cmd_landing_settle(args):
         "api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={sha}&event=push&per_page=100")["workflow_runs"])
     print(f"settled {done} landing row(s)")
     return 0
+
+
+def land_with_full_run(args):
+    """Land the batch PR. The full suite runs once, at the merge into main: when the batch head has no green full
+    run yet, label the batch PR ci-full (CI starts the full run on that event) and refuse until it is green."""
+    try:
+        return land.cmd_land(args)
+    except MergeBatchError as exc:
+        if not str(exc).startswith("full_ci: ") or "must target main" in str(exc):
+            raise
+        gh("pr", "edit", str(args.batch_pr), "--repo", load_state(args.name)["repo"], "--add-label", "ci-full")
+        raise MergeBatchError(f"{exc}; labelled ci-full: the full suite runs once now, run land again when it is green") from exc
 
 
 def cmd_landing_backfill(args):
@@ -254,7 +266,7 @@ def parser():
     evidence.add_argument("--run-id", help="keeper-bound spawner review run")
     evidence.add_argument("--file", help="supplementary review file")
     add("go-req", land.cmd_go_req, "print the batch GO request").add_argument("--name", required=True)
-    cmd = add("land", land.cmd_land, "merge the batch PR and report the included PRs")
+    cmd = add("land", land_with_full_run, "merge the batch PR and report the included PRs")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)
     cmd.add_argument("--approval", metavar="PATH",

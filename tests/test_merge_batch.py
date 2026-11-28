@@ -415,3 +415,26 @@ def test_go_req_checks_workflow_edits_introduced_by_merge(env, trailer, accepted
     assert result.returncode == (0 if accepted else 1), result.stderr
     if not accepted:
         assert "Gate-Edit" in result.stderr and result.stdout == ""
+
+
+@pytest.mark.parametrize("message,labelled", [
+    ("full_ci: tests run 7 is not green on exact batch head abc", True),
+    ("full_ci: no tests run on exact batch head abc", True),
+    ("full_ci: batch PR must target main", False),
+    ("batch PR #5 is a draft", False),
+])
+def test_land_without_its_full_run_labels_the_batch_pr_ci_full(monkeypatch, message, labelled):
+    from argparse import Namespace
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    import merge_batch as mb
+    calls = []
+
+    def refuse(args):
+        raise mb.MergeBatchError(message)
+    monkeypatch.setattr(mb.land, "cmd_land", refuse)
+    monkeypatch.setattr(mb, "gh", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(mb, "load_state", lambda name: {"repo": "owner/proj"})
+    with pytest.raises(mb.MergeBatchError) as refused:
+        mb.land_with_full_run(Namespace(name="n", batch_pr=5))
+    assert ("labelled ci-full" in str(refused.value)) is labelled
+    assert calls == ([("pr", "edit", "5", "--repo", "owner/proj", "--add-label", "ci-full")] if labelled else [])
