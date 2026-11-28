@@ -1,0 +1,1 @@
+Skill text (skill pages and skill eval files) no longer starts the full CI suite: a pull request selects only the skill tests, and the push of a text-only merge to main runs the fast jobs only (D-7122).

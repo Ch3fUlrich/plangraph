@@ -7,17 +7,21 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
-struct Options {
-    dry: bool,
+pub(super) struct Options {
+    pub(super) dry: bool,
     live: bool,
     policy: PathBuf,
     facts: PathBuf,
     rules: PathBuf,
     repo: PathBuf,
     /// Where `--live-facts` reads the kernel counters; tests point it at a fixture.
-    proc: PathBuf,
+    pub(super) proc: PathBuf,
     /// Opens `<proc>/pressure/cpu`; tests inject an error here.
-    open_psi: capacity::OpenPsi,
+    pub(super) open_psi: capacity::OpenPsi,
+    clock: fn() -> i64,
+    pub(super) cpu_count: fn() -> std::io::Result<usize>,
+    pub(super) disk_usage: fn(&Path) -> std::io::Result<u64>,
+    local_quota: sources::LocalQuota,
 }
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
@@ -29,6 +33,10 @@ fn options(home: &Path, args: &[String]) -> Result<Options, String> {
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
         proc: "/proc".into(),
         open_psi: capacity::open_psi,
+        clock: || chrono::Utc::now().timestamp(),
+        cpu_count: || std::thread::available_parallelism().map(std::num::NonZeroUsize::get),
+        disk_usage: pg_worker_core::disk_runtime::disk_usage,
+        local_quota: super::adapters::quota_snapshots,
     };
     let mut once = false;
     let mut explicit_facts = false;
@@ -134,25 +142,33 @@ fn decide(
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
     }
     let host = env.get("PLANGRAPH_HOST_NAME").map(String::as_str).or(local);
+    let now = (o.clock)();
     let (sample, measured) = if o.live {
         let host = host
             .filter(|host| !host.trim().is_empty())
             .ok_or("live capacity requires a configured host name")?;
         let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
-        let (sample, measured) = capacity::sample(
-            host, disk_root, env, &o.proc, o.open_psi, &policy, state, o.dry,
-        )?;
+        let (sample, measured) = capacity::sample(host, disk_root, env, o, &policy, state, now)?;
         (sample, Some(measured))
     } else {
         let sample = serde_json::from_value(sources::read_json(&o.facts)?)
             .map_err(|_| "invalid host facts")?;
         (sample, None)
     };
-    let (mut facts, stale_quota) =
-        match sources::facts(env, &o.repo, sample, running, home, &policy, local)? {
-            sources::FactsOutcome::Ready(facts) => (facts, None),
-            sources::FactsOutcome::QuotaStale { reason, facts } => (facts, Some(reason)),
-        };
+    let (mut facts, stale_quota) = match sources::facts(
+        env,
+        &o.repo,
+        sample,
+        running,
+        home,
+        &policy,
+        local,
+        now,
+        o.local_quota,
+    )? {
+        sources::FactsOutcome::Ready(facts) => (facts, None),
+        sources::FactsOutcome::QuotaStale { reason, facts } => (facts, Some(reason)),
+    };
     let measurement = if let Some(measured) = measured {
         let free_ram_bytes = facts.free_ram_bytes;
         let budget = capacity::apply(&mut facts, &mut policy, measured.cpu)?;

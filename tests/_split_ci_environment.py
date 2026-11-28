@@ -1,9 +1,13 @@
+import faulthandler
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from contextlib import contextmanager
 import pytest
@@ -176,11 +180,14 @@ def shard_selector():
 
 
 def quarantine_items(items, ledger, mode, now):
-    """Select blocking or quarantined tests as of a shared UTC run timestamp."""
+    """Select blocking or quarantined tests as of a shared UTC run timestamp.
+
+    Mode `xfail` keeps every test and marks the active quarantined ones non-strict xfail:
+    they run and report, but their failure cannot fail the run."""
     from datetime import datetime, timedelta
 
-    if mode not in ('blocking', 'quarantine'):
-        raise pytest.UsageError('PYTEST_QUARANTINE_MODE must be blocking or quarantine')
+    if mode not in ('blocking', 'quarantine', 'xfail'):
+        raise pytest.UsageError('PYTEST_QUARANTINE_MODE must be blocking, quarantine or xfail')
     try:
         entries = json.loads(ledger.read_text(encoding='utf-8'))
         if not isinstance(entries, dict) or now.utcoffset() != timedelta():
@@ -206,7 +213,9 @@ def quarantine_items(items, ledger, mode, now):
         owner = active.get(nodeid)
         if owner:
             matched[nodeid] = owner
-        if bool(owner) == (mode == 'quarantine'):
+            if mode == 'xfail':
+                item.add_marker(pytest.mark.xfail(strict=False, reason=f'QUARANTINED owner={owner}'))
+        if mode == 'xfail' or bool(owner) == (mode == 'quarantine'):
             selected.append(item)
     return selected, matched
 
@@ -232,3 +241,132 @@ def pytest_terminal_summary(terminalreporter, exitstatus):
         temporary.replace(target)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+# Per-test timeout: a hang fails by test name instead of eating the CI job timeout.
+DEFAULT_TEST_TIMEOUT = 300.0
+# The faulthandler backstop fires this much later than the timeout: it catches a hang that never
+# returns to the interpreter, dumps every thread's stack and exits the process (xdist then
+# reports the crashed worker with the running test's id).
+TIMEOUT_BACKSTOP_GRACE = 60.0
+_ARMED = {}
+#: Directory where timeouts are recorded outside the report text (tools/affected_tests.py sets
+#: it): `timeouts-<pid>` lists each timed-out node id, `armed-<pid>` names the phase running now
+#: and `backstop-<pid>` receives the faulthandler dump, so a non-empty dump names its test.
+TIMEOUT_DIR_ENV = 'PYTEST_TIMEOUT_DIR'
+_BACKSTOP = {}
+
+
+def _timeout_record(kind):
+    directory = os.environ.get(TIMEOUT_DIR_ENV)
+    return Path(directory, f'{kind}-{os.getpid()}') if directory else None
+
+
+def _backstop_stream():
+    """Where the faulthandler dump goes: this process's backstop file, else stderr."""
+    path = _timeout_record('backstop')
+    if path is None:
+        return sys.stderr
+    if _BACKSTOP.get('path') != path:
+        _BACKSTOP.update(path=path, stream=open(path, 'w', encoding='utf-8'))
+    return _BACKSTOP['stream']
+
+
+def phase_timeout_seconds(item, environ=os.environ):
+    """Budget of each setup, call and teardown phase: `@pytest.mark.timeout(seconds)`, else
+    `PYTEST_TEST_TIMEOUT`, else 300 s; 0 turns the timeout off."""
+    marker = item.get_closest_marker('timeout')
+    raw = marker.args[0] if marker and marker.args else environ.get('PYTEST_TEST_TIMEOUT', DEFAULT_TEST_TIMEOUT)
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        seconds = math.nan
+    if not 0 <= seconds < math.inf:
+        raise pytest.UsageError(f'test timeout of {item.nodeid}: {raw!r} is not a number of seconds')
+    return seconds
+
+
+def _signal_timer():
+    return hasattr(signal, 'setitimer') and threading.current_thread() is threading.main_thread()
+
+
+def _on_timeout(signum, frame):
+    deadline = _ARMED.get('deadline')
+    # A SIGALRM the test sends itself before the deadline is not this timer's.
+    if deadline is None or time.monotonic() < deadline - 0.05:
+        return
+    if record := _timeout_record('timeouts'):
+        with open(record, 'a', encoding='utf-8') as stream:
+            stream.write(_ARMED['nodeid'] + '\n')
+    pytest.fail(f"TEST-TIMEOUT {_ARMED['nodeid']} ({_ARMED['when']}) exceeded {_ARMED['seconds']:g}s")
+
+
+def _arm(seconds):
+    _ARMED['deadline'] = time.monotonic() + seconds
+    if _signal_timer():
+        signal.signal(signal.SIGALRM, _on_timeout)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+    if armed := _timeout_record('armed'):
+        armed.write_text(_ARMED['nodeid'], encoding='utf-8')
+    grace = float(os.environ.get('PYTEST_TIMEOUT_BACKSTOP_GRACE', TIMEOUT_BACKSTOP_GRACE))
+    faulthandler.dump_traceback_later(seconds + grace, exit=True, file=_backstop_stream())
+
+
+@contextmanager
+def phase_timeout(item, when):
+    """Fail the running phase with `TEST-TIMEOUT <nodeid>` once its budget is spent."""
+    seconds = phase_timeout_seconds(item)
+    if not seconds:
+        yield
+        return
+    uses_signal = _signal_timer()
+    previous = signal.getsignal(signal.SIGALRM) if uses_signal else None
+    _ARMED.update(nodeid=item.nodeid, when=when, seconds=seconds)
+    _arm(seconds)
+    try:
+        yield
+    finally:
+        _ARMED.clear()
+        faulthandler.cancel_dump_traceback_later()
+        if armed := _timeout_record('armed'):
+            armed.write_text('', encoding='utf-8')
+        if uses_signal:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, signal.SIG_DFL if previous is None else previous)
+
+
+@contextmanager
+def timeout_extended(seconds):
+    """Give a slow step (a cold cargo build) its own budget; its time does not count against
+    the running test. Outside an armed test phase this does nothing."""
+    deadline = _ARMED.get('deadline')
+    if deadline is None:
+        yield
+        return
+    remaining = max(deadline - time.monotonic(), 1.0)
+    _ARMED['seconds'] = max(seconds, remaining)
+    _arm(_ARMED['seconds'])
+    try:
+        yield
+    finally:
+        if _ARMED:
+            _ARMED['seconds'] = remaining
+            _arm(remaining)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    with phase_timeout(item, 'setup'):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    with phase_timeout(item, 'call'):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item):
+    with phase_timeout(item, 'teardown'):
+        return (yield)

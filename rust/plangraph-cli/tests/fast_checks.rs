@@ -42,6 +42,38 @@ fn git(root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+/// How often a plan runs the bare-Python guard: as its own step, plus once inside the affected
+/// tests when their selection holds it.
+fn guard_runs(root: &std::path::Path, plan: &str, changed: &str) -> usize {
+    let own =
+        plan.contains("rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py");
+    let selection = test_python::command()
+        .current_dir(root)
+        .args([
+            "tools/affected_tests.py",
+            "--base",
+            "origin/main",
+            "--local",
+            "--files-only",
+        ])
+        .args(["--changed", changed])
+        .output()
+        .unwrap();
+    let selected = String::from_utf8_lossy(&selection.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .contains("\"tests/test_spawner_import_guard.py\"");
+    usize::from(own) + usize::from(plan.contains("affected-tests:") && selected)
+}
+
+/// The command of the plan step `label`.
+fn plan_line<'a>(plan: &'a str, label: &str) -> &'a str {
+    plan.lines()
+        .find_map(|line| line.strip_prefix(&format!("{label}: ")))
+        .unwrap_or_else(|| panic!("no {label} step: {plan}"))
+}
+
 #[test]
 fn fast_checks_matches_ci_for_three_fixture_diffs() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -75,7 +107,9 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
             assert!(actual.contains("rust/worker/Cargo.toml"));
         }
         if path == "README.md" {
-            assert!(!actual.contains("cargo clippy"));
+            // A text-only change runs no cargo step and no test.
+            assert!(!actual.contains("cargo "), "{actual}");
+            assert!(!actual.contains("affected-tests"), "{actual}");
         }
     }
 }
@@ -84,7 +118,7 @@ fn fast_checks_matches_ci_for_three_fixture_diffs() {
 fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
+        .current_dir(&root)
         .args([
             "fast-checks",
             "--plan",
@@ -95,16 +129,28 @@ fn fast_checks_includes_reverse_dependents_and_rust_test_preflight() {
         .unwrap();
     assert!(result.status.success());
     let plan = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(
+        guard_runs(&root, &plan, "rust/worker-core/src/lib.rs"),
+        1,
+        "{plan}"
+    );
     for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
-        "pg-spawnd/clippy:",
-        "pg-worker/clippy:",
         "pg-worker/test: cargo run",
         "--bin ci-temporal -- cargo test",
         "--local --files-only --run",
     ] {
         assert!(plan.contains(required), "missing {required}: {plan}");
     }
+    // fmt and clippy cover the changed crate only; its dependents are tested in one cargo call.
+    assert_eq!(
+        plan_line(&plan, "rust/clippy"),
+        "cargo clippy --manifest-path rust/Cargo.toml -p pg-worker-core --all-targets -- -D warnings"
+    );
+    let tests = plan_line(&plan, "rust/test");
+    for package in ["pg-worker-core", "pg-spawnd", "plangraph-cli"] {
+        assert!(tests.contains(&format!(" -p {package}")), "{tests}");
+    }
+    assert!(!plan.contains("pg-worker/clippy:") && !plan.contains("pg-worker/fmt:"));
     assert!(!plan.contains("temporal-spike/test:"));
 }
 
@@ -113,7 +159,7 @@ fn fast_checks_plan_for_a_rust_test_file_runs_the_bare_python_guard_and_affected
     // Cargo alone does not run test_no_bare_python_subprocesses; the plan must.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
+        .current_dir(&root)
         .args([
             "fast-checks",
             "--plan",
@@ -124,8 +170,12 @@ fn fast_checks_plan_for_a_rust_test_file_runs_the_bare_python_guard_and_affected
         .unwrap();
     assert!(result.status.success());
     let plan = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(
+        guard_runs(&root, &plan, "rust/pg-spawnd/tests/head_gate.rs"),
+        1,
+        "{plan}"
+    );
     for required in [
-        "rust-test-env: python3 -m pytest -q tests/test_spawner_import_guard.py",
         "affected-tests: python3 tools/affected_tests.py",
         "--run --changed rust/pg-spawnd/tests/head_gate.rs",
     ] {
@@ -149,9 +199,60 @@ fn fast_checks_keeps_external_rust_inputs_in_a_mixed_diff() {
         .unwrap();
     assert!(output.status.success());
     let plan = String::from_utf8(output.stdout).unwrap();
-    assert!(plan.contains("pg-hook/test:"));
-    assert!(plan.contains("plangraph-cli/test:"));
+    let tests = plan_line(&plan, "rust/test");
+    assert!(tests.contains(" -p pg-hook") && tests.contains(" -p plangraph-cli"));
+    assert_eq!(
+        plan_line(&plan, "rust/clippy"),
+        "cargo clippy --manifest-path rust/Cargo.toml -p plangraph-cli --all-targets -- -D warnings"
+    );
     assert!(!plan.contains("pg-worker/test:"));
+}
+
+#[test]
+#[cfg(unix)]
+fn worker_fast_checks_execute_with_fixture_mode_and_visible_output() {
+    use pg_worker_core::executable_test_support::write_script;
+    let repo = tempfile::tempdir().unwrap();
+    let root = repo.path();
+    git(root, &["init", "-q"]);
+    git(root, &["commit", "--allow-empty", "-qm", "base"]);
+    for (path, name) in [
+        ("rust/worker", "pg-worker"),
+        ("rust/spikes/temporal-spike", "temporal-spike"),
+    ] {
+        let dir = root.join(path);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = format!("[package]\nname = '{name}'\n");
+        fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+    }
+    fs::write(root.join("rust/Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let selector = "#!/bin/sh\ncase \"$1\" in tools/ci_select.py) echo rust-worker=true;; esac\n";
+    let cargo = r#"#!/bin/sh
+[ "$1" = run ] || exit 0
+test "${PG_FAST_CHECK_FIXTURES_ONLY-}|${PG_RECORD_DIR+x}|${PG_TEMPORAL_CLI+x}" = '1||' || exit 7
+prefix='[run][--manifest-path][rust/Cargo.toml][-p][pg-spawnd][--bin][ci-temporal][--]'
+test "$(printf '[%s]' "$@")" = "$prefix"'[cargo][test][--manifest-path][rust/worker/Cargo.toml][-p][pg-worker][--][--show-output]' || exit 8
+echo worker-fixture-command-verified
+"#;
+    write_script(bin.path(), "python3", selector);
+    write_script(bin.path(), "cargo", cargo);
+    let mut path = bin.path().as_os_str().to_owned();
+    path.push(":");
+    path.push(std::env::var_os("PATH").unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .current_dir(root)
+        .args(["fast-checks", "--base", "HEAD"])
+        .env("PATH", path)
+        .env("PLANGRAPH_CARGO_TARGET_DIR", bin.path().join("target"))
+        .env("PLANGRAPH_STATE_DIR", bin.path().join("state"))
+        .env("PG_FAST_CHECK_FIXTURES_ONLY", "0")
+        .env("PG_RECORD_DIR", "inherited-recording")
+        .env("PG_TEMPORAL_CLI", "inherited-temporal")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("worker-fixture-command-verified"));
 }
 
 #[test]
@@ -314,7 +415,7 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
     }
     fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
     fs::write(tools.join("affected_tests.py"),
-        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
+        "import os, pathlib, sys\nassert pathlib.Path.cwd() != pathlib.Path(os.environ['ORIGINAL_CHECKOUT'])\npathlib.Path('generated').write_text('test output')\nprint('fixture-owned-stdout')\nprint('fixture-owned-stderr', file=sys.stderr)\nsys.exit(int(os.environ.get('FIXTURE_FAIL', '0')))\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "base"]);
     let base = git(root, &["rev-parse", "HEAD"]);
@@ -337,6 +438,12 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         let commit = git(root, &["rev-parse", "HEAD"]);
         let output = run(fail);
         assert_eq!(output.status.success(), fail == "0", "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == "fixture-owned-stdout"));
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "fixture-owned-stderr"));
         // Every outcome leaves a receipt for the head; only a passing run leaves a green one.
         let receipt =
             fs::read_to_string(root.join(".git/plangraph-state/fast-checks").join(&commit))
@@ -364,7 +471,12 @@ fn owned_fast_checks_removes_checkout_and_keeps_exact_head_stamp() {
         assert!(!root.join("generated").exists());
     }
     assert!(!home.path().join(".cache/plangraph").exists());
-    assert!(cache.path().join("cargo.plangraph-lock").exists());
+    // A check leases its own pool slot of that cache, never the writers' primary.
+    assert!(cache
+        .path()
+        .join("cargo-pool/slot-1.plangraph-lock")
+        .exists());
+    assert!(!cache.path().join("cargo.lease.json").exists());
 }
 
 #[test]
@@ -617,72 +729,12 @@ fn fast_checks_plan_for_a_spawner_python_change_tests_pg_spawnd() {
             .unwrap();
         assert!(result.status.success());
         let plan = String::from_utf8(result.stdout).unwrap();
-        for required in ["pg-spawnd/clippy:", "pg-spawnd/test: cargo test"] {
-            assert!(plan.contains(required), "{path} misses {required}: {plan}");
-        }
+        let tests = plan_line(&plan, "rust/test");
+        assert!(tests.contains(" -p pg-spawnd"), "{path}: {plan}");
+        // No Rust source changed: nothing to format or lint.
+        assert!(
+            !plan.contains("/clippy:") && !plan.contains("/fmt:"),
+            "{path}: {plan}"
+        );
     }
-}
-
-fn registry(dir: &Path, mem_floor_mb: u64) -> std::path::PathBuf {
-    let doc = serde_json::json!({"version": 1, "self": "worker-a", "hosts": [{
-        "id": "worker-a", "class": "worker", "aliases": [],
-        "transport": "keeper", "os": if cfg!(windows) { "windows" } else { "linux" },
-        "state_dir": dir.to_str().unwrap(),
-        "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2,
-                 "max_sessions": 5, "mem_floor_mb": mem_floor_mb},
-        "warmup": {"warmup_s": 1, "ramp_mb": {}},
-        "session_mb": 1, "roles": [], "repos": {"plangraph": {
-            "root": dir.to_str().unwrap(), "worktrees_root": dir.join("trees").to_str().unwrap(),
-            "remote": "example", "import_roots": [], "cache_env": {}}}
-    }]});
-    let path = dir.join("hosts.json");
-    fs::write(&path, doc.to_string()).unwrap();
-    path
-}
-
-fn dispatch(dir: &Path, floor: u64, command: &[&str]) -> std::process::Output {
-    let hosts = registry(dir, floor);
-    Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .args(["fast-checks", "--dispatch", "--registry"])
-        .arg(&hosts)
-        .args(["--repo", "plangraph", "--log"])
-        .arg(dir.join("dispatch.log"))
-        .arg("--")
-        .args(command)
-        .output()
-        .unwrap()
-}
-
-#[test]
-fn dispatch_report_counts_busy_attempts_apart_from_test_failures() {
-    let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("dispatch.log");
-    fs::write(
-        &log,
-        concat!(
-            "{\"host\":\"a\",\"attempt\":1,\"verdict\":\"host_busy\"}\n",
-            "{\"host\":\"b\",\"attempt\":2,\"verdict\":\"pass\"}\n",
-            "{\"host\":\"a\",\"attempt\":1,\"verdict\":\"test_failure\"}\n",
-        ),
-    )
-    .unwrap();
-    let report = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .args(["fast-checks", "--dispatch", "--report"])
-        .arg(&log)
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8(report.stdout).unwrap().trim(),
-        r#"{"passed":1,"host_busy":1,"test_failure":1,"ignored":0}"#
-    );
-}
-
-#[test]
-fn dispatch_refuses_a_host_below_its_memory_floor() {
-    let dir = tempfile::tempdir().unwrap();
-    let result = dispatch(dir.path(), u64::MAX, &["true"]);
-    assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("worker-a: MemAvailable"), "{stderr}");
-    assert!(!dir.path().join("dispatch.log").exists());
 }

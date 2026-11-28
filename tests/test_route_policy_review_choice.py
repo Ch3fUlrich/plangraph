@@ -12,6 +12,63 @@ from plangraph.routing_errors import SpawnRefused
 REQUIRED_MODELS = {leg.model for leg in DEFAULT_LEGS if leg.id in REVIEW_REQUIRED}
 
 
+def test_gpt_exact_diff_mimo_repository_seat(tmp_path):
+    from plangraph.planner.legs import (REVIEW_AGY_SONNET, REVIEW_HYDROGEN, REVIEW_MIMO_PRO,
+                                        REVIEW_SONNET)
+    from plangraph.planner.route_policy import DEFAULT_POLICY_PATH
+    from registry_route_util import _repo
+
+    repo, base, head = _repo(tmp_path)
+    diff = dict(repo=str(repo), base=base, head=head)
+    models = {leg.id: leg.model for leg in DEFAULT_LEGS}
+    policy = load_route_policy(DEFAULT_POLICY_PATH)
+
+    def plan(card, down=()):
+        return plan_spawn(dict(estimate_tokens=1000, **card), role="review", policy=policy,
+                          writer_families=("gpt",), catalog_rows=(), installed=lambda _: True,
+                          leg_reader=lambda model, **_: {
+                              "state": "limited" if model in down else "available", "evidence": None})
+
+    ordinary = plan({"diff_ref": diff})
+    ids = [leg.id for leg in ordinary.legs]
+    assert ids[:2] == list(REVIEW_REQUIRED)
+    assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO)
+    assert ordinary.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == "tools"
+    assert all(not leg.claude_family for leg in ordinary.legs)
+    # MiMo Pro reads the checkout itself: no diff needed, repository reviews admitted.
+    assert REVIEW_MIMO_PRO in {leg.id for leg in plan({}).legs}
+    assert REVIEW_MIMO_PRO in {leg.id for leg in plan(
+        {"diff_ref": diff, "repository_review_required": True}).legs}
+
+    for extra, down in (({"risk_tags": ["auth"]}, set()), ({}, REQUIRED_MODELS)):
+        card = dict(diff_ref=diff, **extra)
+        ineligible = {REVIEW_AGY_SONNET, REVIEW_SONNET}
+        assert ineligible.isdisjoint(leg.id for leg in plan(card, down).legs)
+        without_hydrogen = down | {models[REVIEW_HYDROGEN]}
+        assert REVIEW_MIMO_PRO in {leg.id for leg in plan(card, without_hydrogen).legs}
+        assert ineligible.isdisjoint(leg.id for leg in plan(card, without_hydrogen).legs)
+        fallback = without_hydrogen | {models[REVIEW_MIMO_PRO]}
+        assert REVIEW_AGY_SONNET in {leg.id for leg in plan(card, fallback).legs}
+        assert REVIEW_SONNET in {leg.id for leg in plan(card, fallback | {"agy/" + REVIEW_SONNET}).legs}
+
+
+def test_mimo_pro_reviews_with_repository_tools_not_inline():
+    from plangraph.planner.legs import REVIEW_MIMO_PRO, mimo_pro_review, role_leg
+    from plangraph.planner.route_policy import has_repository_review_tools, opencode_repository_review
+    registered = next(l for l in DEFAULT_LEGS if l.id == REVIEW_MIMO_PRO)
+    # Implement and orchestrate keep the inline-only leg; only the review role gets tools.
+    assert registered.tool_mode == "inline-only"
+    assert role_leg(registered, "implement") is registered
+    leg = role_leg(registered, "review")
+    assert opencode_repository_review(leg) and has_repository_review_tools(leg)
+    assert not mimo_pro_review(leg, "review")
+    assert mimo_pro_review(registered, "review")
+    plan = plan_spawn(dict(estimate_tokens=1000), role="review", writer_families=("anthropic",),
+                      catalog_rows=(), installed=lambda _: True,
+                      leg_reader=lambda model, **_: {"state": "available", "evidence": None})
+    assert REVIEW_MIMO_PRO in {l.id for l in plan.legs}
+
+
 def test_qoder_off_for_review_even_with_old_active_leg():
     leg = next(l for l in DEFAULT_LEGS if l.harness == 'qodercli')
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
@@ -144,7 +201,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
     for role, base, head, expected in (
         ("implement", None, None, ("cx-gpt-6.2-sol-medium", "codex")),
         ("review", "HEAD~2", "HEAD~1", ("opencode-go-deepseek-v4-flash", "opencode")),
-        ("review", "HEAD~1", "HEAD", ("agy-claude-sonnet-5-5-high", "agy")),
+        ("review", "HEAD~1", "HEAD", ("opencode-go-deepseek-v4-flash", "opencode")),
     ):
         card = {"estimate_tokens": 1000}
         if base:
@@ -162,6 +219,7 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
             seat = group["seats"][0]["chosen_leg"]
             assert (seat["id"], seat["harness"]) == expected
             assert group["seat_coverage"][0]["leg"] == seat["id"]
+            assert {row["chosen_leg"]["id"] for row in group["seats"]} == set(REVIEW_REQUIRED)
 
 
 def test_native_review_route_requires_repository_tools():
@@ -172,7 +230,7 @@ def test_native_review_route_requires_repository_tools():
     assert plan.first_leg.id == "opencode-go-deepseek-v4-flash"
     assert all(leg.tool_mode == "tools" for leg in plan.legs)
     assert {leg.id for leg in plan.legs if leg.harness == "opencode"} == {
-        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "mimo-v2.6-pro",
     }
 
 
@@ -189,7 +247,7 @@ def test_native_review_cli_preview_retains_opencode_repository_legs(tmp_path, mo
                  "--json", "--card", json.dumps(card)]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert {leg["id"] for leg in plan["legs"]} == {
-        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "mimo-v2.6-pro",
     }
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"

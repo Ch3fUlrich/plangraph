@@ -1,4 +1,4 @@
-use super::adapters::{output, python, quota_snapshots, Env, Keeper, Transport};
+use super::adapters::{output, python, Env, Keeper, Transport};
 use super::lanes;
 use super::*;
 use pg_worker_core::work_disks;
@@ -247,6 +247,9 @@ fn apply_facts(
     }
     Ok(f)
 }
+pub(super) type LocalQuota = fn(&Env, &Path) -> Result<Value, String>;
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
@@ -255,6 +258,8 @@ pub(super) fn facts(
     home: &Path,
     p: &Policy,
     local: Option<&str>,
+    now: i64,
+    read_quota: LocalQuota,
 ) -> Result<FactsOutcome, String> {
     f.free_disk_bytes = disk_limit(
         f.free_disk_bytes,
@@ -264,7 +269,6 @@ pub(super) fn facts(
             work_disks::mounted_space,
         ),
     )?;
-    let now = chrono::Utc::now().timestamp();
     let center = env
         .get("PLANGRAPH_QUOTA_FACTS")
         .filter(|path| !path.is_empty())
@@ -273,7 +277,7 @@ pub(super) fn facts(
             PathBuf::from,
         );
     let rows = quota::rows_for_host(
-        quota_snapshots(env, repo).ok(),
+        read_quota(env, repo).ok(),
         f.quota_remaining_percent,
         &center,
         now,
@@ -502,6 +506,8 @@ mod tests {
                 fixture.path(),
                 &Policy::default(),
                 None,
+                1000,
+                |_, _| panic!("disk failure must precede quota lookup"),
             )
             .expect_err("configured work disk must constrain the host facts")
         };

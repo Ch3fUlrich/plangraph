@@ -125,6 +125,22 @@ def selected_count(partial):
         return "unknown"
 
 
+def cargo_path(env):
+    """env's PATH with the rustup bin directory first: the first existing one of $CARGO_HOME/bin
+    and ~/.cargo/bin. Non-login shells and services leave it off PATH, and only the rustup proxy
+    honours rust-toolchain.toml. Unchanged when that directory is on PATH already or absent.
+    Mirrors pg_worker_core::cargo_bin::path_with_cargo for the Python tools."""
+    path = env.get("PATH", "")
+    home = env.get("HOME") or str(Path.home())
+    candidates = [Path(env["CARGO_HOME"]) / "bin"] if env.get("CARGO_HOME") else []
+    for directory in (*candidates, Path(home) / ".cargo/bin"):
+        if directory.is_dir():
+            if str(directory) in path.split(os.pathsep):
+                return path
+            return os.pathsep.join(part for part in (str(directory), path) if part)
+    return path
+
+
 def test_environment(root, env, *, timeout=30):
     """A pre-push caller's Git context must not select a fixture's repository."""
     local = set(subprocess.check_output(
@@ -319,3 +335,45 @@ def affected_parser(description):
     parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
     parser.add_argument("--root", default=None, help="repository root")
     return parser
+
+
+def flake_labels(failed, first_rerun, second_rerun, hashes, parallel=True):
+    """FLAKY needs an explicit pass on both reruns and one tree hash around every run.
+
+    FAILED-IN-PARALLEL needs workers that actually ran (parallel); a serial sequence has none."""
+    stable = None not in hashes and len(set(hashes)) == 1
+    lines = []
+    for nodeid in failed:
+        low, high = first_rerun.get(nodeid), second_rerun.get(nodeid)
+        if "passed" in (low, high) and not stable:
+            lines.append(f"FAILED-THEN-PASSED: {nodeid}")
+        elif parallel and low == "passed" and high == "failed":
+            lines.append(f"FAILED-IN-PARALLEL: {nodeid}")
+        elif low == high == "passed":
+            lines.append(f"FLAKY (rerun -n0; a parallel race is not excluded): {nodeid}")
+    return lines
+
+
+def recorded_timeouts(directory):
+    """(timed-out node ids, faulthandler dumps) from the timeout plugin's record directory
+    (tests/_split_ci_environment.py TIMEOUT_DIR_ENV): every listed SIGALRM timeout, plus the
+    test a non-empty backstop dump of the same process names (that hang killed the process)."""
+    directory = Path(directory)
+    nodeids, dumps = set(), []
+    for listed in directory.glob("timeouts-*"):
+        nodeids.update(line for line in listed.read_text(encoding="utf-8").splitlines() if line)
+    for dump in sorted(directory.glob("backstop-*")):
+        text = dump.read_text(encoding="utf-8", errors="replace")
+        armed = directory / ("armed-" + dump.name.removeprefix("backstop-"))
+        nodeid = armed.read_text(encoding="utf-8").strip() if armed.exists() else ""
+        if text and nodeid:
+            nodeids.add(nodeid)
+            dumps.append(text)
+    return sorted(nodeids), dumps
+
+
+def flaky_only(failed, timed_out, labels, maxfail):
+    """True when every failure is FLAKY, none timed out and --maxfail did not cut the run short."""
+    flaky = [line for line in labels if line.startswith("FLAKY ")]
+    stopped = bool(maxfail) and len(failed) + len(timed_out) >= maxfail
+    return bool(failed) and not timed_out and not stopped and len(flaky) == len(failed)

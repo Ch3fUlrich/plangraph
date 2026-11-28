@@ -191,6 +191,31 @@ def test_build_clean(env):
     assert env.run("status", cwd=wt).stdout.startswith("b1  built")  # state is found from the worktree too
 
 
+def test_fold_adds_a_later_pr_as_a_recorded_part(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A", title="add a")
+    assert env.run("build", "--name", "f1", "--prs", "1").returncode == 0
+    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B", title="add b")
+    res = env.run("fold", "--name", "f1", "--prs", "2,1")  # a part already in the batch is not merged twice
+    assert res.returncode == 0, res.stderr
+    wt = env.tmp / "repo-worktrees" / "batch-f1"
+    assert first_parent(env, "batch/f1", wt) == ["Merge PR #2: add b", "Merge PR #1: add a", "seed"]
+    st = json.loads(env.state_file("f1").read_text())
+    assert st["status"] == "built" and st["head"] == env.git("rev-parse", "batch/f1")
+    assert [(m["pr"], m["items"]) for m in st["merged"]] == [(1, ["plangraph:ITEM-A"]), (2, ["plangraph:ITEM-B"])]
+
+
+def test_fold_merges_a_pr_an_earlier_run_skipped(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, title="add a")
+    env.branch_pr(2, {"b.txt": "b\n"}, title="add b")
+    assert env.run("build", "--name", "f2", "--prs", "1").returncode == 0
+    st = json.loads(env.state_file("f2").read_text())
+    st["prs"]["2"] = {"title": "add b", "head": "0" * 40, "ref": "b", "base": "main"}  # known, skipped, not a part
+    env.state_file("f2").write_text(json.dumps(st))
+    assert env.run("fold", "--name", "f2", "--prs", "2").returncode == 0
+    st = json.loads(env.state_file("f2").read_text())
+    assert [m["pr"] for m in st["merged"]] == [1, 2]
+
+
 def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")
@@ -415,3 +440,27 @@ def test_go_req_checks_workflow_edits_introduced_by_merge(env, trailer, accepted
     assert result.returncode == (0 if accepted else 1), result.stderr
     if not accepted:
         assert "Gate-Edit" in result.stderr and result.stdout == ""
+
+
+@pytest.mark.parametrize("message,labelled", [
+    ("full_ci: tests run 7 is not green on exact batch head abc", True),
+    ("full_ci: no tests run on exact batch head abc", True),
+    ("full_ci: batch PR must target main", False),
+    ("batch PR #5 is a draft", False),
+])
+def test_land_without_its_full_run_labels_the_batch_pr_ci_full(monkeypatch, message, labelled):
+    from argparse import Namespace
+    monkeypatch.syspath_prepend(str(ROOT / "tools"))
+    import merge_batch as mb
+    calls = []
+
+    def refuse(args):
+        raise mb.MergeBatchError(message)
+    monkeypatch.setattr(mb.land, "cmd_land", refuse)
+    monkeypatch.setattr(mb, "gh", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(mb, "load_state", lambda name: {"repo": "owner/proj"})
+    with pytest.raises(mb.MergeBatchError) as refused:
+        mb.land_with_full_run(Namespace(name="n", batch_pr=5))
+    assert ("labelled ci-full" in str(refused.value)) is labelled
+    assert calls == ([("api", "-X", "POST", "repos/owner/proj/issues/5/labels", "-f", "labels[]=ci-full")]
+                     if labelled else [])

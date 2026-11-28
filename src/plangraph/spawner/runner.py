@@ -29,7 +29,7 @@ from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
 from plangraph.spawner.gateway_models import record_served_witness
-from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS, mimo_pro_review, role_leg
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
 
@@ -183,12 +183,13 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None, reasoning_cap=False, chosen=None,
-        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial', allow_shas=None, writable_dirs=(),  # REMOVE-AT-R10
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial', allow_shas=None, writable_dirs=(), missing_review_diff=False,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         from .target import launch_model, resolve_launch_target
         model_or_combo, leg = resolve_launch_target(model_or_combo, chosen=chosen, client=client)
+        mimo_review = mimo_pro_review(leg := role_leg(leg, role), role)   # the leg as this role runs it
         if leg is not None:
             if client is not None and client != leg.harness:
                 from plangraph.routing_errors import SpawnRefused
@@ -209,7 +210,7 @@ class SpawnerRunner:
         if leg is not None and leg.harness == 'opencode':
             from .context_pack import bound_prompt
             from .target import effective_leg
-            request_bound = (leg if prepare_launch else effective_leg(leg)).max_request_tokens
+            request_bound = (leg if prepare_launch else effective_leg(leg, role=role)).max_request_tokens
             if request_bound is not None:
                 bound_prompt(prompt, request_bound)
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
@@ -249,7 +250,6 @@ class SpawnerRunner:
                     break
             if len(self._nonces) >= 4096:
                 raise NonceCapacity('active run nonce capacity reached')
-        # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
             envelope_headers = build_routing_envelope_headers(
@@ -285,13 +285,9 @@ class SpawnerRunner:
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
-            # Completion framing distinguishes a final answer from partial text.
             if '--format' not in cmd:
                 cmd[2:2] = ['--format', 'json']
-            # Name the session so the monitor can witness the served model
-            # (D-2898). --title goes right after the --model pair so it always
-            # precedes any positional/prompt argument ('opencode run' takes
-            # [<message...>]); the prompt itself rides on stdin.
+            # Keep the response-side witness title before any positional argument.
             try:
                 title_at = cmd.index('--model') + 2
             except ValueError:
@@ -303,13 +299,15 @@ class SpawnerRunner:
                 nonlocal request_bound
                 from .context_pack import bound_prompt
                 from .target import effective_leg
-                current = effective_leg(leg, view=ProviderView(env, overlaid=True)).max_request_tokens
+                current = effective_leg(leg, role=role, view=ProviderView(env, overlaid=True)).max_request_tokens
                 if current is not None:
                     request_bound = current if request_bound is None else min(current, request_bound)
                     bound_prompt(prompt, request_bound)
 
             child_env, render_reason = prepare_gateway_env(
                 child_env, model_or_combo, validate=validate_provider_env if leg is not None else None)
+            if mimo_review and render_reason is None:
+                validate_provider_env(child_env)
             if render_reason is None:
                 # Overlay only copies an env name through when the parent already
                 # holds it; hand the child the host keys from the AutoOS keys file
@@ -317,16 +315,10 @@ class SpawnerRunner:
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
-            # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
-            # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
             from .opencode_isolation import apply_review_permissions, close_config_layers, review_credential_reason
             from plangraph.planner.route_policy import opencode_repository_review
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
-                # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
-                # -- the shared store is child-writable and proves nothing. REVIEW-WITNESS-OPENCODE R1:
-                # no inherited config layer: HOME and XDG_CONFIG_HOME live in the per-job dir and every
-                # caller-set OPENCODE_* override outside _REVIEW_OPENCODE_ENV_ALLOW is dropped.
                 render_reason = review_credential_reason(model_or_combo, oc_dir, child_env, render_reason)
                 child_env['HOME'] = oc_dir
                 xdg_config = os.path.join(oc_dir, 'config')
@@ -341,11 +333,6 @@ class SpawnerRunner:
             if render_reason is None:
                 from .opencode_answer import configure_launch_output
                 render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
-            if role == 'review':
-                tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
-                    child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
-            # Response-side gateway evidence applies to writers as well as reviews.
-            # Tag after the final provider merge and review permission changes.
             try:
                 cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                 from .gateway_witness import tag_session
@@ -353,6 +340,17 @@ class SpawnerRunner:
                 child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
             except (ValueError, TypeError, AttributeError):
                 pass  # An unparseable config cannot supply a session-tag witness.
+            if role == 'review':
+                denied = _opencode_tools_denied(child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env)
+                if mimo_review and denied:
+                    denied = not any(cfg.get(key) for key in ('permissions', 'agents', 'agent', 'plugins', 'tools'))
+                tools_event = {'event': 'opencode_tools_denied' if denied else 'opencode_tools_not_denied'}
+                if mimo_review:
+                    tools_event.update(request_chars=len(prompt), max_request_tokens=request_bound)
+                    if not denied:
+                        render_reason = render_reason or 'opencode_tools_not_denied: MiMo inline review'
+                    if missing_review_diff:
+                        render_reason = render_reason or 'inline_diff_failed: no diff_ref for inline-only leg'
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
             if cmd[0] == 'agy' and (prepare_launch or not dry_run):
@@ -1018,7 +1016,9 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget, **route_probe_scope(current, chosen))
+                        # The MiMo launch checks the complete inline payload before its host probe.
+                        probe_skip = None if mimo_pro_review(chosen, role) else await before_launch(
+                            self.runner, chosen, role, dry_run, probe_budget, **route_probe_scope(current, chosen))
                         if stop_on_probe_fault(record, chosen, probe_skip):
                             return
                         if probe_skip:

@@ -16,7 +16,7 @@ import shutil
 import tempfile
 import time
 
-from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, opencode_counterpart
+from plangraph.planner.legs import DEFAULT_LEGS, LEG_ROLES, mimo_pro_review, opencode_counterpart, role_leg
 from plangraph.planner.routing import SpawnRefused
 from . import context_pack, runner
 from .git_guard import writer_launch
@@ -143,12 +143,15 @@ def build(request: dict) -> dict:
     try:
         admit_leg(leg)
         if request['role'] in ('implement', 'review'):
-            leg = codex_leg_effort(leg, request['card'])
+            leg = codex_leg_effort(role_leg(leg, request['role']), request['card'])
     except SpawnRefused as exc:
         reason = str(exc)
         raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
+    is_mimo_review = mimo_pro_review(leg, request['role'])
+    if is_mimo_review and request['card'].get('repository_review_required'):
+        raise LaunchRefused('repository_review_tools_unavailable', leg.id)
     from .target import effective_leg
     from plangraph.routing_support.opencode_overlay import ProviderView
     try:
@@ -219,7 +222,7 @@ def build(request: dict) -> dict:
 
         def prepare(defer_inline_diff):
             prompt = service._leg_prompt(request['prompt'], card, role, leg, pack,
-                                         document_review=request['leg'].get('explicit') is True,
+                                         document_review=request['dry_run'] if is_mimo_review else request['leg'].get('explicit') is True,
                                          prepared=True, defer_inline_diff=defer_inline_diff)
             prompt, writer_env = writer_launch(prompt, role, leg.model, request['run_id'])
             return asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
@@ -245,6 +248,8 @@ def build(request: dict) -> dict:
         for event in job.events:
             if event.get('event') == 'render_refused':
                 raise LaunchRefused('render_refused', event['reason'])
+            if registered_diff or split_inline_diff:
+                event.pop('request_chars', None)  # Rust still has to assemble this payload.
         cmd = job.command
         from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
         try:

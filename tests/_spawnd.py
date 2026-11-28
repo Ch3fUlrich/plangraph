@@ -166,14 +166,16 @@ def build_spawnd():
     debug build is used. A missing toolchain skips; a failing build fails with its diagnostics.
     """
     import pytest
+    from _split_ci_environment import timeout_extended
 
     release = bool(os.environ.get('CI'))
     if release not in _BUILT:
         try:
-            done = subprocess.run(
-                spawnd_build_command(release), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL, text=True, timeout=1500,
-                env=spawnd_build_env(os.environ))
+            with timeout_extended(1500):
+                done = subprocess.run(
+                    spawnd_build_command(release), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL, text=True, timeout=1500,
+                    env=spawnd_build_env(os.environ))
         except FileNotFoundError:
             if os.environ.get('CI'):
                 pytest.fail('cargo is missing', pytrace=False)

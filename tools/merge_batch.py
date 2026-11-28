@@ -19,6 +19,8 @@
             lines of such a path, because a union keeps the old text beside the new.
   continue  resume after the resolution commit, or after a crash: the state is saved before the
             worktree and before each merge, so a merge that was made is recorded, not lost.
+  fold      merge more PRs into a built batch (its worktree or --worktree) and record them as parts, so the
+            pre-push open-PR check accepts them; no plan or entry rules.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
   review    record a keeper-bound review by run id, or a supplementary review file.
@@ -26,7 +28,9 @@
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
             digits) and `VERDICT: PASS` lines, with
-            no FAIL/CHANGES verdict line anywhere. Then per included PR whose recorded head is an ancestor of the
+            no FAIL/CHANGES verdict line anywhere. A batch of one part is refused (train_required) while
+            another batch-ready PR is ready for main (plan exclusions, CI finished): ready PRs land as one train,
+            and its parts need no GO row of their own. Then per included PR whose recorded head is an ancestor of the
             merge commit (else a problem, no MERGED line): MERGED -> `MERGED <pr> <sha> <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
             read once more), same line; a head that moved after the build -> `NOT-MERGED <pr> head
             moved`, not closed, needs-update. Cleanup then sweeps exact landed worktrees and
@@ -41,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -51,8 +56,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
-from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
-                              ci_window, first_ready, gh_json, landing_report, norm_pr, parse_prs, record_landing, render_landing_report,
+from merge_batch_build import landing_journal, landing_lease
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, MergeBatchError, check_name, drop_state, fetch_pr, gh, git, refresh_diff,
+                              keeper_landing_configured, load_state, orphan_names, state_dir, state_path, worktrees,
+                              ci_window, first_ready, gh_json, landing_report, parse_prs, record_landing, render_landing_report,
                               repo_info, require_landing_row, set_fix_tasks, settle_landings)
 
 
@@ -64,16 +71,49 @@ def cmd_plan(args):
     patterns = high_patterns(args.high_path)
     if args.prs:
         prs = [fetch_pr(repo, num) for num in parse_prs(args.prs)]
+        if land.keeper_landing_configured():
+            prs = land.exclude_consumed(repo, prs)
     else:
-        raw = gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", args.label,
-                      "--limit", "200", "--json", PR_FIELDS)
-        prs = [norm_pr(item) for item in raw]
-    if land.keeper_landing_configured():
-        prs = land.exclude_consumed(repo, prs)
+        prs = build.labelled_prs(repo, args.label)
     refresh_diff(base, prs)  # Git owns sizes and paths, including both ends of renames
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
     print(json.dumps(plan, indent=2) if args.json else render_table(plan))
+    return 0
+
+
+def cmd_abort(args):
+    """Drop a batch: its worktree, branch, PR-head refs and state. Without a state file the leftovers of a
+    build are found by branch name (batch/NAME), but only when the build's PR-head refs mark them as ours."""
+    name = check_name(args.name)
+    if state_path(name).exists():
+        st = load_state(name)
+    elif name in orphan_names():
+        st = {"name": name, "branch": f"batch/{name}", "worktree": "", "pr": None}
+        print(f"batch {name!r} has no state file: removing what its build left", file=sys.stderr)
+    else:
+        raise MergeBatchError(f"no batch {name!r} in progress (merge_batch.py status lists them)")
+    if st.get("pr") and keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            train = landing_journal(st["repo"], "show", pr=st["pr"])["train"]
+            if train is not None and not train["merge"]:
+                landing_journal(st["repo"], "abandon", pr=st["pr"], **lease)
+    os.chdir(state_dir().parent)  # the git dir: the cwd may be the worktree that is about to go
+    registered = dict(worktrees())
+    paths = {path for path, branch in registered.items() if branch == st["branch"]}
+    if st.get("worktree") in registered:
+        paths.add(st["worktree"])
+    for wt in sorted(paths):
+        if Path(wt).is_dir():  # a directory removed by hand: worktree remove/prune clean its admin entry
+            git("merge", "--abort", cwd=wt, ok=None)
+        git("worktree", "remove", "--force", "--force", wt)
+    git("worktree", "prune", ok=None)
+    if st.get("worktree") and Path(st["worktree"]).exists():
+        print(f"warning: {st['worktree']} is no worktree of this repo: left in place", file=sys.stderr)
+    git("branch", "-D", st["branch"], ok=None)
+    drop_state(st)
+    note = f"; batch PR #{st['pr']} is still open on the remote" if st.get("pr") else ""
+    print(f"aborted batch {st['name']}: removed {', '.join(sorted(paths)) or 'no worktree'} and {st['branch']}{note}")
     return 0
 
 
@@ -109,6 +149,19 @@ def cmd_landing_settle(args):
         "api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={sha}&event=push&per_page=100")["workflow_runs"])
     print(f"settled {done} landing row(s)")
     return 0
+
+
+def land_with_full_run(args):
+    """Land the batch PR. The full suite runs once, at the merge into main: when the batch head has no green full
+    run yet, label the batch PR ci-full (CI starts the full run on that event) and refuse until it is green."""
+    try:
+        return land.cmd_land(args)
+    except MergeBatchError as exc:
+        if not str(exc).startswith("full_ci: ") or "must target main" in str(exc):
+            raise
+        # REST, not `gh pr edit`: that GraphQL path fails on repositories with classic project cards.
+        gh("api", "-X", "POST", f"repos/{load_state(args.name)['repo']}/issues/{args.batch_pr}/labels", "-f", "labels[]=ci-full")
+        raise MergeBatchError(f"{exc}; labelled ci-full: the full suite runs once now, run land again when it is green") from exc
 
 
 def cmd_landing_backfill(args):
@@ -206,6 +259,11 @@ def parser():
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--skip-conflicts", action="store_true")
+    cmd = add("fold", build.cmd_fold, "merge more PRs into a built batch and record them as parts")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
+    cmd.add_argument("--worktree", help="checkout of the batch branch (default: the batch worktree)")
+    cmd.add_argument("--skip-conflicts", action="store_true")
     cmd = add("push", land.cmd_push, "push batch/NAME and open the batch PR")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--ci-run", type=positive, help="full batch CI run id; repeat push after CI completes")
@@ -216,7 +274,7 @@ def parser():
     evidence.add_argument("--run-id", help="keeper-bound spawner review run")
     evidence.add_argument("--file", help="supplementary review file")
     add("go-req", land.cmd_go_req, "print the batch GO request").add_argument("--name", required=True)
-    cmd = add("land", land.cmd_land, "merge the batch PR and report the included PRs")
+    cmd = add("land", land_with_full_run, "merge the batch PR and report the included PRs")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)
     cmd.add_argument("--approval", metavar="PATH",
@@ -252,7 +310,7 @@ def parser():
     cmd.add_argument("--pr", required=True, type=positive)
     cmd.add_argument("--head", required=True)
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")
-    add("abort", build.cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
+    add("abort", cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
     return top
 
 

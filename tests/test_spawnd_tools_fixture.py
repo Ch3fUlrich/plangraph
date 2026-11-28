@@ -11,4 +11,8 @@ _FIXTURE = (
 
 
 def test_spawnd_tools_fixture_matches_metadata():
-    assert json.loads(_FIXTURE.read_text(encoding="utf-8")) == TOOLS_METADATA
+    fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    # The work-mode endpoint is Rust-only; retain parity for all shared tools.
+    native = [tool for tool in fixture if tool["name"] == "plangraph_work_mode"]
+    assert len(native) == 1
+    assert [tool for tool in fixture if tool not in native] == TOOLS_METADATA

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import textwrap
@@ -16,6 +17,7 @@ needs_xdist = pytest.mark.skipif(not HAS_XDIST, reason="pytest-xdist missing")
 
 CONFTEST = '''
 import json, os
+from _split_ci_environment import pytest_runtest_setup, pytest_runtest_call, pytest_runtest_teardown
 def pytest_configure(config):
     if not hasattr(config, "workerinput"):
         with open(os.environ["FIXTURE_ARGV_LOG"], "a") as log:
@@ -44,6 +46,9 @@ class Fixture:
                         GIT_AUTHOR_NAME="T", GIT_COMMITTER_NAME="T",
                         GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_EMAIL="t@example.invalid")
         self.env.pop("PYTEST_ADDOPTS", None)
+        # The fixture tree uses the suite's per-test timeout plugin.
+        self.env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(Path(__file__).resolve().parent), self.env.get("PYTHONPATH")) if part)
         self.env.pop("PYTEST_XDIST_WORKER", None)
         (self.tree / "tests").mkdir()
         (self.tree / "conftest.py").write_text(CONFTEST)
@@ -101,15 +106,88 @@ def test_a_pass_runs_pytest_once_and_prints_no_label(fx):
     assert "FLAKY" not in result.stdout and "FAILED-" not in result.stdout
 
 
-def test_a_failure_that_passes_both_reruns_is_named_flaky_and_stays_red(fx):
+def test_a_failure_that_passes_both_reruns_is_named_flaky_and_does_not_fail_the_run(fx):
     fx.write(FLAKY)
+    fx.commit()
+    result = fx.run()
+    assert result.returncode == 0, result.stdout
+    assert ("FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky"
+            in result.stdout.splitlines())
+    assert "FLAKY-ONLY: 1 flaky test(s) do not fail the run" in result.stdout.splitlines()
+    assert len(fx.invocations()) == 3
+    assert "-n" in fx.invocations()[1] and fx.invocations()[1][fx.invocations()[1].index("-n") + 1] == "0"
+
+
+def test_a_failure_that_passes_both_reruns_is_named_flaky_and_stays_red(fx):
+    """Next to a real failure the flake is named and the run stays red."""
+    fx.write(FLAKY + "\ndef test_bad():\n    assert False\n")
     fx.commit()
     result = fx.run()
     assert result.returncode == 1
     assert ("FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky"
             in result.stdout.splitlines())
+    assert "FLAKY-ONLY" not in result.stdout
     assert len(fx.invocations()) == 3
     assert "-n" in fx.invocations()[1] and fx.invocations()[1][fx.invocations()[1].index("-n") + 1] == "0"
+
+
+def test_a_flake_that_hit_maxfail_stays_red(fx):
+    fx.write(FLAKY + "\ndef test_later():\n    pass\n")
+    fx.commit()
+    result = fx.run("--maxfail", "1")
+    assert result.returncode == 1
+    assert "FLAKY-ONLY" not in result.stdout
+
+
+HUNG = '''
+import time
+import pytest
+
+@pytest.mark.timeout(1)
+def test_hung():
+    time.sleep(60)
+'''
+
+
+def test_a_timed_out_test_is_not_rerun_and_stays_red(fx):
+    fx.write(FLAKY + HUNG)
+    fx.commit()
+    result = fx.run()
+    assert result.returncode == 1
+    reruns = fx.invocations()[1:]
+    assert reruns and all("tests/test_x.py::test_hung" not in args for args in reruns)
+    assert "FLAKY-ONLY" not in result.stdout
+    assert "TIMED OUT: tests/test_x.py::test_hung" in result.stdout.splitlines()
+
+
+# Hangs once where SIGALRM cannot interrupt it, so only the faulthandler backstop ends it.
+HANGS_ONCE = '''
+import os, signal, time
+from pathlib import Path
+import pytest
+@pytest.mark.timeout(1)
+def test_hangs_once():
+    marker = Path(os.environ["FIXTURE_MARKER"])
+    if not marker.exists():
+        marker.write_text("seen")
+        signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGALRM])
+        time.sleep(60)
+def test_ok():
+    pass
+'''
+
+
+@needs_xdist
+@pytest.mark.skipif(not hasattr(signal, "pthread_sigmask"), reason="needs POSIX signal masks")
+def test_a_hang_killed_by_the_backstop_counts_as_timed_out_and_fails_the_run(fx):
+    fx.write(HANGS_ONCE)
+    fx.commit()
+    fx.env["PYTEST_TIMEOUT_BACKSTOP_GRACE"] = "1"
+    result = fx.run(workers="2")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "TIMED OUT: tests/test_x.py::test_hangs_once" in result.stdout.splitlines()
+    assert "FLAKY" not in result.stdout
+    assert all("tests/test_x.py::test_hangs_once" not in args for args in fx.invocations()[1:])
 
 
 @needs_xdist
@@ -117,7 +195,7 @@ def test_flaky_is_classified_the_same_under_two_workers(fx):
     fx.write(FLAKY)
     fx.commit()
     result = fx.run(workers="2")
-    assert result.returncode == 1
+    assert result.returncode == 0, result.stdout
     assert "FLAKY (rerun -n0; a parallel race is not excluded): tests/test_x.py::test_flaky" in result.stdout
     reruns = fx.invocations()[1:]
     assert [args[args.index("-n") + 1] for args in reruns] == ["0", "2"]
@@ -318,7 +396,7 @@ def test_collection_attempt_and_retries_get_isolated_basetemps(fx):
     collection = fx.run("--collect-only")
     assert collection.returncode == 0, collection.stdout + collection.stderr
     run = fx.run()
-    assert run.returncode == 1, run.stdout + run.stderr
+    assert run.returncode == 0, run.stdout + run.stderr
 
     invocations = fx.invocations()
     assert len(invocations) == 4

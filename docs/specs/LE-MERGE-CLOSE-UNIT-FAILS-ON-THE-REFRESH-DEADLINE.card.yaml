@@ -9,7 +9,6 @@
         "rust/plangraph-cli/src/merge_close.rs",
         "rust/plangraph-cli/src/merge_close_unit.rs",
         "rust/plangraph-cli/tests/merge_close_scheduled.rs",
-        "src/plangraph/keeper/context_sources.py",
         "tests/door_util.py",
         "tests/test_keeper_merge_close_auto.py"
       ],
@@ -20,9 +19,11 @@
         "docs/specs/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.md",
         "docs/specs/LE-MERGE-CLOSE-UNIT-FAILS-ON-THE-REFRESH-DEADLINE.tree.tsv",
         "src/plangraph/keeper/api_routes.py",
+        "src/plangraph/keeper/context_sources.py",
         "src/plangraph/keeper/evidence_pr.py",
         "src/plangraph/keeper/store_close.py",
         "src/plangraph/keeper/store_context.py",
+        "src/plangraph/keeper/store_review.py",
         "src/plangraph/keeper/store_runs.py",
         "src/plangraph/keeper/timing.py",
         "tests/test_keeper_deploy_gate_paths.py",
@@ -34,7 +35,7 @@
         "RunsMixin.warm_merge_scan",
         "landing_record"
       ],
-      "check_cmd": "python3 -m pytest -q tests/test_keeper_merge_refresh_budget.py tests/test_keeper_merge_close_auto.py tests/test_keeper_deploy_gate_paths.py",
+      "check_cmd": "python3 -m pytest -q tests/test_keeper_merge_refresh_budget.py tests/test_keeper_merge_close_auto.py tests/test_keeper_deploy_gate_paths.py tests/test_keeper_landing_authority.py",
       "heldout_check": "cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test merge_close_scheduled",
       "check_kind": "change",
       "risk_tags": [

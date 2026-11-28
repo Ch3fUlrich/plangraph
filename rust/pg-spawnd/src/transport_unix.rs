@@ -127,10 +127,13 @@ pub(crate) async fn connect(path: &Path) -> Result<tokio::net::UnixStream, Strin
 mod tests {
     use super::*;
 
+    /// A short 0700 directory under /tmp: a host TMPDIR can be too long for a socket
+    /// path (sun_path holds about 100 bytes) or sit on a filesystem without sockets.
     fn private_tempdir() -> tempfile::TempDir {
         tempfile::Builder::new()
+            .prefix("s-")
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
+            .tempdir_in("/tmp")
             .unwrap()
     }
 
@@ -209,7 +212,13 @@ mod tests {
         let temp = private_tempdir();
         let base = temp.path();
         let path = base.join("socket");
-        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        let stale =
+            socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+        let address = socket2::SockAddr::unix(&path).unwrap();
+        stale.bind(&address).unwrap();
+        // Model a descriptor inherited by a concurrent spawn before exec.
+        let inherited = stale.try_clone().unwrap();
+        drop(stale);
         let mut replacement = None;
         let winner = bind_checked(&path, || {
             std::fs::remove_file(&path).unwrap();
@@ -223,6 +232,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), identity);
         drop(replacement);
         drop(winner);
+        drop(inherited);
         std::fs::remove_dir_all(base).unwrap();
     }
 

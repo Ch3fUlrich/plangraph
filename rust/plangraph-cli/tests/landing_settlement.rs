@@ -523,11 +523,15 @@ with TemporaryDirectory() as directory, ExitStack() as stack:
     assert part['review_runs'] == {'demo:D': seat}
 
     state['worktree'] = str(path / 'removed')
-    for name, value in dict(state_path=lambda name: path, state_dir=lambda: path,
-                            worktrees=lambda: [], git=Mock(), drop_state=Mock()).items():
-        stack.enter_context(patch.object(build, name, value))
-    stack.enter_context(patch.object(build.os, 'chdir'))
-    assert build.cmd_abort(SimpleNamespace(name='train')) == 0
+    import merge_batch as batch_cli  # abort lives in the CLI module; patch its own bindings
+    for module in (build, batch_cli):
+        for name, value in dict(state_path=lambda name: path, state_dir=lambda: path, worktrees=lambda: [],
+                                git=Mock(), drop_state=Mock(), landing_journal=journal,
+                                keeper_landing_configured=lambda: True, load_state=lambda name: state).items():
+            if hasattr(module, name):
+                stack.enter_context(patch.object(module, name, value))
+    stack.enter_context(patch.object(batch_cli.os, 'chdir'))
+    assert batch_cli.cmd_abort(SimpleNamespace(name='train')) == 0
     assert [(call.args[1], call.kwargs.get('pr')) for call in journal.call_args_list][-4:] == [
         ('acquire', None), ('show', 17), ('abandon', 17), ('release', None)]
 "#,
@@ -573,7 +577,7 @@ for refused in (False, True):
         stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
         for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
                      'require_green', 'record_reruns', 'prepare_train', 'require_main_green', 'require_migration_go',
-                     'merge_trailers'):
+                     'merge_trailers', 'require_train'):  # require_train lists PRs through gh
             stack.enter_context(patch.object(land, name, Mock()))
         stack.enter_context(patch.object(land, 'require_full_run', return_value=[]))
         stack.enter_context(patch.object(land, 'landing_journal', journal))

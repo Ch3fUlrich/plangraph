@@ -51,6 +51,30 @@ fn rust_directory_link_does_not_delete_external_target() {
     assert!(external.join("target/artifact").exists());
 }
 
+// Block allocation can exceed the file's apparent byte size.
+const SLACK_PER_FILE: u64 = 64 * 1024;
+
+fn cache_size_within_slack(measured: u64, files: u64, file_bytes: u64) -> bool {
+    let lower = files * file_bytes;
+    let upper = files * (file_bytes + SLACK_PER_FILE);
+    (lower..=upper).contains(&measured)
+}
+
+#[test]
+fn cache_size_check_allows_allocation_slack_and_rejects_wrong_counts() {
+    let files = 3;
+    let file_bytes = 4 * 1024 * 1024;
+    let upper = files * (file_bytes + SLACK_PER_FILE);
+    for measured in [12_582_912, 12_595_200, upper] {
+        let within_slack = cache_size_within_slack(measured, files, file_bytes);
+        assert!(within_slack, "{measured}");
+    }
+    for measured in [8_388_608, 16_777_216, 12_578_816, upper + 1] {
+        let within_slack = cache_size_within_slack(measured, files, file_bytes);
+        assert!(!within_slack, "{measured}");
+    }
+}
+
 // Real concurrent writer processes, driven through the production Python guard.
 // The subprocess bridge is necessary until the spawner's Python file is ported.
 #[test]
@@ -115,7 +139,7 @@ async def main():
         # Even idle service records cannot authorize eviction under a foreign lease.
         with h.cargo_lease():
             busy = h.local_disk_refusal(cwd, SimpleNamespace(ps=lambda: {'runs': []}))
-        size = h.cargo_target_size_gb(target)
+        size = round(h.cargo_target_size_gb(target) * 1024 ** 3)
         idle = h.local_disk_refusal(cwd, SimpleNamespace(ps=lambda: {'runs': []}))
         print(json.dumps(dict(statuses=[j.status for j in runner.jobs.values()],
             reasons=[j.refusal for j in runner.jobs.values()], busy=busy, idle=idle,
@@ -162,7 +186,11 @@ asyncio.run(main())
         .starts_with("cargo_target_cap:"));
     assert!(result["idle"].is_null(), "{result}");
     assert_eq!(result["reclaimed"], true);
-    assert_eq!(result["size"].as_f64().unwrap(), 12.0 / 1024.0);
+    let size = result["size"].as_u64().unwrap();
+    assert!(
+        cache_size_within_slack(size, 3, 4 * 1024 * 1024),
+        "{result}"
+    );
 }
 
 #[test]

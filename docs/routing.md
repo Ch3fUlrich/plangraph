@@ -195,7 +195,7 @@ D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards witho
 
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
 
-Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
+The earlier review order (rule 3.50, D-6028) started on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
 the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
 flash and Beam free legs, then native Claude Sonnet high. See the D-6652 review order
 and D-6952 quota rules below for the current route.
@@ -259,7 +259,9 @@ required OpenCode seats (`opencode-go-deepseek-v4-flash`, `opencode-go-glm-5.3-f
 mode with checkout reads) ahead of every other leg, each outside the diff's writer families,
 and plans two seats on every head. The Claude review seat serves only for credential,
 authentication and secrets diffs or when both required seats are out of the route.
-D-6952 selects `agy-claude-sonnet-5-5-high` for that seat. The Claude subscription
+For an exact GPT-head diff, Hydrogen-high and MiMo Pro (bounded repository tools) precede
+Sonnet. Sonnet becomes eligible when those two are unavailable and the existing
+credential or required-seat gate admits it. D-6952 selects `agy-claude-sonnet-5-5-high` for that seat. The Claude subscription
 `claude-sonnet-5-5-high` follows it in the order and serves when the Antigravity
 Sonnet quota is limited or the Antigravity client is missing on the selected host.
 Both Sonnet seats bind their review to the checked head and require test evidence

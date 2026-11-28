@@ -31,8 +31,10 @@ also caps auto on resource-constrained hosts. Exit status propagates pytest fail
 pytest's default report. After a failed run (exit 1, at most 50 failed ids) the failed ids rerun
 with `-n0` and at the first worker count, with a tree hash around every run. `FLAKY (...)` needs
 an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass at `-n0` and a
-failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
-status stays that of the first run, so a flake is named, never hidden.
+failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. When every
+failure is `FLAKY`, none timed out and `--maxfail` did not stop the run, the tool prints
+`FLAKY-ONLY: N flaky test(s) do not fail the run` and the pytest batch passes; any other label
+keeps the exit status of the first run. A test that failed by `TEST-TIMEOUT` is never rerun.
 
 Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split_ci_environment.py`):
 
@@ -49,7 +51,15 @@ Pytest CI environment (read by `tests/conftest.py`, implemented in `tests/_split
   which windows are active (`starts <= as_of < expires`); a window that has not begun or has
   expired blocks as normal.
 - `PYTEST_QUARANTINE_MODE`: `blocking` (default) deselects active quarantined tests;
-  `quarantine` runs only them, and an empty selection is not a failure.
+  `quarantine` runs only them, and an empty selection is not a failure; `xfail` runs every
+  test and marks the active quarantined ones non-strict xfail, so they report but cannot fail.
+- Without `PYTEST_QUARANTINE_FILE` the committed ledger `tests/quarantine.json` (same format)
+  applies in `xfail` mode as of the current UTC time (or `PYTEST_QUARANTINE_AS_OF`).
+- `PYTEST_TEST_TIMEOUT`: seconds each setup, call and teardown phase may take (default 300,
+  `0` turns it off; `@pytest.mark.timeout(seconds)` overrides it per test). A phase over budget
+  fails with `TEST-TIMEOUT <nodeid> (<phase>) exceeded <N>s` and the stack where it hung; a hang
+  that never returns to the interpreter is dumped by faulthandler 60 s later and the process exits.
+  A cold cargo build inside a test runs under `timeout_extended(1500)` and does not count.
 
 Pytest supports expiry-bound quarantine selection. The part-entry replay is
 tracked by `LE-CI-FLAKE-ENTRY-REPLAY`. The nonblocking job, retry ledger and
@@ -63,13 +73,13 @@ priority to policy checks, changed tests and direct consumers. A changed package
 initializer selects local tests that explicitly import the package or a changed
 export. Local selection stops at re-export boundaries. The selector reports
 additional files deferred to CI. Workflow-only changes select CI regression
-tests in local preflight and the affected PR tier. The batch tier runs the full
+tests in local preflight and the affected PR tier. Only the merge candidate into main (a train head or a `ci-full` pull request) runs the full
 suite.
 Outside file-only local preflight, conftest/shared helpers, config, and deleted or unmapped files can
 select the full suite. AST cannot establish arbitrary runtime, plugin, or filesystem dependencies.
 Request full verification when changing behavior with those dependencies.
 
-Run the full suite on **merge to main and nightly**, not routinely in writer loops:
+CI runs the full suite once, on the **merge candidate into main**, not routinely in writer loops (docs/ci-gate.md):
 
 ```sh
 python3 -m pytest -n auto tests
@@ -110,6 +120,58 @@ DB paths, so worker-specific paths isolate data in a shared PG database without
 requiring per-worker database creation privileges. Supply PG_DSN for live PG checks.
 `tests/test_parallel_isolation.py` pins directory/schema separation and simultaneous
 live keeper listeners; run it three times with xdist after fixture changes.
+
+## Writing load-independent tests
+
+A test that passes alone and fails inside a full run on a loaded or shared host
+costs every writer a full fast-check run. Measured 2026-11-24 to 2026-11-28 (CI
+run attempts and the dell and workstation fast-check logs), these rules each
+answer one real failure.
+
+1. No real host reads. A spawner test never reaches the real memory reader, the
+   ambient model catalog, the installed `opencode` binary or the host's `systemctl`;
+   pin them with a fixture. tests/conftest.py raises "spawner test reached the real
+   host memory reader; pin it with the admission_memory fixture"; one train head
+   failed 68 tests on it (run 45564794074).
+2. Private directories for everything a test writes or locks. Never write under a
+   directory that parallel tests or a second process share. Example:
+   pg-spawnd/tests/fleet_launch/interrupted.rs:96 (os.replace of
+   `$ROOT/guard/<id>.json.tmp` raised FileNotFoundError because two runs shared
+   the dir). A module-level cache is shared state too: tests/test_stall_alarms.py
+   `test_failing_repo_cached_for_ttl` clears `stall._cache` by hand and fails when
+   the order changes.
+3. No fixed sleeps and no wall-clock upper bounds. Wait on a condition with a
+   generous deadline, or inject the clock. Examples:
+   tests/test_spawner_base_fresh.py `test_probe_budget_counts_routing_time_spent_before_the_run_record`
+   (`assert 1.82 < 1.8`, five reruns); `test_admission_timeout_fails_original_run_records`
+   (`assert 1 > 1` against a 0.3 s watchdog); pg-spawnd/tests/placement_spawn.rs:132
+   (`elapsed < 1.0 s`) and :145 (`sleep(1100 ms)`);
+   plangraph-cli/src/ci_watch/batch_delivery_tests.rs:228 (`elapsed < 10 s`);
+   pg-spawnd/src/evidence_tests.rs:189 (10 s ready wait for two child processes).
+4. Write-then-exec fixtures use `executable_test_support::write_executable`, never
+   `fs::write` plus `Command`: a parallel test that forks while the file is open
+   for writing makes the exec fail with "Text file busy" (ETXTBSY). Examples:
+   plangraph-cli/src/fast_check_target.rs:252 and pg-repo-sync/tests/sync.rs:295.
+   `executable_fixtures_use_the_shared_writer` fails the head that forgets it.
+5. Compare paths in canonical form on Windows. `canonicalize` returns `\\?\C:\...`
+   there; compare canonicalized to canonicalized or strip the prefix. One
+   head failed only on the Windows job (run 46090538048).
+6. Tests that share a real resource (a socket path, the Cargo lease, a shared
+   target, a fixed port) go into a nextest test group with one slot, or take the
+   resource from a private tempdir. Example: pg-spawnd/src/transport_unix.rs:221
+   `concurrent_bind_cannot_replace_live_socket` pins an inode number that the
+   filesystem reuses after remove and bind.
+7. A test that spawns a child process asserts the child's stderr in the failure
+   message and has a deadline that scales with load. Example:
+   pg-spawnd/tests/mimo_output_cap.rs:46 prints the child's stderr only after the
+   child failed under load.
+8. Never depend on a download inside a test job. The browser job installs
+   Chromium with `playwright install --with-deps` under a 285 s bounded step and
+   exits 124 on a cache miss (UI tests in headless Chromium, 16 failed attempts
+   in four days); restore the browser from the cache or the runner image.
+
+Check a new or changed test by running it alone three times and then once next to
+a CPU-bound process (`taskset`/`stress`), before the head leaves the writer.
 
 ## W22 measured evidence (local sandbox)
 

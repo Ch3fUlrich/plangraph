@@ -55,9 +55,14 @@ fn fixture() -> tempfile::TempDir {
     git(&seed, &["commit", "-qam", "two"]);
     tmp
 }
-fn run(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
-        .current_dir(cwd)
+/// pg-repo-sync with the fixture as HOME and an empty XDG config home, so its Git calls
+/// (which drop inherited GIT_* variables) never read the host's global Git config.
+fn sync_command(cwd: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"));
+    cmd.current_dir(cwd)
+        .env("HOME", cwd)
+        .env("XDG_CONFIG_HOME", cwd.join(".config"))
+        .env_remove("PG_REPO_SYNC_TIMEOUT_SECS")
         .env(
             "PATH",
             format!(
@@ -65,10 +70,11 @@ fn run(cwd: &Path, args: &[&str]) -> Output {
                 cwd.join("bin").display(),
                 std::env::var("PATH").unwrap()
             ),
-        )
-        .args(args)
-        .output()
-        .unwrap()
+        );
+    cmd
+}
+fn run(cwd: &Path, args: &[&str]) -> Output {
+    sync_command(cwd).args(args).output().unwrap()
 }
 #[test]
 fn all_five_reasons_and_explicit_label() {
@@ -119,8 +125,8 @@ fn fast_forward_and_missing_home_or_code_are_silent() {
         git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
     );
     for home in [None, Some(tmp.path())] {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"));
-        cmd.current_dir(tmp.path()).env_remove("HOME");
+        let mut cmd = sync_command(tmp.path());
+        cmd.env_remove("HOME");
         if let Some(home) = home {
             cmd.env("HOME", home);
         }
@@ -205,8 +211,7 @@ fn bounded_status_continues_to_next_repository() {
     );
     git(tmp.path(), &["clone", "-q", "source", "next"]);
     let start = std::time::Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
-        .current_dir(tmp.path())
+    let out = sync_command(tmp.path())
         .args(["--repo", "checkout", "--repo", "next"])
         .env(
             "PATH",
@@ -233,8 +238,7 @@ fn live_unit_checkout_is_reported_and_unchanged() {
     fs::create_dir_all(&bin).unwrap();
     pg_worker_core::executable_test_support::write_executable(bin.join("systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", tmp.path().join("checkout").display()));
     let before = git(&tmp.path().join("checkout"), &["rev-parse", "HEAD"]);
-    let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
-        .current_dir(tmp.path())
+    let out = sync_command(tmp.path())
         .args(["--repo", "checkout"])
         .env(
             "PATH",
@@ -278,8 +282,7 @@ fn systemd_optional_and_home_directories_do_not_disable_sync() {
             value.into()
         };
         pg_worker_core::executable_test_support::write_executable(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in --user*list-units*) echo 'other.service loaded active running Other';; *show*) echo '{}';; esac\n", value));
-        let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
-            .current_dir(tmp.path())
+        let out = sync_command(tmp.path())
             .args(["--repo", "checkout"])
             .env("HOME", tmp.path())
             .env(
@@ -347,8 +350,7 @@ fn external_hook_checkout_is_fast_forwarded_or_reported_when_dirty() {
         if dirty {
             fs::write(hooks.join("file"), "dirty").unwrap();
         }
-        let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
-            .current_dir(tmp.path())
+        let out = sync_command(tmp.path())
             .env("HOME", tmp.path())
             .env(
                 "PATH",

@@ -65,7 +65,7 @@ def test_local_selection_always_includes_repository_policy_tests(tmp_path, chang
     assert module.select_tests(tmp_path, [changed], local=True, files_only=True,
                                within=['tests/test_spawner_utf8.py'])['tests'] == ['tests/test_spawner_utf8.py']
 
-def test_ci_pr_uses_affected_and_nightly_keeps_full():
+def test_ci_uses_affected_on_every_non_full_event_and_has_no_nightly_full_run():
     import yaml
 
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1]
@@ -75,7 +75,8 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     pytest_checkout = next(s for s in pytest_steps if s.get("uses") == "actions/checkout@v4")
     assert pytest_checkout["with"]["fetch-depth"] == 0
     pytest_cmd = next(s["with"]["command"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
-    assert 'pull_request' in pytest_cmd
+    # Every event that is not the merge candidate, a push to main included, runs the affected selection.
+    assert '[ "${{ needs.select.outputs.full }}" != "true" ]' in pytest_cmd and 'pull_request' not in pytest_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in pytest_cmd
     assert 'python -m pytest -q -n auto' in pytest_cmd
 
@@ -84,15 +85,16 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     pg_checkout = next(s for s in pg_steps if s.get("uses") == "actions/checkout@v4")
     assert pg_checkout["with"]["fetch-depth"] == 0
     pg_cmd = next(s["with"]["command"] for s in pg_steps if s.get("name", "").startswith("pytest"))
-    assert 'pull_request' in pg_cmd
+    assert '[ "${{ needs.select.outputs.full }}" != "true" ]' in pg_cmd and 'pull_request' not in pg_cmd
     assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd
-    # On push to main, the full PG set also includes claim contract coverage.
+    # On a full run, the full PG set also includes claim contract coverage.
     assert 'tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
     assert 'python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
 
-    # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
-    assert workflow.get("on", workflow.get(True))["schedule"]
+    # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True. The full suite runs once, at the
+    # merge into main: no nightly schedule runs it a second time.
+    assert "schedule" not in workflow.get("on", workflow.get(True))
 
 
 def test_missing_pytest_has_named_fix(tmp_path, monkeypatch, capsys):
@@ -174,6 +176,7 @@ def test_three_shards_cover_only_affected_selection(tmp_path, request, durations
     assert conftest is not None
     hooks = vars(conftest)
     source = 'import os, sys, hashlib, pytest\nfrom pathlib import Path\n_PG = False\n'
+    source += "_COMMITTED_QUARANTINE = Path('quarantine.json')  # absent in tmp_path: no ledger applies\n"
     source += '\n'.join(inspect.getsource(hooks[name]) for name in (
         'shard_items', 'pytest_collection_modifyitems', 'pytest_sessionfinish'))
     source += '\ndef pytest_runtest_logreport(report):\n    if report.when == "call":\n        with Path(os.environ["SHARD_TRACE"]).open("a") as stream:\n            stream.write(report.nodeid + "\\n")\n'

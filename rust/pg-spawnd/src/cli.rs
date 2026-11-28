@@ -6,10 +6,10 @@ use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|resume-local|writer-stop|writer-resume|steer-local|session|hand-run> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|resume-local|writer-stop|writer-resume|steer-local|session|hand-run|settings-web> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local|settings-web> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -242,6 +242,7 @@ pub(crate) fn execute(
     }
     let rest = rest.into_iter();
     match verb.as_deref() {
+        Some("settings-web") => crate::settings_web::run(rest.collect()),
         Some("probe") => parse_probe(rest, out, reader),
         Some("serve") => parse_serve(rest),
         Some("shim") => parse_shim(rest),

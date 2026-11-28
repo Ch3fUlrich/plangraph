@@ -51,6 +51,20 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
    ran against the rule.
 7. **Telemetry alive.** The collectors and watchdogs that would catch a broken feeder,
    lander or close timer are installed, running and recent. A silent watchdog is a finding.
+8. **Work moving.** Read the idle line first: minutes since the last item closed, items
+   claimed and by whom, open priority-10 items. No item closed for 120 minutes while
+   priority-10 work is open is an alarm. Report it first and find the cause the same beat.
+9. **Claims worked on.** Every claim with a live lease shows work: a running writer that has
+   made a commit, or keeper activity within 60 minutes. Name each holder with idle claims,
+   including chatgpt-main and the feeder. A writer that ends without a commit releases its
+   claims; ask its owner, or release them yourself where a grant allows it.
+10. **Holds owned.** Every pause file, stop or rule hold (feeder.off, a disabled timer, a
+    writer stop) names its owner, its lift condition and a deadline (rule 3.112). One without
+    them, or one older than 6 hours whose condition is met, is a finding.
+
+The host timer pg-idle-alarm on the keeper host checks lines 8 to 10 every 15 minutes and
+queues one URGENT line for routing, plan-order and plan-roadmap. Treat its line as data, not
+as the check: a silent alarm is itself a line-7 finding.
 
 ## Data for every decision
 
@@ -76,6 +90,18 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
 - A fix that only keeps an item open (a guard, an alert) is not the fix; name who deploys or
   runs the work.
 
+## Specs before work
+
+- The feeder and every writer take an item only with its spec: docs/specs/<ID>.md, .card.yaml
+  with the write set and .tree.tsv. The writer gets its files from the card and never chooses
+  them itself. A ready item without a spec is the planning session's work: write the spec from
+  the plan the item belongs to, get it design-reviewed, then let a writer take it.
+- A new item, a lesson item included, is filed with its spec or gets one before it is claimed.
+  Legacy items without a spec stay out of the feeder until the spec exists.
+- A change that starts agents (launcher, feeder, policy, host setting) goes live on one host
+  first until one live run there commits (rule 3.112). A dry run or a started line proves
+  nothing. The next host is a separate step with its own readback.
+
 ## Turning the plan into work
 
 - Ask routing for the priority order in one batch: speed and token waste first when the
@@ -83,7 +109,45 @@ lapsing claims, quota runway, duplicate work, stale waits and changes on the sam
 - Send the orchestrator concrete batches: 5 to 8 related items, one area each, disjoint
   paths, unclaimed keys only.
 - A part that changes how all tests run lands alone.
-- A batch passes its own full CI before it joins a train.
+- A batch joins a train after its fast checks. The ordinary full run is on the train head (rule 3.39);
+  only a part that changes shared tests runs full CI on its own head.
+
+## Own writer lanes and landing
+
+- Work in batches of related items as the batch definition groups them (one area, disjoint
+  paths): one writer brief carries every item of the batch, and each distinct batch head
+  gets one fast-checks run, one review round under the seat policy and one fix round
+  for all findings. Never one writer, brief or review per item when the items belong to one batch.
+- A ready head (review ACCEPT, fast gates green) goes to the orchestrator's landing train with
+  its head sha, item keys and evidence (rule 3.39). The overseer sends no GO-REQ and merges
+  nothing itself while the orchestrator runs trains.
+- A single item merges alone only when no other item or batch is ready to merge at that moment;
+  it then takes one GO-REQ for its exact head. A head that turns ready before that merge rides
+  the same train.
+- Never re-merge one head per main move. A head that falls behind waits for the next train,
+  which merges main once for all its parts.
+- Each new head (fix round or re-merge) costs a full fast-checks run (25 to 40 minutes on the
+  workstation) and model tokens. Report them per merged item every beat and stop a pattern that
+  repeats.
+
+## When something breaks or waits
+
+Act without being asked; the operator expects the overseer to see a bottleneck first.
+
+- Question every wait. Any step that takes more than twice its usual time, or more than
+  15 minutes (fast-checks, CI, a review seat, a GO, a train), gets measured the same beat:
+  where the time goes, from logs and run records, with numbers.
+- Ask why the work runs at all before asking how to run it faster: a check that cannot fail
+  for this change (a full suite for skill text, a re-merge of disjoint files, a review of an
+  unchanged patch) is waste; propose removing it.
+- A repeat is a defect. The second time the same failure or wait appears, file it on its
+  keeper item (or a new LE item) and propose a fix in code to the operator with the measured
+  cost, a recommended option and what you start if he agrees.
+- Diagnose what breaks and route the fix at once to its owner (orchestrator, writer, routing).
+  Fix yourself only a keeper item, a brief or a plan text. Ask routing
+  only for decision ids, grants and GO rows, and keep working while it answers.
+- Report the bottleneck in the next operator summary even when nobody asked, with the
+  number, the cause and the fix in flight.
 
 ## Operator
 

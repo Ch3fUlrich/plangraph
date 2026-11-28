@@ -422,8 +422,10 @@ def test_close_merged_with_only_claude_seat(unseated_w, tmp_path, monkeypatch, f
         from pathlib import Path
         repo = Path(__file__).resolve().parents[1]
         target = Path(os.environ.get("CARGO_TARGET_DIR", str(tmp_path / "target")))
-        subprocess.run(["cargo", "build", "--manifest-path", str(repo / "rust/Cargo.toml"),
-                        "-p", "pg-seat-evidence", "--target-dir", str(target)], check=True)
+        from _split_ci_environment import timeout_extended
+        with timeout_extended(1500):
+            subprocess.run(["cargo", "build", "--manifest-path", str(repo / "rust/Cargo.toml"),
+                            "-p", "pg-seat-evidence", "--target-dir", str(target)], check=True)
         monkeypatch.setenv("PG_CLAUDE_SEAT_BIN", str(target / "debug/pg-seat-evidence"))
     ref = {"transcript": str(transcript), "review_file": str(review), "head": HEAD}
     added = w.store.add_evidence_router(w.p("router"), KEY, "claude-seat", ref)

@@ -2,6 +2,7 @@
 //! This proves server pinning, not compatibility between independently built releases.
 #![cfg(unix)]
 use std::{
+    os::unix::process::ExitStatusExt,
     path::Path,
     process::{Child, Command, Stdio},
     sync::Arc,
@@ -16,13 +17,16 @@ use temporalio_common::worker::{
 };
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::{
-    ActivityOptions, Runtime, Worker, WorkerOptions, WorkflowContext, WorkflowResult,
+    ActivityOptions, Runtime, SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext,
+    WorkflowResult,
     activities::{ActivityContext, ActivityError},
 };
 
 #[workflow]
 #[derive(Default)]
-struct CrashWorkflow;
+struct CrashWorkflow {
+    released: bool,
+}
 #[workflow_methods]
 impl CrashWorkflow {
     #[run]
@@ -61,10 +65,18 @@ impl CrashWorkflow {
             .into());
         }
         if mode == "timer" {
-            let _ = ctx.timer(Duration::from_secs(3)).await;
+            temporalio_sdk::workflows::select! {
+                r = ctx.wait_condition(|s: &Self| s.released) => { r?; }
+                _ = ctx.timer(Duration::from_secs(600)) => return Ok("timer fired before release".into()),
+            }
         }
-        let opts = ActivityOptions::with_start_to_close_timeout(Duration::from_secs(2)).build();
+        let opts = ActivityOptions::with_start_to_close_timeout(Duration::from_secs(60)).build();
         Ok(ctx.execute_activity(Probe::attempt, (), opts).await?)
+    }
+
+    #[signal]
+    fn release(&mut self, _: &mut SyncWorkflowContext<Self>, _: ()) {
+        self.released = true;
     }
 }
 struct Probe;
@@ -76,11 +88,10 @@ impl Probe {
     }
     #[activity]
     async fn attempt(self: Arc<Self>, _: ActivityContext, _: ()) -> Result<String, ActivityError> {
-        if std::env::var("CRASH_BUILD").as_deref() == Ok("old")
-            && !Path::new(&std::env::var("CRASH_READY").unwrap()).exists()
-        {
-            std::fs::write(std::env::var("CRASH_READY").unwrap(), b"attempt").unwrap();
-            tokio::time::sleep(Duration::from_secs(60)).await;
+        let ready = std::env::var_os("CRASH_READY").unwrap();
+        if !ready.is_empty() {
+            std::fs::write(ready, b"attempt").unwrap();
+            std::future::pending::<()>().await;
         }
         Ok(std::env::var("CRASH_BUILD").unwrap())
     }
@@ -138,14 +149,14 @@ impl Drop for Process {
         let _ = self.0.wait();
     }
 }
-fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
+fn worker(addr: &str, queue: &str, build: &str, ready: Option<&Path>) -> Process {
     Process(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "child_worker", "--nocapture"])
             .env("CRASH_ADDR", addr)
             .env("CRASH_QUEUE", queue)
             .env("CRASH_BUILD", build)
-            .env("CRASH_READY", ready)
+            .env("CRASH_READY", ready.unwrap_or(Path::new("")))
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()
@@ -154,46 +165,39 @@ fn worker(addr: &str, queue: &str, build: &str, ready: &Path) -> Process {
 }
 
 #[test]
-fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
-    use std::os::unix::process::ExitStatusExt;
-    let cli = std::env::var("PG_TEMPORAL_CLI")
-        .or_else(|_| std::env::var("TEMPORAL_CLI"))
-        .expect(
-            "SIGKILL acceptance requires PG_TEMPORAL_CLI or TEMPORAL_CLI; absence is not evidence",
-        );
-    let temp = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let log = std::fs::File::create(temp.path().join("server.log")).unwrap();
-    let _server = Process(
-        Command::new(&cli)
-            .args([
-                "server",
-                "start-dev",
-                "--ip",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-                "--headless",
-            ])
-            .stdout(log.try_clone().unwrap())
-            .stderr(log)
-            .spawn()
-            .unwrap(),
+fn fixtures_only_reports_crash_skip_without_temporal() {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "--show-output"])
+        .arg("sigkill_mid_attempt_and_mid_timer_stays_pinned")
+        .env_clear()
+        .env("PG_FAST_CHECK_FIXTURES_ONLY", "1")
+        .env("TEMPORAL_CLI", "sentinel-temporal-cli")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let marker = "PG_FAST_CHECK_SKIP sigkill_mid_attempt_and_mid_timer_stays_pinned \
+                  reason=requires_temporal_deployment_fixture";
+    assert_eq!(
+        stdout.lines().filter(|line| *line == marker).count(),
+        1,
+        "{stdout}"
     );
-    let addr = format!("http://127.0.0.1:{port}");
-    for n in 0..200 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        assert!(
-            n < 199,
-            "server failed: {}",
-            std::fs::read_to_string(temp.path().join("server.log")).unwrap()
+}
+
+#[test]
+fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
+    if std::env::var("PG_FAST_CHECK_FIXTURES_ONLY").as_deref() == Ok("1") {
+        println!(
+            "PG_FAST_CHECK_SKIP sigkill_mid_attempt_and_mid_timer_stays_pinned reason=requires_temporal_deployment_fixture"
         );
-        std::thread::sleep(Duration::from_millis(100));
+        return;
     }
+    let cli = std::env::var("TEMPORAL_CLI").expect("run the acceptance suite through ci-temporal");
+    let addr = std::env::var("PG_TEMPORAL_ADDR").expect("ci-temporal supplies an isolated address");
+    let address = addr.strip_prefix("http://").unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let name = |mode: &str| format!("pg-process-crash-{mode}");
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -201,33 +205,35 @@ fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
         .block_on(async {
             let c = client(&addr).await;
             for mode in ["attempt", "timer"] {
+                let id = name(mode);
                 let ready = temp.path().join(mode);
-                let mut old = worker(&addr, mode, "old", &ready);
-                set_current(&cli, port, mode, "old");
+                let mut old = worker(&addr, &id, "old", (mode == "attempt").then_some(&ready));
+                set_current(&cli, address, &id, "old");
                 c.start_workflow(
                     CrashWorkflow::run,
                     mode.to_string(),
-                    WorkflowStartOptions::new(mode, mode).build(),
+                    WorkflowStartOptions::new(&id, &id).build(),
                 )
                 .await
                 .unwrap();
-                let handle = c.get_workflow_handle::<CrashWorkflow>(mode);
-                tokio::time::timeout(Duration::from_secs(20), async {
+                let handle = c.get_workflow_handle::<CrashWorkflow>(&id);
+                let timer_started = async || {
+                    let bytes = handle
+                        .fetch_history(WorkflowFetchHistoryOptions::default())
+                        .to_json()
+                        .await
+                        .unwrap();
+                    let history = String::from_utf8(bytes).unwrap();
+                    assert!(!history.contains("TIMER_FIRED") && !history.contains("TimerFired"));
+                    history.contains("TIMER_STARTED") || history.contains("TimerStarted")
+                };
+                tokio::time::timeout(Duration::from_secs(30), async {
                     loop {
                         if mode == "attempt" && ready.exists() {
                             break;
                         }
-                        if mode == "timer" {
-                            let bytes = handle
-                                .fetch_history(WorkflowFetchHistoryOptions::default())
-                                .to_json()
-                                .await
-                                .unwrap();
-                            let history = String::from_utf8(bytes).unwrap();
-                            if history.contains("TIMER_STARTED") || history.contains("TimerStarted")
-                            {
-                                break;
-                            }
+                        if mode == "timer" && timer_started().await {
+                            break;
                         }
                         tokio::time::sleep(Duration::from_millis(20)).await;
                     }
@@ -235,14 +241,21 @@ fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
                 .await
                 .expect("worker did not reach crash point");
                 old.0.kill().unwrap();
-                assert_eq!(old.0.wait().unwrap().signal(), Some(9));
-                let _new = worker(&addr, mode, "new", &ready);
-                set_current(&cli, port, mode, "new");
+                assert_eq!(old.0.wait().unwrap().signal(), Some(libc::SIGKILL));
+                if mode == "timer" {
+                    assert!(timer_started().await);
+                }
+                let _new = worker(&addr, &id, "new", None);
+                set_current(&cli, address, &id, "new");
                 // A replacement old-build poller is required: the new current
                 // build must not steal an already pinned execution.
-                let _replacement = worker(&addr, mode, "old", &ready);
+                let _replacement = worker(&addr, &id, "old", None);
+                if mode == "timer" {
+                    let release = handle.signal(CrashWorkflow::release, (), Default::default());
+                    release.await.unwrap();
+                }
                 let result = tokio::time::timeout(
-                    Duration::from_secs(30),
+                    Duration::from_secs(120),
                     handle.get_result(WorkflowGetResultOptions::default()),
                 )
                 .await
@@ -250,18 +263,18 @@ fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
                 .unwrap();
                 assert_eq!(result, "old");
             }
-            let ready = temp.path().join("limits");
-            let _limits = worker(&addr, "limits", "new", &ready);
-            set_current(&cli, port, "limits", "new");
             for mode in ["rollover-events", "rollover-waits", "retry-cap"] {
+                let id = name(mode);
+                let _limits = worker(&addr, &id, "new", None);
+                set_current(&cli, address, &id, "new");
                 c.start_workflow(
                     CrashWorkflow::run,
                     mode.to_string(),
-                    WorkflowStartOptions::new("limits", mode).build(),
+                    WorkflowStartOptions::new(&id, &id).build(),
                 )
                 .await
                 .unwrap();
-                let handle = c.get_workflow_handle::<CrashWorkflow>(mode);
+                let handle = c.get_workflow_handle::<CrashWorkflow>(&id);
                 let result = tokio::time::timeout(
                     Duration::from_secs(90),
                     handle.get_result(WorkflowGetResultOptions::default()),
@@ -281,7 +294,7 @@ fn sigkill_mid_attempt_and_mid_timer_stays_pinned() {
         });
 }
 
-fn set_current(cli: &str, port: u16, deployment: &str, build: &str) {
+fn set_current(cli: &str, address: &str, deployment: &str, build: &str) {
     for _ in 0..100 {
         let output = Command::new(cli)
             .args([
@@ -289,7 +302,7 @@ fn set_current(cli: &str, port: u16, deployment: &str, build: &str) {
                 "deployment",
                 "set-current-version",
                 "--address",
-                &format!("127.0.0.1:{port}"),
+                address,
                 "--deployment-name",
                 deployment,
                 "--build-id",

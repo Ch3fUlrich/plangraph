@@ -337,10 +337,11 @@ def first_parent(env, ref, cwd=None):
 
 
 def pushed(env, name="l1", prs=(1, 2, 3), checks="pass", plan=None):
-    """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval."""
-    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
-    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
-    env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
+    """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval. A PR left out of
+    ``prs`` carries no batch-ready label, so it is not ready for main beside the batch."""
+    for number, item in ((1, "A"), (2, "B"), (3, "C")):
+        labels = ("batch-ready",) if number in prs else ()
+        env.branch_pr(number, {f"{item.lower()}.txt": f"{item.lower()}\n"}, item=f"ITEM-{item}", labels=labels)
     assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs)),
                    *(["--plan", plan] if plan else [])).returncode == 0
     push = env.run("push", "--name", name)

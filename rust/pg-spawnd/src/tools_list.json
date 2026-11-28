@@ -1,4 +1,26 @@
 [
+{
+ "name": "plangraph_work_mode",
+ "description": "Read or save the user work mode; report repository overrides and S2 auto resolution.",
+ "inputSchema": {
+  "type": "object",
+  "properties": {
+   "work_mode": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "piecewise",
+     "batch"
+    ]
+   },
+   "repo": {
+    "type": "string",
+    "description": "Absolute repository root; defaults to daemon working directory"
+   }
+  },
+  "additionalProperties": false
+ }
+},
  {
   "description": "Run bounded writer commit probes",
   "inputSchema": {

@@ -706,8 +706,9 @@ class SeatSpawnMixin:
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
         Go tools-mode review seats read the checkout directly."""
         from plangraph.planner.route_policy import train_delta_document
+        from plangraph.planner.legs import mimo_pro_review
         from .prompt_guard import admit_toolless
-        if train_delta_document(card, role):
+        if train_delta_document(card, role) and not mimo_pro_review(leg, role):
             return prompt
         if not isinstance(prompt, str):
             admit_toolless(prompt, role, leg, SpawnRefused)
@@ -722,7 +723,11 @@ class SeatSpawnMixin:
                 and needs_inline_diff(leg, card)):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
-                prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
+                reference = card.get('diff_ref')
+                if reference is not None and mimo_pro_review(leg, role):
+                    from .service import exact_inline_diff_ref
+                    reference = exact_inline_diff_ref(reference, diff_timeout)
+                prompt = inline_diff_prompt(prompt, reference, max_chars=leg.max_request_tokens * 3,
                                             allow_document=document_review, timeout=diff_timeout)
             except InlineDiffError as exc:
                 refuse_oversized_diff(exc, leg)

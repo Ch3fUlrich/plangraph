@@ -33,8 +33,12 @@ scrub when `~/.config/plangraph/scrub-words.txt` exists) and writes the stamp
 `<git-dir>/fast-checks/<head>`. The shared exact-head receipt keeps check timings
 and failed checks for red diagnosis. Over 300 seconds it ends with
 `budget overrun wall_ns=<elapsed> limit_s=300`. Read the verdict with
-`plangraph fast-checks --stamp-green <head>`. A failure resumes the same Codex session with the
-output (stdout and stderr in full), at most twice per head. A turn that leaves HEAD at
+`plangraph fast-checks --stamp-green <head>`. The native copy ends with `skips N`
+and one row per named skip. `requires_real_codex_sandbox` marks the live Codex
+probes, and `requires_temporal_deployment_fixture` marks the process-crash acceptance
+covered by the Temporal-backed worker suite. Both streams appear under separate
+headings in the native log. On failure the failed run record and same-session
+follow-up carry both streams in full, at most twice per head. A turn that leaves HEAD at
 the base is resumed with the items of its brief and runs no gate; after two such
 resumes the run ends exit 7 `no_commit`. `codex-host-readiness` reports a placeholder
 git identity (`example.invalid`, `localhost`, unset) as not ready. A review is refused without the stamp of exactly

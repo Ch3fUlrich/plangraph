@@ -1,0 +1,3 @@
+- `plangraph fast-checks` leases its own cargo pool slot and, when every pool slot is taken, shares the writers' target under their shared lease instead of holding it exclusively for the whole run; writers on the host no longer wait for a check to finish.
+- Fast checks run fmt and clippy only on the crates whose sources changed and test those crates plus their dependents in one cargo call per workspace; the public scrub reads only the checked range.
+- Fast checks, preflight and the affected-test runner find cargo in `$CARGO_HOME/bin` or `~/.cargo/bin` when PATH lacks it.

@@ -32,6 +32,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "vendor/",
     "rust/",
 )
+_is_skill_text = re.compile(r"skills/(?:.+\.md|[^/]+/evals/evals\.json)").fullmatch  # skill pages and eval files
 
 # The standalone Temporal worker job also runs the probe admission guard tests and builds
 # pg-worker-core; the secret deny-list policy JSON is registered here so it selects that job.
@@ -59,6 +60,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/review/prompt.py",  # Rust checks the review output contract against Python.
     "src/plangraph/routing_errors.py",
     ".claude/settings.json",  # pg-hook runs the SendMessage hook commands it registers.
+    ".plangraph/work-mode.json",  # pg-spawnd placement_tools reads the work-mode setting.
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
     "deploy/manifest.toml",  # the plangraph-cli deploy_manifest tests read it.
@@ -207,9 +209,22 @@ def _is_docs_class(p: str) -> bool:
 
 
 def _is_known(p: str) -> bool:
-    if _is_docs_class(p):
+    if _is_docs_class(p) or _is_skill_text(p):
         return True
     return any(p.startswith(prefix) for prefix in KNOWN_PREFIXES)
+
+
+def _is_text(p: str) -> bool:
+    """Skill text or Markdown that no Rust, worker, unit or CI check reads (D-7122)."""
+    return (_is_skill_text(p) or p.endswith(".md")) and not (_is_ci_deps(p) or p in RUST_WORKER_INPUTS
+                                                              or p.endswith(DEPLOY_UNIT_SUFFIXES) or any(fnmatchcase(p, g) for g in RUST_INPUTS))
+
+
+def _text_only_merge(sha: str):
+    """'text-only merge' for a pushed merge commit whose whole first-parent diff, renames split, is text (D-7122); a non-UTF-8 path is not."""
+    run = lambda *a: subprocess.run(["git", *a], capture_output=True).stdout  # noqa: E731
+    paths = [p.decode("utf-8", "replace") for p in run("diff", "--no-renames", "--name-only", "-z", f"{sha}^1", sha).split(b"\0") if p]
+    return "text-only merge" if len(run("rev-list", "--parents", "-n1", sha).split()) >= 3 and paths and "\ufffd" not in "".join(paths) and all(map(_is_text, paths)) else None
 
 
 def select(paths: list[str]) -> dict[str, bool]:
@@ -236,8 +251,9 @@ def select(paths: list[str]) -> dict[str, bool]:
         res["full"] = True
         return res
 
-    # 3. Any UNKNOWN path -> full run
-    if any(not _is_known(p) for p in norm_paths):
+    # 3. Any UNKNOWN path, or a skill eval file beside a non-text path (D-7122), -> full run
+    if any(not _is_known(p) for p in norm_paths) or (any(p.endswith(".json") and _is_skill_text(p) for p in norm_paths)
+                                                       and not all(map(_is_text, norm_paths))):
         res = {s: True for s in SUITES}
         res["full"] = True
         return res
@@ -253,8 +269,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["rust"] = True
         if p in RUST_WORKER_INPUTS:
             res["rust-worker"] = True
-        if p.startswith("skills/") and p.endswith(".md"):
-            # skill pages are guarded by tests/test_skill_*.py
+        if _is_skill_text(p):
+            # skill pages and eval files are guarded by tests/test_skill_*.py
             res["pytest"] = True
             continue
         if _is_docs_class(p):
@@ -279,32 +295,22 @@ def select(paths: list[str]) -> dict[str, bool]:
     return res
 
 
-#: Label a router GO row puts on a pull request head to name it the merge candidate (D-6392 run-once order).
+#: Label set at merge time on the pull request that is the merge candidate into main (D-6392 run-once order).
 FULL_LABEL = "ci-full"
-BATCH_PREFIX = "batch/"
-#: A landing train's head branch: always the full suite, once, directly before the merge into main.
+#: A landing train's head branch: the merge candidate into main, so the full suite runs on it, once.
 TRAIN_PREFIX = "land/train-"
-#: Label of a part pull request (a batch waiting for a train): it runs the affected selection even on a batch/* head.
+#: Label of a part pull request (a batch waiting for a train): never a candidate, whatever its other labels.
 PART_LABEL = "land-part"
 
 
 def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels=()) -> bool:
-    """The full suite runs once per merge candidate; every part and lane pull request gets the affected selection.
-
-    A pull_request event gets the full suite only for a train head (TRAIN_PREFIX), a batch/* head or a head
-    carrying FULL_LABEL, and only when it targets main. A part (PART_LABEL) that is not a train head runs the
-    affected-only mode, whatever its branch name, draft state or other labels.
-    Push, schedule, workflow_dispatch and merge_group events are the record or the candidate itself: full."""
-    if event != "pull_request":
-        return True
-    if base_ref != "main":
-        return False
+    """The full suite runs exactly once, on the merge candidate into main: a train head (TRAIN_PREFIX) or a
+    pull request labelled FULL_LABEL that is not a part (PART_LABEL), both targeting main, or a manual
+    workflow_dispatch. Every other event runs the affected selection: batch/* heads, parts, lanes,
+    merge_group, and the push to main, whose merged train already ran the full suite."""
     names = set(labels or ())
-    if head_ref.startswith(TRAIN_PREFIX):
-        return True
-    if PART_LABEL in names:   # a part is never a candidate, not even with a stray ci-full label
-        return False
-    return FULL_LABEL in names or head_ref.startswith(BATCH_PREFIX)
+    return event == "workflow_dispatch" or (event == "pull_request" and base_ref == "main" and (
+        head_ref.startswith(TRAIN_PREFIX) or (FULL_LABEL in names and PART_LABEL not in names)))
 
 
 #: Commit-status contexts of the landing mode ``tested-ff`` (LAND-MODE-TESTED-FF). ``land-auth`` is the
@@ -336,7 +342,7 @@ def landing_evidence(statuses, tree: str, creator_id):
     the land App's bot user; statuses report their creator, and an unset id never matches), whose description
     names an evidence run and attempt, and the newest ``ci-full`` status in state success whose description
     names that same run and attempt and the tree of this commit (``tree``). Anything else, a newer failed
-    ``land-auth`` included, is not tested: a push run then runs everything, as before."""
+    ``land-auth`` included, is not tested: a push run then runs the affected selection."""
     if not creator_id or not tree:
         return None
     auth = _latest(statuses, LAND_AUTH)
@@ -403,6 +409,18 @@ def _load_tool(name: str):
     return module
 
 
+def _rust_plan(root, base: str, head: str):
+    """(cargo test commands, workspace packages) for the crates base...head changes plus every crate that
+    depends on them (tools/preflight.py rust_commands); both empty when no Rust path changed."""
+    preflight = _load_tool("preflight")
+    try:
+        commands = preflight.rust_commands(Path(root), base, head)
+    except preflight.SkipFamily:
+        commands = []
+    tests = [preflight.with_no_fail_fast(c) for c in commands if c[:2] == ["cargo", "test"] or c[:3] == ["cargo", "nextest", "run"]]
+    return tests, sorted({c[i + 1] for c in tests for i, arg in enumerate(c[:-1]) if arg == "-p"})
+
+
 def entry_set(root, base: str, head: str) -> dict:
     """What a part must pass on its head before it enters a train.
 
@@ -416,20 +434,10 @@ def entry_set(root, base: str, head: str) -> dict:
     suites = select(paths)
     python_tests = _load_tool("affected_tests").select_tests(root, paths, local=True, base=base, head=head)["tests"]
     fallback = "tests" in python_tests or suites["full"]
-    packages: list[str] = []
-    rust_tests: list[list[str]] = []
-    if any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths):
-        preflight = _load_tool("preflight")
-        try:
-            commands = preflight.rust_commands(root, base, head)
-        except preflight.SkipFamily:
-            commands = []
-        for command in commands:
-            if command[:2] == ["cargo", "test"] or command[:3] == ["cargo", "nextest", "run"]:
-                rust_tests.append(preflight.with_no_fail_fast(command))
-                packages += [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
+    rust = any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths)
+    rust_tests, packages = _rust_plan(root, base, head) if rust else ([], [])
     return {"paths": paths, "suites": {k: v for k, v in suites.items()}, "python_tests": python_tests,
-            "rust_packages": sorted(set(packages)), "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
+            "rust_packages": packages, "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
 
 
 def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", root=None) -> list[list[str]]:
@@ -548,7 +556,6 @@ def write_part_cost(path, record: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CI selector and gate verdict")
     subparsers = parser.add_subparsers(dest="command")
-
     select_parser = subparsers.add_parser("select")
     select_parser.add_argument("--full", action="store_true", help="Force full CI run")
     select_parser.add_argument("--base", type=str, default=None, help="Base commit SHA")
@@ -607,28 +614,19 @@ def main(argv: list[str] | None = None) -> int:
         candidate = full_run_required(args.event, args.base_ref, args.head_ref, labels)
 
     if args.command == "select":
+        paths = None
         if args.full or candidate:
-            selection = {s: True for s in SUITES} | {"full": True}
-        elif args.base is not None or args.head is not None:
-            if args.base is not None and args.head is not None:
-                try:
-                    proc = subprocess.run(
-                        ["git", "diff", "--name-only", "-z", f"{args.base}...{args.head}"],
-                        capture_output=True,
-                        check=True,
-                    )
-                    raw_text = proc.stdout.decode("utf-8", errors="replace")
-                    paths = [p for p in raw_text.split("\0") if p]
-                    selection = select(paths)
-                except Exception:
-                    selection = {s: True for s in SUITES} | {"full": True}
-            else:
-                selection = {s: True for s in SUITES} | {"full": True}
-        elif args.files is not None:
-            selection = select(args.files)
-        else:
-            selection = {s: True for s in SUITES} | {"full": True}
-
+            pass
+        elif args.base and args.head:
+            try:
+                raw = subprocess.run(["git", "diff", "--no-renames", "--name-only", "-z", f"{args.base}...{args.head}"],
+                                     capture_output=True, check=True).stdout
+                paths = [p for p in raw.decode("utf-8", errors="replace").split("\0") if p]
+            except Exception:
+                paths = None
+        elif args.base is None and args.head is None and args.files is not None:
+            paths = args.files
+        selection = select(paths) if paths is not None else {s: True for s in SUITES} | {"full": True}
         evidence = None
         if args.event == "push" and args.statuses:
             try:
@@ -636,16 +634,24 @@ def main(argv: list[str] | None = None) -> int:
                     evidence = landing_evidence(json.load(handle), args.tree, args.land_creator_id)
             except (OSError, ValueError):
                 evidence = None  # an unreadable record is no evidence: the full suite runs
+        evidence = evidence or (None if args.full or args.event != "push" else _text_only_merge(os.environ.get("GITHUB_SHA", "")))
         if evidence:
             selection = {s: False for s in SUITES} | {"full": False}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
         lines.append(f"full={'true' if selection['full'] else 'false'}")
+        # Rust jobs test only the changed crates and their dependents. Without the line the whole workspace runs:
+        # a full run, a Rust input outside rust/ (read by tests of any crate) or no package list.
+        if selection["rust"] and not selection["full"] and args.base and not any(
+                fnmatchcase(p, g) for p in paths if not p.startswith("rust/") for g in RUST_INPUTS):
+            try:
+                packages = _rust_plan(Path.cwd(), args.base, args.head)[1]
+            except Exception:
+                packages = []
+            lines += [f"rust-packages={' '.join(packages)}"] if packages else []
         if evidence:
             lines += ["tested=true", f"evidence={evidence}"]
         output_str = "\n".join(lines) + "\n"
-
         sys.stdout.write(output_str)
-
         gh_out = os.environ.get("GITHUB_OUTPUT")
         if gh_out:
             with open(gh_out, "a", encoding="utf-8") as f:
@@ -700,13 +706,11 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             sys.stderr.write("ci-gate: bad needs json\n")
             return 1
-
         problems = gate(needs_obj, require_full=candidate)
         if problems:
             for prob in problems:
                 sys.stderr.write(f"{prob}\n")
             return 1
-
         sys.stdout.write("ci-gate: ok\n")
         return 0
 

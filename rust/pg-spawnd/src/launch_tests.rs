@@ -119,32 +119,42 @@ fn timeout_kills_group() {
         &dir,
         &format!("echo $$ > '{}/pid'\nsleep 30 &\nwait", dir.display()),
     );
-    let start = Instant::now();
-    let error = adapter
-        .request(&dir, &json!({}), Duration::from_millis(300))
-        .err()
-        .unwrap()
-        .into_error_data();
-    assert_eq!(error.message, "launch adapter timed out");
-    assert!(start.elapsed() < Duration::from_secs(2));
-    let pid: i32 = std::fs::read_to_string(dir.join("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    // A loaded host can kill the script before its first line wrote the pid; such a
+    // round proves nothing about the group, so it repeats with a longer timeout.
+    for timeout in [300, 1_000, 3_000, 10_000].map(Duration::from_millis) {
+        let _ = std::fs::remove_file(dir.join("pid"));
+        let start = Instant::now();
+        let error = adapter
+            .request(&dir, &json!({}), timeout)
+            .err()
+            .unwrap()
+            .into_error_data();
+        assert_eq!(error.message, "launch adapter timed out");
+        // Well under the 30 s sleep: the group was killed, not waited for.
+        assert!(start.elapsed() < timeout + Duration::from_secs(10));
+        let Some(pid) = std::fs::read_to_string(dir.join("pid"))
+            .ok()
+            .and_then(|text| text.trim().parse::<i32>().ok())
+        else {
+            continue;
+        };
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        return;
+    }
+    panic!("the launch adapter script never started");
 }
 
 #[test]
 fn exited_adapter_closes_descendant_pipes() {
     let (dir, valid) = fixture();
     std::fs::write(dir.join("spec"), serde_json::to_vec(&valid).unwrap()).unwrap();
-    let adapter = script(&dir, &format!("cat '{}/spec'\n(sleep 5 &)", dir.display()));
+    let adapter = script(&dir, &format!("cat '{}/spec'\n(sleep 30 &)", dir.display()));
     let start = Instant::now();
+    // Waiting for the descendant's pipe would end in the 10 s timeout (an error).
     assert!(adapter
-        .request(&dir, &json!({}), Duration::from_secs(1))
+        .request(&dir, &json!({}), Duration::from_secs(10))
         .is_ok());
-    assert!(start.elapsed() < Duration::from_millis(900));
+    assert!(start.elapsed() < Duration::from_secs(10));
 }
 
 #[test]
@@ -298,7 +308,7 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
     let ssh = dir.join("stall-ssh");
     pg_worker_core::executable_test_support::write_private_executable(
         &ssh,
-        "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids\nexec sleep 8\n",
+        "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids.tmp\n/bin/mv fetch-pids.tmp fetch-pids\nexec /bin/sleep 35\n",
     );
     for args in [
         ["remote", "add", "origin", repo.remote.as_str()].as_slice(),
@@ -313,10 +323,36 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
     }
     request["card"]["diff_ref"]["head_sha"] = json!("0".repeat(40));
     let diff = serde_json::from_value(request["card"]["diff_ref"].clone()).unwrap();
-    let timeout = Duration::from_secs(1);
+    use pg_worker_core::{stall::status_until_with, workspace_resolver::ensure_commit_until_with};
+    let timeout = Duration::from_secs(30);
     let start = Instant::now();
-    let result = crate::prompt_git::head_writers_with_timeout(repo, &diff, timeout);
-    let elapsed = start.elapsed();
+    let tick = std::cell::Cell::new(start);
+    let status = |cmd: &mut std::process::Command, deadline| {
+        if !cmd.get_args().any(|arg| arg == "fetch") {
+            return status_until_with(cmd, deadline, Instant::now, std::thread::sleep);
+        }
+        status_until_with(
+            cmd,
+            deadline,
+            || tick.get(),
+            |remaining| {
+                if tick.get() == start {
+                    while !dir.join("fetch-pids").is_file() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    tick.set(deadline - Duration::from_millis(1));
+                } else {
+                    assert_eq!(remaining, Duration::from_millis(1), "fetch still pending");
+                    tick.set(deadline);
+                }
+            },
+        )
+    };
+    let resolve = |repo: &_, sha: &_, wait, deadline| {
+        ensure_commit_until_with(repo, sha, wait, deadline, &status)
+    };
+    let result = crate::prompt_git::head_writers_with(repo, &diff, timeout, || start, resolve);
+    assert_eq!(tick.get(), start + timeout);
     let pids = std::fs::read_to_string(dir.join("fetch-pids")).expect("fetch reached the stub");
     let (git_pid, stub_pid) = pids.trim().split_once(' ').unwrap();
     let git_pid: libc::pid_t = git_pid.parse().unwrap();
@@ -329,10 +365,6 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
         unsafe { libc::kill(stub_pid, libc::SIGKILL) };
     }
     assert_eq!(result, Err(crate::prompt::InlineDiffError::Git));
-    assert!(
-        (timeout..Duration::from_secs(3)).contains(&elapsed),
-        "fetch took {elapsed:?}"
-    );
     assert!(lock.is_some(), "fetch lock survived the refusal");
     assert_eq!(
         (git_status, git_error.raw_os_error()),
@@ -344,17 +376,25 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
 #[test]
 fn native_codex_review_client_missing_has_a_distinct_exit() {
     let (dir, _) = fixture();
-    let python = which_python();
-    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let sentinel = dir.join("installed-nvm/versions/node/v99.0.0/bin/codex");
+    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    pg_worker_core::executable_test_support::write_executable(
+        &sentinel,
+        "#!/bin/sh\nprintf touched > sentinel-ran\n",
+    );
     pg_worker_core::executable_test_support::write_private_executable(
         dir.join("installed-codex"),
         "#!/bin/sh\nprintf configured-codex",
     );
     let code = r#"
-import io, json, pathlib, subprocess, sys
+import io, json, os, pathlib, sys
 from plangraph.spawner.launch_spec import main
+from plangraph.spawner.host_ready import harness_path
 from plangraph.routing_support.clients import resolve_codex_client
 root = pathlib.Path(sys.argv[1])
+old = dict(os.environ, PATH='', NVM_DIR=str(root / 'installed-nvm'))
+assert resolve_codex_client(dict(old, PATH=harness_path(old)))[0] == str(
+    root / 'installed-nvm/versions/node/v99.0.0/bin/codex')
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=False,
     leg={'id':'gpt-6.2-sol-medium'}, card={}, cwd=str(root), state=str(root), prompt='review')
 out, err = io.StringIO(), io.StringIO()
@@ -363,14 +403,20 @@ assert status == 10, (status, err.getvalue())
 assert err.getvalue().startswith('REVIEW ' + request['run_id'] + ' FAIL client_missing ')
 client = root / 'installed-codex'
 resolved, _ = resolve_codex_client({'PATH':'', 'PLANGRAPH_CODEX_BIN':str(client)})
-assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-codex'
+print(resolved)
 "#;
-    let output = std::process::Command::new(python)
+    std::fs::create_dir(dir.join("bin")).unwrap();
+    std::fs::create_dir(dir.join("home")).unwrap();
+    let output = crate::test_python::command()
         .args(["-c", code])
         .arg(&dir.0)
-        .env("PYTHONPATH", sources)
-        .env("PATH", "")
-        .env("HOME", &dir.0)
+        .current_dir(&dir.0)
+        .env("PATH", dir.join("bin"))
+        .env("HOME", dir.join("home"))
+        .env("USERPROFILE", dir.join("home"))
+        .env("XDG_CONFIG_HOME", dir.join("home/.config"))
+        .env("NVM_DIR", dir.join("home/.nvm"))
+        .env_remove("INVOCATION_ID")
         .env_remove("PLANGRAPH_CODEX_BIN")
         .output()
         .unwrap();
@@ -379,6 +425,18 @@ assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-code
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(!dir.join("sentinel-ran").exists());
+    let resolved = String::from_utf8(output.stdout).unwrap();
+    let mut command = std::process::Command::new(resolved.trim());
+    command
+        .env("PATH", dir.join("bin"))
+        .stdout(std::process::Stdio::piped());
+    let output = pg_worker_core::executable_test_support::spawn(&mut command)
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"configured-codex");
 }
 
 fn which_python() -> std::path::PathBuf {
@@ -389,30 +447,152 @@ fn which_python() -> std::path::PathBuf {
 }
 
 #[test]
-fn review_route_skips_mimo_pro_with_tools_denied_reason() {
+fn review_route_admits_bounded_mimo_pro_repository_tools() {
     let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let (dir, _, request) = repo_with_writer_trailer(Some("codex"));
     let script = r#"
-from pathlib import Path
-from plangraph.planner.legs import DEFAULT_LEGS
+import json, sys
+from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_HYDROGEN, REVIEW_MIMO_PRO
 from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
 from plangraph.planner.routing import plan_spawn
 policy = load_route_policy(DEFAULT_POLICY_PATH)
-card = dict(estimate_tokens=2000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD~1', head='HEAD'))
-pro = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
-plan = plan_spawn(card, role='review', writer_families=('gpt',), policy=policy,
-    catalog_rows=(), leg_reader=lambda *args, **kwargs: dict(state='available', evidence=None))
-assert pro.id not in {leg.id for leg in (*plan.legs, *plan.review_seats)}
-assert any(row['leg'] == pro.id and row['reason'] == 'opencode_tools_denied' for row in plan.skipped), plan.skipped
-assert policy.skip_reason(pro, 'implement') is None
+ref = json.loads(sys.argv[1])
+def route(**card):
+    return plan_spawn(dict(estimate_tokens=2000, **card), role='review', writer_families=('gpt',),
+        policy=policy, catalog_rows=(), leg_reader=lambda *a, **k: dict(state='available', evidence=None))
+plan = route(diff_ref=ref)
+ids = [leg.id for leg in plan.legs]
+assert ids.index(REVIEW_HYDROGEN) < ids.index(REVIEW_MIMO_PRO), ids
+assert plan.legs[ids.index(REVIEW_MIMO_PRO)].tool_mode == 'tools'
+assert plan.legs[ids.index(REVIEW_MIMO_PRO)].max_request_tokens == 200_000
+assert REVIEW_MIMO_PRO in [leg.id for leg in route().legs]
+assert REVIEW_MIMO_PRO in [leg.id for leg in route(diff_ref=ref, repository_review_required=True).legs]
+pro = next(leg for leg in DEFAULT_LEGS if leg.id == REVIEW_MIMO_PRO)
+assert policy.skip_reason(pro, 'implement') is None and policy.skip_reason(pro, 'review') is None
 "#;
+    let registered = &request["card"]["diff_ref"];
+    let reference =
+        json!({"repo":dir.0,"base":registered["base_sha"],"head":registered["head_sha"]});
     let output = std::process::Command::new(which_python())
         .args(["-c", script])
+        .arg(reference.to_string())
         .env("PYTHONPATH", sources)
         .output()
         .unwrap();
     assert!(
         output.status.success(),
         "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn review_route_mimo_not_served_on_host_advances_to_next_seat() {
+    const CHILD: &str = "PG_TEST_MIMO_HOST_REFUSAL";
+    if let Some(root) = std::env::var_os(CHILD) {
+        use pg_worker_core::run::{
+            group::Confinement, supervise::Config, supervisor::SupervisorCfg,
+        };
+        let root = std::path::PathBuf::from(root);
+        let state = root.join("state");
+        let args: crate::placement::Args =
+            serde_json::from_slice(&std::fs::read(root.join("args")).unwrap()).unwrap();
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            pg_worker_core::run::supervisor::Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let result = crate::spawn::spawn(&state, &args, "fixture", &runs)
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_eq!(result["chosen_leg"]["id"], "next", "{result}");
+        let requests: Vec<Value> = std::fs::read_to_string(root.join("requests"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["leg"]["id"], "mimo-v2.6-pro");
+        assert_eq!(requests[1]["leg"]["id"], "next");
+        assert!(requests
+            .iter()
+            .all(|request| request["card"]["diff_ref"] == args["card"]["diff_ref"]));
+        let rows = crate::records::list_runs(&state);
+        let failed = rows
+            .iter()
+            .find(|row| row["reason"] == "not_served_on_host")
+            .unwrap();
+        assert_eq!(failed["attempts"][0]["leg"]["id"], "mimo-v2.6-pro");
+        assert_eq!(failed["head_sha"], args["card"]["diff_ref"]["head"]);
+        assert_eq!(failed["review_base"], args["card"]["diff_ref"]["base"]);
+        assert_eq!(
+            result["plan"]["skipped"][0]["refusal_run"],
+            failed["run_id"]
+        );
+        return;
+    }
+    let (dir, _, request) = repo_with_writer_trailer(Some("codex"));
+    let refs = &request["card"]["diff_ref"];
+    let args = json!({"prompt":"fixture","role":"review","writer_families":["gpt"],"wait_seconds":2,
+        "card":{"estimate_tokens":1000,"diff_ref":{"repo":dir.0,"base":refs["base_sha"],"head":refs["head_sha"]}}});
+    std::fs::write(dir.join("args"), args.to_string()).unwrap();
+    let mimo = json!({"id":"mimo-v2.6-pro","model":"mimo/mimo-v2.6-pro","harness":"opencode","family":"mimo","tool_mode":"inline-only"});
+    let next = json!({"id":"next","model":"fixture/next","harness":"opencode","family":"deepseek","tool_mode":"tools"});
+    let plan = json!({"first_leg":mimo,"legs":[mimo,next],"skipped":[],
+        "seat_admission":{"legs":{"mimo-v2.6-pro":1,"next":1}}});
+    std::fs::write(dir.join("plan"), plan.to_string()).unwrap();
+    let route = dir.join("route");
+    let launch = dir.join("launch");
+    pg_worker_core::executable_test_support::write_private_executable(
+        &route,
+        "#!/bin/sh\ncat plan\n",
+    );
+    let python = which_python();
+    pg_worker_core::executable_test_support::write_private_executable(
+        &launch,
+        format!(
+            r#"#!{}
+import json, pathlib, sys
+request = json.load(sys.stdin)
+with open('requests', 'a') as output:
+    output.write(json.dumps(request) + '\n')
+slots = pathlib.Path('state/seat-slots/mimo-v2_6-pro')
+held = [p.name for p in slots.iterdir() if p.name != 'admission.lock']
+if request['leg']['id'] == 'mimo-v2.6-pro':
+    assert len(held) == 1, held
+    print('unavailable: not_served_on_host: fixture', file=sys.stderr)
+    sys.exit(2)
+assert not held, held
+assert len([p for p in pathlib.Path('state/seat-slots/next').iterdir() if p.name != 'admission.lock']) == 1
+print(json.dumps(dict(argv=['/bin/echo', 'VERDICT: PASS\nFILES READ: f'], cwd=request['cwd'],
+                      env={{}}, stdin=request['prompt'], prompt=request['prompt'])))
+"#,
+            python.display()
+        ),
+    );
+    let test_name = format!(
+        "{}::review_route_mimo_not_served_on_host_advances_to_next_seat",
+        module_path!()
+    )
+    .split_once("::")
+    .unwrap()
+    .1
+    .to_owned();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .current_dir(&*dir)
+        .args(["--exact", &test_name, "--nocapture"])
+        .env(CHILD, &dir.0)
+        .env("PG_SPAWND_ADAPTER", route)
+        .env("PG_SPAWND_LAUNCH_CMD", launch)
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }

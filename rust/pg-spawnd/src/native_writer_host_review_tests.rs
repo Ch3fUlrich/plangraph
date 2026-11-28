@@ -92,7 +92,7 @@ pub(super) fn assert_item_trailers_bound_to_brief(
         "assigned item\n\nPlan-Item: plangraph:ASSIGNED",
     ]);
     let assigned = git(&["rev-parse", "HEAD"]);
-    host.fast_checks(&assigned).unwrap();
+    host.fast_checks_with_scrub(&assigned, None).unwrap();
     assert!(host.stamped(&assigned));
 
     git(&[
@@ -103,7 +103,9 @@ pub(super) fn assert_item_trailers_bound_to_brief(
     ]);
     let wrong = git(&["rev-parse", "HEAD"]);
     assert_eq!(
-        host.fast_checks(&wrong).unwrap_err(),
+        host.fast_checks_with_scrub(&wrong, None)
+            .unwrap_err()
+            .to_string(),
         format!("commit {wrong}: Plan-Item outside writer brief: plangraph:UNASSIGNED")
     );
     assert!(!host.stamped(&wrong));
@@ -238,6 +240,17 @@ fn native_sonnet_pass_requires_reported_tests() {
 /// own process never has it, so the stand-in test below is a no-op there.
 pub(super) const STAND_IN_MARKER: &str = "PG_FAKE_FAST_CHECKS";
 const STAND_IN_TEST: &str = "native_writer_host::review_tests::fast_checks_stand_in";
+pub(super) const RED_LINES: [&str; 3] = [
+    "fixture::test_red",
+    "fixture panic on stdout",
+    "fixture failure on stderr",
+];
+const SANDBOX_NODES: [&str; 3] = [
+    "codex_readiness::tests::workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start",
+    "native_writer_sandbox::tests::a_write_outside_the_named_roots_is_refused_in_a_fixture_run",
+    "native_writer_sandbox::tests::a_writer_worktree_can_commit_with_the_named_git_directories",
+];
+const WORKER_NODE: &str = "sigkill_mid_attempt_and_mid_timer_stays_pinned";
 
 /// What a test host runs in place of the shared exact-head fast checks (the real command is tested
 /// in plangraph-cli), on every platform: this test executable runs again, as the policy and umask
@@ -262,13 +275,99 @@ fn fast_checks_stand_in() {
         return;
     }
     let cwd = std::env::current_dir().unwrap();
+    if cwd.join("fixture-red").exists() {
+        let [node, panic, stderr] = RED_LINES;
+        println!("test {node} ... FAILED\n{panic}");
+        eprint!("{stderr}");
+        std::process::exit(1);
+    }
     let head = pg_worker_core::git::git(&cwd, &["rev-parse", "HEAD"]).unwrap();
     let check = pg_worker_core::fast_check_stamp::Check {
         label: "fake-fast-checks".into(),
         rc: 0,
         seconds: 0.1,
     };
-    pg_worker_core::fast_check_stamp::publish(&cwd, &head, &[check]).unwrap();
+    if cwd.join("fixture-skips").exists() {
+        for node in SANDBOX_NODES
+            .into_iter()
+            .chain([SANDBOX_NODES[0], "unrelated"])
+        {
+            println!("test {node} ... ignored, live host check requiring a working Codex sandbox");
+        }
+        println!("PG_FAST_CHECK_SKIP {WORKER_NODE} reason=requires_temporal_deployment_fixture");
+    }
+    use pg_worker_core::fast_check_stamp::{publish_with_budget, BudgetOverrun};
+    let budget = cwd
+        .join("fixture-overrun")
+        .exists()
+        .then(|| BudgetOverrun::new(690_000_000_000, 300).unwrap());
+    publish_with_budget(&cwd, &head, &[check], budget).unwrap();
+}
+
+#[test]
+fn failing_shared_checks_preserve_streams_and_green_stamp_lists_skips() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = Host::prepared_fixture(dir.path());
+    let head = host.head().unwrap();
+    let red = host.cwd.join("fixture-red");
+    fs::write(&red, "").unwrap();
+    let words = dir.path().join("words");
+    fs::write(&words, "fixture").unwrap();
+    fs::create_dir(host.cwd.join("tools")).unwrap();
+    fs::write(host.cwd.join("tools/preflight_private_scrub.py"),
+        "import pathlib, sys\nprint(pathlib.Path(sys.argv[sys.argv.index('--words') + 1]).resolve())\n").unwrap();
+    let error = host
+        .fast_checks_with_scrub(&head, Some(&words))
+        .unwrap_err()
+        .to_string();
+    let stamp = host.stamp(&head).unwrap();
+    let log = fs::read_to_string(stamp.with_extension("log")).unwrap();
+    for text in [&error, &log] {
+        for row in RED_LINES.into_iter().chain(["stdout:", "stderr:"]) {
+            assert!(text.contains(row), "missing {row} in {text}");
+        }
+    }
+    // The scrub stub prints the resolved --words path; compare canonical paths, since the
+    // printed form differs from the tempdir path on Windows (short names, case, prefix).
+    let canonical = fs::canonicalize(&words).unwrap();
+    assert!(
+        log.lines()
+            .any(|line| fs::canonicalize(line.trim()).is_ok_and(|p| p == canonical)),
+        "missing scrub words path in {log}"
+    );
+    assert!(!host.stamped(&head));
+    fs::remove_file(&red).unwrap();
+    fs::write(host.cwd.join("fixture-skips"), "").unwrap();
+    for overrun in [false, true] {
+        if overrun {
+            fs::write(host.cwd.join("fixture-overrun"), "").unwrap();
+        }
+        host.fast_checks_with_scrub(&head, Some(&words)).unwrap();
+        assert!(host.stamped(&head));
+        let shared = pg_worker_core::worktree::fast_check_stamp(&host.cwd, &head).unwrap();
+        let shared = fs::read_to_string(shared).unwrap();
+        let reference = pg_worker_core::fast_check_stamp::local_receipt_ref(&head);
+        let blob =
+            pg_worker_core::git::git_bytes(&host.cwd, &["show", &format!("{reference}:{head}")])
+                .unwrap();
+        assert_eq!(blob, shared.as_bytes());
+        assert_eq!(
+            shared.contains("budget overrun wall_ns=690000000000 limit_s=300"),
+            overrun
+        );
+        let mut skips =
+            SANDBOX_NODES.map(|node| format!("skip {node} reason=requires_real_codex_sandbox"));
+        skips.sort();
+        assert_eq!(fs::read_to_string(&stamp).unwrap(), format!(
+            "{shared}skips 4\n{}\nskip {WORKER_NODE} reason=requires_temporal_deployment_fixture\n", skips.join("\n")
+        ));
+    }
+    fs::write(red, "").unwrap();
+    assert!(host.fast_checks_with_scrub(&head, None).is_err());
+    assert!(
+        !host.stamped(&head),
+        "a failed rerun must revoke its native stamp"
+    );
 }
 
 /// The fast-check receipt is the shared producer's (structured, in the shared state and as one

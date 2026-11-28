@@ -43,6 +43,35 @@ def prompt(diff_ref, *, harness='opencode', mode='tools', role='review',
     return result
 
 
+def test_mimo_service_refuses_invalid_inline_material_before_launch(diff_ref, tmp_path, monkeypatch, admission_memory):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
+    import asyncio
+    from unittest.mock import AsyncMock
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.service import SpawnService
+
+    admission_memory()
+    monkeypatch.setenv('OMNIROUTE_BASE_URL', 'https://gateway.invalid/v1')
+    process = AsyncMock(side_effect=AssertionError('invalid inline payload reached provider launch'))
+    runner = SpawnerRunner(default_cwd=diff_ref['repo'], process_factory=process)
+    service = SpawnService(runner=runner, state=tmp_path / 'state')
+    monkeypatch.setattr(service, 'client_probe', lambda _: True)
+
+    async def run(card, prompt):
+        return await service.spawn(card=dict(card, estimate_tokens=1000),
+            prompt=prompt, role='review', writer_families=['gpt'], leg='mimo-v2.6-pro',
+            override_reason='Verify inline payload admission', wait_seconds=None)
+
+    missing = asyncio.run(run({}, 'Review this change.'))
+    assert missing['status'] == 'failed' and 'no diff_ref' in missing['error']
+    with pytest.raises(SpawnRefused, match='empty_diff'):
+        asyncio.run(run({'diff_ref': dict(diff_ref, head=diff_ref['base'])}, 'Review this change.'))
+    too_large = asyncio.run(run({'diff_ref': diff_ref}, 'x' * 600_001))
+    assert too_large['status'] == 'failed' and 'prompt_too_large' in too_large['error']
+    process.assert_not_called()
+
+
 @pytest.mark.parametrize('mode', ['tools', 'inline-only'])
 def test_review_diff_inlined(diff_ref, mode):
     out = prompt(diff_ref, mode=mode)

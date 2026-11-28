@@ -1,0 +1,1 @@
+- Rust dev builds keep only line tables as debug info: an incremental plangraph-cli test build fell from 20 s to 8 s on the dev host, and build directories shrink.

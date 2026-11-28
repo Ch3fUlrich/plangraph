@@ -100,7 +100,9 @@ def test_mimo_verdict_seat_passes_review_role_to_thresholds(
     assert threshold_calls == [(card, 'review')]
     assert len(runner.calls) == 1
     assert runner.calls[0]['model_or_combo'] == chosen.model
-    assert '+two' in runner.calls[0]['prompt']
+    from plangraph.planner.legs import REVIEW_TOOLS_LEGS
+    # A review-tools leg reads the checkout; an inline-only seat gets the diff in its prompt.
+    assert ('+two' in runner.calls[0]['prompt']) == (chosen.id not in REVIEW_TOOLS_LEGS)
     seat, = result['seats']
     assert seat['role'] == 'review'
     assert seat['status'] == 'timed_out'

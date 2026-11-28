@@ -87,27 +87,22 @@ fn real_run_and_failure() {
 fn waiting_spawn_does_not_block_second_connection() {
     // serve uses a current-thread runtime; Fixture also pins Tokio's worker
     // count to one so an inline dispatch cannot hide on a second worker.
-    let f = Fixture::new("/bin/sleep 2.5", Value::Null, &[]);
+    let f = held_fixture(&[]);
     let socket = f.state.path().join("socket");
     let mut waiter = common::McpClient::connect(&socket);
-    waiter.set_response_timeout(std::time::Duration::from_secs(4));
+    waiter.set_response_timeout(std::time::Duration::from_secs(35));
     waiter.initialize();
     let thread = std::thread::spawn(move || {
         waiter.request(
             "tools/call",
             json!({
                 "name":"plangraph_agent_spawn", "arguments":{
-                    "prompt":"p", "card":{"x":1}, "wait_seconds":2
+                    "prompt":"p", "card":{"x":1}, "wait_seconds":30
                 }
             }),
         )
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    while !f.state.path().join("request").exists() {
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let began = std::time::Instant::now();
+    wait_for_fixture(|| f.state.path().join("held").exists());
     let mut other = common::McpClient::connect(&socket);
     other.initialize();
     let reply = other.request(
@@ -115,22 +110,50 @@ fn waiting_spawn_does_not_block_second_connection() {
         json!({"name":"plangraph_agent_health","arguments":{}}),
     );
     assert!(reply.get("result").is_some());
-    assert!(began.elapsed() < std::time::Duration::from_secs(1));
     assert!(!thread.is_finished());
-    thread.join().unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(600));
+    std::fs::write(f.state.path().join("release"), "").unwrap();
+    assert_eq!(payload(thread.join().unwrap())["status"], "completed");
 }
+fn held_fixture(extra: &[&str]) -> Fixture {
+    use std::{os::unix::ffi::OsStrExt, process::Command};
+    let resolved = Command::new("/bin/sh")
+        .args(["-c", "command -v timeout"])
+        .output()
+        .unwrap();
+    assert!(
+        resolved.status.success(),
+        "the fixture requires timeout on PATH"
+    );
+    let path = std::ffi::OsStr::from_bytes(resolved.stdout.strip_suffix(b"\n").unwrap());
+    let path = std::fs::canonicalize(path).unwrap();
+    // Use the fixture's working directory so the daemon's PATH cannot change the selection.
+    let fixture = Fixture::new(
+        r#"exec ./fixture-timeout 30 /bin/sh -c ": > held; while ! test -f release; do sleep .02; done""#,
+        Value::Null,
+        extra,
+    );
+    std::os::unix::fs::symlink(path, fixture.state.path().join("fixture-timeout")).unwrap();
+    fixture
+}
+
+fn wait_for_fixture(mut ready: impl FnMut() -> bool) {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not reach the expected state"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn queue_full_and_nonblocking_wait() {
-    let mut f = Fixture::new(
-        "/bin/sleep 1",
-        Value::Null,
-        &["--max-runs", "1", "--max-queued", "0"],
-    );
-    let began = std::time::Instant::now();
+    let mut f = held_fixture(&["--max-runs", "1", "--max-queued", "0"]);
     let first = payload(f.spawn(0.0));
-    assert!(began.elapsed().as_secs_f64() < 1.0);
     assert!(["queued", "running"].contains(&first["status"].as_str().unwrap()));
+    wait_for_fixture(|| f.state.path().join("held").exists());
     let refused = f.spawn(0.0);
     assert_eq!(refused["error"]["code"], -32000);
     let id = refused["error"]["data"]["run_id"].as_str().unwrap();
@@ -142,7 +165,19 @@ fn queue_full_and_nonblocking_wait() {
     assert_eq!(row["refusal"], "QueueFull");
     assert_eq!(row["exit_code"], 2);
     assert_eq!(row["error"], "run queue full");
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(f.state.path().join("release"), "").unwrap();
+    let record = f
+        .state
+        .path()
+        .join("runs")
+        .join(first["run_id"].as_str().unwrap())
+        .join("record.json");
+    wait_for_fixture(|| {
+        std::fs::read(&record)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|run| run["status"] == "completed")
+    });
 }
 #[test]
 fn dry_command_text() {

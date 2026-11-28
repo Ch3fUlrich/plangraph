@@ -1,0 +1,25 @@
+{
+  "project": "plangraph",
+  "line_caps": {
+    "rust/worker-core/src/worktree_disk_tests.rs": {
+      "max_changed_lines": 34,
+      "max_final_lines": 430
+    }
+  },
+  "cards": {
+    "LE-WORKTREE-DISK-TEST-ASSERTS-AN-EXACT-BYTE-SIZE": {
+      "outcome": "The shared Cargo cache cap test accepts the filesystem's allocation slack for the three writer files and still fails when the measured size misses, adds or double-counts a file.",
+      "read_set": [
+        "src/plangraph/spawner/host_ready.py"
+      ],
+      "write_set": [
+        "rust/worker-core/src/worktree_disk_tests.rs"
+      ],
+      "check_cmd": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --lib worktree::disk::tests::",
+      "risk_tags": [],
+      "estimate_tokens": 25000,
+      "window_class": "128k",
+      "heldout_check": "cargo test --manifest-path rust/Cargo.toml --offline --locked -p pg-worker-core --lib worktree::disk"
+    }
+  }
+}

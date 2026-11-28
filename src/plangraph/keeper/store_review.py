@@ -37,11 +37,25 @@ from __future__ import annotations
 import json
 import re
 
-from . import auth, context_sources
+from . import auth, context_sources, timing
 from .errors import Refused
-from .evidence_types import as_epoch, live_evidence_status, no_deploy_declaration
+from .evidence_pr import landing_record
+from .evidence_types import as_epoch, live_evidence_status, no_deploy_declaration, valid_commit_ref
 from .store_outbox import _StoredReceipt
 from .store_waiver import _known_family
+
+
+def _read_landing(ci, git, project, sha, now):
+    if valid_commit_ref(sha) and callable(getattr(ci, "merged_pr_for", None)) and git is not None:
+        try:
+            return landing_record(ci, project, sha, git.repo_ref(project)), now
+        except Exception:  # An unreadable forge proves nothing and leaves the landing cache alone.
+            pass
+    return None
+
+
+def _read_landings(ci, git, project, shas, now):
+    return {sha: _read_landing(ci, git, project, sha, now) for sha in shas}
 
 
 class ReviewMixin:
@@ -322,6 +336,19 @@ class ReviewMixin:
         """The code that holds ``item`` from closing (``live_evidence_status``), or ``None``."""
         return live_evidence_status(item, self._evidence(item["key"]), since)
 
+    _SHA_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+
+    def _lane_merge_decision(self, item, subject, merge_sha):
+        """The first D-id the PR-less merge ``subject`` cites whose decision row names ``merge_sha`` (7 to 40
+        hex digits), else ``None``. A frozen close reads the scan's decision snapshot, never the document."""
+        snapshot = (self.__dict__.get("_landing_decisions") if self.__dict__.get("_frozen_lanes")
+                    else self._decision_snapshot([item["key"]]))
+        rows = snapshot["book"]["rows"] if snapshot else {}
+        for did in context_sources.decision_ids(subject or ""):
+            if any(merge_sha.startswith(token) for line in rows.get(did, ()) for token in self._SHA_TOKEN.findall(line)):
+                return did
+        return None
+
     def _require_live_evidence(self, item):
         """The one close gate; every path ends here under the write lock with the floor it pinned.
 
@@ -331,6 +358,57 @@ class ReviewMixin:
             raise Refused("evidence_unverified",
                           f"{code}: {item['key']} needs a verified deploy evidence row recorded at or after its "
                           "latest merge, or a 'no deploy needed: <reason>' line (D-6790)")
+
+    _LANDING_MISS_S = 600
+
+    def _landing_cached(self, found, now):
+        if not found:
+            return False
+        record, at = found
+        checks = record["checks"] if record else None
+        unreadable = bool(checks) and checks["detail"] == "check_runs_unavailable"
+        return (self.__dict__.get("_frozen_lanes") or (checks and checks["verified"])
+                or (now - at < self._LANDING_MISS_S and not unreadable))
+
+    def _landing_for(self, project, sha, *, warmed=None, now=None):
+        """Read a forge landing or apply its warmed observation on the owner thread.
+
+        Verified checks persist. Missing and non-green results expire, and
+        unreadable checks are looked up again in the next refresh.
+        """
+        cache = self.__dict__.setdefault("_landings", {})
+        now = self.now() if now is None else now
+        key = project, sha
+        found = cache.get(key)
+        if self._landing_cached(found, now):
+            timing.merge_landing_cache_hit()
+            return found[0]
+        if self.__dict__.get("_frozen_lanes"):
+            return None
+        fetched = (_read_landing(self._adapter("ci"), self._adapter("git"), project, sha, now)
+                   if warmed is None else warmed.get(sha))
+        if fetched is not None:
+            cache[key] = fetched
+            return fetched[0]
+        return None
+
+    def _warm_landings(self, project, commits, *, submit=None):
+        shas = [(commit.get("merge") or {}).get("sha") or commit.get("sha") for commit in commits]
+        if submit is None:
+            for sha in shas:
+                self._landing_for(project, sha)
+            return None
+        now, cache = self.now(), self.__dict__.get("_landings", {})
+        misses = [sha for sha in dict.fromkeys(shas) if not self._landing_cached(cache.get((project, sha)), now)]
+        pending = submit("landing_warm", _read_landings, self._adapter("ci"), self._adapter("git"),
+                         project, misses, now, attempt=False)
+
+        def finish():
+            records = pending.result()
+            for sha in shas:
+                self._landing_for(project, sha, warmed=records, now=now)
+
+        return finish
 
     def _sha_landed_at(self, project, sha, ref):
         """When *sha* landed on *ref* (epoch): the forge record, the merge that brought it in, else its own date."""

@@ -16,8 +16,9 @@ import time
 import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, keeper_postgres_files, postgres_bin, report_batches,
-                    run_flag_in, run_keeper_postgres, test_environment, with_result_line)
+from pgtest import (affected_parser, affected_pytest, build_fleet_spawnd, cargo_path, flake_labels, flaky_only,
+                    keeper_postgres_files, postgres_bin, recorded_timeouts, report_batches, run_flag_in, run_keeper_postgres,
+                    test_environment, with_result_line)
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -101,23 +102,6 @@ def tree_hash(root):
         return digest.hexdigest()
     except (OSError, subprocess.SubprocessError):
         return None
-
-
-def flake_labels(failed, first_rerun, second_rerun, hashes, parallel=True):
-    """FLAKY needs an explicit pass on both reruns and one tree hash around every run.
-
-    FAILED-IN-PARALLEL needs workers that actually ran (parallel); a serial sequence has none."""
-    stable = None not in hashes and len(set(hashes)) == 1
-    lines = []
-    for nodeid in failed:
-        low, high = first_rerun.get(nodeid), second_rerun.get(nodeid)
-        if "passed" in (low, high) and not stable:
-            lines.append(f"FAILED-THEN-PASSED: {nodeid}")
-        elif parallel and low == "passed" and high == "failed":
-            lines.append(f"FAILED-IN-PARALLEL: {nodeid}")
-        elif low == high == "passed":
-            lines.append(f"FLAKY (rerun -n0; a parallel race is not excluded): {nodeid}")
-    return lines
 
 
 def revision_asset(root, path, cache=None):
@@ -703,7 +687,7 @@ def _main(root=None):
         placement = any('placement' in Path(path).name or
                         (root / path).is_dir() and any((root / path).rglob('*placement*.py'))
                         for path in plan['tests'])
-        if placement and not shutil.which('cargo'):
+        if placement and not shutil.which('cargo', path=cargo_path(os.environ)):
             print('CARGO FAIL: cargo is required for selected placement tests', file=sys.stderr)
             return 1
         try:
@@ -711,6 +695,7 @@ def _main(root=None):
         except (OSError, subprocess.SubprocessError):
             print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
             return 1
+        env["PATH"] = cargo_path(env)
         env["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
@@ -745,14 +730,26 @@ def _main(root=None):
             def pytest(options, capture=False):
                 """One pytest run: (exit code, {nodeid: outcome}, workers started) from the controller's recorder."""
                 outcomes = Path(scratch) / f"outcomes-{len(runs)}.json"
+                timeouts = Path(scratch) / f"timeouts-{len(runs)}"
+                timeouts.mkdir()
                 runs.append(outcomes)
-                run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTHONPATH=os.pathsep.join(
-                    part for part in (scratch, env.get("PYTHONPATH")) if part))
+                run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTEST_TIMEOUT_DIR=str(timeouts),
+                               PYTHONPATH=os.pathsep.join(part for part in (scratch, env.get("PYTHONPATH")) if part))
                 result = run_pytest(
                     [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
-                return result.returncode, *read_record_file(outcomes)
+                recorded, workers = read_record_file(outcomes)
+                # Timeouts come from the plugin's record, not the report text: a hang the
+                # faulthandler backstop killed reaches the controller only as a crashed worker.
+                timed_out, dumps = recorded_timeouts(timeouts)
+                for dump in dumps:
+                    print(dump, end="")
+                for nodeid in timed_out:
+                    recorded[nodeid] = "timeout"
+                    if not capture:
+                        print(f"TIMED OUT: {nodeid}")
+                return result.returncode, recorded, workers
 
             hashes = [tree_hash(root)]
             code, first, _ = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),
@@ -760,6 +757,8 @@ def _main(root=None):
                                   *plan["tests"]])
             print(f"affected wall seconds: {time.monotonic() - start:.3f}")
             failed = sorted(nodeid for nodeid, outcome in first.items() if outcome == "failed")
+            # A timed-out test is never rerun (each rerun would spend its whole budget again).
+            timed_out = sorted(nodeid for nodeid, outcome in first.items() if outcome == "timeout")
             # Exit 1 only: a collection or usage error (2, 3, 4) is not a test failure.
             if code == 1 and 0 < len(failed) <= MAX_RERUN_FAILURES:
                 hashes.append(tree_hash(root))
@@ -768,8 +767,12 @@ def _main(root=None):
                 hashes.append(tree_hash(root))
                 _, high, ran_workers = pytest([*parallel, *QUIET_FLAGS, *failed], capture=True)
                 hashes.append(tree_hash(root))
-                for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
+                labels = flake_labels(failed, low, high, hashes, parallel=ran_workers)
+                for line in labels:
                     print(line)
+                if flaky_only(failed, timed_out, labels, args.maxfail):
+                    print(f"FLAKY-ONLY: {len(failed)} flaky test(s) do not fail the run")
+                    code = 0
             batches = [("pytest", code)]
             if args.within is None and keeper_postgres_files(root, changed):
                 batches.append(("keeper-postgres", run_keeper_postgres(root, changed, env, runner=run_pytest)))

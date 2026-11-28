@@ -1,5 +1,104 @@
 use super::*;
 
+impl Host {
+    pub(in crate::native_writer_host) fn prepared_fixture(dir: &Path) -> Self {
+        let mut host = local_base_fixture(dir);
+        host.prepare().unwrap();
+        host
+    }
+}
+
+struct FastCheckFlow {
+    host: Host,
+    failed: Option<Value>,
+    red_head: String,
+    reviews: Vec<String>,
+}
+
+impl Driver for FastCheckFlow {
+    fn prepare(&mut self) -> Result<String, String> {
+        self.host.prepare()
+    }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        panic!("the fixture base does not move")
+    }
+    fn disk_gb(&mut self) -> Result<u64, String> {
+        Ok(20)
+    }
+    fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let red = self.host.cwd.join("fixture-red");
+        if let Some(session) = session {
+            assert_eq!(session, "fixture-session");
+            assert!(self.reviews.is_empty());
+            let failed = self.failed.as_ref().unwrap();
+            assert_eq!(failed["head"], self.red_head);
+            assert!(prompt.contains(&self.red_head));
+            for sentinel in crate::native_writer_host::review_tests::RED_LINES {
+                assert!(failed["output"].as_str().unwrap().contains(sentinel));
+                assert!(prompt.contains(sentinel));
+            }
+            fs::remove_file(red).unwrap();
+            git_in(
+                &self.host.cwd,
+                &["commit", "--allow-empty", "-qm", "correct red check"],
+            );
+        } else {
+            fs::write(red, "").unwrap();
+            git_in(
+                &self.host.cwd,
+                &["commit", "--allow-empty", "-qm", "red check"],
+            );
+            self.red_head = self.host.head()?;
+        }
+        Ok("fixture-session".into())
+    }
+    fn head(&mut self) -> Result<String, String> {
+        self.host.head()
+    }
+    fn has_commits_beyond(&mut self, base: &str, head: &str) -> Result<bool, String> {
+        self.host.has_commits_beyond(base, head)
+    }
+    fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        self.host
+            .fast_checks_with_scrub(head, None)
+            .map_err(|e| e.to_string())
+    }
+    fn stamped(&mut self, head: &str) -> bool {
+        self.host.stamped(head)
+    }
+    fn review(&mut self, head: &str, _: Option<&Value>) -> Result<Value, String> {
+        assert_ne!(head, self.red_head);
+        assert!(self.host.stamped(head));
+        self.reviews.push(head.into());
+        Ok(json!({"head":head,"verdict":"ACCEPT","text":"fixture review","run_id":"fixture"}))
+    }
+    fn gates(&mut self) -> Result<(), String> {
+        self.host.gates_with_scrub(None)
+    }
+    fn save(&mut self, record: &Value) -> Result<(), String> {
+        if record["fast_checks"]["status"] == "failed" {
+            self.failed = Some(record["fast_checks"].clone());
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn fast_check_output_reaches_the_same_writer_before_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut driver = FastCheckFlow {
+        host: local_base_fixture(dir.path()),
+        failed: None,
+        red_head: String::new(),
+        reviews: Vec::new(),
+    };
+    let record = json!({"run_id":"run-check-flow","role":"implement"});
+    let record = native_writer::run(&mut driver, record, "fixture brief");
+    assert_eq!(record["exit_code"], 0, "{record}");
+    assert_eq!(driver.reviews, [record["final_head"].as_str().unwrap()]);
+    assert!(!driver.host.stamped(&driver.red_head));
+}
+
 struct MovingMain {
     host: Host,
     upstream: PathBuf,

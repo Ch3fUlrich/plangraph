@@ -2,70 +2,58 @@
 
 use super::{
     round_cli::run,
-    round_cli_tests::{command_shell, World},
+    round_cli_tests::{command_shell, fixture_shell, wait_for, World},
     round_host::{signal_member, LocalHost, Member},
     round_time_tests::{Transcript, MIN, T0},
     round_watch::Host,
 };
 use serde_json::json;
-use std::{fs, path::Path};
-
-fn claude_stub(root: &Path, name: &str, stop_rc: i32, agents_json: &str) -> std::path::PathBuf {
-    let script = format!(
-        "#!/bin/sh\nif [ \"$1\" = stop ]; then exit {stop_rc}; fi\ncat <<'EOF'\n{agents_json}\nEOF\n"
-    );
-    pg_worker_core::executable_test_support::write_script(root, name, &script)
-}
+use std::fs;
 
 #[test]
+#[rustfmt::skip]
 fn claude_stop_exit_zero_is_not_a_stopped_session_while_agents_still_lists_it_live() {
-    let dir = tempfile::tempdir().unwrap();
     let sid = "11111111-2222-3333-4444-555555555555";
-    let end = |stub: std::path::PathBuf| {
-        let mut host = LocalHost::new(dir.path().to_path_buf(), sid.into());
-        host.claude_bin = Some(stub);
-        host.end_session("writer-1")
-    };
+    let host = LocalHost::new(Default::default(), sid.into());
     let live = format!(r#"[{{"sessionId":"{sid}","state":"working"}}]"#);
     let done = format!(r#"[{{"sessionId":"{sid}","state":"done"}}]"#);
     let other = r#"[{"sessionId":"other","state":"working"}]"#;
-    assert!(
-        !end(claude_stub(dir.path(), "live", 0, &live)),
-        "exit zero, still live"
-    );
-    assert!(end(claude_stub(dir.path(), "done", 0, &done)));
-    assert!(
-        end(claude_stub(dir.path(), "gone", 0, other)),
-        "an unlisted session is gone"
-    );
-    assert!(
-        end(claude_stub(dir.path(), "empty", 0, "")),
-        "an empty listing lists nobody"
-    );
-    assert!(
-        !end(claude_stub(dir.path(), "failed", 1, &done)),
-        "stop itself failed"
-    );
-    assert!(
-        !end(claude_stub(dir.path(), "junk", 0, "not json")),
-        "an unreadable poll is unconfirmed"
-    );
+    for (stop, listing, expected) in [
+        (true, Some(live.as_str()), false),
+        (true, Some(done.as_str()), true),
+        (true, Some(other), true),
+        (true, Some(""), true),
+        (true, None, false),
+        (true, Some("not json"), false), (false, Some(&done), false),
+    ] {
+        let mut calls = Vec::new();
+        let ended = host.end_session_with(|argv| {
+            calls.push(argv.join(" "));
+            match argv {
+                ["stop", "11111111"] => stop.then(Vec::new),
+                ["agents", "--json"] => listing.map(|text| text.as_bytes().to_vec()),
+                _ => panic!("unexpected client argv {argv:?}"),
+            }
+        });
+        let expected_calls = ["stop 11111111", "agents --json"];
+        assert_eq!(calls, expected_calls[..if stop { 2 } else { 1 }]);
+        assert_eq!(ended, expected, "{listing:?}");
+    }
 }
 
 #[test]
 fn claude_stop_retries_a_temporarily_busy_executable() {
+    use pg_worker_core::stall::release_busy_fixture;
     let dir = tempfile::tempdir().unwrap();
-    let stub = claude_stub(dir.path(), "busy", 0, "[]");
-    let writer = fs::OpenOptions::new().write(true).open(&stub).unwrap();
+    let stub = pg_worker_core::executable_test_support::write_script(
+        dir.path(), "busy", "#!/bin/sh\ncase \"$*\" in 'stop 11111111') exit 0;; 'agents --json') printf '[]';; *) exit 1;; esac\n",
+    );
+    let mut writer = Some(fs::OpenOptions::new().write(true).open(&stub).unwrap());
     let mut host = LocalHost::new(dir.path().to_path_buf(), "11111111-session".into());
     host.claude_bin = Some(stub);
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(80));
-        drop(writer);
-    });
 
-    let ended = host.end_session("writer-1");
-    release.join().unwrap();
+    let ended = host.end_session_with_sleeper(|pause| release_busy_fixture(&mut writer, pause));
+    assert!(writer.is_none());
     assert!(ended, "a temporary executable-busy error must be retried");
 }
 
@@ -76,7 +64,12 @@ fn racing_signal(member: &Member, _signal: i32) -> bool {
     RACING.store(member.pid, std::sync::atomic::Ordering::SeqCst);
     // SAFETY: kill takes numeric identifiers and dereferences nothing.
     unsafe { libc::kill(member.pid as i32, libc::SIGKILL) };
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for("signalled fixture did not exit", || {
+        fs::read_to_string(format!("/proc/{}/stat", member.pid))
+            .ok()
+            .and_then(|stat| pg_worker_core::run::group_unix::parse_stat(&stat))
+            .is_none_or(|(state, _, _)| matches!(state, 'Z' | 'X'))
+    });
     false
 }
 
@@ -93,7 +86,7 @@ fn a_member_that_exits_before_the_signal_is_no_stop_of_ours() {
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let mut host = LocalHost::new(world.state.clone(), id.into());
+    let mut host = world.host(id);
     host.send_signal = racing_signal;
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(host.signal(&owner, &task), super::round_watch::Sent::Gone);
@@ -140,13 +133,6 @@ fn a_telemetry_only_pass_books_rows_and_touches_nothing_else() {
     assert!(!world.state.join("watchdog").exists());
 }
 
-fn spawn_leader(task_dir: &Path) -> std::process::Child {
-    let mut shell = command_shell(task_dir, "sess-id-0001", "bgI", "sleep 309");
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let _ = &mut shell;
-    shell
-}
-
 fn member_of(pid: u32) -> Member {
     let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
     let (_, group, start_time) = pg_worker_core::run::group_unix::parse_stat(&text).unwrap();
@@ -160,7 +146,7 @@ fn member_of(pid: u32) -> Member {
 #[test]
 fn a_signal_goes_only_to_the_member_that_was_seen() {
     let dir = tempfile::tempdir().unwrap();
-    let mut shell = spawn_leader(dir.path());
+    let mut shell = command_shell(dir.path(), "sess-id-0001", "bgI", "sleep 309");
     let seen = member_of(shell.id());
     // Another start time, or another group: a reused pid or a process that left the group.
     assert!(!signal_member(
@@ -210,7 +196,7 @@ fn when_no_signal_is_accepted_the_stop_is_unsignalled_and_nothing_died() {
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let mut host = LocalHost::new(world.state.clone(), "sess-uns-0001".into());
+    let mut host = world.host("sess-uns-0001");
     host.send_signal = refusing_signal;
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(
@@ -238,7 +224,7 @@ fn the_owners_output_carries_one_stop_line_per_action() {
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let host = LocalHost::new(world.state.clone(), "sess-mark-0001".into());
+    let host = world.host("sess-mark-0001");
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert!(
         owner.output.is_some(),
@@ -268,7 +254,7 @@ fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let host = LocalHost::new(world.state.clone(), "sess-swap-0001".into());
+    let host = world.host("sess-swap-0001");
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     // After the owner was found, the path is replaced by an unrelated file.
     let moved = root.join("tasks/bgW.moved");
@@ -296,28 +282,18 @@ fn the_mark_goes_to_the_owners_file_not_to_whatever_the_path_now_names() {
 
 #[test]
 fn a_command_that_ignores_terminate_is_killed_by_the_verified_escalation() {
-    use std::os::unix::process::CommandExt;
     let world = World::live();
     let root = world.state.parent().unwrap().to_path_buf();
     let tasks = root.join("tasks");
-    fs::create_dir_all(&tasks).unwrap();
-    let output = fs::File::create(tasks.join("bgH.output")).unwrap();
-    let mut shell = std::process::Command::new("/bin/sh")
-        .args(["-c", "trap '' TERM; sleep 313; true"])
-        .env("CLAUDE_CODE_SESSION_ID", "sess-hup-0001")
-        .stdout(output.try_clone().unwrap())
-        .stderr(output)
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    let script = "trap '' TERM; : > trap-ready; exec /bin/sleep 313";
+    let mut shell = fixture_shell(&root, "sess-hup-0001", "bgH", script, false);
     let task = super::round_wait::TaskRef {
         id: "bgH".into(),
         output_path: Some(tasks.join("bgH.output").display().to_string()),
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let host = LocalHost::new(world.state.clone(), "sess-hup-0001".into());
+    let host = world.host("sess-hup-0001");
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(
         host.signal(&owner, &task),
@@ -334,38 +310,28 @@ fn a_command_that_ignores_terminate_is_killed_by_the_verified_escalation() {
 
 #[test]
 fn a_command_that_redirects_its_output_when_signalled_is_still_the_owner_and_still_running() {
-    use std::os::unix::process::CommandExt;
     let world = World::live();
     let root = world.state.parent().unwrap().to_path_buf();
     let tasks = root.join("tasks");
-    fs::create_dir_all(&tasks).unwrap();
-    let output = fs::File::create(tasks.join("bgR.output")).unwrap();
     // On SIGTERM the shell moves its own stdout away and carries on.
-    let mut shell = std::process::Command::new("/bin/sh")
-        .args([
-            "-c",
-            "trap 'exec 1>/dev/null 2>&1' TERM; while :; do sleep 1; done",
-        ])
-        .env("CLAUDE_CODE_SESSION_ID", "sess-redir-0001")
-        .stdout(output.try_clone().unwrap())
-        .stderr(output)
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    let mut shell = fixture_shell(
+        &root, "sess-redir-0001", "bgR",
+        "trap 'exec 1>/dev/null 2>&1; : > redirected' TERM; : > trap-ready; while :; do read -r line; done",
+        false,
+    );
     let task = super::round_wait::TaskRef {
         id: "bgR".into(),
         output_path: Some(tasks.join("bgR.output").display().to_string()),
         launched_from_ms: world.origin,
         launched_to_ms: world.origin + 5_000,
     };
-    let host = LocalHost::new(world.state.clone(), "sess-redir-0001".into());
+    let host = world.host("sess-redir-0001");
     let owner = host.resolve_owner("writer-9", &task).expect("owner");
     assert_eq!(
         host.signal(&owner, &task),
         super::round_watch::Sent::Accepted
     );
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    wait_for("missing redirection", || root.join("redirected").is_file());
     assert!(
         shell.try_wait().unwrap().is_none(),
         "the shell survived the signal"

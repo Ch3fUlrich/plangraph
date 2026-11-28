@@ -847,8 +847,6 @@ tests/test_prod_audit_safety.py::test_stalled_audit_is_bounded
 tests/test_redact_output_rules.py::test_unterminated_pem_scan_is_linear
 tests/test_review_jev_hook.py::test_a_bad_jev_never_blocks_plan_actions_or_changes_the_plan
 tests/test_spawn_cli.py::test_cli_wait_returns_after_the_dispatcher_died
-tests/test_spawner_quota_failfast.py::test_call_log_poll_is_time_bounded
-tests/test_spawner_remote_ps.py::test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan
 '''.splitlines())
     unexpected = [f'{name} at lines {lines}' for name, lines in matches.items()
                   if name not in allowed or len(lines) > 1]

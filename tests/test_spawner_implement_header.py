@@ -127,7 +127,7 @@ def test_native_writer_review_composes_the_entire_brief_for_inline_leg():
              f"=== ITEM CONTEXT\n{item}\nName a finding with file:line evidence.\n"
              f"HEAD: {head}\nVERDICT: ACCEPT or REQUEST_CHANGES\n"
              "\n=== INLINE DIFF ===\n+fn evidence() {}\n")
-    task_prompt = _prompt("review", brief, model="mimo/mimo-v2.6-pro")
+    task_prompt = _prompt("review", brief, model="mimo/mimo-v2.6-flash")
     assert "no tools" in task_prompt.lower()
     for instruction in ("Read the named files", "Open callers", "Run read-only commands",
                         "Open src/example.rs", "cargo test", "Writer brief", "Skills"):

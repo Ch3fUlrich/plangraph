@@ -3,8 +3,12 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     os::unix::fs::OpenOptionsExt,
+    sync::mpsc,
     thread,
 };
+
+pub(super) const WATCHDOG: Duration = Duration::from_secs(30);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[test]
 fn loopback_validation_accepts_only_local_hosts() {
@@ -37,16 +41,15 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
         .unwrap();
     file.write_all(format!("local-{}", std::process::id()).as_bytes())
         .unwrap();
-    let client = Http::new(&base, &path, Duration::from_millis(100)).unwrap();
+    let client = Http::new(&base, &path, if delay { REQUEST_TIMEOUT } else { WATCHDOG }).unwrap();
     assert!(client.agent.config().proxy().is_none());
     std::fs::remove_file(path).unwrap();
     let status = status.to_owned();
     let body = body.to_owned();
+    let (done, complete) = mpsc::channel();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
+        let fixture = Http::fixture_exchanges(listener, complete);
+        let mut stream = fixture.accept();
         let mut bytes = Vec::new();
         let header_end = loop {
             let mut byte = [0];
@@ -82,24 +85,20 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
             assert!(headers.starts_with("post /graphs/local/query "));
         }
         if delay {
-            thread::sleep(Duration::from_millis(200));
+            fixture.finish();
+        } else {
+            if !status.is_empty() {
+                // One write: the client closes as soon as it rejects a malformed status line, so a
+                // response sent piecewise by write! could hit the closed socket.
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            drop(stream);
+            fixture.finish();
         }
-        if !status.is_empty() {
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-        drop(stream);
-        // Watch beyond the client's entire timeout budget, not just response dispatch.
-        thread::sleep(Duration::from_millis(150));
-        listener.set_nonblocking(true).unwrap();
-        assert_eq!(
-            listener.accept().unwrap_err().kind(),
-            std::io::ErrorKind::WouldBlock,
-            "must not retry"
-        );
     });
     #[derive(Serialize)]
     struct Params {
@@ -118,6 +117,7 @@ fn exercise(status: &str, body: &str, delay: bool, write: bool) -> Result<Value,
     } else {
         client.query(&request)
     };
+    let _ = done.send(());
     server.join().unwrap();
     result
 }
@@ -290,15 +290,25 @@ fn access_checks_health_and_authenticated_project_hub() {
             .open(&path)
             .unwrap();
         write!(file, "local-{}", std::process::id()).unwrap();
-        let client = Http::new(&base, &path, Duration::from_millis(300)).unwrap();
+        let timeout =
+            health_status.is_empty() || reply.is_some_and(|(status, _)| status.is_empty());
+        let client = Http::new(
+            &base,
+            &path,
+            if timeout { REQUEST_TIMEOUT } else { WATCHDOG },
+        )
+        .unwrap();
         std::fs::remove_file(path).unwrap();
+        let (done, complete) = mpsc::channel();
         let server = thread::spawn(move || {
-            let (mut health, _) = listener.accept().unwrap();
+            let fixture = Http::fixture_exchanges(listener, complete);
+            let mut health = fixture.accept();
             let headers = access_headers(&mut health);
             assert!(headers.starts_with("get /healthz "));
             assert!(!headers.contains("authorization:"));
             if health_status.is_empty() {
-                thread::sleep(Duration::from_millis(450));
+                fixture.finish();
+                return;
             } else {
                 write!(
                     health,
@@ -308,18 +318,7 @@ fn access_checks_health_and_authenticated_project_hub() {
             }
             drop(health);
             if let Some((status, body)) = reply {
-                listener.set_nonblocking(true).unwrap();
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                let mut query = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(std::time::Instant::now() < deadline, "missing hub request");
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(_) => panic!("fake server accept failed"),
-                    }
-                };
+                let mut query = fixture.accept();
                 let headers = access_headers(&mut query);
                 assert!(headers.starts_with("post /graphs/plangraph/query "));
                 assert!(headers.contains("authorization: bearer "));
@@ -335,26 +334,22 @@ fn access_checks_health_and_authenticated_project_hub() {
                 let request: Value = serde_json::from_slice(&payload).unwrap();
                 assert_eq!(request["params"]["slug"], "plangraph");
                 if status.is_empty() {
-                    thread::sleep(Duration::from_millis(450));
+                    fixture.finish();
+                    return;
                 } else {
                     write!(query, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
                 }
             }
-            listener.set_nonblocking(true).unwrap();
-            assert_eq!(
-                listener.accept().unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
-            );
+            fixture.finish();
         });
-        assert_eq!(client.probe_access(), expected);
+        let result = client.probe_access();
+        let _ = done.send(());
         server.join().unwrap();
+        assert_eq!(result, expected);
     }
 }
 
 fn access_headers(stream: &mut std::net::TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
     let mut headers = Vec::new();
     while !headers.ends_with(b"\r\n\r\n") {
         let mut byte = [0];

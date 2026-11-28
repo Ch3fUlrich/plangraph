@@ -377,19 +377,51 @@ fn remote_validation_and_quotes() {
 }
 #[test]
 fn parallel_outer_deadline_and_slack() {
-    let entries = json!({"slow":{},"fast":{}}).as_object().unwrap().clone();
+    let entries = json!({"a-held":{},"b-ready":{}})
+        .as_object()
+        .unwrap()
+        .clone();
     let start = Instant::now();
-    let rows = gather(&entries, Duration::from_millis(20), |host, _, _| {
-        thread::sleep(Duration::from_millis(if host == "slow" { 700 } else { 40 }));
-        json!({"host":host,"readable":true})
-    });
-    assert!(start.elapsed() < Duration::from_millis(500));
+    let clock = std::cell::Cell::new(start);
+    let watchdog = Duration::from_secs(30);
+    let (started, observed) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let rows = gather_with(
+        &entries,
+        Duration::from_millis(20),
+        move |host, _, budget| {
+            assert_eq!(budget, Duration::from_millis(20));
+            started.send(host.to_owned()).unwrap();
+            if host == "a-held" {
+                let _ = held.lock().unwrap().recv_timeout(watchdog);
+            }
+            json!({"host":host,"readable":true})
+        },
+        || clock.get(),
+        |host, rx, remaining| {
+            if host == "a-held" {
+                let mut started = [
+                    observed.recv_timeout(watchdog).unwrap(),
+                    observed.recv_timeout(watchdog).unwrap(),
+                ];
+                started.sort();
+                assert_eq!(started, ["a-held", "b-ready"]);
+                assert_eq!(remaining, Duration::from_millis(270));
+                clock.set(start + Duration::from_millis(170));
+                return Err(mpsc::RecvTimeoutError::Timeout);
+            }
+            assert_eq!(remaining, Duration::from_millis(100));
+            rx.recv_timeout(watchdog)
+        },
+    );
+    release.send(()).unwrap();
     assert!(rows
         .iter()
-        .any(|r| r["host"] == "fast" && r["readable"] == true));
+        .any(|r| r["host"] == "b-ready" && r["readable"] == true));
     assert!(rows
         .iter()
-        .any(|r| r["host"] == "slow" && r["reason"] == "timeout"));
+        .any(|r| r["host"] == "a-held" && r["reason"] == "timeout"));
 }
 #[path = "agent_view_guard_tests.rs"]
 mod guard;

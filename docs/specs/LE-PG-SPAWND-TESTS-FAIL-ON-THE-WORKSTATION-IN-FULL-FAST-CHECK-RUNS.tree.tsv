@@ -1,0 +1,71 @@
+path	disposition	required	row IDs	label
+.docs-map	read	yes	E4	predicted
+.github/workflows/tests.yml	read	yes	E6	predicted
+changelog.d/LE-PG-SPAWND-TESTS-FAIL-ON-THE-WORKSTATION-IN-FULL-FAST-CHECK-RUNS.md	write	yes	E1 E2 E3 E4 E5 E6	predicted (base 0 lines, ≤3 changed lines, ≤3 final lines)
+docs/SPAWNER.md	read	yes	E4	predicted
+docs/native-codex-writer.md	write	yes	E4 E6	predicted (base 258 lines, ≤10 changed lines, ≤268 final lines)
+rust/Cargo.toml	read	yes	E1 E2 E3 E4 E5	predicted
+rust/og-memory/src/http.rs	read	yes	E5	predicted
+rust/og-memory/src/http_publish_tests.rs	write	yes	E5	predicted (base 238 lines, ≤85 changed lines, ≤323 final lines)
+rust/og-memory/src/http_recall_tests.rs	read	yes	E5	predicted
+rust/og-memory/src/http_tests.rs	write	yes	E5	predicted (base 365 lines, ≤95 changed lines, ≤460 final lines)
+rust/pg-session-resume/tests/system_reap.rs	write	yes	E5	predicted (base 360 lines, ≤26 changed lines, ≤386 final lines)
+rust/pg-spawnd/src/agent_view.rs	write	yes	E5	predicted (base 387 lines, ≤45 changed lines, ≤432 final lines)
+rust/pg-spawnd/src/agent_view_tests.rs	write	yes	E5	predicted (base 475 lines, ≤60 changed lines, ≤535 final lines)
+rust/pg-spawnd/src/bin/ci-temporal.rs	read	yes	E4 E6	predicted
+rust/pg-spawnd/src/launch_tests.rs	write	yes	E2 E5	predicted (base 490 lines, ≤80 changed lines, ≤570 final lines)
+rust/pg-spawnd/src/native_writer.rs	read	yes	E4	predicted
+rust/pg-spawnd/src/native_writer_base_tests.rs	read	yes	E4	predicted
+rust/pg-spawnd/src/native_writer_host.rs	write	yes	E4	predicted (base 550 lines, ≤90 changed lines, ≤640 final lines)
+rust/pg-spawnd/src/native_writer_host_review_tests.rs	write	yes	E4	predicted (base 449 lines, ≤100 changed lines, ≤549 final lines)
+rust/pg-spawnd/src/native_writer_host_tests.rs	write	yes	E4	predicted (base 781 lines, ≤19 changed lines, ≤800 final lines)
+rust/pg-spawnd/src/native_writer_moving_main_tests.rs	write	yes	E4	predicted (base 241 lines, ≤115 changed lines, ≤356 final lines)
+rust/pg-spawnd/src/native_writer_review.rs	write	yes	E4	predicted (base 626 lines, ≤35 changed lines, ≤661 final lines)
+rust/pg-spawnd/src/native_writer_sandbox_tests.rs	read	yes	E1 E4	predicted
+rust/pg-spawnd/src/native_writer_session.rs	read	yes	E4	predicted
+rust/pg-spawnd/src/native_writer_tests.rs	read	yes	E4	predicted
+rust/pg-spawnd/src/prompt_git.rs	write	yes	E5	predicted (base 304 lines, ≤50 changed lines, ≤354 final lines)
+rust/pg-spawnd/src/session/round_cli.rs	write	yes	E2	predicted (base 215 lines, ≤35 changed lines, ≤250 final lines)
+rust/pg-spawnd/src/session/round_cli_tests.rs	write	yes	E2 E5	predicted (base 444 lines, ≤92 changed lines, ≤536 final lines)
+rust/pg-spawnd/src/session/round_host.rs	write	yes	E2 E5	predicted (base 360 lines, ≤60 changed lines, ≤420 final lines)
+rust/pg-spawnd/src/session/round_host_tests.rs	write	yes	E2 E5	predicted (base 386 lines, ≤140 changed lines, ≤526 final lines)
+rust/pg-spawnd/tests/native_tools.rs	read	yes	E1	predicted
+rust/pg-spawnd/tests/placement_spawn.rs	write	yes	E5	predicted (base 400 lines, ≤105 changed lines, ≤505 final lines)
+rust/plangraph-cli/src/codex_readiness.rs	read	yes	E1 E2	predicted
+rust/plangraph-cli/src/codex_readiness_tests.rs	write	yes	E1 E2	predicted (base 198 lines, ≤115 changed lines, ≤313 final lines)
+rust/plangraph-cli/src/fast_check_replay.rs	read	yes	E4 E6	predicted
+rust/plangraph-cli/src/fast_check_target.rs	write	yes	E4 E5	predicted (base 336 lines, ≤90 changed lines, ≤426 final lines)
+rust/plangraph-cli/src/fast_check_worktree.rs	read	yes	E4	predicted
+rust/plangraph-cli/src/fast_checks.rs	write	yes	E4 E6	predicted (base 500 lines, ≤43 changed lines, ≤543 final lines)
+rust/plangraph-cli/src/feeder/adapters.rs	read	yes	E3	predicted
+rust/plangraph-cli/src/feeder/capacity.rs	write	yes	E3	predicted (base 210 lines, ≤50 changed lines, ≤260 final lines)
+rust/plangraph-cli/src/feeder/lanes/tests.rs	read	yes	E2 E3	predicted
+rust/plangraph-cli/src/feeder/quota/tests.rs	read	yes	E3	predicted
+rust/plangraph-cli/src/feeder/runtime.rs	write	yes	E3	predicted (base 364 lines, ≤48 changed lines, ≤412 final lines)
+rust/plangraph-cli/src/feeder/runtime/live_tests.rs	write	yes	E3	predicted (base 384 lines, ≤100 changed lines, ≤484 final lines)
+rust/plangraph-cli/src/feeder/sources.rs	write	yes	E3	predicted (base 754 lines, ≤26 changed lines, ≤780 final lines)
+rust/plangraph-cli/tests/codex_readiness.rs	read	yes	E1	predicted
+rust/plangraph-cli/tests/fast_checks.rs	write	yes	E4	predicted (base 688 lines, ≤55 changed lines, ≤743 final lines)
+rust/test_support/python.rs	read	yes	E2	predicted
+rust/worker-core/src/cargo_pool_telemetry.rs	read	yes	E5	predicted
+rust/worker-core/src/diffscan.rs	read	yes	E1	predicted
+rust/worker-core/src/executable_test_support.rs	read	yes	E2 E5	predicted
+rust/worker-core/src/fast_check_stamp.rs	read	yes	E4	predicted
+rust/worker-core/src/host_probe.rs	write	yes	E3	predicted (base 296 lines, ≤45 changed lines, ≤341 final lines)
+rust/worker-core/src/run/group_unix.rs	read	yes	E2	predicted
+rust/worker-core/src/stall.rs	write	yes	E5	predicted (base 412 lines, ≤65 changed lines, ≤477 final lines)
+rust/worker-core/src/stall/deadline.rs	write	yes	E5	predicted (base 33 lines, ≤42 changed lines, ≤75 final lines)
+rust/worker-core/src/stall/unix.rs	read	yes	E5	predicted
+rust/worker-core/src/work_disks.rs	read	yes	E3	predicted
+rust/worker-core/src/workspace_resolver.rs	write	yes	E5	predicted (base 195 lines, ≤80 changed lines, ≤275 final lines)
+rust/worker-core/tests/host_readiness.rs	read	yes	E1	predicted
+rust/worker/Cargo.toml	read	yes	E6	predicted
+rust/worker/src/workflow_question.rs	read	yes	E6	predicted
+rust/worker/tests/e2e.rs	read	yes	E6	predicted
+rust/worker/tests/process_crash.rs	write	yes	E6	predicted (base 307 lines, ≤145 changed lines, ≤452 final lines)
+src/plangraph/routing_support/clients.py	read	yes	E2	predicted
+src/plangraph/spawner/host_ready.py	read	yes	E2	predicted
+src/plangraph/spawner/launch_spec.py	read	yes	E2	predicted
+tests/test_spawner_launch_spec.py	read	yes	E2	predicted
+tools/affected_tests.py	read	yes	E4	predicted
+tools/check_file_size.py	read	yes	E4	predicted

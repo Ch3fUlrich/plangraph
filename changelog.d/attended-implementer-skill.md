@@ -1,0 +1,1 @@
+- New role skill `attended-implementer`: the operator's attended session folds all work into one integration batch, tests only what changed, lands one train with one full CI run on his word; AGENTS.md names it.

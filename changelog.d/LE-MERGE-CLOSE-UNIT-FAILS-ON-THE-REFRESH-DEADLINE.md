@@ -7,3 +7,7 @@ and landing cache hits let operators attribute slow refreshes from the journal.
 Background refreshes now overlap up to four pinned deploy reads with the
 landing and lane lookups. The refresh thread records the results and the journal
 reports summed stage work with residual wall time.
+
+The same refresh pool now runs landing, lane and deploy reads. The owner
+applies results in candidate order, and repeated merge and CI lookups share
+one observation per generation.

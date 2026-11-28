@@ -35,7 +35,7 @@ def request_data(tmp_path, monkeypatch):
     base = dict(PATH=str(tmp_path), SystemRoot='system', COMSPEC='cmd', TEMP=str(tmp_path),
         OPENCODE_CONFIG_CONTENT=json.dumps({'providers': {'mimo': {
             'package': '@opencode/ai/providers/openai-compatible',
-            'models': {'mimo-v2.6-flash': {'modelID': 'mimo/mimo-v2.6-flash'}}}}}))
+            'models': {key: {'modelID': 'mimo/' + key} for key in ('mimo-v2.6-flash', 'mimo-v2.6-pro')}}}}))
     monkeypatch.setattr(runner, 'build_child_env', lambda *a, **kw: dict(base, **(a[0] or {})))
     return dict(run_id='run-' + 'a' * 32, job_id='external-job', role='review',
                 dry_run=False, leg={'id': 'qodercli-qwen3.8-flash'}, prompt='do work',
@@ -47,6 +47,79 @@ def invoke(req):
     raw = json.dumps(req).encode() if not isinstance(req, bytes) else req
     code = spec.main(io.BytesIO(raw), out, err)
     return code, out.getvalue(), err.getvalue()
+
+
+def test_explicit_mimo_real_launch_requires_a_diff(request_data, monkeypatch):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
+    request_data['leg'] = {'id': 'mimo-v2.6-pro', 'explicit': True}
+    async def unexpected(*args, **kwargs):
+        pytest.fail('invalid review material reached host admission')
+    monkeypatch.setattr(spec, 'host_skip_reason_async', unexpected)
+
+    code, _, err = invoke(request_data)
+    assert code == 2 and 'no diff_ref for inline-only leg' in err
+    request_data['dry_run'] = True
+    preview = spec.build(request_data)
+    assert preview['stdin'] == preview['prompt']
+    assert preview['max_request_tokens'] == 200_000
+    request_data['card']['repository_review_required'] = True
+    assert invoke(request_data) == (2, '', 'repository_review_tools_unavailable: mimo-v2.6-pro\n')
+
+
+@pytest.mark.parametrize('context,cap', [(1_000_000, 200_000), (181_072, 50_000)])
+def test_mimo_uses_effective_inline_payload_limit(request_data, tmp_path, monkeypatch, context, cap):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
+    from plangraph.routing_support import opencode_overlay
+    from registry_route_util import _repo
+
+    repo, base, head = _repo(tmp_path)
+    monkeypatch.setenv('PATH', os.defpath)
+    tool = tmp_path / 'opencode'
+    tool.write_text('#!/bin/sh\nexit 99\n')
+    tool.chmod(0o700)
+    original_overlay = opencode_overlay.overlay_env
+    def overlay(env):
+        env = original_overlay(env)
+        if 'OPENCODE_CONFIG_CONTENT' not in env:
+            return env
+        cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        cfg['providers']['mimo']['models']['mimo-v2.6-pro']['limit'] = {'context': context}
+        return dict(env, OPENCODE_CONFIG_CONTENT=json.dumps(cfg))
+    monkeypatch.setattr(opencode_overlay, 'overlay_env', overlay)
+    requested = 'Please review the change.\n'
+    diff = {'repo': str(repo), 'base': base, 'head': head, 'paths': ['a.txt']}
+    request_data.update(leg={'id': 'mimo-v2.6-pro', 'explicit': True}, cwd=str(repo),
+                        prompt=requested, card={'diff_ref': diff})
+    result = spec.build(request_data)
+    assert result['max_request_tokens'] == cap
+    assert result['stdin'] == result['prompt']
+    assert f'base {base}, head {head}' in result['stdin']
+    cfg = json.loads(result['env']['OPENCODE_CONFIG_CONTENT'])
+    assert cfg['permission']['*'] == cfg['permission']['bash'] == cfg['permission']['edit'] == 'deny'
+    assert cfg['mcp'] == {} and cfg['plugin'] == []
+    assert cfg['providers']['mimo']['models']['mimo-v2.6-pro']['limit']['output'] == 131072
+    request_data['prompt'] += 'x' * (cap * 3 - len(result['stdin']))
+    assert len(spec.build(request_data)['stdin']) == cap * 3
+    request_data['prompt'] += 'x'
+    with pytest.raises(spec.LaunchRefused, match=f'max_request_tokens {cap}'):
+        spec.build(request_data)
+    request_data.update(prompt=requested, card={'diff_ref': dict(diff, head=base)})
+    with pytest.raises(spec.LaunchRefused, match='empty diff'):
+        spec.build(request_data)
+
+
+def test_mimo_rejects_an_override_after_gateway_tagging(request_data, monkeypatch):
+    monkeypatch.setattr('plangraph.planner.legs.REVIEW_TOOLS_LEGS', frozenset())   # the inline MiMo Pro path
+    from plangraph.spawner import gateway_witness
+
+    original = gateway_witness.tag_session
+    def tag(config, job_id):
+        original(config, job_id)
+        config['permissions'] = [{'action': 'shell', 'resource': '*', 'effect': 'allow'}]
+    monkeypatch.setattr(gateway_witness, 'tag_session', tag)
+    request_data.update(dry_run=True, leg={'id': 'mimo-v2.6-pro', 'explicit': True})
+    with pytest.raises(spec.LaunchRefused, match='opencode_tools_not_denied'):
+        spec.build(request_data)
 
 
 @pytest.mark.parametrize('key', ['run_id', 'job_id', 'role', 'dry_run', 'leg', 'prompt', 'card', 'cwd', 'state'])

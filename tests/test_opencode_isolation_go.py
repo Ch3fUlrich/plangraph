@@ -335,7 +335,8 @@ def test_real_models_probe(tmp_path):
     assert not job.exists()
 
 
-@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'])
+@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+                                    'mimo-v2.6-pro'])
 def test_tools_review_launch_preserves_checkout_and_enables_read_and_tests(tmp_path, monkeypatch, leg_id):
     from plangraph.planner.legs import DEFAULT_LEGS
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
@@ -356,4 +357,47 @@ def test_tools_review_launch_preserves_checkout_and_enables_read_and_tests(tmp_p
     assert cfg['permission']['bash']['cargo test *'] == 'allow'
     assert cfg['permission']['edit'] == 'deny'
     assert cfg['permission']['external_directory'] == 'deny'
+    # Read-only review: shell is deny-by-default, no write, web or agent tools.
+    assert cfg['permission']['bash']['*'] == 'deny'
+    assert all(cfg['permission'][tool] == 'deny' for tool in ('webfetch', 'websearch', 'task', 'todowrite'))
+    assert not any(event.get('event') == 'opencode_tools_not_denied' and job.status == 'refused'
+                   for event in job.events)
     assert cfg['mcp'] == {} and cfg['plugin'] == []
+
+
+def _bash_decision(rules, command):
+    """opencode's bash permission rule: the last pattern that matches the whole command wins;
+    '*' spans any text and a trailing ' *' also matches the bare command."""
+    import re
+    decision = None
+    for pattern, action in rules.items():
+        optional_tail = pattern.endswith(' *')
+        regex = re.escape(pattern[:-2] if optional_tail else pattern).replace(r'\*', '.*')
+        regex += '( .*)?' if optional_tail else ''
+        if re.fullmatch(regex, command, re.S):
+            decision = action
+    return decision
+
+
+@pytest.mark.parametrize('command,decision', [
+    ('git diff --stat', 'allow'), ('git diff', 'allow'), ('git log --oneline -3', 'allow'),
+    ('git show HEAD:src/a.py', 'allow'), ('cargo test -p worker-core cargo_pool', 'allow'),
+    ('python3 -m pytest -q tests/test_a.py', 'allow'),
+    # git options that write a file, run a program or read outside the checkout
+    ('git diff --output=x', 'deny'), ('git log --outp=x -1', 'deny'), ('git show --output x', 'deny'),
+    ('git diff --ext-diff', 'deny'), ('git diff --no-index /dev/null ../outside.txt', 'deny'),
+    ('git -c core.pager=x log', 'deny'), ('git log --exec=x', 'deny'),
+    ('cargo test --config build.rustc-wrapper=x', 'deny'), ('cargo test --target-dir /x', 'deny'),
+    ('pytest --basetemp=/ tests', 'deny'),
+    # shell composition, substitution and redirects
+    ('cargo test x; true', 'deny'), ('git diff && rm -rf x', 'deny'), ('git log | tee x', 'deny'),
+    ('git diff > x', 'deny'), ('git diff 2>x', 'deny'), ('git log $(touch x)', 'deny'),
+    ('git log `touch x`', 'deny'), ('pytest tests < x', 'deny'), ('git diff\ntouch x', 'deny'),
+    ('rm -rf x', 'deny'), ('cat ~/.ssh/id_rsa', 'deny'),
+])
+def test_review_shell_allowlist_admits_only_plain_read_and_test_commands(command, decision):
+    from plangraph.spawner.opencode_isolation import _DENIED_TOOLS, apply_review_permissions
+    env = {}
+    apply_review_permissions(env, _DENIED_TOOLS, repository_tools=True)
+    rules = json.loads(env['OPENCODE_CONFIG_CONTENT'])['permission']['bash']
+    assert _bash_decision(rules, command) == decision

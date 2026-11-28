@@ -108,7 +108,8 @@ def landing_record(ci, project, merge_sha, target_ref):
     error on the check-runs leaves ``checks`` unverified with a fixed reason; it never raises
     for them.  Returns ``None`` when the forge names no merged PR for the commit.
     """
-    pr = timing.merge_stage_call("merged_pr_for", ci.merged_pr_for, project, merge_sha, target_ref)
+    pr = timing.merge_lookup(("merged_pr_for", id(ci), project, merge_sha, target_ref), lambda:
+                             timing.merge_stage_call("merged_pr_for", ci.merged_pr_for, project, merge_sha, target_ref))
     if not isinstance(pr, Mapping):
         return None
     head_ref = pr.get("head")
@@ -123,7 +124,9 @@ def landing_record(ci, project, merge_sha, target_ref):
     from .evidence import _ci_conclusion
 
     try:
-        runs = timing.merge_stage_call("check_runs", ci.check_runs, ci.mode(project), record["head"])
+        mode, head = ci.mode(project), record["head"]
+        runs = timing.merge_lookup(("check_runs", id(ci), mode, head), lambda:
+                                   timing.merge_stage_call("check_runs", ci.check_runs, mode, head))
         verdict = _ci_conclusion(runs, record["head"])
         names = sorted({str(r.get("name")) for r in runs if isinstance(r, Mapping) and r.get("name")})
         record["checks"] = {"head": record["head"], "verified": verdict is None,

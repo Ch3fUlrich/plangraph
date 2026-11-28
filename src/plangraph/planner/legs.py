@@ -136,6 +136,9 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          ("128k", "256k"), 100000, False, note="pay-as-you-go, only if really needed"),
 )
 
+MIMO_PRO_MODEL = "mimo/mimo-v2.6-pro"
+MIMO_PRO_REVIEW_CAP = 200_000
+
 # D-2148/D-1704/D-2569: role orders are policy, not resolver fallbacks.
 from dataclasses import replace as _replace
 _legacy = {leg.id: leg for leg in DEFAULT_LEGS}
@@ -183,8 +186,8 @@ DEFAULT_LEGS = (
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
         "openai", ("128k",), 100000, False, roles=("review",), benchmark_optional=True),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
-    Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
-        "mimo", ("128k", "256k", "1m"), 200000, False,
+    Leg("mimo-v2.6-pro", "subscription", "opencode", MIMO_PRO_MODEL,
+        "mimo", ("128k", "256k", "1m"), MIMO_PRO_REVIEW_CAP, False,
         roles=("implement", "review", "orchestrate"), tool_mode="inline-only"),
     _replace(_legacy["agy-sonnet-5.5"], roles=("orchestrate", "review")),
     Leg("agy-claude-opus", "subscription", "agy", "claude-opus-4-6-thinking",
@@ -577,6 +580,28 @@ POLICY_REQUEST_CAPS = {"deepseek": 100_000}
 LEAD_WRITER_RESEARCH_CAP = 900_000
 
 
+def mimo_pro_review(leg, role):
+    """An inline MiMo Pro review: the exact diff in the prompt and every tool denied.
+
+    ``role_leg`` gives the registered MiMo Pro leg the bounded repository tools for reviews
+    (``route_policy.opencode_repository_review``); only an inline-only review leg takes this path.
+    """
+    return (role == "review" and getattr(leg, "model", None) == MIMO_PRO_MODEL
+            and getattr(leg, "tool_mode", None) == "inline-only")
+
+
+#: Legs that stay inline-only for implement and orchestrate but review with the bounded
+#: read-only repository tools (read, glob, grep, list and allowlisted git/test shell commands).
+REVIEW_TOOLS_LEGS = frozenset({"mimo-v2.6-pro"})
+
+
+def role_leg(leg, role):
+    """``leg`` as ``role`` runs it: a ``REVIEW_TOOLS_LEGS`` leg reviews in tools mode."""
+    if role == "review" and getattr(leg, "id", None) in REVIEW_TOOLS_LEGS and leg.tool_mode != "tools":
+        return _replace(leg, tool_mode="tools")
+    return leg
+
+
 def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role: str | None = None) -> tuple[tuple[Leg, ...], tuple[tuple[Leg, str], ...]]:
     """The legs with the request bound of the active provider registry, and the legs it refuses.
 
@@ -588,6 +613,7 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
     from plangraph.routing_support.opencode_overlay import ProviderView, RequestBoundError
     kept, refused = [], []
     for leg in legs:
+        leg = role_leg(leg, role)
         if not isinstance(leg, Leg) or leg.harness != "opencode":
             kept.append(leg)
             continue
@@ -612,6 +638,8 @@ def bound_legs(legs: Iterable[Leg], view=None, card: Mapping | None = None, role
             bound = min(bound, POLICY_REQUEST_CAPS.get(leg.id, bound))
             if role == "research" and leg.id == LEAD_WRITER:
                 bound = min(bound, LEAD_WRITER_RESEARCH_CAP)
+            if role == "review" and leg.model == MIMO_PRO_MODEL:
+                bound = min(bound, MIMO_PRO_REVIEW_CAP)
         kept.append(leg if bound == leg.max_request_tokens else _replace(leg, max_request_tokens=bound))
     return tuple(kept), tuple(refused)
 

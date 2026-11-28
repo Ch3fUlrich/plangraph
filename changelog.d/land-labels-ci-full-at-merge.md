@@ -1,0 +1,1 @@
+- `merge_batch.py land` starts the one full run at the merge: when the batch head has no green full run, it labels the batch PR `ci-full` (CI runs the full suite on that event) and refuses until the run is green.

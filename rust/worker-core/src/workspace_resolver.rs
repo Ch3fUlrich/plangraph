@@ -50,9 +50,20 @@ pub fn git_output_until(
     deadline: Instant,
     cap: usize,
 ) -> Result<(ExitStatus, Vec<u8>), ResolveError> {
+    git_output_until_with(command, deadline, cap, &crate::stall::status_until)
+}
+
+type BoundedStatus<'a> = &'a dyn Fn(&mut Command, Instant) -> std::io::Result<ExitStatus>;
+
+fn git_output_until_with(
+    command: &mut Command,
+    deadline: Instant,
+    cap: usize,
+    status: BoundedStatus<'_>,
+) -> Result<(ExitStatus, Vec<u8>), ResolveError> {
     let mut output = tempfile::tempfile()?;
     command.stdout(output.try_clone()?).stderr(Stdio::null());
-    let status = crate::stall::status_until(command, deadline)?;
+    let status = status(command, deadline)?;
     output.rewind()?;
     let mut bytes = Vec::new();
     output
@@ -66,7 +77,7 @@ pub fn git_output_until(
 
 struct Git<'a> {
     root: &'a Path,
-    deadline: Option<Instant>,
+    deadline: Option<(Instant, BoundedStatus<'a>)>,
 }
 
 impl Git<'_> {
@@ -83,8 +94,8 @@ impl Git<'_> {
             file.rewind()?;
             command.stdin(file);
         }
-        if let Some(deadline) = self.deadline {
-            git_output_until(&mut command, deadline, 1024 * 1024)
+        if let Some((deadline, status)) = self.deadline {
+            git_output_until_with(&mut command, deadline, 1024 * 1024, status)
         } else {
             let out = command.output()?;
             Ok((out.status, out.stdout))
@@ -141,14 +152,25 @@ pub fn ensure_commit_until(
     wait: Duration,
     deadline: Instant,
 ) -> Result<(), ResolveError> {
-    ensure_commit_inner(repo, sha, wait, Some(deadline))
+    ensure_commit_until_with(repo, sha, wait, deadline, &crate::stall::status_until)
+}
+
+/// Use the normal locked commit lookup with a supplied bounded Git status runner.
+pub fn ensure_commit_until_with(
+    repo: &RepoEntry,
+    sha: &str,
+    wait: Duration,
+    deadline: Instant,
+    status: BoundedStatus<'_>,
+) -> Result<(), ResolveError> {
+    ensure_commit_inner(repo, sha, wait, Some((deadline, status)))
 }
 
 fn ensure_commit_inner(
     repo: &RepoEntry,
     sha: &str,
     wait: Duration,
-    deadline: Option<Instant>,
+    deadline: Option<(Instant, BoundedStatus<'_>)>,
 ) -> Result<(), ResolveError> {
     if sha.len() != 40
         || !sha
@@ -165,7 +187,7 @@ fn ensure_commit_inner(
         return Ok(());
     }
     let common = git.common_dir()?;
-    let wait = deadline.map_or(wait, |end| {
+    let wait = deadline.map_or(wait, |(end, _)| {
         wait.min(end.saturating_duration_since(Instant::now()))
     });
     let _guard =

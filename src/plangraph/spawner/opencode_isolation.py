@@ -260,6 +260,19 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'webfetch', 'websearch')
 
 
+#: Plain read and test commands a repository review may run. The test commands run the
+#: reviewed code by design; the checkout is the review's own.
+_REVIEW_SHELL_ALLOW = ('git diff *', 'git show *', 'git status *', 'git log *', 'git rev-parse *',
+                       'cargo test *', 'pytest *', 'python -m pytest *', 'python3 -m pytest *')
+#: Forms of an allowed command that write files, start other programs or read outside the
+#: checkout: shell composition, substitution and redirects (opencode checks only the first
+#: command of a redirect), git --output/--ext-diff/--exec/--no-index (and their abbreviations),
+#: cargo --config/--target-dir and pytest --basetemp (it empties that directory).
+_REVIEW_SHELL_DENY = ('*;*', '*&*', '*|*', '*$(*', '*`*', '*>*', '*<*', '*\n*',
+                      '*--ou*', '*--ext*', '*--exec*', '*--no-i*', '*--config*',
+                      '*--target-dir*', '*--basetemp*')
+
+
 def apply_review_permissions(env, denied_tools, *, repository_tools):
     """Set the isolated review permissions while preserving provider config."""
     try:
@@ -271,11 +284,9 @@ def apply_review_permissions(env, denied_tools, *, repository_tools):
     permission = dict.fromkeys(('*', *denied_tools), 'deny')
     if repository_tools:
         permission.update(read='allow', glob='allow', grep='allow', list='allow')
-        permission['bash'] = {'*': 'deny', **dict.fromkeys((
-            'git diff *', 'git show *', 'git status *', 'git log *',
-            'git rev-parse *', 'cargo test *', 'pytest *',
-            'python -m pytest *', 'python3 -m pytest *',
-        ), 'allow')}
+        # opencode applies the last matching pattern, so the denies after the allows win.
+        permission['bash'] = {'*': 'deny', **dict.fromkeys(_REVIEW_SHELL_ALLOW, 'allow'),
+                              **dict.fromkeys(_REVIEW_SHELL_DENY, 'deny')}
     config.update(permission=permission, mcp={}, plugin=[])
     env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
 

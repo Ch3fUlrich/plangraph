@@ -284,26 +284,52 @@ impl Host for LocalHost {
     }
 
     fn end_session(&self, _session: &str) -> bool {
-        // `claude stop` takes the short job id: the first eight characters of the session id.
-        let job: String = self.session_id.chars().take(8).collect();
+        self.end_session_with_sleeper(std::thread::sleep)
+    }
+
+    fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {
+        let (name, outbox) = self.outbox_file(recipient, key);
+        // The sent marker outlives the delivery that removes the outbox file: a line is
+        // queued once, never queued again after the bridge delivered it.
+        let marker = self.state.join("round-watch/sent").join(&name);
+        if marker.exists() {
+            return Ok(());
+        }
+        if !outbox.exists() {
+            let event = json!({"rule": "round-wait-timeout", "kind": "alert",
+                "recipient": recipient, "key": key, "text": line});
+            atomic_write_private(&outbox, event.to_string().as_bytes())?;
+        }
+        atomic_write_private(&marker, b"1")
+    }
+}
+
+impl LocalHost {
+    pub(super) fn end_session_with_sleeper(&self, mut sleep: impl FnMut(Duration)) -> bool {
         let bin = self.claude_bin.clone().unwrap_or_else(|| {
             std::env::var("PLANGRAPH_CLAUDE_BIN")
                 .ok()
                 .filter(|v| !v.is_empty())
                 .map_or_else(|| "claude".into(), PathBuf::from)
         });
-        let run = |args: &[&str]| {
+        self.end_session_with(|args| {
             let mut command = Command::new(&bin);
             command
                 .args(args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            pg_worker_core::stall::spawn_retrying(&mut command)
+            pg_worker_core::stall::spawn_retrying_with(|| command.spawn(), &mut sleep)
                 .and_then(Child::wait_with_output)
                 .ok()
                 .filter(|out| out.status.success())
-        };
+                .map(|out| out.stdout)
+        })
+    }
+
+    pub(super) fn end_session_with(&self, mut run: impl FnMut(&[&str]) -> Option<Vec<u8>>) -> bool {
+        // `claude stop` takes the short job id: the first eight characters of the session id.
+        let job: String = self.session_id.chars().take(8).collect();
         if run(&["stop", &job]).is_none() {
             return false;
         }
@@ -312,7 +338,7 @@ impl Host for LocalHost {
         let Some(listing) = run(&["agents", "--json"]) else {
             return false;
         };
-        let text = String::from_utf8_lossy(&listing.stdout);
+        let text = String::from_utf8_lossy(&listing);
         let rows: serde_json::Value = if text.trim().is_empty() {
             json!([])
         } else {
@@ -340,21 +366,5 @@ impl Host for LocalHost {
                     && !["finished", "stopped", "done", "failed"]
                         .contains(&row["state"].as_str().unwrap_or(""))
             })
-    }
-
-    fn notify(&self, recipient: &str, key: &str, line: &str) -> io::Result<()> {
-        let (name, outbox) = self.outbox_file(recipient, key);
-        // The sent marker outlives the delivery that removes the outbox file: a line is
-        // queued once, never queued again after the bridge delivered it.
-        let marker = self.state.join("round-watch/sent").join(&name);
-        if marker.exists() {
-            return Ok(());
-        }
-        if !outbox.exists() {
-            let event = json!({"rule": "round-wait-timeout", "kind": "alert",
-                "recipient": recipient, "key": key, "text": line});
-            atomic_write_private(&outbox, event.to_string().as_bytes())?;
-        }
-        atomic_write_private(&marker, b"1")
     }
 }

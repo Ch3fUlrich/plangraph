@@ -37,7 +37,7 @@
       tableSel: new Set(),
       prioPending: new Map(),            // key -> int, T3 batch panel
       sidebar: { open: true, tab: "needs" },
-      settings: { textSize: "M", theme: "auto", showCritical: true,
+      settings: { textSize: "M", theme: "auto", workMode: "batch", showCritical: true,
                   showCross: true, autoCollapseDone: false, animate: true },
       focusProject: null                 // phone: one project in view (A11)
     };

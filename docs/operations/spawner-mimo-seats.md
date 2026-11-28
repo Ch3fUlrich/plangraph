@@ -2,6 +2,35 @@
 
 Moved out of [SPAWNER.md](../SPAWNER.md) to keep it under its line cap (`tools/check_file_size.py`, `DOC_CAPS`).
 
+## MiMo Pro inline reviews
+
+The GPT-head route keeps the required repository-capable seats and orders Hydrogen-high
+before MiMo Pro. For the review role MiMo Pro runs in tools mode (`legs.role_leg`,
+`REVIEW_TOOLS_LEGS`) with the bounded repository profile of the OpenCode review seats:
+read, glob, grep and list allowed, shell deny-by-default except the allowlisted
+`git diff/show/status/log/rev-parse`, `cargo test` and `pytest` commands, and edit,
+web, task, external-directory, MCP and plugin tools denied. Implement and orchestrate
+keep the inline-only leg. The inline path below serves an inline-only MiMo Pro review leg:
+it reviews an exact, nonempty base/head diff with OpenCode's isolated tool-denied profile,
+and routing skips it for a repository-tools-required review or a missing diff.
+
+A MiMo Pro review request is limited to three characters per estimated token, with
+a ceiling of 200,000 tokens (600,000 characters). A smaller provider limit takes
+precedence. The count includes the brief, context pack, diff and all framing.
+Oversized requests are refused or split by the native review path. Each split
+request has the same limit and the aggregate verdict needs full path coverage.
+The `opencode_tools_denied` event records the rendered request size and token limit.
+For a native review refused with `not_served_on_host` before dispatch, the
+spawner records the refusal, releases that seat's reservation and tries the
+next eligible seat from the existing route with the same diff. An explicit
+`no_fallthrough` request reports the refusal immediately.
+
+For the supervised S1 run, record the published base and head, the request size and
+cap, the final tool-denial event, the gateway response-side MiMo Pro identity and
+the canonical verdict. Use the first seat's brief and diff. Attach the required
+repository-capable seat verdicts and exact-head test evidence from their own runs.
+Use the S1 command in the approved design's acceptance section.
+
 ## MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
 For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
